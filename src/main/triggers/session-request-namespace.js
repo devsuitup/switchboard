@@ -40,7 +40,7 @@ function createSessionRequestNamespace({ fs, journal, publisher, actions, proces
     const identity = { stemKey, actualStem, family, suppliedHash, rawHash: opened?.rawHash ?? null };
     const resultFile = owner => path.join(processedDir, owner.actualStem + '.result.json');
     const marker = path.join(processedDir, stemKey + '.action.json');
-    const entries = fs.readdirSync(processedDir);
+    const entries = outcome.state === 'absent' ? fs.readdirSync(processedDir) : [];
     const results = entries.filter(name => name.toLowerCase() === stemKey + '.result.json');
     const markers = entries.filter(name => name.toLowerCase() === stemKey + '.action.json');
     if (outcome.state === 'absent' && (results.length || markers.length)) {
@@ -63,10 +63,9 @@ function createSessionRequestNamespace({ fs, journal, publisher, actions, proces
       if (!opened) { publisher.cleanup(input, null, markers.length ? path.join(processedDir, markers[0]) : null); return { done: true }; }
     }
     if (!opened) {
-      if (outcome.state !== 'absent' && outcome.owner.family === 'action' && markers.length) {
+      if (outcome.state !== 'absent' && outcome.owner.family === 'action' && fs.existsSync(marker)) {
         if (outcome.owner.resultBytes) {
           publisher.publish(resultFile(outcome.owner), Buffer.from(outcome.owner.resultBytes));
-          publisher.cleanup(input, null, marker);
         } else {
           const state = actions.readState(resultFile(outcome.owner), marker);
           if (!state) throw new Error('pending action recovery state unavailable');
@@ -85,7 +84,7 @@ function createSessionRequestNamespace({ fs, journal, publisher, actions, proces
         stemKey, actualStem: stem, rawHash: opened.rawHash,
         resultBytes: Buffer.from(JSON.stringify({ ok: false, error: 'request id conflict', reason: 'request id conflict', submitted: 'no' }) + '\n'),
       })).conflict;
-      if (outcome.owner.resultBytes && !results.includes(outcome.owner.actualStem + '.result.json')) {
+      if (outcome.owner.resultBytes && !fs.existsSync(resultFile(outcome.owner))) {
         publisher.publish(resultFile(outcome.owner), Buffer.from(outcome.owner.resultBytes));
       }
       const base = path.join(processedDir, conflict.actualStem + '.conflict-' + conflict.rawHash);
@@ -113,7 +112,7 @@ function createSessionRequestNamespace({ fs, journal, publisher, actions, proces
       if (family === 'action') {
         const state = actions.readState(resultFile(outcome.owner), marker);
         await publish(state?.result || actions.refusal(trigger, 'interrupted by restart', { uncertain: true }));
-      } else await publish({ ok: false, submitted: 'no', wrote: false, steps_total: 0,
+      } else await publish({ ok: false, submitted: 'unknown', wrote: true, steps_total: 0,
         error: 'interrupted by restart', reason: 'an earlier attempt may have executed; no automatic retry was performed', uncertain: true });
       return { done: true };
     }

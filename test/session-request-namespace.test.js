@@ -8,6 +8,32 @@ const { createJournal } = require('./fixtures/session-request-journal.cjs');
 const openStore = require('./fixtures/conversation-store.cjs');
 const original = Buffer.from('{"immutable":"owner"}\n');
 
+for (const upperFirst of [false, true]) test(`equal raw action case alias terminates without retries, upperFirst=${upperFirst}`, async t => {
+  const lower = 'abcdef01-2345-6789-abcd-0123456789ab';
+  const stem = upperFirst ? lower.toUpperCase() : lower;
+  const r = await rig(t, { stem, payload: { version: 1, action: 'stop', sessionId: lower } });
+  const output = path.join(r.processed, lower + '.result.json'), bytes = fs.readFileSync(output), effects = r.effects();
+  const alias = (upperFirst ? lower : lower.toUpperCase()) + '.json';
+  fs.writeFileSync(path.join(r.dir, alias), r.body);
+  await r.notify(alias);
+  assert.equal(fs.existsSync(path.join(r.dir, alias)), false, 'equal raw case alias must be consumed');
+  assert.equal(r.errors.length, 0, 'owner replay cannot throw a conflict error');
+  assert.equal(r.timers.size, 0, 'owner replay must terminate without retained retry');
+  assert.deepEqual(fs.readFileSync(output), bytes); assert.equal(r.effects(), effects);
+});
+
+test('ordinary journalled trigger avoids enumerating processed artifacts', async t => {
+  const journal = createJournal(), first = await rig(t, { journal, payload: {} });
+  let scans = 0;
+  const r = await rig(t, { journal, stem: first.stem, payload: {}, fs: {
+    readdirSync(file, ...args) { if (path.basename(file) === 'processed') scans++; return fs.readdirSync(file, ...args); },
+  } });
+  scans = 0;
+  fs.writeFileSync(r.input, r.body); await r.notify();
+  assert.equal(scans, 0, 'a journalled owner needs no pre-upgrade directory scan');
+  assert.equal(fs.existsSync(r.input), false);
+});
+
 for (const family of ['session-status', 'legacy', 'action']) for (const incoming of ['legacy', 'action', 'malformed', 'stale', 'oversize']) {
   for (const sameCase of [true, false]) test(`${family} owner blocks ${incoming} incoming, sameCase=${sameCase}`, async t => {
     const stem = 'ABCDEF01-2345-6789-abcd-0123456789ab', journal = createJournal();

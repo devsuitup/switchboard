@@ -2183,7 +2183,7 @@ function start(ctx) {
     })
       .catch((err) => {
         retained.add(filename);
-        safeLogError(ctx, '[trigger-watcher] Trigger processing threw, will not be run again:',
+        safeLogError(ctx, '[trigger-watcher] Trigger processing threw; retained input will be retried:',
           filename, err && err.message);
       })
       .finally(() => {

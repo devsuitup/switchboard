@@ -50,6 +50,12 @@ basename on the host platform, so an empty stem or a space/dot before the
 suffix does not become a new legacy restriction; NUL and path components are
 refused.
 
+An equal non-null raw hash also matches an owner with a supplied identity.
+This lets byte-identical action requests replay across case spellings whose
+filename validation yields different supplied identities. The original family,
+publication spelling and result bytes still win; owner replays never create a
+conflict receipt.
+
 Mutating inputs carry actionToken and argsHash. Producers use the exported
 `hashSessionRequestCommand(command, input)` in `session-index-commands.js`:
 sorted exact command arguments, including result bytes, family, supplied/raw

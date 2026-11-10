@@ -28,6 +28,16 @@ survive case aliases, cache rebuild and processed-file removal. Legacy uses its
 original spelling; action ordinary results keep canonical lowercase spelling.
 Action recovery requires action open/stop, not merely a version property.
 
+Completed action owners keep leftover markers when an input has already been
+archived as a conflict. A subsequent archive rename notification republishes
+the saved result without deleting that marker; genuine pending/orphan recovery
+still removes its marker after publication. Equal raw bytes replay the owner
+across filename case aliases, even when one spelling fails action validation.
+Pending legacy claims publish `submitted: 'unknown'`, `wrote: true` and a
+non-retryable interruption error, because earlier delivery cannot be excluded.
+Only absent owners require a pre-upgrade processed-directory scan; journalled
+owners use direct artifact checks.
+
 `session-request-publication.js` publishes acknowledged saved bytes: temp write,
 file fsync, atomic rename, supported parent fsync, then input/marker cleanup.
 Unexpected errors retain input; a failed post-rename flush cannot retract visible
