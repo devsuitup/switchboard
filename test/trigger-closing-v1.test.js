@@ -219,3 +219,66 @@ for (const [name, settle] of [
     assert.equal(f.events.filter(e => e[0] === 'result').length, 1);
   });
 }
+
+function cancellableStop(t) {
+  const s = stack(t);
+  const f = stopFixture(t);
+  f.lifecycle.launchAllowed = s.attempts.launchAllowed; f.lifecycle.captureAuthority = s.attempts.capture;
+  const backend = [];
+  const stopCall = f.lifecycle.stop;
+  f.lifecycle.stop = (...args) => { backend.push(args); return stopCall(...args); };
+  return { s, f, backend };
+}
+for (const [name, behave, reason] of [
+  ['rejected liveness', () => Promise.reject(new Error('probe failed')), 'session liveness unavailable'],
+  ['unknown liveness', () => ({ known: false }), 'session liveness unavailable'],
+  ['a live elsewhere writer', () => ({ known: true, live: { kind: 'interactive' } }), 'session live elsewhere'],
+  ['a missing session', () => ({ known: true, live: null }), 'session not found'],
+]) {
+  test(`stop keeps its cancellation over ${name} that settles after commit and rollback`, async t => {
+    const c = cancellableStop(t);
+    c.f.map.clear();
+    let release; const gate = new Promise(resolve => { release = resolve; });
+    let reached; const started = new Promise(resolve => { reached = resolve; });
+    c.f.lifecycle.liveElsewhere = async () => { reached(); await gate; return behave(); };
+    c.f.start();
+    await started;
+    const undo = await c.s.rollback();
+    undo();
+    release();
+    const result = await c.f.finish();
+    assert.equal(result.ok, false); assert.equal(result.reason, 'Switchboard is closing.');
+    assert.equal(c.backend.length, 0);
+    assert.notEqual(result.reason, reason);
+  });
+}
+test('stop keeps its cancellation over an early lookup refusal', async t => {
+  const c = cancellableStop(t);
+  c.f.map.clear();
+  let release; const gate = new Promise(resolve => { release = resolve; });
+  let reached; const started = new Promise(resolve => { reached = resolve; });
+  c.f.lifecycle.remoteTarget = async () => { reached(); await gate; return true; };
+  c.f.start();
+  await started;
+  const undo = await c.s.rollback();
+  undo();
+  release();
+  const result = await c.f.finish();
+  assert.equal(result.reason, 'Switchboard is closing.');
+  assert.equal(c.backend.length, 0);
+});
+test('a stop queued behind another request is cancelled by a commit that is rolled back before it starts', async t => {
+  const c = cancellableStop(t);
+  let release; const gate = new Promise(resolve => { release = resolve; });
+  let reached; const queued = new Promise(resolve => { reached = resolve; });
+  c.f.execution.acquireSessionLock = async () => { reached(); await gate; return () => c.f.events.push(['release-fifo']); };
+  c.f.start();
+  await queued;
+  const undo = await c.s.rollback();
+  undo();
+  release();
+  const result = await c.f.finish();
+  assert.equal(result.ok, false); assert.equal(result.reason, 'Switchboard is closing.');
+  assert.equal(c.backend.length, 0);
+  assert.equal(c.f.events.some(e => e[0] === 'release-fifo'), true, 'the session lock is released');
+});
