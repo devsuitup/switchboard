@@ -408,6 +408,13 @@ authority. Conversation-ID continuity alone never authorizes another process.
 Stop reads the revocation after each of its status observations, including the
 last one before the backend call. The reader returns no usable writer or
 identity when its final revalidation ends at or after the absolute deadline.
+The `/proc` scan tolerates entries it cannot use: a process that exited during
+the scan (`ENOENT`/`ESRCH`) and a process whose PID namespace link is denied
+(`EACCES`/`EPERM`) do not make it incomplete, because the former no longer
+exists and the latter is read for its status and start only. A denied entry
+whose NSpid and start match the descriptor, or a denied anchor, still makes the
+observation uncertain. `test/trigger-actions-readiness.test.js` drives the
+shipped `scripts/claude-sandbox.sh` and node-pty against the real `/proc`.
 
 ### Open target after waits
 
