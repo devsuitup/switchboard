@@ -7,6 +7,8 @@ function memoryWriter(backend, cache) {
   const commands = createWriterCommands(backend);
   const client = {
     ready: Promise.resolve(),
+    requestForWorkflow(_workflowId, name, ...args) { return this.request(name, ...args); },
+    async fenceWorkflow() {},
     async request(name, ...args) {
       if (name === 'effects') {
         for (const effect of args[0]) await this.request(effect.name, ...effect.args);

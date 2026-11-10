@@ -185,7 +185,7 @@ function writerFixture() {
   const client = { ready: Promise.resolve(), request: async (name, ...args) => {
     requests.push(name);
     return commands[name](...args);
-  } };
+  }, requestForWorkflow(_workflowId, name, ...args) { return this.request(name, ...args); }, async fenceWorkflow() {} };
   const backend = { ...h.deps, searchFtsRecreated: false };
   const cache = { buildProjectsFromCache: () => [], resolveFolderDir: () => null };
   const writer = createSessionIndexWriter({ client, readonlyBackend: backend }, cache);

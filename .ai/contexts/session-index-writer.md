@@ -402,6 +402,13 @@ visibility and worktree archive changes, not just changes to selected keys.
 Schedule names are still read on main after the write acknowledgment. Effect-free
 reads use the acknowledged mirror without waiting for pending writes.
 
+Without an epoch proof, retirement retains its two-argument transport shape.
+Archive keys remain exact storage keys: the remote-root key `host::` decodes to
+`/` only for workflow and writer identity guards, never for persistence. Remote
+POSIX and host-qualified Windows paths retain the archive identity adapter.
+Dismissal validates empty or non-string paths before the writer identity guard,
+returning the legacy error without changing offers or notifying the renderer.
+
 ## Continuations and shutdown
 
 Refresh and retained-live release await linked-source preparation before opening
@@ -479,6 +486,23 @@ logs and displays a native error before exiting; second-instance ignores a destr
 window.
 
 ## Qualification
+
+Archive workflow admission and cancellation now share one client-scoped gate
+across withCache facades; see [project-delete.md](project-delete.md),
+"Archive workflow exclusion (A4b2)". Ordinary workflows share keys; only deletion
+reservations exclude new work and wait for all admitted leases. List reads
+tolerate blocked identities and skip epoch IPC when the reader's cheap
+`projectDeletion.hasFences()` query finds no fence. Actual retirement retains
+writer admission guards, including epoch-zero checks on the fast path. Failed
+cancellation reconciles only after confirmed old-worker termination; failure
+and circuit-stop cleanup retire client workflow seals after removing requests.
+`readProjectArchiveEpochs` and workflow
+fence/retirement controls are read/control turns without a revision increment
+or settings publication. Archive mutations retain the ordinary single
+commitTransaction revision increment. Deletion receipt purge uses a bounded
+maintenance transaction outside that data revision, avoiding self-staling
+owned deletion chunks. The #380 session-request tables, commands and receipt
+revision behavior coexist unchanged with these APIs.
 
 Source tests and Electron-as-Node integration cover real SQLite readonly failure,
 crash before commit, lost ACK after commit, lock exhaustion/release, queued close,
