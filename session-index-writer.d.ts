@@ -26,8 +26,28 @@ type ArchiveRuntime = {
 type Logger = { warn(...args: unknown[]): void; info(...args: unknown[]): void };
 type OfferRuntime = { notify(): void };
 
+export type DeletionProject = { alias: string | null; projectPath: string };
+export type DeletionReference = { operationId: string; project: DeletionProject };
+export type DeletionUnit = { ordinal: number; category: string; target: unknown; status: 'pending' | 'completed' | 'kept' | 'failed'; result: unknown };
+export type ProjectDeletionState = {
+  state: 'absent' | 'unknown' | 'inProgress' | 'committed' | 'partial' | 'notStarted';
+  terminal: boolean; noLateCommit: boolean; receiptAvailable: boolean; projectEpoch: number;
+  revision: number; readRevision: number; projectHidden: boolean; settingsPresent: boolean; metadata: unknown[];
+  operationId?: string; phase?: 'preparing' | 'applying' | 'finalizing' | 'terminal'; reason?: string;
+  startRevision?: number; lastRevision?: number; nextUnit?: number; totalUnits?: number;
+  stagedUnits?: number; unstagedUnits?: number; completed?: DeletionUnit[]; remaining?: DeletionUnit[];
+  kept?: DeletionUnit[]; failed?: DeletionUnit[]; error?: unknown;
+};
+export type ProjectDeletionScope = {
+  writerRevision: number; projectEpoch: number; writerMembershipDigest: string;
+  scope: { rows: unknown[]; metadata: unknown[]; fields: unknown[]; ownership: unknown[]; folders: unknown[]; settingsKeys: string[] };
+};
+
 export interface SessionIndexWriter {
   readonly ready: Promise<void>;
+  getProjectDeletionState(input: DeletionReference): Promise<ProjectDeletionState>;
+  readProjectDeletionScope(input: { project: DeletionProject }): Promise<ProjectDeletionScope>;
+  fenceProjectDeletion(input: DeletionReference & { expectedProjectEpoch: number }): Promise<ProjectDeletionState>;
   rekeySessionMeta(fromId: string, toId: string): Promise<void>;
   completeRepairFolders(folders: string[]): Promise<void>;
   withCache(cache: Cache): SessionIndexWriter;

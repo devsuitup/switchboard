@@ -2,7 +2,76 @@
 
 Scope: one writable WAL connection in a Node worker; one main-side readonly
 connection remains for the existing synchronous reads. Independent read workers,
-removal of main's connection, durable receipts and outcome recovery belong to step 2.
+removal of main's connection and general outcome recovery belong to step 2.
+The dormant #474 A4b1 deletion substrate below provides operation-specific receipts.
+
+## Dormant project deletion substrate (#474 A4b1)
+
+Writable schema reconciliation adds `project_delete_fences`,
+`project_delete_operations` and `project_delete_units`, with project/state and
+terminal-retention indexes. A cascade trigger also removes units when foreign
+keys are disabled. Existing stores upgrade additively; readonly opens do not
+create these tables and can open an unmigrated database. Deletion statements
+are prepared lazily on first use; header/fence/progress writes, unit results
+and bounded receipt maintenance statements are prepared only by a writable
+connection. Readonly connections can read deletion tables after migration.
+
+`src/main/projects/project-delete-progress.js` owns the dormant admission,
+staging, effect transaction hook, status, fence and restart primitives.
+`commitTransaction` is shared with the worker's existing transaction/BUSY
+wrapper: the hook receives the exact next revision and writes progress before
+the revision and COMMIT. Rollback undoes both effect and progress. No completed
+array grows in a header; results live in ordinal unit rows.
+
+Admission compares the integer `_writer_revision`, canonical host/path epoch
+and durable snapshot digest before claiming an epoch and inserting the header.
+An optional synchronous first-effect hook shares that transaction and records
+the first unit result/cursor there. It requires a completely staged bounded
+manifest; larger manifests stage before a later effect transaction. This is a
+trusted backend seam, with no worker command for admission or effects. The
+manifest hash binds the supplied manifest and ordered targets. Staging admits
+at most 16 units per transaction and defers targets using the production
+savepoint budget with progress/revision overhead reserved. Effects run one unit
+per transaction, checking ownership, seal, hash, staging and revision inside
+that transaction. The first indivisible oversized unit retains the existing
+budget exception. An unexpected synchronous exception rolls back its chunk;
+the caller must fence/reconcile the open receipt, rather than infer rollback
+of earlier chunks. A recorded failed unit seals partial.
+
+Worker bootstrap includes recovered operation/project identities in
+`ready.recoveredProjectDeletions` and seals every unfinished header partial before `ready`, one
+transaction per header, advances only its matching owned epoch and never
+replays pending effects. There are at most 32 active headers. Maintenance
+deletes at most 16 unit rows per transaction; terminal details are limited to
+128 receipts and seven days after maintenance converges. Epoch high-water rows
+survive receipt removal. Each admit/apply/fence/recover call performs at most
+one purge transaction; large receipts leave excess terminal headers for later
+calls. Snapshot reads retain no hard wall-time bound.
+
+Only `getProjectDeletionState`, `readProjectDeletionScope` and
+`fenceProjectDeletion` are forwarded by the typed facade. The two read ports
+run consistent reads directly on the worker connection without revision or
+settings-mirror publication. Fence is a service-boundary operation with the
+existing BUSY retry policy and publishes a settings ACK only when it changed
+the revision. It rereads durable state after sealing. Epoch checks reject an
+old buffered/unsent unit when it eventually reaches the dormant effect seam;
+there is no completion generator to cancel in this slice.
+
+`absent` and `inProgress` give no terminal proof. Only a matching absent fence
+can record `notStarted`. Missing/expired receipts after epoch advancement give
+`unknown` with `noLateCommit:true`, without fabricated completed lists. Fresh
+hidden/settings/metadata observations carry `readRevision`, distinct from
+receipt `lastRevision`. A terminal receipt is immutable; an old fence cannot
+clear a newer owner. Same-hash duplicate admission observes the receipt and
+never replays effects; a notStarted tombstone rejects admission.
+
+Scope readback supplies raw persisted rows, metadata/provenance, folder mappings,
+settings-key presence and conservative cross-project ownership evidence. It is
+not proof of runtime inventory, metadata-only orphan ownership or settings
+erasure safety. A4b3 owns that validation and the shared identity/hash extraction.
+No archive-workflow exclusion, metadata deletion engine, complete command,
+main/IPC/UI caller or general producer cancellation is added here. See
+[project-delete.md](project-delete.md) for the remaining slice boundaries.
 
 The #820 column reconcile adds `runtime TEXT DEFAULT 'claude'` and `sessionFile TEXT`
 on writable opens only, without setting `mustReindex` or deleting rows. Existing

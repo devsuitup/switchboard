@@ -4,10 +4,12 @@ const { parentPort } = require('node:worker_threads');
 const { setTimeout: delay, setImmediate: yieldTurn } = require('node:timers/promises');
 const { openSessionIndexStore } = require('../session-index-store');
 const { createWriterCommands } = require('../session-index-commands');
+const { createProjectDeleteProgress, commitTransaction } = require('../src/main/projects/project-delete-progress');
 
 // see .ai/contexts/session-index-writer.md
 const db = openSessionIndexStore({ readonly: false });
 const commands = createWriterCommands(db);
+const deletionProgress = createProjectDeleteProgress(db);
 const rawCommands = new Set(['setSetting', 'deleteSetting', 'toggleStar', 'setStarred', 'setArchived', 'setName',
   'upsertCachedSessions', 'deleteCachedSession', 'deleteCachedFolder', 'replaceSessionMetrics',
   'touchCachedModified', 'setFolderMeta', 'deleteSearchFolder', 'deleteSearchSession', 'deleteSearchType',
@@ -28,15 +30,10 @@ function flushBusyCounts() {
 const busyTimer = setInterval(flushBusyCounts, 60000);
 busyTimer.unref();
 
-async function transaction(name, fn) {
+async function transaction(name, fn, commitHook, execute = () => commitTransaction(db, fn, commitHook)) {
   const backoff = [20, 50, 100];
   for (let attempt = 0; ; attempt++) {
-    try { return db.transact(() => {
-      const before = db.changeCount();
-      const result = fn();
-      if (db.changeCount() !== before) db.setSetting('_writer_revision', (db.getSetting('_writer_revision') || 0) + 1);
-      return { result, committedRevision: db.getSetting('_writer_revision') || 0 };
-    }); }
+    try { return execute(); }
     catch (error) {
       if (!/^SQLITE_BUSY/.test(error.code || '')) throw error;
       if (!busyCounts.has(name)) busyCounts.set(name, { retries: 0, exhaustions: 0 });
@@ -96,6 +93,9 @@ function* units(name, args) {
 }
 
 function* commandUnits(message) {
+  if (message.command === 'getProjectDeletionState') { yield () => deletionProgress.read(message.args[0]); return; }
+  if (message.command === 'readProjectDeletionScope') { yield () => deletionProgress.readScope(message.args[0]); return; }
+  if (message.command === 'fenceProjectDeletion') { yield () => deletionProgress.fence(message.args[0]); return; }
   if (message.command === 'close') { yield () => { clearInterval(busyTimer); flushBusyCounts(); db.closeDb(); }; return; }
   if (message.command === 'drain') { yield () => {}; return; }
   if (message.command === 'measurements') { yield () => db.measurements(); return; }
@@ -127,7 +127,12 @@ async function drain() {
         parentPort.postMessage({ id: message.id, result: message.command === 'effects' ? { committedRevision: message.committedRevision } : message.result,
           ...(message.mutated ? { settings: settings() } : {}) });
       } else {
-        if (['close', 'drain', 'measurements'].includes(message.command)) message.result = unit.value();
+        if (['close', 'drain', 'measurements', 'getProjectDeletionState', 'readProjectDeletionScope'].includes(message.command)) message.result = unit.value();
+        else if (message.command === 'fenceProjectDeletion') {
+          const before = db.getSetting('_writer_revision') || 0;
+          message.result = await transaction(message.command, null, undefined, unit.value);
+          message.mutated = (db.getSetting('_writer_revision') || 0) !== before;
+        }
         else if (message.command === 'beginOffer') {
           message.result = unit.value();
         } else {
@@ -169,4 +174,6 @@ async function drain() {
 const heartbeat = setInterval(() => parentPort.postMessage({ heartbeat: true }), 1000);
 heartbeat.unref();
 parentPort.on('message', message => { queue.push(message); void drain(); });
-parentPort.postMessage({ ready: true, settings: settings(), searchFtsRecreated: db.searchFtsRecreated });
+const recoveredProjectDeletions = [];
+for (let recovered; (recovered = deletionProgress.recover());) recoveredProjectDeletions.push(recovered);
+parentPort.postMessage({ ready: true, settings: settings(), searchFtsRecreated: db.searchFtsRecreated, recoveredProjectDeletions });
