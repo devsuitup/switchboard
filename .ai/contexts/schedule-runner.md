@@ -27,6 +27,9 @@ directory is only listed; its files are never read or changed. The hook restores
 the environment and cache and removes the disposable home even on failure.
 `SWITCHBOARD_TEST_REAL_HOME` points this guard at a fake real home for leak and
 concurrent-writer tests. Nothing sets this variable in normal runs.
+The prefix rule is strict on purpose: a leftover folder from an older, leaking
+run fails every local run until it is moved out of the real projects directory
+by hand. The failure names the folder.
 Catch-up callbacks only record fired projects; assertions run in the file-level
 after hook, outside the scheduler's launch-error catch.
 
