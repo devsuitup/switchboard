@@ -79,13 +79,14 @@ for (const failed of [false, true]) {
     try {
       const calls = installRecordingApi(ctx, { stopSession: id => handler({}, id) });
       assert.equal(handler({}, 's1').ok, true, 'first sidebar Stop retains its previous IPC contract');
-      assert.equal(handler({}, 's1').ok, true, 'second sidebar Stop accepts termination pending');
+      assert.equal(handler({}, 's1').ok, true, 'second sidebar Stop retains the successful IPC reply');
       const row = localSession('s1');
       ctx.window.sessionMap.set('s1', row); ctx.window.activePtyIds.add('s1');
       ctx.sidebar.renderProjects([{ projectPath: row.projectPath, sessions: [row] }], true);
       await ctx.document.querySelector('.session-archive-btn').onclick(new ctx.window.MouseEvent('click'));
       assert.equal(calls.filter(c => c.method === 'archiveSession').length, 1, 'Archive must not abort while termination is pending');
-      assert.equal(kills, 1, 'the PTY kill is not repeated');
+      assert.equal(kills, failed ? 3 : 1, 'failed kills are retried while a successful pending kill is not repeated');
+      assert.equal(entry.stopRequested, !failed, 'failed retries do not attribute a later natural exit to Stop');
     } finally { ctx.destroy(); }
   });
 }

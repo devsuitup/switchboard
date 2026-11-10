@@ -250,6 +250,27 @@ test('a pending real kill is successful for a second trigger stop without anothe
   assert.equal((await f.finish()).outcome, 'closed'); assert.equal(calls, 1);
 });
 
+for (const retryFails of [false, true]) {
+  test(`a failed real kill ${retryFails ? 'refuses' : 'retries'} a later trigger stop without waiting on it`, async t => {
+    const { killPty } = require('../src/main/terminals/pty-ops');
+    const { stopLocalSession } = require('../src/main/terminals/stop-session');
+    const f = fixture(t); let calls = 0;
+    f.session.pty.kill = () => {
+      calls++;
+      if (calls === 1 || retryFails) throw new Error('kill denied');
+      f.session.exited = true;
+    };
+    assert.equal(stopLocalSession(f.session, ID, killPty).ok, false);
+    assert.equal(f.session.stopRequested, false);
+    f.lifecycle.stop = (session, key) => stopLocalSession(session, key, killPty);
+    f.start(); const r = await f.finish();
+    assert.equal(retryFails ? r.reason : r.outcome, retryFails ? 'session stop failed' : 'closed',
+      'a failed kill must be retried or refused, never treated as pending');
+    assert.equal(calls, 2, 'the failed first request must not suppress the second kill');
+    assert.equal(f.session.stopRequested, !retryFails);
+  });
+}
+
 for (const kind of ['false', 'throw']) {
   test(`genuine first kill ${kind} clears Stop attribution before a natural exit`, async t => {
     const { stopLocalSession } = require('../src/main/terminals/stop-session');
@@ -281,6 +302,47 @@ for (const status of ['busy', 'shell']) {
     assert.equal(f.kills(), 1); assert.deepEqual(f.writes, ['Save a note', '\r']);
   });
 }
+
+test('OSC completed note closes with a frozen busy descriptor and its quiet closed transcript', async t => {
+  let turn, delivered = false;
+  const f = fixture(t, { onEnter: () => {
+    const enteredAt = Date.now();
+    turn = { closed: true, closedAt: enteredAt + 1, mtimeMs: enteredAt + 1,
+      prompts: [{ at: enteredAt, text: 'Save a note' }] };
+    setTimeout(() => { f.session._cliBusy = false; f.setStatus('busy', enteredAt); }, 10);
+  }, onKill: session => { session.exited = true; } });
+  const save = f.execution.saveMarker;
+  f.execution.saveMarker = value => { save(value); if (value.phase === 'note-delivered') delivered = true; };
+  f.ctx.getTranscriptTurn = () => delivered ? turn : null;
+  f.start({ before: 'Save a note' }); const r = await f.finish();
+  assert.equal(r.outcome, 'closed', 'quiet closed own turn must release the stale-descriptor wait: ' + JSON.stringify(r));
+  assert.equal(r.delivery.final_turn.source, 'busy_flag');
+  assert.ok(r.delivery.final_turn.completedAt >= turn.prompts[0].at);
+  assert.ok(Date.now() - turn.mtimeMs >= Number(process.env.SWITCHBOARD_TRANSCRIPT_QUIET_MS));
+  assert.equal(f.kills(), 1); assert.deepEqual(f.writes, ['Save a note', '\r']);
+});
+
+test('OSC completed note refuses unproven transcript completion with a frozen busy descriptor', async t => {
+  for (const state of ['open', 'not quiet', 'older closed turn', 'missing own prompt']) {
+    await t.test(state, async child => {
+      let turn, delivered = false;
+      const f = fixture(child, { onEnter: () => {
+        const enteredAt = Date.now();
+        turn = { closed: state !== 'open', closedAt: state === 'older closed turn' ? enteredAt - 1 : enteredAt + 1,
+          mtimeMs: enteredAt + 1, prompts: [{ at: enteredAt, text: state === 'missing own prompt' ? 'another task' : 'Save a note' }] };
+        setTimeout(() => { f.session._cliBusy = false; f.setStatus('busy', enteredAt); }, 10);
+      } });
+      const save = f.execution.saveMarker;
+      f.execution.saveMarker = value => { save(value); if (value.phase === 'note-delivered') delivered = true; };
+      f.ctx.getTranscriptTurn = () => !delivered ? null : state === 'not quiet' ? { ...turn, mtimeMs: Date.now() } : turn;
+      f.start({ before: 'Save a note' }); const r = await f.finish();
+      assert.equal(r.reason, 'note step not finished', `${state} cannot authorize a kill`);
+      assert.equal(r.delivery.final_turn.source, 'busy_flag');
+      assert.equal(Date.now(), f.execution.deadline, 'refuse only at the original deadline');
+      assert.equal(f.kills(), 0); assert.deepEqual(f.writes, ['Save a note', '\r']);
+    });
+  }
+});
 
 test('stop before readiness deadline reports the unfinished note without writing', async t => {
   const f = fixture(t, { timeout: 60 });

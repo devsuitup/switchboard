@@ -156,6 +156,9 @@ including a failed kill request. The trigger treats a genuine first-request
 failure as `session stop failed`. Both callers accept a PTY already in
 `killedPtys` as termination pending without invoking kill again. A genuine
 failure clears `stopRequested` so a later natural exit is not labelled Stopped.
+Failed backend kills are removed from `killedPtys`; a later trigger retries the
+kill, refusing `session stop failed` if that retry fails instead of waiting on
+the earlier failed request.
 
 A completed OSC busy fall records its completion and Enter timestamps. A
 busy/shell descriptor stamped at or before that completion is stale: stop waits
@@ -164,6 +167,10 @@ quiet transcript turn. It never sends the note again. A later busy stamp or
 busy rise refuses new activity. Composer, ownership and target checks remain
 active during this wait. Expiration while waiting for renderer readiness with
 `before` returns `note step not finished`; closing keeps its dedicated reason.
+The stale-descriptor transcript gate is exercised after OSC completion with a
+frozen busy timestamp: the note's quiet closed turn permits one kill, while an
+open or still-changing transcript, a closure older than its prompt, or a missing
+own prompt waits until the original deadline without a kill or a second note.
 
 Markers record the claimed/prompt-attempted/note-delivered/note-finished and
 stop-requested phases. Confirmed kill requests set `stop_requested:true`;
