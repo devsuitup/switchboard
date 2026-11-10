@@ -413,22 +413,27 @@ async function until(predicate, label) {
   assert.ok(predicate(), label);
 }
 function spies() {
-  const s = { lookups: [], writes: [], effects: 0, dispatches: 0, gate: null, onDispatch: null };
+  const s = { lookups: [], writes: [], effects: 0, dispatches: 0, gate: null, onDispatch: null, opens: false, sessions: new Map() };
+  const session = { pty: { pid: 1 }, generation: 7, cwd: '/p', projectPath: '/p' };
   const lifecycle = {
-    launchAllowed: () => true, activeSessions: new Map(),
+    launchAllowed: () => true, activeSessions: s.sessions,
     remoteTarget: async () => { s.effects++; return false; },
     liveElsewhere: async () => { s.effects++; return { known: true, live: null }; },
     resolveTarget: async () => { s.effects++; return { ok: true, cwd: '/p', project: '/p', transcript: 't', transcriptIdentity: 'i' }; },
     saveName: async () => { s.effects++; return { name: 'n' }; },
-    broker: { request: async (_operation, beforeSpawn) => {
+    broker: { request: async (operation, beforeSpawn) => {
       await beforeSpawn();
       s.dispatches++;
       s.onDispatch?.();
       await s.gate;
-      return { ok: false, reason: 'renderer refused' };
+      if (!s.opens) return { ok: false, reason: 'renderer refused' };
+      s.sessions.set(operation.tabKey, session);
+      operation.onOpened?.(session);
+      return { ok: true, generation: 7, resumed: true };
     } },
   };
-  s.ctx = { getPtyForSession: sessionId => { s.lookups.push(sessionId); return null; },
+  s.ctx = { getPtyForSession: sessionId => { s.lookups.push(sessionId); return s.sessions.size ? { session, ptyProcess: session.pty, cwd: '/p' } : null; },
+    pinDelivery: (_id, entry) => ({ binding: { tab: entry.session }, ctx: {}, handle: {} }),
     getComposerState: () => ({ pending: 0, lastInputAt: 0 }), isSessionBusy: () => false, lifecycle };
   return s;
 }
@@ -494,9 +499,11 @@ test('an unreadable committed result is never overwritten and its duplicate inpu
   assertNoDuplicateEffects(s);
 });
 
-for (const [kind, variant] of [['versioned', payload], ['legacy for another target', { sessionId: other, command: 'replay to B' }]]) {
-  test(`an uppercase ${kind} duplicate queues behind the active owner and cannot touch its result`, async t => {
+for (const [kind, variant, outcome] of [['versioned', payload, 'refused'], ['legacy for another target', { sessionId: other, command: 'replay to B' }, 'refused'],
+  ['versioned', payload, 'opened'], ['legacy for another target', { sessionId: other, command: 'replay to B' }, 'opened']]) {
+  test(`an uppercase ${kind} duplicate queues behind the active owner and cannot touch its ${outcome} result`, async t => {
     const s = spies();
+    s.opens = outcome === 'opened';
     const gate = deferred();
     const reached = deferred();
     s.gate = gate.promise;
@@ -523,7 +530,9 @@ for (const [kind, variant] of [['versioned', payload], ['legacy for another targ
     gate.resolve();
     await until(() => fs.existsSync(r.output), 'the owner commits its result');
     const first = fs.readFileSync(r.output);
-    assert.equal(JSON.parse(first).reason, 'renderer refused');
+    if (outcome === 'refused') assert.equal(JSON.parse(first).reason, 'renderer refused');
+    else assert.equal(JSON.parse(first).outcome, 'opened');
+    await until(() => !fs.existsSync(r.input) && !fs.existsSync(r.marker), 'the owner removes its input and marker');
     await until(() => !fs.existsSync(upper), 'the queued variant drains after release');
     fs.writeFileSync(r.input, JSON.stringify({ sessionId: other, command: 'late legacy duplicate' }));
     r.notify();
