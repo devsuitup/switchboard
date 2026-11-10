@@ -48,10 +48,11 @@ const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, men
 const { createUnsavedGuard } = require('./src/main/app/unsaved-guard');
 const { inventory, runExitHandoffs } = require('./src/main/app/session-exit');
 const { backgroundRefusal } = require('./src/main/bg-agents/bg-handoff');
-let revokeTriggerActions = () => {};
+let suspendTriggerActions = () => {};
+let restoreTriggerActions = () => {};
 const unsavedGuard = createUnsavedGuard({ ipcMain, quit: attempt => { quitAttemptToken = attempt; app.quit(); },
   inventory: () => exitInventory(), background: (ids, opts) => runExitBackground(ids, opts), externalFlush: () => flushForLogoff(), onAttemptReleased: () => { updateInstalling = false; },
-  onCommitted: win => revokeTriggerActions(win) });
+  onCommitted: win => suspendTriggerActions(win), onRolledBack: win => restoreTriggerActions(win) });
 let exitInventory = () => ({ rows: [], counts: {}, remote: {} });
 let runExitBackground = async () => [];
 let flushForLogoff = () => Promise.resolve();
@@ -336,11 +337,12 @@ const activeSessions = new Map();
 const triggerRendererBridge = require('./src/main/triggers/trigger-renderer-bridge').createTriggerRendererBridge({
   ipcMain, getWindow: () => mainWindow, getSession: id => activeSessions.get(id), launchAllowed: () => unsavedGuard.launchAllowed(),
 });
-revokeTriggerActions = win => triggerRendererBridge.revoke(win, 'Switchboard is closing.');
+suspendTriggerActions = win => triggerRendererBridge.suspend(win);
+restoreTriggerActions = win => triggerRendererBridge.restore(win);
 
 function triggerLifecycleDeps() {
   const { resolveLocalTarget, resolveProject } = require('./src/main/triggers/trigger-actions');
-  return { activeSessions, broker: triggerRendererBridge, launchAllowed: () => unsavedGuard.launchAllowed(),
+  return { activeSessions, broker: triggerRendererBridge, launchAllowed: () => unsavedGuard.launchAllowed(), captureAuthority: () => unsavedGuard.capture(),
     getProjectSnapshot: getTriggerProjectSnapshot, getCachedSession, getCachedFolder, projectsDir: PROJECTS_DIR,
     resolveTarget: resolveLocalTarget, resolveProject,
     liveElsewhere: (id, deadline) => cliSessionState.liveElsewhereV1Checked(id, () => false, cliSessionState.makePtyPids(activeSessions), { deadline }),

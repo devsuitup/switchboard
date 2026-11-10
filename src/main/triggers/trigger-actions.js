@@ -331,8 +331,10 @@ async function executeStop(trigger, execution) {
   const bound = read => boundedRead(read, { now, deadline });
   const pause = ms => new Promise(resolve => setTimeout(resolve, Math.max(0, Math.min(ms, deadline - now()))));
   const reject = (reason, extra) => { throw Object.assign(new Error(reason), { stopRefusal: true, extra }); };
+  const authority = deps.captureAuthority?.();
+  const allowed = () => deps.launchAllowed() && authority?.valid() !== false;
   const check = (timeout = 'session action timed out') => {
-    if (!deps.launchAllowed()) reject('Switchboard is closing.');
+    if (!allowed()) reject('Switchboard is closing.');
     if (now() >= deadline) reject(timeout, stopRequested ? { uncertain: true } : undefined);
     const state = ready?.validate();
     if (state && !state.ok) reject(state.reason);
@@ -456,7 +458,7 @@ async function executeStop(trigger, execution) {
     ready = await deps.broker.waitForReady(deadline);
     if (!ready?.ok) reject(before && now() >= deadline ? 'note step not finished' : ready?.reason || 'renderer not ready');
     pinned.binding.validateAction = () => {
-      const state = ready.validate();
+      const state = allowed() ? ready.validate() : { ok: false, reason: 'Switchboard is closing.' };
       if (!state.ok) throw Object.assign(new Error(state.reason), { deliveryRefusal: true });
     };
     check(); target();
@@ -483,7 +485,7 @@ async function executeStop(trigger, execution) {
       effects = { ...effects, ...delivered, delivery: delivered };
       delete effects.ok; delete effects.reason; delete effects.error;
       marker('note-delivered');
-      if (!deps.launchAllowed()) reject('Switchboard is closing.');
+      if (!allowed()) reject('Switchboard is closing.');
       if (!delivered.ok || delivered.timedOut || now() >= deadline || !delivered.final_turn
         || delivered.final_turn.timedOut || delivered.final_turn.sessionExited
         || !['descriptor', 'transcript', 'busy_flag'].includes(delivered.final_turn.source)) {
@@ -543,10 +545,12 @@ async function executeOpen(trigger, execution) {
   let effects = { ...evidence };
   let releaseSession, releaseTab, reservation, pinned;
   const fail = (reason, extra = {}) => refusal(trigger, reason, { ...effects, sessionId: id, ok: false, outcome: 'refused', reason, ...extra });
+  const authority = deps.captureAuthority?.();
+  const allowed = () => deps.launchAllowed() && authority?.valid() !== false;
   const expired = () => now() >= deadline;
-  const admitted = () => !expired() && deps.launchAllowed();
+  const admitted = () => !expired() && allowed();
   const check = () => {
-    if (!deps.launchAllowed()) throw Object.assign(new Error('Switchboard is closing.'), { refusal: true });
+    if (!allowed()) throw Object.assign(new Error('Switchboard is closing.'), { refusal: true });
     if (expired()) throw Object.assign(new Error('session action timed out'), { refusal: true });
   };
   const bound = read => boundedRead(read, { now, deadline });
@@ -583,6 +587,9 @@ async function executeOpen(trigger, execution) {
     if (!releaseTab) return fail('session action timed out');
     pinned.binding.deadline = deadline;
     pinned.binding.expectedCwd = trigger.expectedCwd;
+    pinned.binding.validateAction = () => {
+      if (!allowed()) throw Object.assign(new Error('Switchboard is closing.'), { deliveryRefusal: true });
+    };
     return null;
   }
   async function run() {
