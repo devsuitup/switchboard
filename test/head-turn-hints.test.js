@@ -9,6 +9,15 @@ const { createSessionState } = require('../public/session-state');
 const { createTaskRecordsClient } = require('../task-records-client');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 
+test('an untimestamped background prompt hint cannot close an unknown head', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const snapshot = { liveness: 'alive', backgroundJob: true, promptHint: true };
+    assert.equal(ctx.window.headActivitySnapshot('background-hint', snapshot).headTurn, 'unknown');
+    assert.equal(ctx.window.headActivitySnapshot('background-hint', { ...snapshot, promptHintAt: 2000 }).headTurn, 'closed');
+  } finally { ctx.destroy(); }
+});
+
 for (const type of ['promptHint', 'descriptorStatus']) {
   for (const next of ['busy', 'transcriptTouched', 'descriptorStatus']) {
     for (const at of [1000, 2000, 3000]) {

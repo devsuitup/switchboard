@@ -151,7 +151,7 @@ function setupDom({ readSubagentJsonlResult = { entries: SAMPLE_ENTRIES }, readS
   evalInWindow(dom, path.join(PUBLIC_DIR, 'subagent-timing.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'bridge-url.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'worktree-nesting.js'));
-  for (const file of ['session-state.js', 'session-activity-dom.js', 'session-activity.js']) {
+  for (const file of ['session-state.js', 'session-status-projection.js', 'session-activity-dom.js', 'session-activity.js']) {
     evalInWindow(dom, path.join(PUBLIC_DIR, file));
   }
   evalInWindow(dom, path.join(PUBLIC_DIR, 'task-registry.js'));
