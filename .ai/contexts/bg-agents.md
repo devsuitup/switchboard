@@ -53,6 +53,34 @@ remain unknown and held. Mismatched or ambiguous identity refuses; ambiguity nam
 every matching id. A missing record releases the held entry, with a notice;
 a later sidebar click follows the ordinary guarded resume path.
 
+Restore checks conversation and worker liveness before deciding retirement.
+A saved `done` job with unknown worker liveness retires only when its normalized
+task evidence is valid, has no in-flight or queued tasks, and has no unfinished
+fan task. `failed` and `stopped` retain their previous recovery rules.
+Explicit saved ids also request `findNewer`: another readable, known-state job
+must have its own parsed `sessionId` (from linkScanPath/sessionId) equal to the
+saved conversation and have a strictly later `updatedAt`. A `resumeSessionId`
+alone is a fork/resume origin and never proves supersession. Project
+or cwd equality alone never supersedes a job. Unreadable, unrelated and
+undated candidates cannot establish supersession. Superseded entries retire
+with dead or unknown worker liveness, even with pending task evidence. Live
+workers always follow the attach path, including idle `done` workers. Without
+supersession, dead `done` jobs retain automatic recovery. Legacy lookups retain
+their unique-match requirement. Explicit-id restore lookups share directory names
+and parsed state records for a fixed one-second window, including calls separated
+by asynchronous settings reads. The snapshot is keyed by jobs directory; a directory
+change or an expired window reads fresh evidence. It holds at most one record per
+job encountered in that window. Supersession reads the candidate's own identity
+directly from `linkScanPath` or a valid `sessionId`; `parseJobState` retains its
+`resumeSessionId` fallback for other callers.
+
+The `retire` result makes `prepareBackgroundRestore` release the skipped,
+dormant and in-flight slots, clear its Restore notice and schedule persistence
+without opening a terminal or displaying a failure during startup. On a user
+click, retirement instead continues the ordinary guarded open in the same click.
+The transcript and Agents record remain available for an explicit user open or
+Respawn. Retirement never calls Respawn, including attach-only retries.
+
 `conversationCheck(id, { workerLiveness: 'all' })` requests S1a's classifier
 for terminal states too. Live attaches; dead `working`, `done`, `running` and `failed` jobs go through
 the existing `checkVerb('respawn')` and `runVerb` guards, preserving #796 recovery
@@ -119,7 +147,8 @@ Lazy/manual held-entry opens share
 `prepareBackgroundRestore`.
 The remembered active background entry defers to startup policy. Renderer
 rechecks descriptor identity and requires an attach verdict; no interactive
-fallback is allowed during background preparation. Except for missing jobs,
+fallback is allowed after a refusal during background preparation. An interactive
+retirement continues the ordinary open path. Except for missing and retired jobs,
 refusals stay in `skippedWorkingSetEntries`, survive saves
 with their job identity, and use persistent Restore notices. Tests:
 `restore-live-elsewhere`, `restore-lazy`, `restore-pending-persist`,
@@ -129,9 +158,12 @@ M1 evidence (2026-10-25, CLI 2.1.302; untracked scratch notes in the
 primary checkout's `.work-files/m1-785-report.md`, not in the repository) measured dead `working` surviving daemon death,
 respawn cold-starting the daemon, retaining job/session/name, then producing
 a usable background descriptor. This implementation uses those recorded facts;
-it does not repeat the live acceptance run. The #1020 policy retains #796's
-automatic recovery for dead `working`, `done`, `running` and `failed`, with manual recovery
-for dead `blocked` and `stopped`.
+it does not repeat the live acceptance run. The #1065 policy retires `done`
+entries with unknown worker liveness and no pending work, and superseded entries
+with dead or unknown worker liveness, as described above before
+#1020's recovery rules apply. Remaining dead `working`, `done`, `running` and
+`failed` jobs retain #796's recovery; dead `blocked` and `stopped` retain manual
+recovery.
 
 ## Invariants
 
