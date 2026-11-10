@@ -2341,11 +2341,13 @@ async function launchNewSession(project, sessionOptions, restoreSessionId, flags
 
   // Inject into cached project data so it appears in sidebar immediately
   sessionMap.set(sessionId, session);
+  const createdProjectRows = [];
   for (const projList of [cachedProjects, cachedAllProjects]) {
     let proj = projList.find(p => p.projectPath === projectPath);
     if (!proj) {
       proj = { folder, projectPath, sessions: [] };
       projList.unshift(proj);
+      createdProjectRows.push({ projects: projList, project: proj });
     }
     proj.sessions.unshift(session);
   }
@@ -2375,6 +2377,10 @@ async function launchNewSession(project, sessionOptions, restoreSessionId, flags
       sessionMap.delete(sessionId);
       for (const projects of [cachedProjects, cachedAllProjects]) {
         for (const project of projects) project.sessions = project.sessions.filter(s => s.sessionId !== sessionId);
+      }
+      for (const { projects, project } of createdProjectRows) {
+        const index = projects.indexOf(project);
+        if (index !== -1 && project.sessions.length === 0) projects.splice(index, 1);
       }
       refreshSidebar();
     }
@@ -2647,7 +2653,12 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
   let resumeOptions = customOptions
     || (session.type === 'terminal' ? { type: 'terminal' } : await resolveDefaultSessionOptions({ projectPath }));
   if (reattachOnly) resumeOptions = { ...resumeOptions, reattachOnly: true };
-  if (triggerAction && Date.now() >= triggerAction.deadline) { destroySession(sessionId); return false; }
+  if (triggerAction && Date.now() >= triggerAction.deadline) {
+    const held = skippedWorkingSetEntries.get(sessionId);
+    destroySession(sessionId);
+    if (held) skippedWorkingSetEntries.set(sessionId, held);
+    return false;
+  }
   entry.attach = resumeOptions.type === 'attach';
   entry.attachJobId = entry.attach ? resumeOptions.jobId : null;
   entry.attachCwd = entry.attach ? resumeOptions.cwd || projectPath : null;
@@ -2669,12 +2680,16 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
   result ||= { ok: false, error: 'The terminal backend is unavailable or returned no result' };
   if (triggerAction && result.ok) entry.triggerGeneration = result.generation;
   if (result.notLive) {
+    const held = triggerAction && skippedWorkingSetEntries.get(sessionId);
     destroySession(sessionId);
+    if (held) skippedWorkingSetEntries.set(sessionId, held);
     return false;
   }
   if (!result.ok) {
     if (triggerAction) {
+      const held = skippedWorkingSetEntries.get(sessionId);
       destroySession(sessionId);
+      if (held) skippedWorkingSetEntries.set(sessionId, held);
       onOpenError?.(result.error, result.reason, result.generation ?? null);
       return false;
     }

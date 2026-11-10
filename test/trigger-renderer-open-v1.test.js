@@ -164,3 +164,66 @@ test('a new trigger deadline after entry creation removes all placeholder state'
   await disk.persistWorkingSet();
   assert.deepEqual(disk.read().openWorkingSet, [], 'an expired placeholder must not be persisted as fresh');
 });
+
+for (const refusal of ['deadline after defaults', 'notLive', 'backend refusal']) {
+  test(`a held startup entry survives trigger ${refusal} and a later working-set save`, async t => {
+    const h = fixture(t); const disk = persistence(t, h); const op = request();
+    const held = { item: { sessionId: ID, projectPath: '/project', active: false }, index: 0 };
+    h.w.skippedWorkingSetEntries.set(ID, held);
+    await disk.persistWorkingSet();
+    assert.deepEqual(disk.read().openWorkingSet, [held.item]);
+    if (refusal === 'deadline after defaults') {
+      h.w.resolveDefaultSessionOptions = async () => { op.deadline = 0; return {}; };
+    } else {
+      h.w.api.openTerminal = async () => refusal === 'notLive'
+        ? { ok: false, notLive: true }
+        : { ok: false, error: 'blocked', reason: 'session live elsewhere' };
+    }
+    await h.f.handleTriggerSessionAction(op);
+    assert.equal(h.calls.find(c => c[0] === 'ack')?.[1].ok, false);
+    assert.equal(h.w.openSessions.has(ID), false);
+    assert.equal(h.w.skippedWorkingSetEntries.get(ID), held, 'trigger cleanup must retain the original held startup entry');
+    assert.equal(h.calls.some(c => c[0] === 'notice' || c[0] === 'persist'), false);
+    await disk.persistWorkingSet();
+    assert.deepEqual(disk.read().openWorkingSet, [held.item], 'a later save must retain the held conversation');
+  });
+}
+
+for (const refusal of ['deadline', 'absent result', 'backend refusal', 'backend throw']) {
+  test(`a new trigger ${refusal} removes only the empty project rows it created`, async t => {
+    const h = fixture(t); const op = request({ mode: 'new', requestedSessionId: null, name: 'Name' });
+    const existing = { projectPath: '/project', sessions: [] };
+    h.w.cachedAllProjects.push(existing);
+    if (refusal === 'deadline') {
+      const create = h.w.createTerminalEntry;
+      h.w.createTerminalEntry = session => { const entry = create(session); op.deadline = 0; return entry; };
+    } else {
+      h.w.api.openTerminal = async () => {
+        if (refusal === 'backend throw') throw new Error('backend unavailable');
+        return refusal === 'absent result' ? undefined : { ok: false, error: 'blocked' };
+      };
+    }
+    await h.f.handleTriggerSessionAction(op);
+    assert.equal(h.calls.find(c => c[0] === 'ack')?.[1].ok, false);
+    assert.equal(h.w.cachedProjects.length, 0, 'trigger cleanup must remove the empty project row it created');
+    assert.equal(h.w.cachedAllProjects.length, 1, 'an existing empty project row must survive');
+    assert.equal(h.w.cachedAllProjects[0], existing);
+    assert.equal(existing.sessions.length, 0);
+    assert.equal(h.w.openSessions.has(ID), false);
+    assert.equal(h.w.pendingSessions.has(ID), false);
+    assert.equal(h.w.sessionMap.has(ID), false);
+  });
+}
+
+test('a failed new trigger retains a created project row that gained another session', async t => {
+  const h = fixture(t); const other = { sessionId: OTHER, projectPath: '/project' };
+  h.w.api.openTerminal = async () => {
+    for (const projects of [h.w.cachedProjects, h.w.cachedAllProjects]) projects[0].sessions.push(other);
+    return { ok: false, error: 'blocked' };
+  };
+  await h.f.handleTriggerSessionAction(request({ mode: 'new', requestedSessionId: null, name: 'Name' }));
+  for (const projects of [h.w.cachedProjects, h.w.cachedAllProjects]) {
+    assert.equal(projects.length, 1);
+    assert.deepEqual(Array.from(projects[0].sessions), [other]);
+  }
+});

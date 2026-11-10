@@ -16,7 +16,9 @@ host-visible NSpid/stat/ns evidence, independently of any local PTY, demands a
 unique mapping and rereads file/process identity. Zero or multiple matches and
 unsupported identity yield known:false. Zombie/exited host writers and ancestry
 links cannot supply live proof. On Windows, two dead native PID reads establish
-absence, including for an unanchored descriptor. Two native anchor start probes
+absence, including for an unanchored descriptor. This assumes descriptor PIDs
+belong to this Windows host's PID namespace; a WSL CLI sharing the config
+directory would break that assumption. Two native anchor start probes
 that both mismatch establish a stale descriptor. Both paths reread the unchanged
 descriptor before excluding it; mixed, unavailable or replaced evidence stays
 unknown. Linux keeps zero mappings and start mismatches unknown because the raw

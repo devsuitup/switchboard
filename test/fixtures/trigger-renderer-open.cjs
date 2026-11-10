@@ -26,7 +26,7 @@ function fixture(t) {
     encodeProjectPath: () => 'folder', refreshSidebar() {},
     createTerminalEntry: session => { const entry = { session, initialSize: { cols: 80, rows: 24 }, terminal: { write() {} } }; w.openSessions.set(session.sessionId, entry); return entry; },
     rowOpenId: s => w.openSessions.has(s.sessionId) ? s.sessionId : null,
-    destroySession: id => w.openSessions.delete(id), showSession: () => calls.push(['focus']),
+    destroySession: id => { w.openSessions.delete(id); w.skippedWorkingSetEntries.delete(id); }, showSession: () => calls.push(['focus']),
     syncPtySizeAfterOpen() {}, setSessionMcpState() {}, setSessionSandboxed() {}, forgetSessionExit() {},
     pollActiveSessions() {}, schedulePersistWorkingSet: () => calls.push(['persist']),
     wrapInGridCard: id => calls.push(['card', id]), updateGridColumns() {}, gridCards: new Map(), gridViewerCount: {},

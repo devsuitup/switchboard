@@ -55,9 +55,13 @@ and Windows 8.3 aliases. Resume keeps its separately verified recorded cwd.
 The final descriptor liveness scan applies to resume; new has a freshly reserved
 UUID and revalidates project admission without scanning unrelated descriptors.
 Prompt delivery still requires the new launch's descriptor readiness proof.
-Renderer trigger refusals destroy the terminal without restore notices, skipped
-restore entries or working-set writes. Failed or expired new opens also remove
-their pending/sidebar rows so a later save cannot retain a fresh placeholder.
+Renderer trigger refusals destroy the terminal without restore notices, new skipped
+restore entries or working-set writes. Cleanup preserves any existing held startup
+entry across deadline, not-live and backend refusals so a later working-set save
+retains that conversation. Failed or expired new opens also remove their
+pending/sidebar rows and any empty project rows created by that launch. Existing
+project rows and created rows that gained another session survive cleanup so a
+later save cannot retain a fresh placeholder.
 If the renderer joins an ordinary pending exact resume, main revalidates its
 recorded launch mode/source, transcript/cwd, liveness and generation before the
 ACK. `ensureJoined` also covers an ordinary entry created while the permit was
