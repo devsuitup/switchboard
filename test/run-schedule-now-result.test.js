@@ -57,7 +57,7 @@ function setup(t, { sandbox = false, platform = 'linux', refused = false, spawnE
   const file = path.join(root, '.claude', 'commands', 'schedule-test.md');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, '---\nname: test\n---\nDo the task');
-  const handlers = new Map(), children = [], events = [], messages = [], logs = [], activities = [];
+  const handlers = new Map(), children = [], events = [], messages = [], logs = [], activities = [], created = [];
   const log = { info: (...args) => logs.push(args), warn: (...args) => logs.push(args), error: (...args) => logs.push(args) };
   const ctx = vm.createContext({
     require: createRequire(path.join(__dirname, '..', 'main.js')), fs, path, DB_PATH: path.join(root, 'db'),
@@ -96,7 +96,7 @@ function setup(t, { sandbox = false, platform = 'linux', refused = false, spawnE
     electron: { ipcMain: { handle: (name, handler) => handlers.set(name, handler) } },
     [SCHEDULE_RUNNER]: {
       parseFrontmatter: require('../src/main/schedules/schedule-runner').parseFrontmatter,
-      createScheduleSession: () => ({ sessionId: 'manual-session' }),
+      createScheduleSession: schedule => { created.push(schedule); return { sessionId: 'manual-session' }; },
       buildScheduleCommand: () => ({ claudeArgs: ['--resume', 'manual-session', '--add-dir', refused ? path.join(root, '.claude') : '/refused'] }),
     },
   }, [SCHEDULE_RUNNER]);
@@ -109,8 +109,45 @@ function setup(t, { sandbox = false, platform = 'linux', refused = false, spawnE
     return result;
   },
     cron: () => ctx.runScheduleCommand(['--resume', 'cron-session'], root, 'Nightly cron', () => {}),
-    children, events, messages, logs, activities, root, get identity() { return identity; } };
+    children, created, events, messages, logs, activities, root, get identity() { return identity; } };
 }
+
+test('Run now refuses a held project before creating or spawning a session and release restores it', async t => {
+  const h = setup(t);
+  const { projectOperationGate } = require('../src/main/shared/project-operation-gate');
+  const held = projectOperationGate.hold(h.root);
+  t.after(() => held.release());
+  const result = await h.run();
+  assert.equal(result.ok, false, 'held project must refuse Run now');
+  assert.match(result.error, /project.*operation|being deleted/i);
+  assert.equal(h.children.length, 0);
+  assert.equal(h.created.length, 0, 'held project must not create a schedule session');
+  held.release();
+  assert.equal((await h.run()).ok, true);
+});
+
+test('Run now keeps its reservation through asynchronous spawn while hold refuses another run', async t => {
+  const h = setup(t, { deferSpawn: true });
+  const { projectOperationGate } = require('../src/main/shared/project-operation-gate');
+  const pending = h.run();
+  for (let i = 0; i < 30 && !h.children.length; i++) await Promise.resolve();
+  assert.equal(h.children.length, 1, 'first Run now reaches the asynchronous spawn boundary');
+  const held = projectOperationGate.hold(h.root);
+  t.after(() => held.release());
+  let ready = false;
+  held.ready.then(() => { ready = true; });
+  await Promise.resolve();
+  assert.equal(ready, false, 'hold must wait until Run now spawn acknowledgement');
+  const late = h.run();
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+  assert.equal(h.created.length, 1, 'execution must not create a new schedule session');
+  assert.equal(h.children.length, 1, 'no new session may spawn during execution');
+  assert.equal((await late).ok, false, 'execution must refuse a new Run now');
+  h.children[0].emit('spawn');
+  assert.equal((await pending).ok, true);
+  await held.ready;
+  assert.equal(ready, true);
+});
 
 test('Run now passes the resolved schedule identity as the fifth launcher argument', async t => {
   const h = setup(t);

@@ -211,6 +211,7 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
     }
   });
   ipcMain.handle('run-schedule-now', async (_event, filePath) => {
+    let admission;
     try {
       const target = resolveRunNowTarget(filePath, isPathAllowed);
       if (!target.ok) {
@@ -219,6 +220,9 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
       }
       const { realPath, projectPath } = target;
       if (isProjectArchived(projectPath)) return { ok: false, error: 'Project is archived; unarchive it before running schedules' };
+      const { projectOperationGate, PROJECT_OPERATION_ERROR } = require('../shared/project-operation-gate');
+      admission = projectOperationGate.tryAdmit(projectPath);
+      if (!admission) return { ok: false, error: PROJECT_OPERATION_ERROR };
 
       const content = fs.readFileSync(realPath, 'utf8');
       const { meta, body } = parseFrontmatter(content);
@@ -246,7 +250,7 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
     } catch (err) {
       log.error('[schedule] Failed to run schedule:', err);
       return { ok: false, error: err.message };
-    }
+    } finally { admission?.release(); }
   });
 }
 

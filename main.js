@@ -2168,18 +2168,21 @@ ipcMain.handle('remote-launch-session', async (_event, payload) => {
   const rawId = payload && payload.sessionId;
   const sessionId = typeof rawId === 'string' ? rawId.toLowerCase() : null;
   if (sessionId && activeSessions.has(sessionId)) return { ok: false, error: 'invalid request' };
+  let session;
   const result = await handleLaunchRequest(payload, {
     hasHost: (alias) => enabledHosts((getSetting('global') || {}).remoteHosts).some(h => h.alias === alias),
     getHosts: () => (getSetting('global') || {}).remoteHosts,
     launchBlockReason: (alias) => launchBlockReason(remoteIndexer.getRemoteHostProfile(alias)),
     adapter: remoteLaunchAdapter,
     attach: (alias, descriptor, size) => remoteAttachAdapter.attach(alias, descriptor, size),
+    register: result => {
+      session = registerRemoteAttachSession(result.descriptor.sessionId, {
+        alias: payload.alias, projectPath: result.descriptor.cwd, cwd: result.descriptor.cwd, ptyProcess: result.attachResult.ptyProcess,
+        remoteResizeAllowed: result.attachResult.remoteResizeAllowed,
+      });
+    },
   });
   if (!result.ok) return { ok: false, error: result.error };
-  const session = registerRemoteAttachSession(result.descriptor.sessionId, {
-    alias: payload.alias, projectPath: result.descriptor.cwd, cwd: result.descriptor.cwd, ptyProcess: result.attachResult.ptyProcess,
-    remoteResizeAllowed: result.attachResult.remoteResizeAllowed,
-  });
   remoteIndexer.refreshHostNow(payload.alias, { force: true }).catch(() => {});
   return { ok: true, remote: true, remoteResizeAllowed: session.remoteResizeAllowed, generation: session.generation };
 });
@@ -3084,6 +3087,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     spawnCwd = panelTarget.cwd;
   }
 
+  const { projectOperationGate, PROJECT_OPERATION_ERROR } = require('./src/main/shared/project-operation-gate');
+  const admission = isAttach ? null : projectOperationGate.tryAdmitAll([projectPath, spawnCwd]);
+  if (!isAttach && !admission) return { ok: false, error: PROJECT_OPERATION_ERROR,
+    ...(triggerPermit ? { reason: PROJECT_OPERATION_ERROR } : {}) };
+  try {
   // Spawn new PTY
   if (!fs.existsSync(spawnCwd)) {
     return { ok: false, error: `project directory no longer exists: ${spawnCwd}` };
@@ -3353,6 +3361,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     mcpError,
     generation: session.generation,
   };
+  } finally { admission?.release(); }
   } finally { releaseOpen(); }
 });
 

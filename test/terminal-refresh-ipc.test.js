@@ -47,7 +47,7 @@ async function promotionFixture(t, { initialCount = 1 } = {}) {
       ipcRenderer: { on(channel, cb) { listeners.set(channel, cb); } },
       webUtils: {},
     }),
-  });
+  }, { filename: path.join(__dirname, '../preload.js') });
   const activeSessions = new Map();
   const context = vm.createContext({
     activeSessions,
@@ -59,7 +59,7 @@ async function promotionFixture(t, { initialCount = 1 } = {}) {
     revealIfSdkSession() {},
   });
   const main = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  vm.runInContext(extractFunction(main, 'registerRemoteAttachSession'), context);
+  vm.runInContext(extractFunction(main, 'registerRemoteAttachSession'), context, { filename: path.join(__dirname, '../main.js') });
   const session = context.registerRemoteAttachSession('promoted-session', {
     alias: 'fixture', projectPath: '/fixture', cwd: '/fixture', ...attached,
   });
@@ -147,17 +147,23 @@ test('remote open, reattach and launch preserve the adapter sizing capability in
       normalizePtySize: require('../src/main/terminals/pty-size').normalizePtySize,
       remoteAttachAdapter: { attach: async () => attachResult },
       remoteLaunchAdapter: {},
-      handleLaunchRequest: async () => ({ ok: true, descriptor, attachResult }),
+      handleLaunchRequest: async (_payload, deps) => {
+        const result = { ok: true, descriptor, attachResult };
+        await deps.register(result);
+        return result;
+      },
       wireSessionPty() {},
       revealIfSdkSession() {},
       getMcpState: () => null,
     });
-    vm.runInContext(extractFunction(main, 'registerRemoteAttachSession'), context);
+    vm.runInContext(extractFunction(main, 'registerRemoteAttachSession'), context, { filename: path.join(__dirname, '../main.js') });
     for (const channel of ['open-terminal', 'remote-launch-session']) {
       const start = main.indexOf(`ipcMain.handle('${channel}'`);
       const end = main.indexOf('\n});', start) + 4;
       assert.ok(start >= 0 && end > start);
-      vm.runInContext(main.slice(start, end), context, { filename: path.join(__dirname, '../main.js') });
+      vm.runInContext(main.slice(start, end), context, {
+        filename: path.join(__dirname, '../main.js'), lineOffset: main.slice(0, start).split('\n').length - 1,
+      });
     }
     const open = handlers.get('open-terminal');
     const result = await open(null, 'fixture', '/fixture', false, {}, { cols: 120, rows: 40 });
@@ -200,7 +206,7 @@ test('the shipped preload and main resize registration forward one refresh and r
       ipcRenderer: { send(channel, ...args) { sends++; assert.equal(channel, 'terminal-resize'); registered(null, ...args); } },
       webUtils: {},
     }),
-  });
+  }, { filename: path.join(__dirname, '../preload.js') });
   api.resizeTerminal('fixture', 120, 40, { refresh: true });
   assert.equal(sends, 1);
   assert.deepEqual(calls, [{ cols: 120, rows: 40 }, { cols: 119, rows: 40 }]);

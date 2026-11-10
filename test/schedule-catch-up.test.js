@@ -72,6 +72,49 @@ function fakeClock(t, now) {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now });
 }
 
+for (const catchUp of [false, true]) {
+  test(`scheduler ${catchUp ? 'catch-up' : 'tick'} reserves admission until launcher acknowledgement`, async t => {
+    const r = rig({ cron: '* * * * *', catchUp });
+    fakeClock(t, at(5, 12, 0, 30));
+    let acknowledge;
+    const stop = startScheduler({ info() {}, warn() {}, error() {} }, () => {
+      return new Promise(resolve => { acknowledge = resolve; });
+    }, { resumeSource: r.resume, stateDir: STATE_DIR, projects: () => [PROJECT] });
+    t.after(stop);
+    if (!catchUp) t.mock.timers.tick(30000);
+    assert.equal(typeof acknowledge, 'function', 'launcher must be pending');
+    const { projectOperationGate } = require('../src/main/shared/project-operation-gate');
+    const held = projectOperationGate.hold(PROJECT);
+    t.after(() => held.release());
+    let ready = false;
+    held.ready.then(() => { ready = true; });
+    await Promise.resolve();
+    assert.equal(ready, false, 'hold must wait for scheduler launcher acknowledgement');
+    acknowledge();
+    await held.ready;
+    assert.equal(ready, true);
+  });
+}
+
+for (const catchUp of [false, true]) {
+  test(`held project refuses scheduler ${catchUp ? 'catch-up claims' : 'minute tick'} and release restores it`, async t => {
+    const r = rig({ cron: '* * * * *', catchUp });
+    fakeClock(t, at(5, 12, 0, 30));
+    const { projectOperationGate } = require('../src/main/shared/project-operation-gate');
+    const held = projectOperationGate.hold(PROJECT);
+    t.after(() => held.release());
+    const stop = r.start();
+    t.after(stop);
+    t.mock.timers.tick(60000);
+    assert.equal(r.runs.length, 0, `held project must refuse scheduler ${catchUp ? 'catch-up' : 'tick'}`);
+    assert.deepEqual(fs.existsSync(STATE_DIR) ? fs.readdirSync(STATE_DIR) : [], [], 'held project must not claim a minute');
+    assert.deepEqual(r.firstMessages(), [], 'held project must not create a transcript');
+    held.release();
+    t.mock.timers.tick(60000);
+    assert.equal(r.runs.length, 1);
+  });
+}
+
 test('cron and catch-up pass file, slug and due-minute identity to the launcher', t => {
   const r = rig({ cron: '0 20 * * *' });
   fakeClock(t, at(5, 12, 0, 30));
