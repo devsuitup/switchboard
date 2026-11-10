@@ -17,18 +17,33 @@ function archiveProjectIdentity(project) {
 function projectArchiveWorkflows(client) {
   if (gates.has(client)) return gates.get(client);
   const active = new Map(), holds = new Map(), scope = new AsyncLocalStorage();
-  const identities = projects => [...new Map(projects.map(project => { const identity = archiveProjectIdentity(project); return [identity.key, identity]; })).values()].sort((a, b) => a.key.localeCompare(b.key));
+  const identities = (projects, skipInvalid = false) => [...new Map(projects.flatMap(project => {
+    try { const identity = archiveProjectIdentity(project); return [[identity.key, identity]]; }
+    catch (failure) { if (skipInvalid && failure.code === 'DELETION_ID') return []; throw failure; }
+  })).values()].sort((a, b) => a.key.localeCompare(b.key));
   const current = () => scope.getStore();
   const assertLive = () => { if (current()?.sealed) throw error('WORKFLOW_SEALED'); };
-  function run(projects, fn) {
+  function run(projects, fn, { skipInvalid = false } = {}) {
     let targets;
     try {
-      targets = identities(projects);
-      if (targets.some(project => active.has(project.key) || holds.has(project.key))) throw error('WORKFLOW_BUSY');
+      targets = identities(projects, skipInvalid);
+      if (targets.some(project => holds.has(project.key))) throw error('WORKFLOW_BUSY');
     } catch (failure) { return Promise.reject(failure); }
     let finish;
     const lease = { id: randomUUID(), projects: targets, sealed: false, settled: new Promise(resolve => { finish = resolve; }) };
-    for (const project of targets) active.set(project.key, lease);
+    for (const project of targets) {
+      if (!active.has(project.key)) active.set(project.key, new Set());
+      active.get(project.key).add(lease);
+    }
+    const release = () => {
+      for (const project of targets) {
+        const leases = active.get(project.key);
+        leases?.delete(lease);
+        if (!leases?.size) active.delete(project.key);
+      }
+      client.retireWorkflow?.(lease.id);
+      finish();
+    };
     return scope.run(lease, async () => {
       let releasable = true;
       try { return await fn(lease); }
@@ -38,12 +53,13 @@ function projectArchiveWorkflows(client) {
       } finally {
         if (lease.sealed) {
           try { await client.fenceWorkflow(lease.id); }
-          catch { releasable = false; }
+          catch {
+            releasable = false;
+            client.waitForWorkflowTermination?.(lease.id).then(release).catch(() => {});
+          }
         }
         if (releasable) {
-          for (const project of targets) active.delete(project.key);
-          client.retireWorkflow?.(lease.id);
-          finish();
+          release();
         }
       }
     });
@@ -53,7 +69,7 @@ function projectArchiveWorkflows(client) {
     if (targets.some(project => holds.has(project.key))) throw error('WORKFLOW_BUSY');
     const token = {};
     for (const project of targets) holds.set(project.key, token);
-    const waiting = [...new Set(targets.map(project => active.get(project.key)).filter(Boolean))];
+    const waiting = [...new Set(targets.flatMap(project => [...(active.get(project.key) || [])]))];
     let released = false, ready = false;
     return {
       ready: Promise.all(waiting.map(lease => lease.settled)).then(() => { ready = true; }),

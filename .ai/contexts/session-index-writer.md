@@ -465,7 +465,14 @@ window.
 
 Archive workflow admission and cancellation now share one client-scoped gate
 across withCache facades; see [project-delete.md](project-delete.md),
-"Archive workflow exclusion (A4b2)". `readProjectArchiveEpochs` and workflow
+"Archive workflow exclusion (A4b2)". Ordinary workflows share keys; only deletion
+reservations exclude new work and wait for all admitted leases. List reads
+tolerate blocked identities and skip epoch IPC when the reader's cheap
+`projectDeletion.hasFences()` query finds no fence. Actual retirement retains
+writer admission guards, including epoch-zero checks on the fast path. Failed
+cancellation reconciles only after confirmed old-worker termination; failure
+and circuit-stop cleanup retire client workflow seals after removing requests.
+`readProjectArchiveEpochs` and workflow
 fence/retirement controls are read/control turns without a revision increment
 or settings publication. Archive mutations retain the ordinary single
 commitTransaction revision increment. Deletion receipt purge uses a bounded

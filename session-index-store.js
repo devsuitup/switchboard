@@ -951,6 +951,7 @@ if (!readonly) try {
 let preparedDeletionStatements;
 function deletionStatements() {
 return preparedDeletionStatements ??= {
+  hasFences: db.prepare('SELECT 1 FROM project_delete_fences LIMIT 1'),
   fence: db.prepare('SELECT * FROM project_delete_fences WHERE projectKey = ?'),
   setFence: !readonly && db.prepare(`INSERT INTO project_delete_fences(projectKey, epoch, operationId, blocked) VALUES (?, ?, ?, ?)
     ON CONFLICT(projectKey) DO UPDATE SET epoch=excluded.epoch, operationId=excluded.operationId, blocked=excluded.blocked`),
@@ -967,6 +968,7 @@ return preparedDeletionStatements ??= {
 };
 }
 const projectDeletion = {
+  hasFences: () => !!deletionStatements().hasFences.get(),
   fence: key => deletionStatements().fence.get(key) || null,
   setFence: (key, epoch, id, blocked) => deletionStatements().setFence.run(key, epoch, id, blocked),
   operation: id => deletionStatements().operation.get(id) || null,

@@ -231,15 +231,16 @@ function createWriterCommands(db) {
       archive.clearArchivedEntry(db.getSetting, db.setSetting, null, projectPath);
     },
     retireArchivedEntries(entries, snapshot, proof) {
-      guard(entries.map(entryProject), proof);
       const current = db.getSetting('archivedProjects') || {};
+      entries = entries.filter(entry => Object.hasOwn(current, entry));
+      guard(entries.map(entryProject), proof);
       const state = { archivedProjects: current, hiddenProjects: (db.getSetting('global') || {}).hiddenProjects || [],
         hiddenProjectScopes: (db.getSetting('global') || {}).hiddenProjectScopes || {},
         scheduleReenableOffers: db.getSetting('scheduleReenableOffers') || {} };
       if (JSON.stringify(state) !== JSON.stringify(snapshot)) {
         throw Object.assign(new Error('archive snapshot changed before writer admission'), { code: 'WRITER_STALE' });
       }
-      archive.retireArchivedEntries(db.getSetting, db.setSetting, current, entries.filter(entry => Object.hasOwn(current, entry)));
+      archive.retireArchivedEntries(db.getSetting, db.setSetting, current, entries);
     },
     dismissReenableOffer(projectPath, folderKey, proof) {
       guard([{ alias: parseFolderKey(folderKey).alias, projectPath }], proof);

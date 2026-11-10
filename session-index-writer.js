@@ -378,9 +378,11 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         if (['reenableOfferedSchedules', 'dismissReenableOffer'].includes(name) && (typeof args[0] !== 'string' || !args[0])) return admit(() => fn(...args));
         return track(commandScope.run(owner, () => workflows.run(workflowTargets[name](...args), async lease => {
           await ready;
-          lease.proof = await request('readProjectArchiveEpochs', lease.projects.map(({ alias, projectPath }) => ({ alias, projectPath })), ['unhideProject', 'revealAddedProject'].includes(name));
+          if (name !== 'applyAndPersistArchived' || backend.projectDeletion?.hasFences?.() !== false) {
+            lease.proof = await request('readProjectArchiveEpochs', lease.projects.map(({ alias, projectPath }) => ({ alias, projectPath })), ['applyAndPersistArchived', 'unhideProject', 'revealAddedProject'].includes(name));
+          }
           return fn(...args);
-        })));
+        }, { skipInvalid: name === 'applyAndPersistArchived' })));
       };
       continue;
     }

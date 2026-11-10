@@ -128,6 +128,7 @@ test('durable epochs refuse stale archive offer retirement and Undo after deleti
   commitTransaction(h.db, () => h.commands.revealAddedProject(h.root, fresh));
   assert.equal(h.db.getSetting('_writer_revision'), revision + 1, 'explicit reopen advances exactly one writer revision');
   assert.ok(h.commands.beginOffer(h.entry, h.commands.readProjectArchiveEpochs([h.project])), 'fresh admitted work remains usable after explicit re-add');
+  h.db.setSetting('archivedProjects', archived);
   for (const operation of operations) assert.throws(operation, { code: 'PROJECT_EPOCH_STALE' }, 'old epoch stays stale after explicit reopen');
   assert.deepEqual(h.bytes(), before);
 });
@@ -279,4 +280,126 @@ test('client sealing removes unsent workflow requests and refuses future submiss
     assert.equal((await rejected)?.code, 'WORKFLOW_SEALED');
     await assert.rejects(client.requestForWorkflow('old', 'beginArchive', []), { code: 'WORKFLOW_SEALED' });
   } finally { await client.terminate(); }
+});
+
+for (const operation of ['list', 'hide', 'archive']) test(`ordinary ${operation} succeeds during a list load without a deletion reservation`, supported, async t => {
+  const h = setup(t); await h.writer.ready;
+  h.db.setInitialScanComplete(true);
+  const projects = [{ projectPath: h.root, sessions: [] }];
+  const loading = h.writer.applyAndPersistArchived(projects, false);
+  const concurrent = operation === 'list' ? h.writer.applyAndPersistArchived(projects, false)
+    : operation === 'hide' ? h.writer.hideProject(h.root, 'manual')
+      : h.writer.archiveProjectFolders([{ projectPath: h.root }], {}, { mergeProjects: value => value, now: () => 'now', seedProjects: () => [], scan: () => [], notify() {} });
+  const results = await Promise.allSettled([loading, concurrent]);
+  assert.deepEqual(results.map(result => result.status), ['fulfilled', 'fulfilled'], 'ordinary workflows must both succeed without reservation');
+  if (operation === 'archive') assert.equal(results[1].value.ok, true, 'archive completes during list load');
+});
+
+test('list containing a fenced project succeeds while retirement still guards affected entries', supported, async t => {
+  const h = setup(t); await h.writer.ready; h.fence();
+  const projects = [{ projectPath: h.root, sessions: [] }, { projectPath: path.join(h.root, 'other'), sessions: [] }];
+  const result = await h.writer.applyAndPersistArchived(projects, false).then(value => ({ value }), error => ({ error: error.code }));
+  assert.equal(result.error, undefined, 'blocked identity must not reject a project list');
+  assert.equal(result.value.length, 2);
+  const otherEntry = archive.archivedEntry(null, projects[1].projectPath);
+  h.db.setSetting('archivedProjects', { [otherEntry]: { knownSessionIds: [], disabledSchedules: [] } });
+  const withRetirement = await h.writer.applyAndPersistArchived([projects[0], { ...projects[1], sessions: [{ sessionId: 'new-other' }] }], false);
+  assert.equal(withRetirement.length, 2);
+  assert.equal(h.db.getSetting('archivedProjects')[otherEntry], undefined, 'only the retired entry needs an unblocked epoch');
+  h.db.setSetting('archivedProjects', { [h.entry]: { knownSessionIds: [], disabledSchedules: [h.file] } });
+  await assert.rejects(h.writer.applyAndPersistArchived([{ projectPath: h.root, sessions: [{ sessionId: 'new' }] }], false), { code: 'PROJECT_EPOCH_STALE' });
+  assert.ok(h.db.getSetting('archivedProjects')[h.entry], 'blocked retirement preserves record');
+});
+
+test('list carries a relative remote cwd through without rejecting other identities', supported, async t => {
+  const h = setup(t); await h.writer.ready; h.fence();
+  const result = await h.writer.applyAndPersistArchived([{ remoteAlias: 'host', projectPath: 'relative/cwd', sessions: [] }, { projectPath: h.root, sessions: [] }], false)
+    .then(value => ({ value }), error => ({ error: error.code }));
+  assert.equal(result.error, undefined, 'unvalidated relative cwd must not reject the list');
+  assert.equal(result.value.length, 2);
+  assert.equal(result.value[0].projectPath, 'relative/cwd');
+});
+
+test('unfenced list reads do not send archive epoch requests', supported, async t => {
+  const h = setup(t); await h.writer.ready;
+  const request = h.client.request.bind(h.client), calls = [];
+  h.client.request = async (name, ...args) => { calls.push(name); return request(name, ...args); };
+  await h.writer.applyAndPersistArchived([{ projectPath: h.root, sessions: [] }], false);
+  assert.equal(calls.includes('readProjectArchiveEpochs'), false, 'no writer round trip for an unfenced list');
+  h.fence(); calls.length = 0;
+  await h.writer.applyAndPersistArchived([{ projectPath: h.root, sessions: [] }], false).catch(() => {});
+  assert.equal(calls.includes('readProjectArchiveEpochs'), true, 'existing fence requires fresh epoch proofs');
+});
+
+test('failed cancellation releases its lease only after old worker termination and recovery', supported, async t => {
+  const h = setup(t), dead = deferred(), ports = [], sent = [];
+  const client = createWriterWorkerClient({ heartbeatMs: 10000, workerFactory() {
+    const port = new EventEmitter(); ports.push(port);
+    port.terminate = () => ports.length === 1 ? dead.promise : Promise.resolve();
+    port.postMessage = message => {
+      sent.push(message);
+      if (ports.length === 1 && message.command === 'beginOffer') { queueMicrotask(() => port.emit('error', new Error('worker crashed'))); return; }
+      queueMicrotask(() => {
+        const result = ['retireWorkflow', 'fenceWorkflow'].includes(message.command) ? true : h.commands[message.command](...message.args);
+        port.emit('message', { id: message.id, result });
+      });
+    };
+    queueMicrotask(() => port.emit('message', { ready: true, settings: [] }));
+    return port;
+  } });
+  const fenceWorkflow = client.fenceWorkflow.bind(client);
+  client.fenceWorkflow = id => { void fenceWorkflow(id).catch(() => {}); return Promise.reject(new Error('barrier unreachable')); };
+  const writer = createSessionIndexWriter({ client, readonlyBackend: h.db }, {});
+  t.after(() => client.terminate());
+  await writer.ready;
+  await assert.rejects(writer.reenableOfferedSchedules(h.root, null, { notify() {} }), /outcome unknown/);
+  const hold = reserve(writer, [h.project]); let ready = false; hold.ready.then(() => { ready = true; });
+  await turn(); assert.equal(ready, false, 'old worker must terminate before lease release');
+  dead.resolve();
+  const recovered = client.request('readProjectArchiveEpochs', [h.project]); await recovered;
+  await turn();
+  assert.equal(ready, true, 'dead worker cancellation lease must reconcile after recovery');
+  await hold.ready; hold.release();
+  assert.equal((await writer.reenableOfferedSchedules(h.root, null, { notify() {} })).ok, true);
+  assert.ok(sent.length);
+});
+
+test('client failure retires sealed workflows once their active requests are gone', async () => {
+  const ports = [];
+  const client = createWriterWorkerClient({ heartbeatMs: 10000, workerFactory() {
+    const port = new EventEmitter(); ports.push(port); port.postMessage = () => {}; port.terminate = async () => {};
+    queueMicrotask(() => port.emit('message', { ready: true, settings: [] }));
+    return port;
+  } });
+  try {
+    await client.ready;
+    const pending = client.requestForWorkflow('retiring', 'beginOffer', 'entry').catch(error => error);
+    const fencing = client.fenceWorkflow('retiring').catch(error => error);
+    client.retireWorkflow('retiring');
+    ports[0].emit('error', new Error('crash'));
+    await Promise.all([pending, fencing]);
+    await turn();
+    const next = client.requestForWorkflow('retiring', 'beginOffer', 'entry').then(() => 'admitted', error => error.code);
+    const admission = await Promise.race([next, turn().then(() => 'pending')]);
+    assert.equal(admission, 'pending', 'failed active request must not retain its retired seal');
+  } finally { await client.terminate(); }
+});
+
+test('deletion reservation waits for every shared workflow and refuses new archive effects', supported, async t => {
+  const h = setup(t); h.offer(); await h.writer.ready;
+  const first = deferred(), second = deferred(); let callbacks = 0;
+  t.after(() => { first.resolve(); second.resolve(); });
+  const enabling = [first, second].map(blocker => h.writer.reenableOfferedSchedules(h.root, null, {
+    notify() {}, async reenable(files) { callbacks++; await blocker.promise; return h.reenable(files); },
+  }).catch(error => ({ error: error.code })));
+  await turn(); await turn();
+  assert.equal(callbacks, 2, 'ordinary workflows share their identity');
+  const hold = reserve(h.writer, [h.project]); let ready = false; hold.ready.then(() => { ready = true; });
+  const before = h.bytes();
+  await assert.rejects(h.writer.archiveProjectFolders([{ projectPath: h.root }], {}, {}), { code: 'WORKFLOW_BUSY' });
+  await assert.rejects(h.writer.reenableOfferedSchedules(h.root, null, { notify() {}, reenable: h.reenable }), { code: 'WORKFLOW_BUSY' });
+  assert.deepEqual(h.bytes(), before, 'reservation refuses archive and offer filesystem effects');
+  first.resolve(); await enabling[0]; await turn();
+  assert.equal(ready, false, 'one shared workflow completing cannot release the other');
+  second.resolve(); await enabling[1]; await hold.ready; hold.release();
 });
