@@ -599,6 +599,8 @@ async function executeOpen(trigger, execution) {
     releaseSession = await lock(execution.acquireSessionLock, id);
     if (!releaseSession) return fail('session action timed out');
     check();
+    const stale = execution.checkStale?.();
+    if (stale) return fail(stale.reason, { error: stale.error });
     let entry = isNew ? null : ctx.getPtyForSession(id);
     if (entry?.ambiguous) return fail('ambiguous normalized local tab id; nothing was written');
     if (!isNew && !entry && ctx.lookupDeliveryFallback) {
@@ -675,6 +677,14 @@ async function executeOpen(trigger, execution) {
     if (!session || session.exited || session.generation !== ack.generation || (entry && session !== entry.session)) return fail('session target changed');
     if (eligibility(session)) return fail(eligibility(session));
     marker();
+    const acceptedPty = session.pty;
+    const acceptedGeneration = session.generation;
+    const targetChanged = () => {
+      const keys = [...deps.activeSessions].filter(([, value]) => value === session);
+      if (!keys.length || session.exited || session.pty !== acceptedPty || session.generation !== acceptedGeneration) return fail('session target changed');
+      const reason = eligibility(session);
+      return reason ? fail(reason) : null;
+    };
     if (!pinned) {
       entry = ctx.getPtyForSession(id);
       if (entry?.session !== session) return fail('session target changed');
@@ -688,6 +698,7 @@ async function executeOpen(trigger, execution) {
       } catch (error) { return fail(error.code === 'TRIGGER_DEADLINE' ? 'session action timed out' : 'session name could not be saved', { error: error.message }); }
     }
     check();
+    const moved = targetChanged(); if (moved) return moved;
     const cwd = cwdFailure(session.cwd); if (cwd) return cwd;
     if (own(trigger, 'prompt')) {
       const result = await execution.deliver({ sessionId: id, command: trigger.prompt, wait: 'idle', expectedCwd: trigger.expectedCwd,
@@ -699,6 +710,7 @@ async function executeOpen(trigger, execution) {
       check();
     }
     if (!admitted()) { check(); }
+    const final = targetChanged(); if (final) return final;
     return { ...fail(null), ok: true, outcome: 'opened', reason: null };
   }
   let result;
