@@ -52,6 +52,10 @@ serialization shared by all ordinary and permit-bearing opens.
 Project admission returns the matched local `allProjects.projectPath` spelling
 for the permit, renderer and new-session cwd, including case, separators, `..`
 and Windows 8.3 aliases. Resume keeps its separately verified recorded cwd.
+The trigger snapshot carries `hiddenProjects`, `hiddenProjectKinds` and
+`hiddenProjectScopes` from one cloned settings snapshot. Any change to that
+tuple during the projects query refuses admission. The shared hidden-project
+matcher uses the captured host scopes when validating local projects.
 The final descriptor liveness scan applies to resume; new has a freshly reserved
 UUID and revalidates project admission without scanning unrelated descriptors.
 Prompt delivery still requires the new launch's descriptor readiness proof.
@@ -244,6 +248,14 @@ and `hiddenProjectKinds`. Snapshot errors/missing provenance refuse
 before known membership and directory existence, with `project is archived`
 for archive/delete/legacy hidden entries. Kind-only and remote-qualified entries
 do not deny a local path; group archive records do not deny known projects.
+The optional `hiddenProjectScopes` snapshot field qualifies each hidden
+entry by `{ alias: null|string }` through the shared `projectHiddenMatcher`,
+with an identity target normaliser.
+A mark scoped to another host does not refuse a local trigger. Missing scopes
+retain legacy bare-path matching; callers supplying scopes must carry the
+current global map alongside the hidden entries. Only absolute hidden paths
+participate in local trigger resolution; relative entries are ignored before
+normalization. One matcher serves both recorded-cwd selection and admission.
 Unknown membership refuses `unknown project`; missing project/recorded worktree
 cwd refuses `project directory does not exist`. Deadline checks refuse
 `session action timed out`. Cache and project-snapshot promises share the supplied

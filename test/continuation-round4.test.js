@@ -98,7 +98,7 @@ test('R4 R2 an unindexed target notice says waiting for indexing', { timeout: 90
   const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:pending"][role="status"]');
   assert.ok(notice);
   assert.match(notice.textContent, /waiting for indexing/i);
-  assert.doesNotMatch(notice.textContent, /choose|failed/i);
+  assert.doesNotMatch(notice.textContent.replaceAll(h.root, ''), /choose|failed/i);
   assert.equal(h.dom.window.document.querySelector('#app-notices [role="alert"]'), null);
 });
 

@@ -4,6 +4,7 @@ const nativeFs = require('fs');
 const path = require('path');
 const { extractVerifiedCwdFromJsonl, resolveWorktreePath } = require('../../../derive-project-path');
 const { normalizeProjectPath } = require('../shared/normalize-project-path');
+const { projectHiddenMatcher } = require('../../../public/worktree-nesting');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FILENAME_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -125,14 +126,16 @@ async function resolveProject(project, deps) {
       || !object(snapshot.hiddenProjectKinds)) return fail('project lookup unavailable');
   } catch (error) { return { ...fail(error.code === 'TRIGGER_DEADLINE' ? 'session action timed out' : 'project lookup unavailable'), error: error.message }; }
   if (deps.now && deps.now() >= deps.deadline) return fail('session action timed out');
+  const hidden = projectHiddenMatcher(snapshot.hiddenProjects.filter(entry => typeof entry === 'string' && path.isAbsolute(entry)),
+    snapshot.hiddenProjectScopes, normalize, value => value);
   const knownPath = key => snapshot.allProjects.find(entry => object(entry) && !entry.remoteAlias && !entry.host
     && typeof entry.projectPath === 'string' && normalize(entry.projectPath) === key);
   if (typeof deps.recordedCwd === 'string') {
     const cwdKey = normalize(deps.recordedCwd);
-    if (knownPath(cwdKey) || snapshot.hiddenProjects.some(entry => typeof entry === 'string' && path.isAbsolute(entry) && normalize(entry) === cwdKey)) project = deps.recordedCwd;
+    if (knownPath(cwdKey) || hidden(null, cwdKey)) project = deps.recordedCwd;
   }
   const key = normalize(project);
-  if (snapshot.hiddenProjects.some(entry => typeof entry === 'string' && path.isAbsolute(entry) && normalize(entry) === key)) return fail('project is archived');
+  if (hidden(null, key)) return fail('project is archived');
   const known = knownPath(key);
   if (!known) return fail('unknown project');
   try {

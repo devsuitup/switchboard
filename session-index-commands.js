@@ -3,6 +3,7 @@
 const archive = require('./archived-projects');
 const { scheduleRegistry } = require('./src/main/schedules/schedule-runner');
 const { whatsNewOnStartup } = require('./src/main/app/changelog');
+const { isProjectHidden } = require('./public/worktree-nesting');
 
 // see .ai/contexts/session-index-writer.md
 function createWriterCommands(db) {
@@ -24,6 +25,10 @@ function createWriterCommands(db) {
         delete kinds[projectPath];
         const fields = { hiddenProjects: global.hiddenProjects.filter(p => p !== projectPath) };
         if (global.hiddenProjectKinds) fields.hiddenProjectKinds = kinds;
+        if (global.hiddenProjectScopes) {
+          fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
+          delete fields.hiddenProjectScopes[projectPath];
+        }
         patch(fields);
       }
       archive.clearArchivedEntry(db.getSetting, db.setSetting, null, projectPath);
@@ -43,31 +48,49 @@ function createWriterCommands(db) {
       const row = db.getCachedSession(from);
       db.rekeySessionMeta(from, to, row?.customTitle || row?.aiTitle || row?.summary);
     },
-    hideProject(entry, kind) {
+    hideProject(entry, kind, scope) {
       const global = db.getSetting('global') || {};
+      const fields = {};
+      if (scope || global.hiddenProjectScopes) {
+        fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
+        if (scope && (!(global.hiddenProjects || []).includes(entry) || Object.hasOwn(global.hiddenProjectScopes || {}, entry))) fields.hiddenProjectScopes[entry] = scope;
+        else delete fields.hiddenProjectScopes[entry];
+      }
       patch({ hiddenProjects: [...new Set([...(global.hiddenProjects || []), entry])],
-        hiddenProjectKinds: { ...global.hiddenProjectKinds, [entry]: kind } });
+        hiddenProjectKinds: { ...global.hiddenProjectKinds, [entry]: kind }, ...fields });
     },
     clearArchivedEntry: (alias, projectPath) => archive.clearArchivedEntry(db.getSetting, db.setSetting, alias, projectPath),
     unhideProject(entry, alias, projectPath) {
       archive.clearArchivedEntry(db.getSetting, db.setSetting, alias, projectPath);
       const global = db.getSetting('global') || {};
+      if (!isProjectHidden([entry], alias, projectPath, global.hiddenProjectScopes)) return;
       const kinds = { ...global.hiddenProjectKinds };
       delete kinds[entry];
-      patch({ hiddenProjects: (global.hiddenProjects || []).filter(p => p !== entry), hiddenProjectKinds: kinds });
+      const fields = { hiddenProjects: (global.hiddenProjects || []).filter(p => p !== entry), hiddenProjectKinds: kinds };
+      if (global.hiddenProjectScopes) {
+        fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
+        delete fields.hiddenProjectScopes[entry];
+      }
+      patch(fields);
     },
     revealAddedProject(projectPath) {
       const global = db.getSetting('global') || {};
-      if (global.hiddenProjects?.includes(projectPath)) {
+      if (isProjectHidden(global.hiddenProjects, null, projectPath, global.hiddenProjectScopes)) {
         const kinds = { ...global.hiddenProjectKinds };
         delete kinds[projectPath];
-        patch({ hiddenProjects: global.hiddenProjects.filter(p => p !== projectPath), hiddenProjectKinds: kinds });
+        const fields = { hiddenProjects: global.hiddenProjects.filter(p => p !== projectPath), hiddenProjectKinds: kinds };
+        if (global.hiddenProjectScopes) {
+          fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
+          delete fields.hiddenProjectScopes[projectPath];
+        }
+        patch(fields);
       }
       archive.clearArchivedEntry(db.getSetting, db.setSetting, null, projectPath);
     },
     retireArchivedEntries(entries, snapshot) {
       const current = db.getSetting('archivedProjects') || {};
       const state = { archivedProjects: current, hiddenProjects: (db.getSetting('global') || {}).hiddenProjects || [],
+        hiddenProjectScopes: (db.getSetting('global') || {}).hiddenProjectScopes || {},
         scheduleReenableOffers: db.getSetting('scheduleReenableOffers') || {} };
       if (JSON.stringify(state) !== JSON.stringify(snapshot)) {
         throw Object.assign(new Error('archive snapshot changed before writer admission'), { code: 'WRITER_STALE' });

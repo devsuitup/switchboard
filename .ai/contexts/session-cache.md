@@ -2230,6 +2230,40 @@ usable" and "dispose() is terminal", in `test/remote-index.test.js`.
 
 ## Project Archive and Delete
 
+Optional `global.hiddenProjectScopes[entry] = { alias }` restricts a hidden
+entry to the local host (`null`) or a named remote host. Existing Delete Project
+and Archive operations write no scope and retain their existing matching.
+Supplying a scope must never narrow an existing unscoped entry. No settings
+migration or new deletion flow is introduced. `isProjectHidden` in
+`public/worktree-nesting.js` is shared by Node
+and the renderer: bare unscoped paths match every host, qualified entries match
+their alias, and scoped entries additionally require the same alias. Callers
+that already normalize local paths pass their existing normalizer; scope lookup
+uses the original stored entry so Windows path normalization cannot lose it.
+Only prefixes satisfying the remote folder-key alias syntax are qualified;
+paths such as `/a::b` stay bare. `projectHiddenMatcher` parses and normalizes
+stored entries once per policy call. Descriptor filtering and local admission
+reuse that matcher for the project and its worktree parent, and empty hidden
+lists bypass path normalization.
+
+Local admission normalizes its target once and compares the derived worktree
+parent as-is, preserving the existing comparison when the worktree is missing
+but its repository exists. The matcher accepts a separate target normalizer for
+callers that already normalized their query. A project-cache pass shares one
+matcher across cached rows, empty groups, terminals and the background merge;
+each Memory or Work Files list call builds one matcher for all its folders.
+
+The cache, archive projection, pending groups, working-set reload, worktree
+nesting, background descriptors, file lists and trigger resolver all use this
+matcher. Working-set fallback uses the persisted local project identity.
+File-list worker policy/version, archive retirement snapshots and sidebar
+invalidation include scopes. Writer hide accepts an optional third `{ alias }`
+argument; unhide/re-add remove the matching entry's scope. Worktree cleanup
+keeps its existing path-wide cache deletion and removes the stored path mark
+and its scope. Global Settings already rereads and spreads the latest global
+record on Save, preserving scopes alongside archive state without a new form
+field.
+
 Project Settings offers **Archive Project** and **Delete Project** (#568).
 Archive writes only the existing `global.hiddenProjects` array through
 `archive-project-settings`. Bare paths keep their historical all-host matching;

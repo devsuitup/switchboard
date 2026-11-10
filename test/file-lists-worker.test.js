@@ -81,6 +81,32 @@ function shipped(t, options, observed = false) {
   };
 }
 
+test('file-list workers hide local memory and work files under a local scope', async t => {
+  const f = fixture(t);
+  const query = shipped(t, f.options);
+  for (const kind of ['memory', 'work-file']) {
+    const result = await query(kind, { hiddenProjects: [f.project], hiddenProjectScopes: { [f.project]: { alias: null } } });
+    assert.equal(result.view.projects.some(p => p.projectPath === f.project), false, 'local scope must hide the local file list: ' + kind);
+  }
+});
+
+for (const kind of ['listMemories', 'listWorkFiles']) {
+  test(`${kind} builds one hidden matcher per call across project folders`, t => {
+    const f = fixture(t);
+    const hidden = f.options.hiddenProjects[0];
+    let reads = 0;
+    f.options.hiddenProjectScopes = { get [hidden]() { reads++; return { alias: null }; } };
+    const list = require('../file-lists')[kind];
+    for (let pass = 0; pass < 2; pass++) {
+      reads = 0;
+      const result = list(f.options);
+      assert.ok(result.view.projects.some(p => p.projectPath === f.project));
+      assert.equal(result.view.projects.some(p => p.projectPath === hidden), false);
+      assert.equal(reads, 1, 'one file-list call must read each hidden scope once');
+    }
+  });
+}
+
 test('worker lists equal the pre-change synchronous fixture including hidden projects, worktree dedupe and cap', async t => {
   const f = fixture(t);
   const old = baseline(f.options);

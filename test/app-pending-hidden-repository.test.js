@@ -14,7 +14,7 @@ const { loadAppFunctions } = require('./app-source');
 const ID = '3f2a9c10-7b1d-4e55-9a60-0123456789ac';
 const WT = '/r/.claude/worktrees/w';
 
-async function run(pendingSession, hiddenProjects) {
+async function run(pendingSession, hiddenProjects, hiddenProjectScopes = {}) {
   const ctx = setupSidebarDom();
   try {
     const { window } = ctx;
@@ -27,7 +27,7 @@ async function run(pendingSession, hiddenProjects) {
     window.api = {
       getProjects: async () => ({ defaultProjects: [], allProjects: [] }),
       getActiveTerminals: async () => [],
-      getSetting: async (key) => (key === 'global' ? { hiddenProjects } : null),
+      getSetting: async (key) => (key === 'global' ? { hiddenProjects, hiddenProjectScopes } : null),
     };
     window.cachedProjects = [];
     window.cachedAllProjects = [];
@@ -47,6 +47,14 @@ test('a pending session in a worktree of a hidden repository stays hidden', asyn
   const { cached, all, drawn } = await run({ sessionId: ID, projectPath: WT, summary: 'New session' }, ['/r']);
   for (const list of [cached, all]) assert.equal(list.find(p => p.projectPath === WT).hiddenRepository, true);
   assert.equal(drawn, false);
+});
+
+test('pending remote groups and worktrees survive a same-path local delete scope', async () => {
+  const scopes = { '/r': { alias: null } };
+  const direct = await run({ sessionId: ID, projectPath: '/r', remoteAlias: 'box', summary: 'New session' }, ['/r'], scopes);
+  assert.equal(direct.cached.length, 1, 'local scope must allow reinjection of the remote pending group');
+  const nested = await run({ sessionId: ID, projectPath: WT, remoteAlias: 'box', summary: 'New session' }, ['/r'], scopes);
+  assert.equal(nested.cached[0].hiddenRepository, undefined, 'local scope must not hide the remote worktree repository');
 });
 
 test('a pending session in a worktree of a repository hidden on another host is shown', async () => {

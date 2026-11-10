@@ -99,7 +99,7 @@ scenario('reappearing projects persist only archive keys through the writer and 
   });
   await writer.setSetting('scheduleReenableOffers', { [otherEntry]: { disabledSchedules: ['other.md'] } });
   messages.length = 0;
-  const snapshot = { archivedProjects: db.getSetting('archivedProjects'), hiddenProjects: [],
+  const snapshot = { archivedProjects: db.getSetting('archivedProjects'), hiddenProjects: [], hiddenProjectScopes: {},
     scheduleReenableOffers: db.getSetting('scheduleReenableOffers') };
   const reply = await invoke(null, 'both');
   assert.deepEqual(db.getSetting('archivedProjects'), {

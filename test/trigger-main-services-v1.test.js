@@ -41,3 +41,33 @@ test('trigger project snapshot retains hidden provenance and rejects changes whi
   assert.equal(snapshot.hiddenProjectKinds['/hidden'], 'delete');
   mutate = true; await assert.rejects(query(), /project lookup unavailable/);
 });
+
+test('trigger validation receives the frozen host scope of a hidden mark', async () => {
+  const { resolveProject } = require('../src/main/triggers/trigger-actions');
+  const project = path.resolve(__dirname, '..');
+  const global = { hiddenProjects: [project], hiddenProjectKinds: { [project]: 'delete' },
+    hiddenProjectScopes: { [project]: { alias: 'box' } } };
+  const context = vm.createContext({ structuredClone, getSetting: () => global,
+    getProjectsSnapshot: async () => ({ allProjects: [{ projectPath: project }] }) });
+  vm.runInContext(extractFunction(source, 'getTriggerProjectSnapshot'), context, { filename });
+  const snapshot = await context.getTriggerProjectSnapshot();
+  global.hiddenProjectScopes[project].alias = null;
+  const admitted = await resolveProject(project, { getProjectSnapshot: async () => snapshot });
+  assert.equal(admitted.ok, true, 'a remote-scoped hidden mark must admit the same-path local project');
+  const refused = await resolveProject(project, { getProjectSnapshot: context.getTriggerProjectSnapshot });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'project is archived');
+});
+
+test('trigger project snapshot refuses a scope-only change while querying', async () => {
+  const global = { hiddenProjects: ['/hidden'], hiddenProjectKinds: { '/hidden': 'delete' },
+    hiddenProjectScopes: { '/hidden': { alias: 'box' } } };
+  const context = vm.createContext({ structuredClone, getSetting: () => global,
+    getProjectsSnapshot: async () => {
+      global.hiddenProjectScopes['/hidden'].alias = null;
+      return { allProjects: [] };
+    } });
+  vm.runInContext(extractFunction(source, 'getTriggerProjectSnapshot'), context, { filename });
+  await assert.rejects(context.getTriggerProjectSnapshot(), /project lookup unavailable/,
+    'scope-only changes must invalidate trigger project admission');
+});
