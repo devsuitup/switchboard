@@ -220,3 +220,31 @@ test('a stale new action refunds its unretained rate token and launches nothing'
   assert.equal(f.events.some(e => e[0] === 'renderer' || e[0] === 'name' || e[0] === 'deliver'), false);
   assert.equal((await f.new()).outcome, 'opened', 'three stale refusals left every token available');
 });
+
+for (const [change, apply] of Object.entries(targetChanges)) {
+  const reason = change === 'background eligibility' ? 'background session is not supported' : 'session target changed';
+  test(`reattach refuses ${change} while its tab lock was pending, before any renderer dispatch`, async () => {
+    const f = fixture();
+    f.execution.acquireTabLock = async () => { apply(f); return () => f.events.push(['release-mutex']); };
+    const r = await f.open();
+    assert.equal(r.ok, false); assert.equal(r.outcome, 'refused'); assert.equal(r.reason, reason);
+    assert.equal(f.events.some(e => e[0] === 'renderer'), false);
+    assertReleasedOnce(f);
+  });
+}
+test('reattach refuses a PTY replacement that arrives between dispatch and the ACK', async () => {
+  const f = fixture();
+  const request = f.ctx.lifecycle.broker.request;
+  f.ctx.lifecycle.broker.request = async (...args) => { const ack = await request(...args); f.session.pty = { pid: 2 }; return ack; };
+  assert.equal((await f.open()).reason, 'session target changed');
+});
+test('a surviving alias does not authorize replacement of the requested map binding', async () => {
+  const f = fixture(); f.ctx.getPtyForSession = () => null;
+  f.execution.acquireTabLock = async () => { f.map.set('alias', f.session); f.map.set(ID, { ...f.session }); return () => f.events.push(['release-mutex']); };
+  const r = await f.open();
+  assert.equal(r.reason, 'session target changed'); assert.equal(r.resumed, true);
+  const created = fixture();
+  created.ctx.lifecycle.saveName = async (id, name) => { created.map.set('alias', created.session); created.map.set(id, { ...created.session }); return { name }; };
+  const n = await created.new();
+  assert.equal(n.reason, 'session target changed'); assert.equal(created.events.some(e => e[0] === 'deliver'), false);
+});

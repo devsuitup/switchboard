@@ -574,6 +574,13 @@ async function executeOpen(trigger, execution) {
       : session.isPlainTerminal ? 'plain terminal sessions are not supported'
         : session.isAttach || session.backgrounding || session.backgrounded ? 'background session is not supported' : null;
   }
+  function sessionChanged(session, pty, generation) {
+    const keys = [...deps.activeSessions];
+    if (!keys.some(([, value]) => value === session) || session.exited || session.pty !== pty || session.generation !== generation
+      || keys.some(([key, value]) => String(key).toLowerCase() === id && value !== session)) return fail('session target changed');
+    const reason = eligibility(session);
+    return reason ? fail(reason) : null;
+  }
   function cwdFailure(cwd) {
     if (!own(trigger, 'expectedCwd')) return null;
     const normalize = require('./trigger-watcher').normalizeCwd;
@@ -616,6 +623,7 @@ async function executeOpen(trigger, execution) {
       if (found.ambiguous) return fail('ambiguous descriptor-to-tab ownership; nothing was written');
       entry = found.entry;
     }
+    const firstTarget = entry ? { pty: entry.session.pty, generation: entry.session.generation } : null;
     let tabKey = id;
     let mode = isNew ? 'new' : 'resume';
     if (entry) {
@@ -626,6 +634,7 @@ async function executeOpen(trigger, execution) {
       tabKey = matches[0][0]; mode = 'reattach';
       const cwd = cwdFailure(entry.cwd); if (cwd) return cwd;
       const failure = await pin(entry); if (failure) return failure;
+      const moved = sessionChanged(entry.session, firstTarget.pty, firstTarget.generation); if (moved) return moved;
     } else if (!isNew) {
       if (await bound(() => deps.remoteTarget(id))) return fail('remote sessions are not supported');
       const live = await liveness(); if (live) return live;
@@ -636,7 +645,7 @@ async function executeOpen(trigger, execution) {
     }
     check();
     const operation = { mode, requestedSessionId: isNew ? null : id, tabKey,
-      generation: entry?.session.generation ?? null, entry: entry?.session,
+      generation: firstTarget?.generation ?? null, entry: entry?.session,
       project: mode === 'reattach' ? entry.session.projectPath : target.project,
       session: { sessionId: tabKey, headSessionId: tabKey, mergedMemberIds: [], projectPath: mode === 'reattach' ? entry.session.projectPath : target.project },
       target, name: isNew ? trigger.new.name.trim() : undefined, deadline };
@@ -684,14 +693,9 @@ async function executeOpen(trigger, execution) {
     if (!session || session.exited || session.generation !== ack.generation || (entry && session !== entry.session)) return fail('session target changed');
     if (eligibility(session)) return fail(eligibility(session));
     marker();
-    const acceptedPty = session.pty;
-    const acceptedGeneration = session.generation;
-    const targetChanged = () => {
-      const keys = [...deps.activeSessions].filter(([, value]) => value === session);
-      if (!keys.length || session.exited || session.pty !== acceptedPty || session.generation !== acceptedGeneration) return fail('session target changed');
-      const reason = eligibility(session);
-      return reason ? fail(reason) : null;
-    };
+    const acceptedPty = firstTarget?.pty ?? session.pty;
+    const acceptedGeneration = firstTarget?.generation ?? session.generation;
+    const targetChanged = () => sessionChanged(session, acceptedPty, acceptedGeneration);
     if (!pinned) {
       entry = ctx.getPtyForSession(id);
       if (entry?.session !== session) return fail('session target changed');
@@ -729,6 +733,9 @@ async function executeOpen(trigger, execution) {
         : error.deliveryRefusal ? error.message : 'session open failed', { error: error.message,
         ...(step?.text_written ? { wrote: true, text_written: true, enter_written: !!step.enter_written,
           submitted: step.enter_written ? 'assumed' : 'no', ...(expired() && step.enter_written ? { uncertain: true } : {}) } : {}) });
+    }
+    if (!allowed() && result.reason !== 'Switchboard is closing.') {
+      result = { ...result, ok: false, outcome: 'refused', reason: 'Switchboard is closing.', error: 'Switchboard is closing.' };
     }
     await execution.publish(result);
     return result;

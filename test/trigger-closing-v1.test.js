@@ -198,3 +198,24 @@ test('a stop holding readiness from before the commit never reaches the backend 
   assert.equal(result.ok, false);
   await running;
 });
+
+for (const [name, settle] of [
+  ['rejected', reject => reject(new Error('disk'))],
+  ['mismatched', (_reject, resolve) => resolve({ name: 'Other' })],
+]) {
+  test(`a ${name} name save cannot override the cancellation of its action`, async t => {
+    const f = openingStack(t);
+    let finish;
+    f.execution.ctx.lifecycle.saveName = () => { f.signalName(); return new Promise((resolve, reject) => { finish = () => settle(reject, resolve); }); };
+    const running = f.run();
+    await f.nameStarted;
+    const undo = await f.rollback();
+    undo();
+    finish();
+    const result = await running;
+    assert.equal(result.ok, false); assert.equal(result.outcome, 'refused'); assert.equal(result.reason, 'Switchboard is closing.');
+    assert.equal(result.created, true); assert.equal(result.sessionId, NEW);
+    assert.equal(f.events.some(e => e[0] === 'deliver'), false);
+    assert.equal(f.events.filter(e => e[0] === 'result').length, 1);
+  });
+}
