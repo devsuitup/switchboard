@@ -54,6 +54,7 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
     const table = new Map();
     let complete = true;
     let names;
+    if (expired(deadline)) return { table, complete: false };
     try { names = procFs.readdirSync('/proc').filter(name => /^\d+$/.test(name)); }
     catch { return { table, complete: false }; }
     if (names.length > 32768) complete = false;
@@ -68,6 +69,10 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
     if (!scan.complete || !/^\d+$/.test(String(candidate.raw.procStart))) return null;
     const matches = [...scan.table.values()].filter(p => p.live && p.inner === candidate.raw.pid && p.start === String(candidate.raw.procStart));
     return matches.length === 1 && matches[0].namespace !== null ? matches[0] : null;
+  }
+  function unreadableMatch(candidate, scan) {
+    return [...scan.table.values()].some(p => p.live && p.namespace === null && p.inner === candidate.raw.pid
+      && p.start === String(candidate.raw.procStart));
   }
   function unchangedProc(identity, deadline) {
     try { return JSON.stringify(proc(identity.pid, deadline)) === JSON.stringify(identity); }
@@ -178,6 +183,7 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
     if (!scan.complete || !table.complete || !anchor || !anchor.live || anchor.namespace === null || anchor.start !== String(ptyStart)) return unavailable;
     const eligible = [];
     for (const candidate of scan.candidates) {
+      if (unreadableMatch(candidate, table)) return unavailable;
       const writer = mapped(candidate, table);
       if (!writer || writer.namespace === anchor.namespace) continue;
       let chain;

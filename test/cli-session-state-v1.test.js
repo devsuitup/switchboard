@@ -259,3 +259,25 @@ for (const code of ['ENOENT', 'ESRCH']) {
     assert.equal(observe(w).uncertain, false);
   });
 }
+
+function addCompetingWriter(w) {
+  w.put(400, 200, '40', 'pid:[2]', 4);
+  fs.writeFileSync(path.join(w.dir, '4.json'), JSON.stringify({ pid: 4, sessionId: '11234567-89ab-cdef-0123-456789abcdef',
+    kind: 'interactive', status: 'busy', statusUpdatedAt: Date.now() - 500, procStart: '40' }));
+}
+test('two readable descriptor writers under one PTY stay uncertain', t => {
+  const w = createWorld(t); addCompetingWriter(w);
+  assert.equal(observe(w).uncertain, true);
+});
+test('a competing descriptor writer whose PID namespace is unreadable keeps the observation uncertain', t => {
+  const w = createWorld(t); addCompetingWriter(w); denyNamespace(w, 400, 'EACCES');
+  assert.equal(observe(w).uncertain, true);
+});
+test('an expired descriptor scan starts no /proc enumeration', t => {
+  const w = createWorld(t); let enumerations = 0; let reads = 0;
+  w.descriptorFs.readFileSync = (p, ...args) => { const value = fs.readFileSync(p, ...args); if (++reads === 1) w.expire(); return value; };
+  const readdir = w.procFs.readdirSync;
+  w.procFs.readdirSync = p => { enumerations++; return readdir(p); };
+  assert.equal(observe(w).uncertain, true);
+  assert.equal(enumerations, 0);
+});

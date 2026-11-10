@@ -62,7 +62,7 @@ function createWorld(t, { historical = false } = {}) {
     fs.writeFileSync(path.join(projectsDir, 'folder', B + '.jsonl'), '\n');
   }
   const pin = () => ctx.pinDelivery(ID, ctx.getPtyForSession(ID), false, { v1: true, deadline });
-  return { root, dir, reader, procFs, descriptorFs, ctx, pin, session, map, lifecycle, source, writer, writes, observations,
+  return { root, dir, reader, procFs, descriptorFs, ctx, pin, session, map, lifecycle, source, writer, writes, observations, put,
     deadline, clock: () => clock, setClock: value => { clock = value; }, expire: () => { clock = deadline + 1; } };
 }
 
