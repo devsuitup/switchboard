@@ -11,6 +11,13 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### Changed
 - The Browser choice replaces Chrome in settings and session dialogs, keeping your saved choices as Off or Claude in Chrome. (#812)
 
+### Fixed
+- File triggers no longer act on a sandboxed session whose CLI process was replaced after the request was admitted: nothing is typed and no stop is sent. (#1066)
+- A file trigger whose UUID already has a result is removed without being acted on and the first result stays as written, whatever the format, spelling or age of the second file. (#1066)
+- A trigger-opened session that changes while it is being opened, and an open request that waited past the staleness limit, are refused instead of reporting success or typing a prompt. (#1066)
+- Triggers keep working after a cancelled update without replaying the actions the update had cancelled. (#1066)
+- Creating a session from a trigger no longer moves your keyboard focus to the terminal. (#1066)
+
 ## v0.0.104 — 2026-11-09
 
 ### New

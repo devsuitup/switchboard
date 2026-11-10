@@ -254,8 +254,13 @@ the launch acknowledgement or another run is launched successfully.
 
 Publish a UTF-8 JSON file named with a fresh lowercase UUID in the triggers
 directory, preferably by renaming a completed temporary file in that directory.
-Never reuse the request UUID. The running app opens an ordinary selectable
-terminal without changing your selection, view or keyboard focus.
+Never reuse the request UUID: the first result written for a UUID is final.
+Any later file with that UUID, in any spelling or format, is removed without
+being acted on and leaves the result as it was. A request that waited in the
+queue past the staleness limit is refused with `not sent` before anything
+happens. The running app opens an ordinary selectable terminal without changing
+your selection, view or keyboard focus, including while the session is still
+starting.
 
 Resume an exact local session ID, optionally delivering one prompt:
 
@@ -327,7 +332,13 @@ means the pinned PTY exited; timeout after requesting termination returns
 `session stop not confirmed`, `uncertain:true`. A recovered `stop-requested`
 marker likewise reports uncertainty without issuing another stop. Do not retry
 automatically. Closing Switchboard cancels pending work with
-`Switchboard is closing.`.
+`Switchboard is closing.`. A cancelled action stays cancelled when the close is
+abandoned, for example when an update is cancelled: the window keeps serving new
+triggers, and the cancelled one is not replayed.
+
+A file that parses to an object with a `version` or `action` property is a
+versioned request; any other JSON, including `null`, arrays and scalars, is
+handled as a legacy trigger whatever its filename.
 
 ### Send to an already-open session (legacy)
 

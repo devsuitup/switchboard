@@ -263,14 +263,17 @@ OS/parser details belong in `error`, not stable codes.
 Versioned terminal results use the existing temporary-write/rename-retry helper
 at `processed/<uuid>.result.json`. Publication precedes input removal, and
 marker removal follows successful input removal. A committed v1 result is
-immutable and wins over duplicate canonical v1 input,
-and over any action marker. Publication failure retains input/marker and
-suppresses replay in memory; cleanup failure also suppresses reprocessing.
-Legacy publication, including deletion after a failed result write, is unchanged.
+immutable and wins over every duplicate payload (see "Canonical request
+ownership" below) and over any action marker. Publication failure retains
+input/marker and suppresses replay in memory; cleanup failure also suppresses
+reprocessing. Legacy publication, including deletion after a failed result
+write, is unchanged for a UUID without a committed result.
 
 Recovery applies to inputs only after they parse as versioned and only when
-their filenames already use the canonical lowercase UUID spelling. Legacy
-inputs never read or obey v1 recovery state, even when they reuse its UUID.
+their filenames already use the canonical lowercase UUID spelling. A legacy
+input never obeys an action marker, even when it reuses its UUID; a committed
+result is protected by the earlier check described under "Canonical request
+ownership".
 Recovery reads lstat each result/marker before opening it, then open with
 `O_RDONLY | O_NOFOLLOW | O_NONBLOCK` where available on POSIX, or `O_RDONLY`
 alone on Windows. Descriptor fstat must still identify a regular file of at
@@ -366,6 +369,63 @@ path must reserve after schema/project validation and before dispatch, return
 `new session rate limit exceeded` on exhaustion, and retain uncertain effects.
 Resume, stop and manual + never consume a token. This refusal-only build consumes
 none. Tests use injected clocks for burst/refill/refund and parallel reservation.
+
+### Canonical request ownership
+
+A UUID-shaped input filename (either case) is owned by its canonical lowercase
+UUID from dispatch to the end of cleanup. The watcher keeps a set of active
+canonical owners next to its per-filename in-flight set: a second spelling of an
+owned UUID, from the startup scan, a live event or marker recovery, stays in
+the wait queue and is dispatched after the owner releases it. Ownership is
+released on every completion, refusal and error path. It is separate from the
+session FIFO and tab locks, and distinct UUIDs still run concurrently up to the
+in-flight cap.
+
+The owner inspects `processed/<canonical>.result.json` before the input is
+inspected, aged, parsed or dispatched. A readable object with an own `version`
+is a committed result: it keeps its bytes, nothing is resolved, delivered,
+launched, named or stopped for the duplicate, and the duplicate input is removed
+with the ordinary cleanup (the marker only after the input is gone). A removal
+failure retains the input and suppresses further processing of it. A result that
+cannot be inspected safely (not a regular file, over 64 KiB, unreadable,
+unparseable) retains the input and the result and suppresses reprocessing. A
+readable result without `version`, and a marker alone, do not protect: legacy
+input still runs, and marker recovery follows the rules above. Every result
+publication, legacy and transport-error ones included, checks the canonical
+result again immediately before replacing it, so a result committed during an
+earlier wait wins over the pending outcome. This is in-process coordination; it
+is not a distributed lock.
+
+### Sandbox writer identity
+
+A pinned v1 binding keeps the first complete, unexpired, conversation-authorized
+writer identity (generation, host PTY, writer namespace, host writer PID/start,
+namespace-local PID). A missing or uncertain observation neither pins nor
+clears it. Any later usable observation with another identity revokes the
+binding for good: status reads return `undefined`, writes and stop refuse with
+`session target changed`, and the original identity returning does not restore
+authority. Conversation-ID continuity alone never authorizes another process.
+Stop reads the revocation after each of its status observations, including the
+last one before the backend call. The reader returns no usable writer or
+identity when its final revalidation ends at or after the absolute deadline.
+
+### Open target after waits
+
+`executeOpen` retains the session object, PTY and generation once the target is
+accepted and checks them again, with the map binding and eligibility, after the
+tab lock, the name save and the prompt delivery, immediately before a success is
+published. A same-object re-key keeps the action valid. The watcher-supplied
+staleness check runs right after the session FIFO is acquired, before any target
+work; a refusal refunds an unretained rate token.
+
+### Action cancellation
+
+`createExitAttempts` hands each action a capture (`captureAuthority`) taken
+before its asynchronous work; the capture is invalid for good once any close
+commitment happened after it, even after a rolled-back update makes
+`launchAllowed()` true again. An invalid capture refuses with
+`Switchboard is closing.` at every check, including the guarded prompt/Enter
+writes, keeping the confirmed `created`/`resumed` and partial-delivery evidence.
 
 ### Sandbox control directory
 
