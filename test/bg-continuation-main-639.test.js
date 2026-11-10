@@ -39,6 +39,7 @@ for (const proof of ['descriptor', 'job', 'callback-error']) {
     const start = source.indexOf('sessionTransitions.init({');
     const end = source.indexOf('\n});', start) + '\n});'.length;
     vm.runInNewContext(source.slice(start, end), {
+      require: require('node:module').createRequire(path.join(__dirname, '../main.js')),
       getSetting: () => null,
       parseFolderKey: require('../src/main/remote/remote-hosts').parseFolderKey,
       normalizeArchivedProjectPath: require('../src/main/shared/normalize-project-path').normalizeProjectPath,

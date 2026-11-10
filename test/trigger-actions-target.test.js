@@ -26,6 +26,44 @@ function rig(t) {
   return { dir, project, projectsDir, folder, transcript, snapshot, deps };
 }
 
+test('trigger resolution refuses local history under a local scoped bare mark', async t => {
+  const r = rig(t);
+  r.snapshot.hiddenProjects = [r.project];
+  r.snapshot.hiddenProjectScopes = { [r.project]: { alias: null } };
+  assert.equal((await resolveLocalTarget(id, r.deps)).reason, 'project is archived', 'local scope must refuse a local trigger target');
+});
+
+test('trigger resolution ignores relative hidden entries that resolve to a known project', async t => {
+  const prev = process.cwd();
+  t.after(() => process.chdir(prev));
+  const r = rig(t);
+  process.chdir(r.dir);
+  const relative = 'project';
+  assert.equal(path.isAbsolute(relative), false);
+  r.snapshot.hiddenProjects = [relative];
+  const result = await resolveLocalTarget(id, r.deps);
+  assert.equal(result.ok, true, 'a relative hidden entry must not archive a known absolute project');
+  assert.equal(result.project, r.project);
+});
+
+test('trigger resolution ignores relative hidden entries for recorded worktree selection', async t => {
+  const prev = process.cwd();
+  t.after(() => process.chdir(prev));
+  const r = rig(t);
+  process.chdir(r.dir);
+  const cwd = path.join(r.project, '.worktrees', 'next');
+  fs.mkdirSync(cwd, { recursive: true });
+  fs.writeFileSync(r.transcript, JSON.stringify({ cwd }) + '\n');
+  r.deps.extractVerifiedCwdFromJsonl = () => ({ complete: true, cwd });
+  const relative = path.join('project', '.worktrees', 'next');
+  assert.equal(path.isAbsolute(relative), false);
+  r.snapshot.hiddenProjects = [relative];
+  const result = await resolveLocalTarget(id, r.deps);
+  assert.equal(result.ok, true, 'a relative hidden entry must not select an unknown recorded worktree');
+  assert.equal(result.project, r.project);
+  assert.equal(result.cwd, cwd);
+});
+
 test('strict resolver admits cold-cache readable local top-level transcript and canonical ID', async t => {
   const r = rig(t);
   const target = await resolveLocalTarget(id.toUpperCase(), r.deps);

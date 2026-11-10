@@ -887,11 +887,12 @@ function skipMissedScheduleRuns(projects) {
 }
 
 function isProjectSettingsArchived(projectPath) {
-  const hidden = (getSetting('global') || {}).hiddenProjects || [];
-  const local = hidden.filter(entry => parseFolderKey(entry).alias === null).map(normalizeArchivedProjectPath);
+  const global = getSetting('global') || {};
+  if (!global.hiddenProjects?.length) return false;
+  const { projectHiddenMatcher, worktreeParentPath } = require('./public/worktree-nesting');
+  const hidden = projectHiddenMatcher(global.hiddenProjects, global.hiddenProjectScopes, normalizeArchivedProjectPath, value => value);
   const target = normalizeArchivedProjectPath(projectPath);
-  return local.includes(target)
-    || require('./public/worktree-nesting').isHiddenRepositoryWorktree(target, null, local);
+  return hidden(null, target) || hidden(null, worktreeParentPath(target));
 }
 
 // see .ai/contexts/session-cache.md ("Project Archive and Delete")
@@ -1395,10 +1396,10 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
       const merged = mergePlaceholderSessions(projects);
       const kept = await writer.applyAndPersistArchived(merged, archived);
       if (projection) {
-        const hidden = (getSetting('global') || {}).hiddenProjects || [];
+        const global = getSetting('global') || {};
         for (const project of merged) {
           if (kept.some(p => p.projectPath === project.projectPath && (p.remoteAlias || null) === (project.remoteAlias || null))) continue;
-          const filterReason = hidden.includes(project.projectPath) || hidden.includes(project.remoteAlias + '::' + project.projectPath)
+          const filterReason = require('./public/worktree-nesting').isProjectHidden(global.hiddenProjects, project.remoteAlias || null, project.projectPath, global.hiddenProjectScopes)
             ? 'hidden-project' : 'archived';
           for (const row of project.sessions) {
             factsByMember ??= diagnostics.indexProjectionFacts(projection);
@@ -1548,11 +1549,13 @@ function invalidateFtsSignature(kind, filePath) {
 
 function fileListsPolicy(kind) {
   const state = fileListStates.get(kind);
-  const hiddenProjects = (getSetting('global') || {}).hiddenProjects || [];
+  const global = getSetting('global') || {};
+  const hiddenProjects = global.hiddenProjects || [];
+  const hiddenProjectScopes = global.hiddenProjectScopes || {};
   const activeProjectPaths = kind === 'memory' ? [...activeSessions.values()].map(session => session.projectPath).filter(Boolean) : [];
   return {
-    hiddenProjects, activeProjectPaths,
-    version: JSON.stringify([state.epoch, hiddenProjects, activeProjectPaths]),
+    hiddenProjects, hiddenProjectScopes, activeProjectPaths,
+    version: JSON.stringify([state.epoch, hiddenProjects, hiddenProjectScopes, activeProjectPaths]),
   };
 }
 
@@ -3538,14 +3541,15 @@ const sessionTransitions = require('./session-transitions');
 sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
   getLiveDescriptors: () => {
-    const hidden = new Set(((getSetting('global') || {}).hiddenProjects || [])
-      .filter(entry => parseFolderKey(entry).alias === null).map(normalizeArchivedProjectPath));
+    const global = getSetting('global') || {};
     const descriptors = cliSessionState.getSidebarDescriptors({ allWriters: true });
-    return hidden.size ? descriptors.filter(descriptor => {
-      const cwd = normalizeArchivedProjectPath(descriptor.cwd);
-      const parent = require('./public/worktree-nesting').worktreeParentPath(descriptor.cwd?.replace(/\\/g, '/'));
-      return !hidden.has(cwd) && !hidden.has(normalizeArchivedProjectPath(parent));
-    }) : descriptors;
+    if (!global.hiddenProjects?.length) return descriptors;
+    const { projectHiddenMatcher, worktreeParentPath } = require('./public/worktree-nesting');
+    const hidden = projectHiddenMatcher(global.hiddenProjects, global.hiddenProjectScopes, normalizeArchivedProjectPath);
+    return descriptors.filter(descriptor => {
+      const parent = worktreeParentPath(descriptor.cwd?.replace(/\\/g, '/'));
+      return !hidden(null, descriptor.cwd) && !hidden(null, parent);
+    });
   },
   onDescriptorSession: async (sessionId, session, folderPath) => {
     await taskRecords.read(path.join(folderPath, sessionId + '.jsonl'), sessionId);

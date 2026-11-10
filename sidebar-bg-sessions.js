@@ -8,6 +8,7 @@ const { parseFolderKey } = require('./src/main/remote/remote-hosts');
 const { validId, continuationRollup } = require('./session-continuations');
 const { isHostedJob, JOB_ID_RE, JOB_STATES } = require('./src/main/bg-agents/bg-agents-roster');
 const { conversationMeta } = require('./conversation-meta');
+const { projectHiddenMatcher } = require('./public/worktree-nesting');
 
 const key = id => String(id).toLowerCase();
 
@@ -178,7 +179,8 @@ function conversationMemberIds(rows, id, descriptors = [], jobs = new Map(), opt
 
 // see .ai/contexts/session-cache.md ("Local background sidebar rows")
 function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, options) {
-  const { hiddenProjects, metaMap, showArchived, jobs = new Map() } = options;
+  const { hiddenProjects, hiddenProjectScopes, metaMap, showArchived, jobs = new Map() } = options;
+  const hidden = options.hiddenMatcher || projectHiddenMatcher(hiddenProjects, hiddenProjectScopes);
   const conversations = options.conversations || conversationGroups(cachedRows, descriptors, jobs, undefined, options);
   const localRows = new Map(cachedRows.filter(row => !row.parentSessionId && parseFolderKey(row.folder).alias === null)
     .map(row => [key(row.sessionId), row]));
@@ -248,7 +250,7 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, options
     if (!visible) {
       if (!descriptor || localRows.has(head) || !descriptor.cwd) continue;
       const projectPath = resolveWorktreePath(descriptor.cwd);
-      if (hiddenProjects.has(projectPath) || (!showArchived && metaMap.get(descriptor.sessionId)?.archived)) continue;
+      if (hidden(null, projectPath) || (!showArchived && metaMap.get(descriptor.sessionId)?.archived)) continue;
       let project = projects.find(p => !p.remoteAlias && p.projectPath === projectPath);
       if (!project) {
         project = { folder: encodeProjectPath(projectPath), projectPath, remoteAlias: null,

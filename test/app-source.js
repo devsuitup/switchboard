@@ -97,6 +97,7 @@ function extractDeclaration(src, name) {
 // Evaluates the named declarations and functions of public/app.js in `context`
 // (a jsdom VM context) and returns the functions by name.
 function loadAppFunctions(context, { functions, declarations = [], sourcePath = APP_PATH }) {
+  context.isProjectHidden ||= require('../public/worktree-nesting').isProjectHidden;
   const src = fs.readFileSync(sourcePath, 'utf8');
   const parts = [
     ...declarations.map((n) => extractDeclaration(src, n)),
