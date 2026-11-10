@@ -319,7 +319,7 @@ async function executeStop(trigger, execution) {
   const deps = ctx.lifecycle;
   const id = trigger.sessionId.toLowerCase();
   const before = own(trigger, 'before');
-  let effects = { ...evidence }, pinned, entry, session, pty, generation, tabKey, ready, writerIdentity;
+  let effects = { ...evidence }, pinned, entry, session, pty, generation, tabKey, ready;
   let releaseSession, releaseTab, stopRequested = false, noteFinished = false;
   const noteEntry = {};
   const fail = (reason, extra = {}) => refusal(trigger, reason, { ...effects, ...extra });
@@ -351,12 +351,12 @@ async function executeStop(trigger, execution) {
   }
   function sample(completion) {
     target();
-    if (session.sandbox && !pinned.ctx.getCliStatus?.(id)) reject('session state unavailable');
+    const available = !session.sandbox || pinned.ctx.getCliStatus?.(id);
+    if (pinned.binding.revoked) reject('session target changed');
+    if (!available) reject('session state unavailable');
     pinned.binding.checkStop();
-    const identity = pinned.binding.observation?.identity;
-    if (writerIdentity != null && identity !== writerIdentity) reject('session target changed');
-    writerIdentity ??= identity;
     const status = pinned.ctx.getCliStatus?.(id);
+    if (pinned.binding.revoked) reject('session target changed');
     if (status?.kind === 'schedule') reject('scheduled session is not supported');
     if (status?.kind === 'bg') reject('background session is not supported');
     let staleBusy = completion?.source === 'transcript' && status
@@ -466,7 +466,6 @@ async function executeStop(trigger, execution) {
       let delivered;
       try {
         pinned.binding.checkStop();
-        writerIdentity = pinned.binding.observation?.identity;
         marker('prompt-attempted');
         delivered = await execution.deliver({ sessionId: id, command: trigger.before, wait: 'idle', expectedCwd: trigger.expectedCwd,
           entry, pinned, deadline, waitForFinalTurn: true });

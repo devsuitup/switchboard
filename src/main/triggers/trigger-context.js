@@ -10,6 +10,8 @@ const { classifyUserText } = require('../../../read-session-file');
 
 const { createTranscriptTurnReader } = require('../../../transcript-turn');
 
+const WRITER_CHANGED = 'session target changed';
+
 // Local session handle — see .ai/contexts/trigger-watcher.md, "Session handle".
 function createLocalSessionHandle(ptyProcess) {
   return {
@@ -126,7 +128,8 @@ function createTriggerContext(deps) {
     const own = eligible(session);
     let start = own ? (v1 && session.hostPtyStart != null ? session.hostPtyStart : source.deliveryPtyStart(pid)) : null;
     const binding = { tab: session, entry, requestedId, effectiveId: normalizeSessionId(requestedId), reset: null,
-      resetAuthorized: false, step: null, observation: null, lastDialog: null, ...(v1 ? { deadline } : {}) };
+      resetAuthorized: false, step: null, observation: null, lastDialog: null, writerIdentity: null, revoked: false,
+      ...(v1 ? { deadline } : {}) };
     const sandboxV1 = v1 && session.sandbox;
     const observationForTab = () => sandboxV1
       ? source.observeTabWriterV1({ session, pty, generation, ptyStart: start, deadline: binding.deadline }) : observe(pid);
@@ -222,6 +225,18 @@ function createTriggerContext(deps) {
     }
     function inspect() {
       if (!own) return { outcome: 'mine' };
+      if (binding.revoked) return { outcome: 'other', reason: WRITER_CHANGED };
+      const outcome = inspectOwnership();
+      const observed = binding.observation;
+      if (!v1 || !observed || observed.uncertain || !observed.identity) return outcome;
+      if (binding.writerIdentity !== null && observed.identity !== binding.writerIdentity) {
+        binding.revoked = true;
+        return { outcome: 'other', reason: WRITER_CHANGED };
+      }
+      if (outcome.outcome === 'mine' && observed.writer) binding.writerIdentity = observed.identity;
+      return outcome;
+    }
+    function inspectOwnership() {
       resetBookkeeping();
       let observation;
       try { observation = observationForTab(); } catch { return { outcome: 'unknown' }; }
@@ -304,6 +319,8 @@ function createTriggerContext(deps) {
         let observation;
         try { observation = observationForTab(); } catch {}
         const writer = observation?.writer;
+        if (v1 && writer && !observation.uncertain && observation.identity
+          && normalizeSessionId(writer.sessionId) === normalizeSessionId(requestedId)) binding.writerIdentity ??= observation.identity;
         if (!writer || normalizeSessionId(writer.sessionId) !== normalizeSessionId(requestedId) || observation.hasBackground) {
           const continuation = graph(normalizeSessionId(requestedId));
           for (const candidate of continuation.candidates || []) {
