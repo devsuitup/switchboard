@@ -19,6 +19,85 @@ Main-process modules `trigger-watcher.js` and `trigger-context.js` live in
 
 ## Public surface
 
+### Renderer broker and open lifecycle (issue #1022, slice C)
+
+`src/main/triggers/trigger-renderer-bridge.js` is an Electron-free request
+owner with injected IPC, window/session lookup, launch admission, clock and
+timers. Main instantiates it and supplies the watcher with lifecycle ports.
+Open/new are enabled. Stop still returns
+`session action not implemented in this build`. Legacy delivery is unchanged.
+
+`cli-session-state.liveElsewhereV1Checked` reads raw descriptors before host
+filtering and proves namespace identity even without a PTY. Pinned sandbox
+delivery uses `observeTabWriterV1` for ownership and status on every sample and
+write. Ordinary status readers and legacy triggers retain their existing paths.
+
+The broker registers `trigger-actions-ready` (invoke) and
+`trigger-session-action-result` (send), and emits `trigger-session-action`.
+`attach(win)` binds a window once. Readiness comes only from that window's
+current main frame, not loading the document. An absolute deadline bounds the
+ready wait, marker callback and action ACK. No window is created or focused.
+The main caller must supply already resolved local metadata and persist its
+action marker before dispatch, using the awaited `beforeDispatch` callback.
+
+`request(operation, beforeDispatch)` keeps the requested ID, exact map key and
+pinned generation separate. Reattach pins the actual entry and PTY before
+dispatch; ACK acceptance rechecks them. Resume/new require a single-use
+`consumePermit` call from the current main frame and main-only `markOpened`
+evidence before a successful ACK. `checkPermit` is the final synchronous
+deadline/closing/target check for the launch integration; it does not
+itself prove liveness, transcript validity, defaults, eligibility or readiness.
+Main supplies these checks through `trigger-launch.js` and pending-open
+serialization shared by all ordinary and permit-bearing opens.
+Project admission returns the matched local `allProjects.projectPath` spelling
+for the permit, renderer and new-session cwd, including case, separators, `..`
+and Windows 8.3 aliases. Resume keeps its separately verified recorded cwd.
+The trigger snapshot carries `hiddenProjects`, `hiddenProjectKinds` and
+`hiddenProjectScopes` from one cloned settings snapshot. Any change to that
+tuple during the projects query refuses admission. The shared hidden-project
+matcher uses the captured host scopes when validating local projects.
+The final descriptor liveness scan applies to resume; new has a freshly reserved
+UUID and revalidates project admission without scanning unrelated descriptors.
+Prompt delivery still requires the new launch's descriptor readiness proof.
+Renderer trigger refusals destroy the terminal without restore notices, new skipped
+restore entries or working-set writes. Cleanup preserves any existing held startup
+entry across deadline, not-live and backend refusals so a later working-set save
+retains that conversation. When a prior manual failure left a closed error tab,
+trigger resume also preserves that entry around the closed-tab destruction before
+the resume guard runs. Guard refusal and deadline expiry after the guard retain
+it; a successful open consumes it. Failed or expired new opens also remove their
+pending/sidebar rows and any empty project rows created by that launch. Existing
+project rows and created rows that gained another session survive cleanup so a
+later save cannot retain a fresh placeholder.
+If the renderer joins an ordinary pending exact resume, main revalidates its
+recorded launch mode/source, transcript/cwd, liveness and generation before the
+ACK. `ensureJoined` also covers an ordinary entry created while the permit was
+waiting in main. Such a join has `resumed:false`; fresh/fork/attach/remote paths
+cannot satisfy it. Normalized-key collisions refuse rather than spawn again.
+
+Navigation, renderer exit, window destruction/closure, explicit `revoke` and
+deadline settle once and abort the permit signal. The exit guard calls
+`revoke(win, 'Switchboard is closing.')` at close commitment.
+Opened evidence comes from main's entry, never renderer flags, and immediately
+updates the marker through the broker's main-only `onOpened` hook. Interruption
+after permit consumption conservatively carries uncertainty. Explicit backend
+failure preserves its known effects without that interruption flag. Late/duplicate/wrong-document or
+wrong-target replies cannot complete another request. `dispose()` removes the
+registered IPC and window listeners.
+
+Preload exposes the three named APIs and a per-subscription cleanup function.
+`handleTriggerSessionAction` uses `openSession`/`openSessionNow` and
+`launchNewSession` with activation disabled, exact IDs and current ordinary
+defaults. It adds grid cards without focusing them. Main persists only the new
+ID's trimmed name through the writer before delivery. No prompt enters CLI argv.
+`deliverSingle` is shared by legacy commands and v1 prompts. v1 supplies the
+absolute action deadline to verification and every write. A new launch requires
+fresh status at or after `launchStartedAt`, continuous settled idle and a free,
+quiet composer; no-prompt opens need only the verified terminal ACK.
+The FIFO starts before resolution and the tab mutex covers ensure-open,
+delivery and result publication. A timed-out FIFO waiter releases its eventual
+lock. True created/resumed and partial submission evidence survive refusals.
+
 ### Versioned requests (issue #1022, slice B)
 
 The watcher dispatches parsed objects with an own `version` or `action` property
@@ -47,7 +126,7 @@ The filename stem must be a lowercase UUID of shape
 Session IDs accept either case and normalize to lowercase. Prompt is optional
 for resume, required for new; `before` is optional for stop. Explicit null/empty
 text is invalid. Prompts remain verbatim; validated names are trimmed by the
-future lifecycle storage path. New projects must be absolute native paths.
+lifecycle storage path. New projects must be absolute native paths.
 There are no launch flags or focus field. `expectedCwd` is allowed only with an
 existing ID. Explicit `timeout_ms` must be an integer in 1–600000.
 
@@ -80,24 +159,23 @@ null/false properties still count as present. Stop rejects `new` and `prompt`;
 resume rejects `before`; new rejects `expectedCwd`. All modes reject arbitrary
 properties, including legacy command/key/chain, options, cli, wait and focus.
 
-**This build performs no v1 lifecycle action or prompt delivery.** After schema
-validation, every valid open/resume/new/stop returns `outcome:"refused"`,
-`reason:"session action not implemented in this build"`. This new stable reason
-is specific to this intermediate build. It means zero PTY writes, spawns,
-resumes, stops or renderer requests. The refusal occurs before target/liveness
-resolution, ID allocation and token reservation. No user-facing feature or
-setting is enabled; this slice takes `no-changelog`.
+Main supplies lifecycle ports for open/resume/new. Stop retains
+`outcome:"refused"`, `reason:"session action not implemented in this build"`,
+before target resolution, writes or renderer work. Calling the standalone
+actions helper without lifecycle ports keeps the same safe build refusal.
 
 Every classified result echoes the requested `version` and `action` (null when
-missing, unsupported values unchanged), with `ok:false`, `outcome:"refused"`,
-stable `reason`, canonical valid requested `sessionId` or null, `submitted:"no"`,
-`wrote:false`, and `steps_total` zero until the permitted prompt/before has
+missing, unsupported values unchanged). Validation failures have `ok:false`,
+`outcome:"refused"`, stable `reason`, canonical valid requested `sessionId` or
+null, `submitted:"no"`, `wrote:false`, and `steps_total` zero until prompt/before has
 passed text validation, then one. Rejected fields, blank/oversized/control
 text, and text not reached in validation order contribute zero. Later timeout
 or cwd failures preserve one already validated text step.
-Open-resume has `resumed:false`; open-new has `created:false`. No new ID is
-allocated by this build. OS/parser details belong in `error`, not stable codes.
-No `opened` or `closed` result is produced by this slice.
+Open-resume starts with `resumed:false`; open-new starts with `created:false`.
+New allocates its ID only after project admission. Successful opens return
+`opened`, `ok:true`, `reason:null`; confirmed spawn flags and partial submission
+evidence survive later refusals. No `closed` result is produced while stop is
+disabled. OS/parser details belong in `error`, not stable codes.
 
 Versioned terminal results use the existing temporary-write/rename-retry helper
 at `processed/<uuid>.result.json`. Publication precedes input removal, and
@@ -188,16 +266,12 @@ An exact known worktree project takes precedence over its collapsed repository
 root, so a settings-hidden ancestor does not deny that distinct visible project.
 An exact settings-hidden recorded cwd still refuses before root fallback.
 
-The resolver is deliberately not wired as launch admission: the current
-`get-projects('both')` implementation queries the projects worker and then
-assembles placeholders/archive effects; it does not expose a consistent public
-snapshot with hidden-settings provenance. That extraction, v1 checked raw
-liveness, existing-tab ownership, expected-cwd rechecks, session/tab locks,
-renderer readiness/acknowledgement, permits, name persistence, actual-cwd spawn,
-prompt verification, stop/final-note completion and cancellation belong to later
-slices. A successful read-only resolution must never be interpreted as permission
-to launch or write. The current unconditional build refusal keeps those paths
-closed.
+`getProjectsSnapshot` is shared by the ordinary IPC and v1 admission.
+`getTriggerProjectSnapshot` retains settings-hidden provenance and refuses a
+concurrent provenance change. Closed resume revalidates exact transcript
+identity and recorded cwd before spawn, with no fresh-start fallback. New uses
+the known project and ordinary defaults. Stop/final-note completion remains
+slice D. A successful resolution alone never authorizes launch or writing.
 
 Each watcher owns one `createNewSessionLimiter` bucket: capacity three,
 continuous refill of one token per 20000 ms, capped at three, reset on restart.

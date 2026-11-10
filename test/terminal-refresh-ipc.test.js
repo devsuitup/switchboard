@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { createRequire } = require('node:module');
 const { createTerminalResizeHandler } = require('../src/main/terminals/terminal-resize');
 const { extractFunction } = require('./app-source');
 const { createTmuxAttachAdapter } = require('../src/main/remote/remote-attach');
@@ -134,6 +135,7 @@ test('remote open, reattach and launch preserve the adapter sizing capability in
     const descriptor = { sessionId: 'fixture', cwd: '/fixture' };
     const attachResult = { ok: true, ptyProcess: {}, remoteResizeAllowed };
     const context = vm.createContext({
+      require: createRequire(path.join(__dirname, '../main.js')),
       activeSessions,
     mainWindow: { webContents: { send() {} } },
     unsavedGuard: { launchAllowed: () => true },
@@ -155,7 +157,7 @@ test('remote open, reattach and launch preserve the adapter sizing capability in
       const start = main.indexOf(`ipcMain.handle('${channel}'`);
       const end = main.indexOf('\n});', start) + 4;
       assert.ok(start >= 0 && end > start);
-      vm.runInContext(main.slice(start, end), context);
+      vm.runInContext(main.slice(start, end), context, { filename: path.join(__dirname, '../main.js') });
     }
     const open = handlers.get('open-terminal');
     const result = await open(null, 'fixture', '/fixture', false, {}, { cols: 120, rows: 40 });

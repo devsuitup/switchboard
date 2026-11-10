@@ -18,7 +18,7 @@ test('background handoff is registered and the local record retains pre-launch e
 
 test('a held physical exit cannot be reported as a live reattach during handoff', () => {
   const idx = MAIN.indexOf("ipcMain.handle('open-terminal'");
-  assert.match(MAIN.slice(idx, idx + 900), /if \(session\.backgrounding && session\.exited\) return \{ ok: false/);
+  assert.match(MAIN.slice(idx, MAIN.indexOf('\n});', idx)), /if \(session\.backgrounding && session\.exited\) return \{ ok: false/);
 });
 
 test('open-terminal builds `claude attach <id>` for an attach session and never a --resume', () => {

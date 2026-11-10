@@ -145,9 +145,11 @@ function functionBody(src, signature) {
 test('openSession runs the guard before it asks main for a PTY', () => {
   const body = functionBody(APP_SRC, 'async function openSessionNow(');
   const guardAt = body.indexOf('guardResume(');
-  const spawnAt = body.indexOf('window.api.openTerminal(');
+  const spawnAt = body.indexOf('window.api.openTerminal(', body.indexOf('const verdict ='));
   assert.notEqual(guardAt, -1, 'openSession must call guardResume');
   assert.ok(guardAt < spawnAt, 'the guard must run before open-terminal spawns claude --resume');
+  assert.match(body.slice(0, guardAt), /mode === 'reattach'/);
+  assert.match(body.slice(0, guardAt), /reattachOnly: true/);
   assert.match(body, /guardResume\(session, \{ automatic,/);
 });
 

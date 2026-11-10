@@ -1,5 +1,51 @@
 # Context: cli-session-state
 
+## V1 trigger reader (#1022)
+
+`liveElsewhereV1Checked` and `observeTabWriterV1` use the separate
+`src/main/cli/session-state-v1.js` reader. Init supplies the configured descriptor
+directory, existing descriptor/state parsers, clock and injectable filesystem /
+procfs edges (`v1DescriptorFs`, `v1ProcFs`). Existing public readers keep their
+host-filtered behavior.
+
+The raw scan retains matching descriptors before any PID/start liveness filter.
+It caps descriptor count/size and process count and checks the action deadline.
+Malformed/unreadable/truncated evidence cannot prove absence. Tracked schedules
+are checked without requiring a descriptor. Linux maps raw PID + start through
+host-visible NSpid/stat/ns evidence, independently of any local PTY, demands a
+unique mapping and rereads file/process identity. Zero or multiple matches and
+unsupported identity yield known:false. Zombie/exited host writers and ancestry
+links cannot supply live proof. On Windows, two dead native PID reads establish
+absence, including for an unanchored descriptor. This assumes descriptor PIDs
+belong to this Windows host's PID namespace; a WSL CLI sharing the config
+directory would break that assumption. Two native anchor start probes
+that both mismatch establish a stale descriptor. Both paths reread the unchanged
+descriptor before excluding it; mixed, unavailable or replaced evidence stays
+unknown. Linux keeps zero mappings and start mismatches unknown because the raw
+PID can belong to another namespace. Windows compares live native anchor start
+identity twice; unsupported live identities remain unknown. Native probes receive
+the remaining budget, have a reader-owned deadline race and cannot initiate a
+second probe after expiry. A proven live refusal takes precedence over other
+uncertain files. Conversation-specific exclusion
+requires proof back to that conversation's PTY.
+
+Sandbox delivery additionally binds the exact session/PTY/generation and host
+PTY start, requires a different namespace and a proven descendant tree, excludes
+nested/background writers and revalidates each observation. The normalized
+writer retains host PID/start, raw PID and namespace separately, with its parsed
+status/statusUpdatedAt/waitingFor. `createTriggerContext` uses this observation
+for all v1 sandbox readiness and writes; loss of proof never enables direct-key
+fallback. The on-disk descriptor is never rewritten. Main records the actual
+sandbox flag and launch time immediately before spawn. Fresh startup accepts
+statusUpdatedAt equal to launch time; the legacy strict boundary is unchanged.
+Missing/stale startup proof uses `session readiness unavailable`; a fresh busy,
+waiting, shell or briefly idle descriptor retains its existing delivery refusal.
+
+The reader, startup and delivery portions belong to slice C. Stop's composer
+sampling, final-turn completion, stop backend and exit confirmation belong to D
+and remain disabled. Node fixtures qualify these boundaries; real Linux
+namespaces and live application IPC require separate qualification.
+
 **Purpose**: turn the Claude CLI's own "I just went idle" moment into an
 immediate subagent rescan, so a subagent that finished right before its parent's
 turn ended is marked complete in seconds instead of waiting for the next

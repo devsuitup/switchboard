@@ -4,6 +4,52 @@
 
 This file is the **canonical inventory** of the IPC surface. When you add a new IPC, you change three places — main handler, preload bridge, renderer caller — and every IPC name should appear here.
 
+## Trigger renderer broker (#1022, slice C)
+
+Source-extraction fixtures for `get-projects` load both the IPC registration
+and `getProjectsSnapshot`, with the main-relative require, structured cloning
+and conflict notification dependencies. This applies to the shared
+`test/get-projects-handler.cjs`, the archive-writer child script and the
+during-scan fixture. Each evaluates one contiguous slice from the snapshot helper
+through the registration, with `lineOffset` measured at the helper start so
+coverage retains the original `main.js` lines.
+`test/get-projects-archive-extraction.test.js` verifies that source mapping for
+all three fixtures and exercises the archive and scan extraction blocks under
+plain Node, without starting their Electron/SQLite processes. It also executes
+the remote-resize test's open/reattach/launch block with a main-relative require,
+and statically checks the excluded background-continuation exit contexts for
+`writer.releaseLiveSession`. The complete Electron integration tests remain
+separate qualification; these probes do not replace their assertions.
+
+Main instantiates `createTriggerRendererBridge`, binds it to each window and
+supplies it to the watcher. The renderer registers `handleTriggerSessionAction`
+before startup and announces readiness only after project load and restore
+succeed. v1 open/new are active; stop retains slice B's refusal.
+
+| Direction | Channel | Preload API / payload |
+| --- | --- | --- |
+| Renderer → main, invoke | `trigger-actions-ready` | `api.triggerActionsReady()`; returns `{documentEpoch}` for the current window/main frame, otherwise null |
+| Main → renderer | `trigger-session-action` | `api.onTriggerSessionAction(cb)`; `{requestId, documentEpoch, mode, requestedSessionId, tabKey, generation, session, project, name, deadline}`; returns a function that removes only this callback |
+| Renderer → main, send | `trigger-session-action-result` | `api.triggerSessionActionResult(ack)`; `{requestId, documentEpoch, mode, ok, requestedSessionId, tabKey, generation, reason?, error?}` |
+
+The broker correlates the current main frame and document epoch as well as
+the request/target tuple. Historical requested ID A may address a pinned tab B;
+an ACK must retain both identities. Main-owned entry, PTY and generation checks
+prevent a renderer ACK from authorizing a replacement. Resume/new ACKs require
+main-recorded spawn evidence. Permits are private to main, single-use, bounded
+by the action deadline and revoked on document/window loss. No external
+protocol or injected JavaScript is used.
+
+`openTerminal(id, projectPath, isNew, options, initialSize, triggerRequestId)`
+accepts an optional private permit in its sixth argument. Five-argument callers
+retain their argument shape. Main consumes it once, checks v1 raw liveness and
+the exact transcript/cwd, then rechecks after awaited preparation and immediately
+before spawn. Main serializes all opens by normalized ID, including ordinary
+clicks. Close commitment revokes pending permits through the existing exit guard.
+The renderer uses the ordinary new/resume/reattach lifecycle with activation
+disabled and returns a structured correlated ACK after registration/persistence.
+See [trigger-watcher.md](trigger-watcher.md), “Renderer broker and open lifecycle”.
+
 ## Terminal backlog (#1037)
 
 `terminal-backlog` is a one-way renderer-to-main diagnostic sent by

@@ -355,6 +355,7 @@ const rendererCrossFileGlobals = {
   toggleGridView: 'readonly',
   focusGridCard: 'readonly',
   wrapInGridCard: 'readonly',
+  updateGridColumns: 'readonly',
   initGridObservers: 'readonly',
   initGridGroupToggle: 'readonly',
   initFilePanel: 'readonly',
@@ -826,7 +827,7 @@ module.exports = [
 
   // Tests: node:test, Node globals
   {
-    files: ['test/**/*.js', 'test/**/*.test.js'],
+    files: ['test/**/*.js', 'test/**/*.test.js', 'test/fixtures/trigger-*.cjs', 'test/get-projects-handler.cjs'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'commonjs',
