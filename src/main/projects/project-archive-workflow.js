@@ -27,7 +27,8 @@ function projectArchiveWorkflows(client) {
     let targets;
     try {
       targets = identities(projects, skipInvalid);
-      if (targets.some(project => holds.has(project.key))) throw error('WORKFLOW_BUSY');
+      if (skipInvalid) targets = targets.filter(project => !holds.has(project.key));
+      else if (targets.some(project => holds.has(project.key))) throw error('WORKFLOW_BUSY');
     } catch (failure) { return Promise.reject(failure); }
     let finish;
     const lease = { id: randomUUID(), projects: targets, sealed: false, settled: new Promise(resolve => { finish = resolve; }) };

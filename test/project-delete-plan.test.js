@@ -47,6 +47,13 @@ async function planFor(f, changes) {
   return result.plan;
 }
 
+test('planner exposes the jobs already included in membership and fingerprint', async () => {
+  const f = fixture();
+  f.state.runtime.jobs.push(identity(null, { id: 'job', runtime: 'claude', verified: true, liveness: { state: 'stopped', source: 'job' } }));
+  const plan = await planFor(f);
+  assert.deepEqual(plan.jobs, f.state.runtime.jobs, 'complete inventory must expose jobs');
+});
+
 test('nullable row paths remain nullable in a confirmable membership projection', async () => {
   const f = fixture();
   f.state.ownership.groups[0].parentProjectPath = null;
