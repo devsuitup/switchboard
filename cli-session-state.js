@@ -60,6 +60,15 @@ const descriptorListeners = new Set();
 const statusListeners = new Set();
 const pendingOwnerDeaths = new Map();
 const scheduledRuns = new Map();
+let v1Reader;
+
+function liveElsewhereV1Checked(...args) {
+  return v1Reader ? v1Reader.liveElsewhereV1Checked(...args) : Promise.resolve({ known: false, reason: 'reader not initialized' });
+}
+
+function observeTabWriterV1(binding) {
+  return v1Reader ? v1Reader.observeTabWriterV1(binding) : { uncertain: true };
+}
 
 function trackScheduleRun(sessionId, child, cwd, scheduleName) {
   const key = sessionId.toLowerCase();
@@ -338,6 +347,12 @@ function init(ctx) {
   readCliProcess = ctx.readCliProcess || defaultReadCliProcess;
   readRealpath = ctx.readRealpath || fs.realpathSync;
   ownPid = ctx.ownPid || process.pid;
+  v1Reader = require('./src/main/cli/session-state-v1').createV1Reader({ dir, parseDescriptor, parseState,
+    platform, now, procFs: ctx.v1ProcFs, descriptorFs: ctx.v1DescriptorFs,
+    readProcStartMany: ctx.readProcStartMany || ctx.readProcStart ? readProcStartMany
+      : (pids, deadline) => platform === 'win32'
+        ? probeProcStartWindows(pids, Math.max(1, Math.min(PROBE_TIMEOUT_MS, deadline - now()))) : readProcStartMany(pids),
+    readParentPid, readCliProcess, scheduledRuns, procStartMatches, isProcessAlive });
   processTableEnabled = !ctx.readParentPid && (platform === 'win32' || platform === 'darwin');
   readProcessTable = ctx.readProcessTable || defaultReadProcessTable;
   processTableEpoch++;
@@ -1127,6 +1142,8 @@ async function liveElsewhereMany(sessionIds, hasPty, ptyPids = () => []) {
 }
 
 module.exports = {
+  liveElsewhereV1Checked,
+  observeTabWriterV1,
   procStartMatches,
   toCreated,
   WINDOWS_FILETIME_RE,

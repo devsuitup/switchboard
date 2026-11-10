@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { createRequire } = require('node:module');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 const { loadAppFunctions, extractFunction } = require('./app-source');
 const { computeHostProfile, attachBlockReason, sendBlockReason } = require('../src/main/remote/remote-host-profile');
@@ -66,6 +67,7 @@ function remoteMain(descriptorIds) {
   const descriptors = descriptorIds.map(sessionId => ({ sessionId, pid: 42, cwd: '/remote/project', tmux: 'main:@0.%0' }));
   const attached = [], handlers = new Map();
   const context = vm.createContext({
+    require: createRequire(mainPath),
     ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
     activeSessions: new Map(), mainWindow: { webContents: { send() {} } },
     unsavedGuard: { launchAllowed: () => true },

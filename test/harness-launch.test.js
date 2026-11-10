@@ -39,6 +39,8 @@ for (const [name, isNew, exists, git, options, expected] of cases) {
     const context = {
       sessionId: 'session', isNew, sessionOptions: Object.freeze(options), spawnCwd: '/project',
       isAttach: false, PROJECTS_DIR: '/unused', sessionTranscriptExists: () => exists,
+      triggerPermit: null,
+      launchMode: null,
       isGitRepo: () => git, parseAddDirs: value => String(value || '').split(',').map(s => s.trim()).filter(Boolean),
       log: { info() {}, warn() {} },
       getHarness: id => require('../harnesses').getHarness(id),

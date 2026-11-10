@@ -157,7 +157,7 @@ test('an old continuation exits immediately through shipped PTY wiring', t => {
     shutdownMcpServer() {}, mainWindow: { isDestroyed: () => false, webContents: { send: (...args) => messages.push(args) } },
     appQuitting: false, activeSessions: h.activeSessions, exitedRemoteSessionIds: new Set(),
     activityReporter: { sessionEnded: id => ended.push(id) }, taskRecords: { ownerDied: id => dead.push(id) },
-    sessionCache: { releaseLiveSession: () => false }, notifyRendererProjectsChanged() {}, log: { warn() {} },
+    writer: { releaseLiveSession: async () => false }, notifyRendererProjectsChanged() {}, log: { warn() {} },
     holdBackgroundExit: () => false, sessionTransitions: transitions });
   const { wireSessionPty } = loadAppFunctions(context, { functions: ['wireSessionPty'], sourcePath: path.join(__dirname, '../main.js') });
   wireSessionPty(h.entry, OLD, { onData() {}, onExit: fn => { exit = fn; } });
@@ -177,7 +177,7 @@ test('a fresh authorized link holds the shipped PTY exit until late daemon proof
     shutdownMcpServer() {}, mainWindow: { isDestroyed: () => false, webContents: { send: (...args) => messages.push(args) } },
     appQuitting: false, activeSessions: h.activeSessions, exitedRemoteSessionIds: new Set(),
     activityReporter: { sessionEnded: id => ended.push(id) }, taskRecords: { ownerDied: id => dead.push(id) },
-    sessionCache: { releaseLiveSession: () => false }, notifyRendererProjectsChanged() {}, log: { warn() {} },
+    writer: { releaseLiveSession: async () => false }, notifyRendererProjectsChanged() {}, log: { warn() {} },
     holdBackgroundExit: () => false, sessionTransitions: transitions });
   const { wireSessionPty } = loadAppFunctions(context, { functions: ['wireSessionPty'], sourcePath: path.join(__dirname, '../main.js') });
   wireSessionPty(h.entry, OLD, { onData() {}, onExit: fn => { exit = fn; } });

@@ -2317,15 +2317,16 @@ async function reloadProjects(options) {
 // rebindSidebarEvents, buildSessionItem, startRename) → sidebar.js
 
 
-async function launchNewSession(project, sessionOptions, restoreSessionId) {
-  const sessionId = crypto.randomUUID();
+async function launchNewSession(project, sessionOptions, restoreSessionId, flags = {}) {
+  if (flags.triggerAction && Date.now() >= flags.triggerAction.deadline) return null;
+  const sessionId = flags.triggerAction ? flags.triggerAction.tabKey : crypto.randomUUID();
   const projectPath = project.projectPath;
   const session = {
     sessionId,
     summary: 'New session',
     firstPrompt: '',
     projectPath,
-    name: null,
+    name: flags.triggerAction ? flags.triggerAction.name : null,
     starred: 0,
     archived: 0,
     messageCount: 0,
@@ -2340,17 +2341,20 @@ async function launchNewSession(project, sessionOptions, restoreSessionId) {
 
   // Inject into cached project data so it appears in sidebar immediately
   sessionMap.set(sessionId, session);
+  const createdProjectRows = [];
   for (const projList of [cachedProjects, cachedAllProjects]) {
     let proj = projList.find(p => p.projectPath === projectPath);
     if (!proj) {
       proj = { folder, projectPath, sessions: [] };
       projList.unshift(proj);
+      createdProjectRows.push({ projects: projList, project: proj });
     }
     proj.sessions.unshift(session);
   }
   refreshSidebar();
 
   const entry = createTerminalEntry(session);
+  if (flags.triggerAction) entry.triggerRequestId = flags.triggerAction.requestId;
   if (restoreSessionId) {
     if (restoreInFlight.get(restoreSessionId)?.active) pendingSessions.get(sessionId).openingActive = true;
     restoreInFlight.delete(restoreSessionId);
@@ -2358,22 +2362,42 @@ async function launchNewSession(project, sessionOptions, restoreSessionId) {
 
   // Open terminal in main process with session options
   let result;
+  if (flags.triggerAction) beginPtyOpen(sessionId);
   try {
-    result = await window.api.openTerminal(sessionId, projectPath, true, sessionOptions || null, entry.initialSize);
+    if (flags.triggerAction && Date.now() >= flags.triggerAction.deadline) return null;
+    result = flags.triggerAction
+      ? await window.api.openTerminal(sessionId, projectPath, true, sessionOptions || null, entry.initialSize, flags.triggerAction.requestId)
+      : await window.api.openTerminal(sessionId, projectPath, true, sessionOptions || null, entry.initialSize);
   } finally {
     delete pendingSessions.get(sessionId)?.openingActive;
+    if (flags.triggerAction) settlePtyOpen(sessionId, result);
+    if (flags.triggerAction && !result?.ok) {
+      destroySession(sessionId);
+      pendingSessions.delete(sessionId);
+      sessionMap.delete(sessionId);
+      for (const projects of [cachedProjects, cachedAllProjects]) {
+        for (const project of projects) project.sessions = project.sessions.filter(s => s.sessionId !== sessionId);
+      }
+      for (const { projects, project } of createdProjectRows) {
+        const index = projects.indexOf(project);
+        if (index !== -1 && project.sessions.length === 0) projects.splice(index, 1);
+      }
+      refreshSidebar();
+    }
   }
-  if (!result.ok) {
-    entry.terminal.write(`\r\nError: ${result.error}\r\n`);
+  if (!result?.ok) {
+    if (flags.triggerAction) throw Object.assign(new Error(result?.error || 'session open failed'), { reason: result?.reason || 'session open failed' });
+    entry.terminal.write(`\r\nError: ${result?.error || 'The terminal backend is unavailable'}\r\n`);
     entry.closed = true;
-    showSession(sessionId);
+    if (flags.activate !== false) showSession(sessionId);
     return null;
   }
+  if (flags.triggerAction) entry.triggerGeneration = result.generation;
   syncPtySizeAfterOpen(entry, result);
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
   setSessionSandboxed(sessionId, result.sandbox);
 
-  showSession(sessionId);
+  if (flags.activate !== false) showSession(sessionId);
   schedulePersistWorkingSet();
   pollActiveSessions();
   return sessionId;
@@ -2490,14 +2514,15 @@ function settleContinuedInFlight(item) {
   schedulePersistWorkingSet();
 }
 
-async function openSessionNow(session, customOptions, { automatic = false, fromRestore = false, live, continuationResolved = false, chooseAgain = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onHold, onOpenError, reattachOnly = false, backgroundRestoreJobId } = {}, open = null) {
+async function openSessionNow(session, customOptions, { automatic = false, fromRestore = false, live, continuationResolved = false, chooseAgain = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onHold, onOpenError, reattachOnly = false, backgroundRestoreJobId, triggerAction } = {}, open = null) {
   const restoreNoticeSessions = [session];
   let freshLive = false;
   if (!fromRestore && !restoreRunDepth) sessionOpenedOutsideRestore = true;
   if (!automatic) continuationRetryCancelled = true;
   if (open?.after) await open.after;
+  if (triggerAction && Date.now() >= triggerAction.deadline) return false;
   const mayShow = () => activate && (activeFrom === undefined || activeSessionId === activeFrom);
-  const currentOpenId = () => (customOptions?.type === 'attach'
+  const currentOpenId = () => (triggerAction || customOptions?.type === 'attach'
     ? (openSessions.has(session.sessionId) && !openSessions.get(session.sessionId).closed ? session.sessionId : null)
     : rowOpenId(session));
   let openId = currentOpenId();
@@ -2514,14 +2539,20 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
     openId = settled;
   }
   if (openId && !chooseAgain) {
+    if (triggerAction?.mode === 'reattach' && ptyGenerations.get(openId) == null) {
+      const result = await window.api.openTerminal(openId, triggerAction.project, false, { reattachOnly: true }, openSessions.get(openId).initialSize, triggerAction.requestId);
+      if (!result?.ok || result.generation !== triggerAction.generation || Date.now() >= triggerAction.deadline) return false;
+      settlePtyOpen(openId, result);
+    }
     for (const target of restoreNoticeSessions) clearAppNotice(sessionActionNoticeId('Restore', target));
     if (clearDormantRow(openId)) schedulePersistWorkingSet();
     if (mayShow()) showSession(openId);
-    return;
+    return triggerAction ? { ok: true, generation: ptyGenerations.get(openId) } : undefined;
   }
   const backgroundHeld = !backgroundRestoreJobId && !reattachOnly && customOptions?.type !== 'attach'
     && (dormantWorkingSet.get(session.sessionId) || skippedWorkingSetEntries.get(session.sessionId));
   if (backgroundHeld?.item?.bg === true) {
+    if (triggerAction) throw Object.assign(new Error('background session is not supported'), { reason: 'background session is not supported' });
     skippedWorkingSetEntries.set(session.sessionId, backgroundHeld);
     const background = await prepareBackgroundRestore(session, backgroundHeld.item);
     if (!background) return false;
@@ -2592,7 +2623,9 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
   if (openSessions.has(resolvedOpenId)) {
     const entry = openSessions.get(resolvedOpenId);
     if (entry.closed) {
+      const held = triggerAction && skippedWorkingSetEntries.get(resolvedOpenId);
       destroySession(resolvedOpenId);
+      if (held) skippedWorkingSetEntries.set(resolvedOpenId, held);
     } else {
       for (const target of restoreNoticeSessions) clearAppNotice(sessionActionNoticeId('Restore', target));
       if (clearDormantRow(resolvedOpenId)) schedulePersistWorkingSet();
@@ -2604,6 +2637,7 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
 
   // see .ai/contexts/cli-session-state.md ("Live elsewhere") and .ai/contexts/bg-agents.md ("Attach")
   const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, freshLive, allowBgAttach, onBlocked, api: window.api, name: cleanDisplayName(session.name || session.aiTitle || session.summary), confirm: question => appConfirm({ ...question }), notify: notice => showAppNotice(notice) });
+  if (triggerAction && Date.now() >= triggerAction.deadline) return false;
   if (verdict === false) return false;
   if (backgroundRestoreJobId && (!verdict?.attach || verdict.attach !== backgroundRestoreJobId)) {
     showSessionActionFailure('Restore', session, `Job ${backgroundRestoreJobId} no longer has an attachable background descriptor`, 'Check the background session in the Agents view.');
@@ -2615,11 +2649,18 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
 
   // Create new terminal entry (hidden until showSession)
   const entry = createTerminalEntry(session);
+  if (triggerAction) entry.triggerRequestId = triggerAction.requestId;
 
   // Open terminal in main process — see .ai/contexts/session-state.md ("Reopening a plain terminal")
   let resumeOptions = customOptions
     || (session.type === 'terminal' ? { type: 'terminal' } : await resolveDefaultSessionOptions({ projectPath }));
   if (reattachOnly) resumeOptions = { ...resumeOptions, reattachOnly: true };
+  if (triggerAction && Date.now() >= triggerAction.deadline) {
+    const held = skippedWorkingSetEntries.get(sessionId);
+    destroySession(sessionId);
+    if (held) skippedWorkingSetEntries.set(sessionId, held);
+    return false;
+  }
   entry.attach = resumeOptions.type === 'attach';
   entry.attachJobId = entry.attach ? resumeOptions.jobId : null;
   entry.attachCwd = entry.attach ? resumeOptions.cwd || projectPath : null;
@@ -2627,7 +2668,9 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
   beginPtyOpen(sessionId);
   let result;
   try {
-    result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions, entry.initialSize);
+    result = triggerAction
+      ? await window.api.openTerminal(sessionId, projectPath, false, resumeOptions, entry.initialSize, triggerAction.requestId)
+      : await window.api.openTerminal(sessionId, projectPath, false, resumeOptions, entry.initialSize);
   } catch (err) {
     if (!automatic && !entry.attach) {
       settlePtyOpen(sessionId, null);
@@ -2637,11 +2680,21 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
   }
   settlePtyOpen(sessionId, result);
   result ||= { ok: false, error: 'The terminal backend is unavailable or returned no result' };
+  if (triggerAction && result.ok) entry.triggerGeneration = result.generation;
   if (result.notLive) {
+    const held = triggerAction && skippedWorkingSetEntries.get(sessionId);
     destroySession(sessionId);
+    if (held) skippedWorkingSetEntries.set(sessionId, held);
     return false;
   }
   if (!result.ok) {
+    if (triggerAction) {
+      const held = skippedWorkingSetEntries.get(sessionId);
+      destroySession(sessionId);
+      if (held) skippedWorkingSetEntries.set(sessionId, held);
+      onOpenError?.(result.error, result.reason, result.generation ?? null);
+      return false;
+    }
     if (automatic || entry.attach) {
       showSessionActionFailure(automatic ? 'Restore' : 'Attach background', session, backgroundRestoreJobId ? `Job ${backgroundRestoreJobId}: ${result.error}` : result.error,
         entry.attach ? 'Check the background session in the Agents view, then open it from the sidebar to retry attaching.'
@@ -2685,6 +2738,68 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
   if (mayShow()) showSession(sessionId);
   schedulePersistWorkingSet();
   pollActiveSessions();
+  if (triggerAction) return { ok: true, generation: result.generation };
+}
+
+async function handleTriggerSessionAction(request) {
+  if (!request || typeof request !== 'object') return;
+  const ack = { requestId: request.requestId, documentEpoch: request.documentEpoch, mode: request.mode,
+    requestedSessionId: request.requestedSessionId, tabKey: request.tabKey, generation: null, ok: false };
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const validTabKey = request.mode === 'reattach'
+    ? typeof request.tabKey === 'string' && request.tabKey.length > 0 : uuid.test(request.tabKey);
+  let backendGeneration = null;
+  const check = () => {
+    if (Date.now() >= request.deadline) throw Object.assign(new Error('session action timed out'), { reason: 'session action timed out' });
+  };
+  try {
+    if (!uuid.test(request.requestId) || !uuid.test(request.documentEpoch) || !validTabKey
+      || !['new', 'resume', 'reattach'].includes(request.mode) || !Number.isFinite(request.deadline)
+      || typeof request.project !== 'string' || !request.project
+      || (request.mode === 'new' ? request.requestedSessionId !== null || typeof request.name !== 'string' || !request.name.trim()
+        : !uuid.test(request.requestedSessionId)) || (request.mode === 'resume' && request.tabKey !== request.requestedSessionId)) {
+      throw new Error('invalid session action');
+    }
+    check();
+    if (request.mode === 'new') {
+      const project = { projectPath: request.project };
+      const options = await resolveDefaultSessionOptions(project);
+      check();
+      const result = await launchNewSession(project, options, null, { activate: false, triggerAction: request });
+      if (result !== request.tabKey) throw new Error('session open failed');
+    } else {
+      const session = { ...request.session, sessionId: request.tabKey, headSessionId: request.tabKey,
+        mergedMemberIds: [], projectPath: request.project };
+      let blocked;
+      const result = await openSession(session, null, { automatic: true, activate: false, continuationResolved: true,
+        allowBgAttach: false, reattachOnly: request.mode === 'reattach', triggerAction: request,
+        onOpenError: (error, reason, generation) => { backendGeneration = generation; blocked = { error, reason: reason || 'session open failed' }; },
+        onBlocked: value => { blocked = value; } });
+      if (blocked) throw Object.assign(new Error(blocked.error || blocked.reason || 'session live elsewhere'), { reason: blocked.reason || 'session live elsewhere' });
+      if (result === false || result === null) throw new Error('session open failed');
+    }
+    check();
+    const entry = openSessions.get(request.tabKey);
+    const generation = ptyGenerations.get(request.tabKey);
+    if (!entry || entry.closed || entry.openError || generation == null
+      || (request.mode === 'reattach' && generation !== request.generation)) throw new Error('session open failed');
+    ack.generation = generation;
+    if (gridViewActive && !gridCards.has(request.tabKey)) {
+      wrapInGridCard(request.tabKey);
+      updateGridColumns();
+      gridViewerCount.textContent = gridCards.size + ' session' + (gridCards.size === 1 ? '' : 's');
+    }
+    schedulePersistWorkingSet();
+    ack.ok = true;
+  } catch (error) {
+    const entry = openSessions.get(request.tabKey);
+    if (entry?.triggerRequestId === request.requestId && Number.isInteger(entry.triggerGeneration)) backendGeneration = entry.triggerGeneration;
+    ack.generation = request.mode === 'reattach' ? request.generation
+      : backendGeneration !== undefined ? backendGeneration : ptyGenerations.get(request.tabKey) ?? null;
+    ack.reason = error.reason || 'session open failed';
+    ack.error = error.message;
+  }
+  window.api.triggerSessionActionResult(ack);
 }
 
 // --- Terminal geometry re-sync ---
@@ -2959,12 +3074,15 @@ async function loadStartupProjects() {
       if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] startup project load failed', error);
     }
   }
-  try { await restoreStartupSessions({ projectsLoaded: loaded }); }
+  try {
+    await restoreStartupSessions({ projectsLoaded: loaded });
+    if (loaded) await window.api.triggerActionsReady?.();
+  }
   catch (error) { console.warn('[switchboard] startup restore failed', error); }
   if (!loaded) {
     const retry = async remaining => {
       if (await reloadProjects()) {
-        try { await restoreStartupSessions(); }
+        try { await restoreStartupSessions(); await window.api.triggerActionsReady?.(); }
         catch (error) { console.warn('[switchboard] startup restore failed', error); }
         return;
       }
@@ -2974,6 +3092,7 @@ async function loadStartupProjects() {
   }
 }
 
+window.api.onTriggerSessionAction(handleTriggerSessionAction);
 loadStartupProjects();
 
 // Live-reload sidebar when filesystem changes are detected

@@ -60,13 +60,21 @@ Admissions at this base:
   awaits that callback before releasing, so an operation awaiting `ready` sees
   the registered attach PTY rather than an unobserved remote launch.
 
-The local `origin/main` at `97f600cf` includes #1049 trigger transport but not
-#1054's launch executor. Versioned open/new/resume/stop requests all refuse as
-unimplemented, while legacy command/chain/key delivery addresses existing PTYs.
-There is no trigger spawn to gate or bypass in A3 at this base. When an executor
-lands, it must reserve this singleton after target resolution and before its
-first asynchronous spawn preparation, retaining the reservation through spawn.
-The trigger token bucket is a separate rate limit and cannot substitute for this.
+After #1054, versioned trigger open/new and closed-session resume use the same
+`open-terminal` admission for project membership and resolved spawn cwd. The
+per-session `acquireOpen` lock precedes permit consumption and target validation;
+the project reservation follows target resolution, immediately before its inner
+`try`, and spans asynchronous spawn preparation through PTY registration. Its
+inner `finally` releases admission before the outer `finally` releases the open
+lock. A held project returns `ok:false` with `PROJECT_OPERATION_ERROR` as both
+error and trigger reason. The renderer removes failed placeholders without
+writing the working set, replies with a null generation, and the broker retires
+the consumed permit. The action publishes `outcome: 'refused'`, preserving
+`created:false`/`resumed:false`, and refunds a new-session rate reservation.
+No session or name is saved. A later renderer interruption still follows the
+broker's conservative uncertainty rules. Existing-session trigger reattachment
+and legacy command/chain/key delivery start no process and bypass admission;
+stop remains unimplemented. The trigger token bucket is a separate rate limit.
 
 Refusals preserve each launch surface's existing result shape. No process is
 stopped here. This lock is in-process and ephemeral; external CLIs, other app

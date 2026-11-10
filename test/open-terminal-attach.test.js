@@ -95,8 +95,14 @@ test('worktree launch keeps both identities reserved through preparation and rel
   const cwd = path.join(h.root, 'test');
   h.context.resolveSessionRealCwd = () => cwd;
   let rejectSnapshot;
-  h.context.sessionTransitions.snapshotContinuationsBeforeSpawn = () => new Promise((_resolve, reject) => { rejectSnapshot = reject; });
+  let enteredSnapshot;
+  const preparing = new Promise(resolve => { enteredSnapshot = resolve; });
+  h.context.sessionTransitions.snapshotContinuationsBeforeSpawn = () => new Promise((_resolve, reject) => {
+    rejectSnapshot = reject;
+    enteredSnapshot();
+  });
   const pending = h.open('dual-pending', h.root, false, {});
+  await preparing;
   const { projectOperationGate } = require('../src/main/shared/project-operation-gate');
   const held = [projectOperationGate.hold(h.root), projectOperationGate.hold(cwd)];
   t.after(() => held.forEach(hold => hold.release()));
@@ -131,8 +137,14 @@ for (const [mode, isNew, options] of [['new', true, {}], ['resume', false, {}], 
 test('open-terminal keeps an admitted asynchronous launch reserved until the PTY is registered', async t => {
   const h = launchFixture();
   let finishSnapshot;
-  h.context.sessionTransitions.snapshotContinuationsBeforeSpawn = () => new Promise(resolve => { finishSnapshot = resolve; });
+  let enteredSnapshot;
+  const preparing = new Promise(resolve => { enteredSnapshot = resolve; });
+  h.context.sessionTransitions.snapshotContinuationsBeforeSpawn = () => new Promise(resolve => {
+    finishSnapshot = resolve;
+    enteredSnapshot();
+  });
   const pending = h.open('pending', h.root, true, {});
+  await preparing;
   assert.equal(typeof finishSnapshot, 'function');
   const { projectOperationGate } = require('../src/main/shared/project-operation-gate');
   const held = projectOperationGate.hold(h.root);
@@ -157,7 +169,7 @@ test('background handoff is registered and the local record retains pre-launch e
 
 test('a held physical exit cannot be reported as a live reattach during handoff', () => {
   const idx = MAIN.indexOf("ipcMain.handle('open-terminal'");
-  assert.match(MAIN.slice(idx, idx + 900), /if \(session\.backgrounding && session\.exited\) return \{ ok: false/);
+  assert.match(MAIN.slice(idx, MAIN.indexOf('\n});', idx)), /if \(session\.backgrounding && session\.exited\) return \{ ok: false/);
 });
 
 test('open-terminal builds `claude attach <id>` for an attach session and never a --resume', () => {

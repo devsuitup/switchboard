@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { createRequire } = require('node:module');
 const { createTerminalResizeHandler } = require('../src/main/terminals/terminal-resize');
 const { extractFunction } = require('./app-source');
 const { createTmuxAttachAdapter } = require('../src/main/remote/remote-attach');
@@ -134,6 +135,7 @@ test('remote open, reattach and launch preserve the adapter sizing capability in
     const descriptor = { sessionId: 'fixture', cwd: '/fixture' };
     const attachResult = { ok: true, ptyProcess: {}, remoteResizeAllowed };
     const context = vm.createContext({
+      require: createRequire(path.join(__dirname, '../main.js')),
       activeSessions,
     mainWindow: { webContents: { send() {} } },
     unsavedGuard: { launchAllowed: () => true },

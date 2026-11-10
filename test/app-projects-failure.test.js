@@ -17,6 +17,8 @@ function setup() {
   for (const name of ['reportActivityFocus', 'reportActivityTitles', 'refreshSidebar', 'renderDefaultStatus']) w[name] = () => {};
   w.pollActiveSessions = async () => {};
   w.api = { getProjects: async () => { throw new Error('worker failed'); }, getSetting: async () => ({}), getActiveTerminals: async () => [] };
+  w.api.onTriggerSessionAction = () => {};
+  w.handleTriggerSessionAction = () => {};
   w.console = { ...console, warn: () => {} };
   loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects'] });
   return h;
