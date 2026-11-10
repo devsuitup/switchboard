@@ -5,6 +5,79 @@ connection remains for the existing synchronous reads. Independent read workers,
 removal of main's connection and general outcome recovery belong to step 2.
 The dormant #474 A4b1 deletion substrate below provides operation-specific receipts.
 
+## Dormant consumed-request journal (#380 S1b1)
+
+Writable reconciliation adds `session_requests` (one lowercase safe filename
+stem per data directory) and `session_request_commands` (stem/actionToken
+receipts). Neither table is cache data or references session/cache rows.
+Deletion receipt maintenance, transcript removal, cache clear/rebuild and
+processed-result removal must never expire these records. Existing deletion
+tables, `projectDeletion`, `commitTransaction` and startup recovery are retained.
+Both domains share `_writer_revision`; a journal result and its receipt are one
+indivisible worker unit with one revision increment in `commitTransaction`.
+The adaptive 32-row/65536-byte/10 ms policy and first oversized-unit exception
+remain unchanged. There is no additional writable connection or FULL scope;
+the existing WAL/NORMAL process-crash boundary does not promise power-loss
+durability. Node22 fixture transactions do not qualify native crash ordering.
+
+The command registry and admitted/drained typed facade expose:
+
+| Port | Contract |
+|---|---|
+| `querySessionRequestOutcome({stemKey, suppliedHash?, rawHash?})` | Ordered worker read, without mutation/revision/settings ACK. Returns absent, owned, pending, completed or conflict. Read errors reject; cached readonly absence is never an outcome fence. |
+| `recordConsumedSessionStatusRequest` | First-wins typed status bytes or typed open-session refusal; requires supplied hash. A later competing candidate cannot replace owner bytes, timestamps, physical publication stem or owner revision. |
+| `claimSessionResultNamespace` | Minimal legacy/action filename tombstone, optionally adopting known pre-upgrade result bytes. An unknown supplied/raw identity remains owned and cannot grant an exact replay. This is not launch or retry authority. |
+| `recordSessionResultPublication` | Complete an existing matching legacy/action claim once with saved result bytes. Mismatched identity/family cannot overwrite its pending or final state. Unknown identity cannot complete an uncertain effect with a new token. |
+| `recordSessionRequestConflict` | Immutable conflict bytes keyed by owning stem and raw SHA256; repeated raw conflicts return the first bytes and timestamps. Requires an existing owner. |
+
+Only an omitted family defaults to `session-status`; explicitly supplied
+invalid families are refused, including null and other falsy values.
+
+Outcomes carry `owner` for the original namespace and `conflict` separately
+when applicable; `conflict:null` means no conflict envelope has been recorded.
+Without supplied/raw identity an occupied stem is `owned`, even if it contains
+terminal bytes. A matching identity reports `pending` or `completed`; a
+different identity reports `conflict`. Case aliases share the lowercase key;
+the original `actualStem` remains unchanged. Action publication stems must be
+lowercase; legacy and typed stems preserve actual spelling. Non-UUID safe
+legacy basenames remain valid. Validation checks the complete `<stem>.json`
+basename on the host platform, so an empty stem or a space/dot before the
+suffix does not become a new legacy restriction; NUL and path components are
+refused.
+
+Mutating inputs carry actionToken and argsHash. Producers use the exported
+`hashSessionRequestCommand(command, input)` in `session-index-commands.js`:
+sorted exact command arguments, including result bytes, family, supplied/raw
+identity, actual spelling and token, excluding argsHash itself. Buffer and
+Uint8Array candidates hash identically across structured clone. The worker
+verifies the hash before receipt lookup. Same command/token/args returns the
+original receipt without writes; different arguments or command for that token
+reject with `SESSION_REQUEST_TOKEN_CONFLICT`. A mismatched candidate digest
+rejects with `SESSION_REQUEST_ARGS_HASH`. Distinct concurrent candidates use
+distinct tokens; a losing candidate gets the first owner's record and a
+receipt for its own command. Owner revision remains historical while that
+new receipt has its own commit revision.
+
+SQL stores result bytes as BLOBs. Receipt JSON base64-encodes bytes without
+parsing or rebuilding public envelopes. Statements are lazy; write statements
+are prepared only on writable connections. Readonly pre-migration opens do
+not create tables: `sessionRequests.available()` is false and raw snapshots
+return null. The authoritative command rejects unavailable schema, rather
+than treating it as absence.
+
+Consumers must query exact replay before gathering current state; a consume
+ACK is required before publication or input cleanup. A lost/rejected/late ACK
+does not prove rollback. An explicit subsequent ordered query recovers any
+committed bytes; a late ACK must not revive an abandoned publication attempt.
+The generic transport is unchanged and does not replay unknown writes. All
+five ports use normal admission, shutdown tracking and drain behavior.
+
+This slice has no trigger caller, namespace lock, publisher, status gatherer or
+new external endpoint. S1b2 owns universal existing-family guards/publication;
+S1b3 owns typed status dispatch/evidence. A pending legacy/action claim never
+permits re-executing an uncertain old effect; existing #1022 recovery remains
+responsible for reconciling it.
+
 ## Dormant project deletion substrate (#474 A4b1)
 
 Writable schema reconciliation adds `project_delete_fences`,

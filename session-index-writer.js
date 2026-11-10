@@ -126,6 +126,11 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       recorder.finish();
     },
     withCache(otherCache) { return createSessionIndexWriter({ client }, otherCache); },
+    async querySessionRequestOutcome(input) { return request('querySessionRequestOutcome', input); },
+    async recordConsumedSessionStatusRequest(input) { return request('recordConsumedSessionStatusRequest', input); },
+    async recordSessionRequestConflict(input) { return request('recordSessionRequestConflict', input); },
+    async claimSessionResultNamespace(input) { return request('claimSessionResultNamespace', input); },
+    async recordSessionResultPublication(input) { return request('recordSessionResultPublication', input); },
     async getProjectDeletionState(input) { return request('getProjectDeletionState', input); },
     async readProjectDeletionScope(input) { return request('readProjectDeletionScope', input); },
     async fenceProjectDeletion(input) { return request('fenceProjectDeletion', input); },

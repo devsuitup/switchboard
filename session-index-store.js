@@ -125,6 +125,22 @@ db.pragma('busy_timeout = 100');
 db.pragma('synchronous = NORMAL');
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS session_requests (
+    stemKey TEXT PRIMARY KEY, suppliedHash TEXT, rawHash TEXT, family TEXT NOT NULL,
+    actualStem TEXT NOT NULL, resultBytes BLOB, createdAt INTEGER NOT NULL,
+    completedAt INTEGER, revision INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS session_request_commands (
+    domainId TEXT NOT NULL, actionToken TEXT NOT NULL, command TEXT NOT NULL,
+    argsHash TEXT NOT NULL, rawHash TEXT, outcomeJson TEXT NOT NULL,
+    revision INTEGER NOT NULL, createdAt INTEGER NOT NULL,
+    PRIMARY KEY(domainId, actionToken)
+  );
+  CREATE INDEX IF NOT EXISTS idx_session_request_conflicts
+    ON session_request_commands(domainId, command, rawHash);
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS session_meta (
     sessionId TEXT PRIMARY KEY,
     name TEXT,
@@ -967,7 +983,32 @@ const projectDeletion = {
   metadataFields: () => db.prepare('SELECT * FROM session_meta_fields ORDER BY sessionId, field').all(),
 };
 
+let preparedRequestStatements;
+const requestSchemaAvailable = () => db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('session_requests', 'session_request_commands')").get().n === 2;
+function requestStatements() {
+  return preparedRequestStatements ??= {
+    get: db.prepare('SELECT * FROM session_requests WHERE stemKey=?'),
+    receipt: db.prepare('SELECT * FROM session_request_commands WHERE domainId=? AND actionToken=?'),
+    conflict: db.prepare("SELECT outcomeJson FROM session_request_commands WHERE domainId=? AND command='recordSessionRequestConflict' AND rawHash=? ORDER BY revision LIMIT 1"),
+    insert: !readonly && db.prepare('INSERT INTO session_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'),
+    publish: !readonly && db.prepare('UPDATE session_requests SET resultBytes=?, completedAt=?, revision=? WHERE stemKey=? AND resultBytes IS NULL'),
+    addReceipt: !readonly && db.prepare('INSERT INTO session_request_commands VALUES (?, ?, ?, ?, ?, ?, ?, ?)'),
+  };
+}
+const sessionRequests = {
+  available: requestSchemaAvailable,
+  get: key => requestSchemaAvailable() ? requestStatements().get.get(key) || null : null,
+  receipt: (key, token) => requestSchemaAvailable() ? requestStatements().receipt.get(key, token) || null : null,
+  conflict: (key, hash) => requestSchemaAvailable() ? requestStatements().conflict.get(key, hash)?.outcomeJson || null : null,
+  insert: row => requestStatements().insert.run(row.stemKey, row.suppliedHash, row.rawHash, row.family,
+    row.actualStem, row.resultBytes, row.createdAt, row.completedAt, row.revision),
+  publish: row => requestStatements().publish.run(row.resultBytes, row.completedAt, row.revision, row.stemKey),
+  addReceipt: row => requestStatements().addReceipt.run(row.domainId, row.actionToken, row.command, row.argsHash,
+    row.rawHash, row.outcomeJson, row.revision, row.createdAt),
+};
+
 return {
+  sessionRequests,
   projectDeletion,
   beginSearchEntry, appendSearchBody, publishSearchEntry,
   connection: db, transact, chunkUnit, changeCount: totalChanges, measurements: () => measured.slice(), nextChunkSize: () => chunkSize,

@@ -7,6 +7,22 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
+const { createWriterCommands } = require('../session-index-commands');
+const { createSessionIndexWriter } = require('../session-index-writer');
+
+test('all journal producers reject transport failure without reconstructing or retrying their candidate', async () => {
+  const commands = createWriterCommands({}), calls = [];
+  const writer = createSessionIndexWriter({ readonlyBackend: {}, client: { ready: Promise.resolve(),
+    request: async name => { calls.push(name); throw Object.assign(new Error('unknown commit outcome'), { code: 'WRITER_TIMEOUT' }); } } }, {});
+  await writer.ready;
+  for (const name of ['querySessionRequestOutcome', 'recordConsumedSessionStatusRequest', 'recordSessionRequestConflict',
+    'claimSessionResultNamespace', 'recordSessionResultPublication']) {
+    assert.equal(typeof commands[name], 'function', `${name} is registered in the production command registry`);
+    assert.equal(typeof writer[name], 'function', `${name} is forwarded by the production facade`);
+    await assert.rejects(writer[name]({ stemKey: 'a' }), { code: 'WRITER_TIMEOUT' });
+    assert.equal(calls.filter(value => value === name).length, 1, 'unknown outcomes require an explicit ordered query');
+  }
+});
 
 function fixture(writer) {
   let worker;

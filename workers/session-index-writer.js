@@ -127,7 +127,7 @@ async function drain() {
         parentPort.postMessage({ id: message.id, result: message.command === 'effects' ? { committedRevision: message.committedRevision } : message.result,
           ...(message.mutated ? { settings: settings() } : {}) });
       } else {
-        if (['close', 'drain', 'measurements', 'getProjectDeletionState', 'readProjectDeletionScope'].includes(message.command)) message.result = unit.value();
+        if (['close', 'drain', 'measurements', 'getProjectDeletionState', 'readProjectDeletionScope', 'querySessionRequestOutcome'].includes(message.command)) message.result = unit.value();
         else if (message.command === 'fenceProjectDeletion') {
           const before = db.getSetting('_writer_revision') || 0;
           message.result = await transaction(message.command, null, undefined, unit.value);
