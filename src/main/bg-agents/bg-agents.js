@@ -437,7 +437,7 @@ async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = 
   return { known: true, job: owners.values().next().value || null };
 }
 
-function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false } = {}) {
+function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false, findNewer = false } = {}) {
   const same = value => typeof value === 'string' && value.toLowerCase() === sessionId.toLowerCase();
   const listed = id => roster.find(e => e.kind === 'background' && e.id === id) || null;
   const identity = (raw, id) => [raw?.sessionId, raw?.resumeSessionId,
@@ -462,6 +462,19 @@ function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false
         return { known: false, missing: true, reason: `no background job record for ${sessionId}` };
       }
       const record = read(attachJobId);
+      if (record.matches && findNewer) {
+        let newer;
+        try {
+          for (const id of fs.readdirSync(jobsDir).filter(id => JOB_ID_RE.test(id) && id !== attachJobId)) {
+            try {
+              const candidate = read(id);
+              if (candidate.matches && workerTimestamp(candidate.job.updatedAt) > workerTimestamp(record.job.updatedAt)
+                && (!newer || workerTimestamp(candidate.job.updatedAt) > workerTimestamp(newer.updatedAt))) newer = candidate.job;
+            } catch {}
+          }
+        } catch {}
+        if (newer) return { known: true, job: record.job, supersededBy: newer.id };
+      }
       return record.matches ? { known: true, job: record.job }
         : { known: false, reason: `job ${attachJobId} does not match saved session ${sessionId}` };
     }

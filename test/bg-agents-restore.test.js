@@ -26,6 +26,76 @@ function fixture(t) {
   return write;
 }
 
+for (const state of ['done', 'failed', 'stopped']) {
+  for (const liveness of ['unknown', 'dead', 'live']) {
+    test(`1065 ${state}/${liveness} without pending work is retired without respawn`, async t => {
+      const write = fixture(t);
+      write('aaaaaaaa', { state, updatedAt: '2026-11-04T06:28:00Z' });
+      const handlers = new Map();
+      const calls = [];
+      t.mock.method(bg, 'conversationCheck', async () => ({ known: true, state, workerLiveness: liveness }));
+      t.mock.method(bg, 'runVerb', async (...args) => { calls.push(args); return { ok: true }; });
+      require('../src/main/bg-agents/bg-agents-ipc').init({
+        ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, bgAgents: bg,
+        getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map(),
+        getSetting: () => ({ openWorkingSet: [{ sessionId: SID, bg: true, attachJobId: 'aaaaaaaa' }] }),
+        cliSessionState: { readAllDescriptors: () => [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID }], onDescriptorsChanged: () => () => {} },
+      });
+      const result = await handlers.get('restore-background-job')({}, SID);
+      assert.equal(result.action, 'retire', 'finished saved job must not produce a restore failure');
+      assert.deepEqual(calls, [], 'finished saved job must never respawn automatically');
+    });
+  }
+}
+
+test('1065 a newer job must match the conversation before superseding a saved job', t => {
+  const write = fixture(t);
+  write('aaaaaaaa', { updatedAt: '2026-11-04T06:28:00Z' });
+  write('bbbbbbbb', { updatedAt: '2026-11-10T06:28:00Z', sessionId: OTHER });
+  assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa', { findNewer: true }).supersededBy, undefined);
+  write('bbbbbbbb', { updatedAt: '2026-11-10T06:28:00Z', sessionId: OTHER, resumeSessionId: SID });
+  assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa', { findNewer: true }).supersededBy, 'bbbbbbbb');
+});
+
+for (const fields of [
+  { inFlight: { tasks: 1, kinds: ['local_agent'] } },
+  { inFlight: { tasks: 0, kinds: [], queued: 1 } },
+  { fan: [{ id: 'pending', kind: 'agent', startedAt: 1 }] },
+  { updatedAt: null },
+]) {
+  test(`1065 pending or unreadable task evidence stays held: ${JSON.stringify(fields)}`, async t => {
+    const write = fixture(t);
+    write('aaaaaaaa', { state: 'done', updatedAt: '2026-11-04T06:28:00Z', ...fields });
+    const handlers = new Map();
+    t.mock.method(bg, 'conversationCheck', async () => ({ known: true, state: 'done', workerLiveness: 'unknown' }));
+    require('../src/main/bg-agents/bg-agents-ipc').init({
+      ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, bgAgents: bg,
+      getMainWindow: () => null, log: { warn() {} },
+      getSetting: () => ({ openWorkingSet: [{ sessionId: SID, bg: true, attachJobId: 'aaaaaaaa' }] }),
+    });
+    assert.equal((await handlers.get('restore-background-job')({}, SID)).action, 'refuse');
+  });
+}
+
+for (const [state, liveness, action] of [['done', 'unknown', 'retire'], ['working', 'dead', 'retire'], ['working', 'unknown', 'refuse']]) {
+  test(`1065 superseded ${state}/${liveness} returns ${action} without respawn`, async t => {
+    const write = fixture(t);
+    write('aaaaaaaa', { state, updatedAt: '2026-11-04T06:28:00Z', inFlight: { tasks: 1, kinds: ['local_agent'] } });
+    write('bbbbbbbb', { updatedAt: '2026-11-10T06:28:00Z', resumeSessionId: SID });
+    const handlers = new Map();
+    const calls = [];
+    t.mock.method(bg, 'conversationCheck', async () => ({ known: true, state, workerLiveness: liveness }));
+    t.mock.method(bg, 'runVerb', async (...args) => { calls.push(args); return { ok: true }; });
+    require('../src/main/bg-agents/bg-agents-ipc').init({
+      ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, bgAgents: bg,
+      getMainWindow: () => null, log: { warn() {} },
+      getSetting: () => ({ openWorkingSet: [{ sessionId: SID, bg: true, attachJobId: 'aaaaaaaa' }] }),
+    });
+    assert.equal((await handlers.get('restore-background-job')({}, SID)).action, action);
+    assert.deepEqual(calls, []);
+  });
+}
+
 test('B lookup reads saved attachJobId directly and refuses a different conversation', t => {
   const write = fixture(t);
   write('aaaaaaaa'); write('bbbbbbbb');

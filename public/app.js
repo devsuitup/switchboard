@@ -493,6 +493,14 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false } = 
   try { result = await window.api.restoreBackgroundJob(item.sessionId, attachOnly ? { attachOnly: true } : undefined); }
   catch (err) { result = { action: 'refuse', reason: err.message || String(err) }; }
   const id = sessionActionNoticeId('Restore', session);
+  if (result?.action === 'retire') {
+    skippedWorkingSetEntries.delete(item.sessionId);
+    clearDormantRow(item.sessionId);
+    restoreInFlight.delete(item.sessionId);
+    clearAppNotice(id);
+    schedulePersistWorkingSet();
+    return null;
+  }
   const report = (reason, actionLabel, onAction) => showAppNotice({ id, kind: 'error',
     message: `Restore failed for ${sessionActionDescription(session)}${result?.jobId ? `, job ${result.jobId}` : ''}: ${reason}. Check the background session in the Agents view, then open it from the sidebar to retry attaching.`,
     actionLabel, onAction, dismissOnAction: false });

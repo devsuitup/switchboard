@@ -190,9 +190,13 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       const global = await getSetting('global');
       const item = global?.openWorkingSet?.find(item => item.sessionId === sessionId && item.bg === true);
       if (!item) return refuse('session is not a saved background entry in the working set');
-      const lookup = bgAgents.findRestoreJob(sessionId, item.attachJobId);
+      const lookup = bgAgents.findRestoreJob(sessionId, item.attachJobId, { findNewer: true });
       if (!lookup.known || !lookup.job) return { ...refuse(lookup.reason || 'background job record unavailable'), ...(lookup.missing ? { missing: true } : {}) };
       job = lookup.job;
+      const tasks = job.taskEvidence;
+      const finished = ['done', 'failed', 'stopped'].includes(job.state);
+      if (finished && (lookup.supersededBy || tasks?.valid && tasks.terminal && tasks.inFlight === 0 && tasks.queued === 0
+        && tasks.tasks.every(task => task.doneAt !== null))) return { action: 'retire', jobId: job.id };
       if (!attachOnly) {
         const { projectOperationGate, PROJECT_OPERATION_ERROR } = require('../shared/project-operation-gate');
         admission = projectOperationGate.tryAdmit(item.projectPath);
@@ -202,6 +206,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       if (!check.known) return refuse(check.reason || 'conversation liveness unknown');
       job.state = check.state;
       if (check.workerLiveness !== 'live' && check.workerLiveness !== 'dead') return refuse('worker liveness unknown — not respawned');
+      if (lookup.supersededBy && check.workerLiveness === 'dead') return { action: 'retire', jobId: job.id };
       if (check.workerLiveness === 'dead') {
         if (attachOnly) return refuse('worker is not live — not attached');
         if (!['working', 'done', 'running', 'failed'].includes(check.state)) return refuse(check.state + ' job was not respawned automatically', 'respawn');

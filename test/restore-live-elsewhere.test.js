@@ -532,6 +532,23 @@ test('C3 background preparations overlap and completed tabs retain saved order',
   assert.deepEqual(vm.runInContext('JSON.stringify([...openSessions.keys()])', h.ctx), '["x","y"]');
 });
 
+test('1065 retired background entry disappears silently and stays absent on the next restart', async t => {
+  const item = { sessionId: 'x', projectPath: '/px', bg: true, attachJobId: '1234abcd' };
+  const h = setup({ savedSet: [item], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  h.dom.window.api.restoreBackgroundJob = async () => ({ action: 'retire', jobId: '1234abcd' });
+  await h.restore();
+  assert.equal(h.dom.window.document.querySelector('.app-notice'), null, 'finished job must not show a failure notice');
+  assert.deepEqual(h.openTerminalCalls, []);
+  await h.persist();
+  assert.deepEqual(h.settings.global.openWorkingSet, [], 'finished job must leave the saved working set');
+  const next = setup({ savedSet: h.settings.global.openWorkingSet, liveIds: [] });
+  t.after(() => next.dom.window.close());
+  next.dom.window.api.restoreBackgroundJob = async () => assert.fail('retired job retried on next restart');
+  await next.restore();
+  assert.equal(next.dom.window.document.querySelector('.app-notice'), null);
+});
+
 for (const missing of [true, false]) {
   test(`C4 ${missing ? 'missing job releases the slot for a guarded later click' : 'GUARD ambiguous job stays held'}`, async t => {
     const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true }], liveIds: [] });
