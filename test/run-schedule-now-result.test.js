@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { isolatedHome } = require('./fixtures/isolated-home.cjs');
-const realHome = process.env.SWITCHBOARD_1064_REAL_HOME || os.homedir();
+const realHome = process.env.SWITCHBOARD_TEST_REAL_HOME || os.homedir();
 const home = isolatedHome(test, { realHome, projects: () => [] });
 home.install();
 const vm = require('node:vm');

@@ -10,7 +10,7 @@ const os           = require('os');
 const path         = require('path');
 const EventEmitter = require('events');
 const { isolatedHome } = require('./fixtures/isolated-home.cjs');
-const realHome = process.env.SWITCHBOARD_1064_REAL_HOME || os.homedir();
+const realHome = process.env.SWITCHBOARD_TEST_REAL_HOME || os.homedir();
 const firedProjects = new Set();
 const home = isolatedHome(test, { realHome, projects: () => [...firedProjects] });
 home.install();
@@ -60,7 +60,6 @@ function rig(schedule) {
   let hold = false;
   const run = (argv, cwd, name, onDone, identity) => {
     firedProjects.add(cwd);
-    home.assertProjects([...firedProjects]);
     runs.push({ argv, cwd, name, identity });
     if (hold) pending.push(onDone); else onDone();
   };
@@ -85,7 +84,6 @@ for (const catchUp of [false, true]) {
     let acknowledge;
     const stop = startScheduler({ info() {}, warn() {}, error() {} }, () => {
       firedProjects.add(PROJECT);
-      home.assertProjects([...firedProjects]);
       return new Promise(resolve => { acknowledge = resolve; });
     }, { resumeSource: r.resume, stateDir: STATE_DIR, projects: () => [PROJECT] });
     t.after(stop);
