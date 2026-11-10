@@ -1115,7 +1115,7 @@ window.api.onCliBusyState((sessionId, busy) => {
 // --- Single entry point for all sidebar renders ---
 // resort=true: re-sort items by priority+time (use for user-initiated actions)
 // resort=false (default): preserve existing DOM order, new items go to top
-function refreshSidebar({ resort = false, skipUnchanged = false, hiddenSettings } = {}) {
+function refreshSidebar({ resort = false, skipUnchanged = false, hiddenSettings, keepFocus = false } = {}) {
   if (hiddenSettings) renderProjects.hiddenSettings = hiddenSettings;
   // When searching, always use all projects (search ignores archive filter)
   let projects = (searchMatchIds !== null)
@@ -1136,7 +1136,7 @@ function refreshSidebar({ resort = false, skipUnchanged = false, hiddenSettings 
   }
 
   const skipped = !!(skipUnchanged && !resort && renderProjects.unchanged?.(projects));
-  if (!skipped) renderProjects(projects, resort);
+  if (!skipped) renderProjects(projects, resort, { keepFocus });
   const counters = refreshSidebar.counters ||= { renders: 0, skips: 0 };
   if (skipped) counters.skips++;
   else counters.renders++;
@@ -2351,7 +2351,8 @@ async function launchNewSession(project, sessionOptions, restoreSessionId, flags
     }
     proj.sessions.unshift(session);
   }
-  refreshSidebar();
+  const keepFocus = flags.activate === false;
+  refreshSidebar({ keepFocus });
 
   const entry = createTerminalEntry(session);
   if (flags.triggerAction) entry.triggerRequestId = flags.triggerAction.requestId;
@@ -2382,7 +2383,7 @@ async function launchNewSession(project, sessionOptions, restoreSessionId, flags
         const index = projects.indexOf(project);
         if (index !== -1 && project.sessions.length === 0) projects.splice(index, 1);
       }
-      refreshSidebar();
+      refreshSidebar({ keepFocus });
     }
   }
   if (!result?.ok) {

@@ -933,7 +933,7 @@ renderProjects.unchanged = projects => {
   return !sidebarRenderDirty && sidebarRenderKey === JSON.stringify(sidebarRenderInputs(projects));
 };
 
-function renderProjects(projects, resort) {
+function renderProjects(projects, resort, { keepFocus = false } = {}) {
   const scheduleRuns = new Map();
   const changedScheduleItems = new Set();
   for (const project of projects) {
@@ -1502,7 +1502,7 @@ function renderProjects(projects, resort) {
   // interacting with an input/textarea (search box, rename input, dialogs, etc.)
   const ae = document.activeElement;
   const isUserTyping = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable || ae.closest('.modal-overlay'));
-  if (activeSessionId && openSessions.has(activeSessionId) && !isUserTyping) {
+  if (activeSessionId && openSessions.has(activeSessionId) && !isUserTyping && !keepFocus) {
     openSessions.get(activeSessionId).terminal.focus();
   }
   sidebarRenderKey = JSON.stringify(sidebarRenderInputs(inputProjects));

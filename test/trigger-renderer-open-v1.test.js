@@ -246,3 +246,51 @@ test('a failed new trigger retains a created project row that gained another ses
     assert.deepEqual(Array.from(projects[0].sessions), [other]);
   }
 });
+
+function sidebarHarness(t, { grid }) {
+  const h = fixture(t); const doc = h.w.document;
+  const button = doc.createElement('button'); const second = doc.createElement('button'); const input = doc.createElement('textarea');
+  button.id = 'user-control'; second.id = 'second-control'; input.id = 'terminal-input'; doc.body.append(button, second, input);
+  Object.assign(h.w, { activeSessionId: OTHER, gridViewActive: grid, showArchived: false, searchMatchIds: null,
+    pruneRemoteActivityTimers() {}, pruneLocalTranscriptTimers() {} });
+  h.w.openSessions.set(OTHER, { session: { sessionId: OTHER, projectPath: '/project' }, terminal: { focus: () => input.focus() } });
+  const real = loadAppFunctions(h.context, { functions: ['refreshSidebar'] });
+  h.w.refreshSidebar = real.refreshSidebar;
+  let release;
+  h.w.api.openTerminal = () => new Promise(resolve => { release = resolve; });
+  const waitForBackend = async () => { for (let i = 0; i < 60 && !release; i++) await Promise.resolve(); assert.ok(release, 'reaches the ordinary open boundary'); };
+  return { h, doc, button, second, input, waitForBackend, settle: result => release(result) };
+}
+for (const grid of [false, true]) {
+  for (const outcome of ['success', 'failure']) {
+    test(`nonactivating new keeps the focused control before, during and after ${outcome} (grid=${grid})`, async t => {
+      const s = sidebarHarness(t, { grid });
+      s.button.focus();
+      assert.equal(s.doc.activeElement.id, 'user-control');
+      const pending = s.h.f.handleTriggerSessionAction(request({ mode: 'new', requestedSessionId: null, name: 'New' }));
+      await s.waitForBackend();
+      assert.equal(s.doc.activeElement.id, 'user-control', 'during the backend wait');
+      s.settle(outcome === 'success' ? { ok: true, generation: 7 } : { ok: false, reason: 'refused' });
+      await pending;
+      assert.equal(s.doc.activeElement.id, 'user-control', 'after settlement');
+      assert.equal(s.h.calls.some(c => c[0] === 'focus'), false);
+      assert.equal(s.h.w.activeSessionId, OTHER);
+    });
+  }
+  test(`a focus move made while the launch is pending is not undone by its completion (grid=${grid})`, async t => {
+    const s = sidebarHarness(t, { grid });
+    s.button.focus();
+    const pending = s.h.f.handleTriggerSessionAction(request({ mode: 'new', requestedSessionId: null, name: 'New' }));
+    await s.waitForBackend();
+    s.second.focus();
+    s.settle({ ok: true, generation: 7 });
+    await pending;
+    assert.equal(s.doc.activeElement.id, 'second-control');
+  });
+}
+test('an ordinary user-initiated sidebar refresh still returns focus to the active terminal', t => {
+  const s = sidebarHarness(t, { grid: false });
+  s.button.focus();
+  s.h.w.refreshSidebar();
+  assert.equal(s.doc.activeElement.id, 'terminal-input');
+});
