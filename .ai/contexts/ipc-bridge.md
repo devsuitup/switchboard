@@ -24,7 +24,8 @@ separate qualification; these probes do not replace their assertions.
 Main instantiates `createTriggerRendererBridge`, binds it to each window and
 supplies it to the watcher. The renderer registers `handleTriggerSessionAction`
 before startup and announces readiness only after project load and restore
-succeed. v1 open/new are active; stop retains slice B's refusal.
+succeed. v1 open/new and stop are active; stop waits only for renderer readiness,
+then uses the shared main-side stop backend and pinned PTY exit confirmation.
 
 | Direction | Channel | Preload API / payload |
 | --- | --- | --- |

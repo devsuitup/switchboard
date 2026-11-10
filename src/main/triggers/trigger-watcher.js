@@ -881,7 +881,7 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
  *
  * Returns { timedOut, sessionExited, waited_ms, waitingSeen } (waitingSeen only set on a timeout).
  */
-function waitForBusyFall(sessionId, ctx, deadlineMs, enterAtMs, turnObserved = false) {
+function waitForBusyFall(sessionId, ctx, deadlineMs, enterAtMs, turnObserved = false, { requireCompleted = false, command, ownEntry = {} } = {}) {
   const start = Date.now();
   const settleMs = getBusyFallSettleMs();
   const riseDeadline = start + getBusyRiseWaitMs();
@@ -899,6 +899,7 @@ function waitForBusyFall(sessionId, ctx, deadlineMs, enterAtMs, turnObserved = f
     if (now >= deadlineMs) {
       return resolve({ timedOut: true, sessionExited: false, waited_ms: now - start, waitingSeen: dialog.seen(now) });
     }
+    if (requireCompleted) ctx.delivery?.checkStop();
     if (!ctx.getPtyForSession(sessionId)) {
       return resolve({ timedOut: false, sessionExited: true, waited_ms: now - start });
     }
@@ -913,8 +914,14 @@ function waitForBusyFall(sessionId, ctx, deadlineMs, enterAtMs, turnObserved = f
       }
     } else {
       descIdleSince = null;
-      if (desc && transcriptShowsTurnOver(ctx, sessionId, desc, enterAtMs, now, dialog.seen(now))) {
-        return resolve({ timedOut: false, sessionExited: false, waited_ms: now - start, source: 'transcript' });
+      const ownAt = requireCompleted ? transcriptOwnEntryAt(ctx, sessionId, enterAtMs, command, ownEntry) : enterAtMs;
+      if (desc && ownAt !== null && transcriptShowsTurnOver(ctx, sessionId, desc, ownAt, now, dialog.seen(now))) {
+        const turn = requireCompleted ? readTranscriptTurn(ctx, sessionId) : null;
+        return resolve({ timedOut: false, sessionExited: false, waited_ms: now - start, source: 'transcript',
+          ...(requireCompleted ? { status: desc.status, statusUpdatedAt: desc.statusUpdatedAt,
+            busy: ctx.isSessionBusy(sessionId), closedAt: turn?.closedAt, lastEntryAt: turn?.lastEntryAt,
+            transcriptIdentity: turn?.compactionCursor ? { filePath: turn.compactionCursor.filePath,
+              dev: String(turn.compactionCursor.dev), ino: String(turn.compactionCursor.ino) } : null } : {}) });
       }
     }
     if (ctx.isSessionBusy(sessionId)) {
@@ -925,7 +932,7 @@ function waitForBusyFall(sessionId, ctx, deadlineMs, enterAtMs, turnObserved = f
       if (now - idleSince >= settleMs) {
         return resolve({ timedOut: false, sessionExited: false, waited_ms: now - start, source: 'busy_flag' });
       }
-    } else if (now >= riseDeadline) {
+    } else if (!requireCompleted && now >= riseDeadline) {
       // Never rose within the bound: turn never observed, not an error.
       return resolve({ timedOut: false, sessionExited: false, waited_ms: now - start, source: 'no_rise' });
     }
@@ -1042,7 +1049,7 @@ function safeLogError(ctx, ...args) {
   } catch {}
 }
 
-async function deliverSingle({ ctx, sessionId, command, wait = 'idle', entry: sessionEntry, handle, delivery, deliveryDeadline, startup = false, launchStartedAt, v1 = false, onWriteAttempt = () => {}, failure }) {
+async function deliverSingle({ ctx, sessionId, command, wait = 'idle', entry: sessionEntry, handle, delivery, deliveryDeadline, startup = false, launchStartedAt, v1 = false, waitForFinalTurn = false, onWriteAttempt = () => {}, failure }) {
   const deliveryFailure = failure || (err => {
     const step = delivery?.step;
     return { ok: false, sessionId, reason: err.message, error: err.message, wrote: !!step?.text_written,
@@ -1146,10 +1153,12 @@ async function deliverSingle({ ctx, sessionId, command, wait = 'idle', entry: se
   let compactionEvidence = {};
   let compactionReason = null;
   let verification;
+  const ownEntry = {};
   try {
     if (delivery) { delivery.beginStep(command); delivery.deadline = commandDeadline; }
     onWriteAttempt();
-    const v = await submitWithVerify(handle, sessionId, command, ctx, v1 || isCompactCommand(command) ? commandDeadline : undefined);
+    const v = await submitWithVerify(handle, sessionId, command, ctx, v1 || isCompactCommand(command) ? commandDeadline : undefined,
+      { transcriptReaction: waitForFinalTurn, ownEntry });
     verification = v;
     submitRetries     = v.submit_retries;
     submitConfirmed   = v.confirmed;
@@ -1183,7 +1192,7 @@ async function deliverSingle({ ctx, sessionId, command, wait = 'idle', entry: se
       (submitRetries ? ` (submit retried ${submitRetries}x)` : ''));
   }
 
-  return ({
+  const result = {
     ok:             isCompactCommand(command) ? compactionEvidence.compaction_observed : true,
     submitted:      classifySubmitted(composerConfirmed, sawBusy),
     sessionId,
@@ -1198,7 +1207,21 @@ async function deliverSingle({ ctx, sessionId, command, wait = 'idle', entry: se
     ...(recoverySkipped ? { reason: recoveryReason } : {}),
     ...compactionEvidence,
     ...(compactionReason ? { error: ERROR_UNCONFIRMED, reason: compactionReason } : {}),
-  });
+  };
+  if (waitForFinalTurn && result.ok && !result.timedOut) {
+    try {
+      const final = await waitForBusyFall(sessionId, ctx, commandDeadline, verification.enterAt,
+        verification.confirmSource !== 'transcript' && (sawBusy || verification.compactionObserved === true),
+        { requireCompleted: true, command, ownEntry });
+      result.final_turn = final;
+      result.waited_ms += final.waited_ms;
+      result.ok = !final.timedOut && !final.sessionExited && final.source !== 'no_rise';
+      result.timedOut = !!final.timedOut;
+    } catch (error) {
+      result.ok = false; result.error = error.message; result.reason = error.message;
+    }
+  }
+  return result;
 }
 
 /**
@@ -1386,9 +1409,14 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     versioned = true;
     if (canonicalName && recoverState()) return;
     const evidence = { steps_total: 0 };
-    if (!recoveryError && !validateTrigger(trigger, uuid, evidence) && trigger.action === 'open' && ctx.lifecycle) {
+    if (!recoveryError && !validateTrigger(trigger, uuid, evidence) && ctx.lifecycle) {
       const deadline = Date.now() + (trigger.timeout_ms ?? getIdleTimeout());
       await actions.execute(trigger, uuid, { ctx, deadline, acquireSessionLock, acquireTabLock, publish: writeResult,
+        checkStale: () => {
+          const age = Date.now() - stat.mtimeMs;
+          return age > maxAgeMs ? { error: ERROR_NOT_SENT,
+            reason: `trigger is ${Math.round(age)}ms old, older than the ${maxAgeMs}ms staleness limit; refused rather than act on a request that may no longer target the intended session state` } : null;
+        },
         saveMarker: marker => {
           fs.writeFileSync(markerPath + '.tmp', JSON.stringify(marker) + '\n', 'utf8');
           renameWithRetry(markerPath + '.tmp', markerPath);
@@ -2245,4 +2273,4 @@ function start(ctx) {
   };
 }
 
-module.exports = { deliverSingle, start, getTriggersDir, weakestSubmitted, SUBMITTED_RANK, normalizeCwd, submitWithVerify, waitForCliIdleAfter, waitForBusyFall, isCompactCommand, REASON_REMOTE_NO_FRESH_PULL, REASON_REMOTE_SHELL };
+module.exports = { deliverSingle, start, getTriggersDir, getQuietMs, describeBusyComposer, weakestSubmitted, SUBMITTED_RANK, normalizeCwd, submitWithVerify, waitForCliIdleAfter, waitForBusyFall, isCompactCommand, REASON_REMOTE_NO_FRESH_PULL, REASON_REMOTE_SHELL };

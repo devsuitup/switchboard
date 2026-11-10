@@ -349,6 +349,7 @@ function triggerLifecycleDeps() {
       return !!row?.remoteAlias || !!row?.host || isRemoteFolder(getCachedFolder(id)) || !!remoteIndexer.findSessionAlias(id);
     },
     saveName: (id, name) => writer.renameSession(id, name),
+    stop: (session, tabKey) => require('./src/main/terminals/stop-session').stopLocalSession(session, tabKey, killPty),
   };
 }
 
@@ -2097,9 +2098,7 @@ ipcMain.handle('stop-session', (_event, sessionId) => {
     detachPty(session, sessionId);
     return { ok: true, detached: true };
   }
-  session.stopRequested = true;
-  killPty(session, sessionId);
-  return { ok: true };
+  return require('./src/main/terminals/stop-session').stopLocalSession(session, sessionId, killPty);
 });
 
 const REMOTE_STOP_SYNC_TIMEOUT_MS = 20000;

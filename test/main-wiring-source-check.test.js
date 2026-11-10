@@ -189,7 +189,7 @@ test('main-wiring source check: terminal-resize delegates all resizes to the gua
 test('main-wiring source check: stop-session kills through killPty', () => {
   const args = argsOf("ipcMain.handle('stop-session'", 'ipcMain.handle');
   assert.match(
-    args, /killPty\(\s*session\s*,\s*sessionId\s*\)/,
+    args, /stopLocalSession\(\s*session\s*,\s*sessionId\s*,\s*killPty\s*\)/,
     'stop-session must kill through killPty — a bare kill() rejects the invoke',
   );
 });

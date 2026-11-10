@@ -24,8 +24,7 @@ Main-process modules `trigger-watcher.js` and `trigger-context.js` live in
 `src/main/triggers/trigger-renderer-bridge.js` is an Electron-free request
 owner with injected IPC, window/session lookup, launch admission, clock and
 timers. Main instantiates it and supplies the watcher with lifecycle ports.
-Open/new are enabled. Stop still returns
-`session action not implemented in this build`. Legacy delivery is unchanged.
+Open/new and stop are enabled. Legacy delivery is unchanged.
 
 `cli-session-state.liveElsewhereV1Checked` reads raw descriptors before host
 filtering and proves namespace identity even without a PTY. Pinned sandbox
@@ -98,6 +97,58 @@ The FIFO starts before resolution and the tab mutex covers ensure-open,
 delivery and result publication. A timed-out FIFO waiter releases its eventual
 lock. True created/resumed and partial submission evidence survive refusals.
 
+### Versioned stop (issue #1022, slice D)
+
+`executeStop` in `trigger-actions.js` acquires the normalized session FIFO,
+resolves only an already-open local target, pins its session object, generation
+and PTY, and holds the tab input mutex through result publication. Known closed
+targets return `not-found` / `session not open here`; unknown IDs return
+`not-found` / `session not found`. Remote, scheduled, background/attach and plain
+terminal targets are refused, regardless of remoteTriggers. Stop never opens,
+attaches or selects a session. `broker.waitForReady(deadline)` observes the
+existing main-frame handshake without sending a renderer action; its returned
+readiness validation detects reload or orderly close throughout the operation.
+
+Bare stop requires readable idle, no busy flag, an observable empty composer
+and `getQuietMs()` silence since `lastInputAt || 0`. Each sample validates the
+pinned ownership first, then activity, then composer. Pending/unobservable input
+refuses immediately. Empty recent input waits only for the remaining quiet
+interval under the original deadline; deadline equality refuses
+`session input not quiet`. Every guard is repeated after saving the marker and
+immediately before termination, including new quiet intervals after type/delete.
+There is no deferred stop after a terminal refusal.
+
+`before` uses the same pinned `deliverSingle` and `submitWithVerify` path with
+`waitForFinalTurn:true`. The actual Enter timestamp is passed to
+`waitForBusyFall` in completed-turn mode: no-rise never grants permission to
+stop. Completion needs post-Enter idle, observed busy fall, or the note's own
+transcript entry followed by a closed quiet turn. Delivery/verification/final
+wait failures map to `note step not finished`, retain diagnostics in `delivery`
+and request no kill. Closing retains `Switchboard is closing.`. After completion,
+new busy/shell/waiting activity, pending input, writer or target changes refuse.
+Transcript fallback may account for a stale busy/shell descriptor only while
+its timestamp, transcript identity/closure and busy observation remain valid.
+Published transcript identity uses string device/inode values so the reader's
+BigInt stat fields never reach JSON markers or results.
+Sandbox status and stop checks use the same v1 namespace proof as prompt writes;
+missing proof cannot use the ordinary direct-key fallback.
+
+Both the sidebar IPC and the trigger call `stopLocalSession` in
+`src/main/terminals/stop-session.js`, which records `stopRequested` before
+`killPty`. Attach detachment remains separate. A kill request is not closure:
+the trigger waits for the pinned object's `exited` flag. Timeout returns
+`session stop not confirmed`, `uncertain:true`; a note timeout never initiates
+termination. A natural exit after confirmed note completion counts as closed.
+
+Markers record the claimed/prompt-attempted/note-delivered/note-finished and
+stop-requested phases. Confirmed kill requests set `stop_requested:true`;
+restart recovery retains this and note evidence, emits `interrupted by restart`
+with uncertainty, and never resumes the pending stop. The immutable terminal
+result wins over leftover input/marker files. Marker publication errors prevent
+the next side effect; a marker failure after termination was requested remains
+uncertain. Result failure retains recovery files. No UI or sandbox launch gate
+changes belong to this slice.
+
 ### Versioned requests (issue #1022, slice B)
 
 The watcher dispatches parsed objects with an own `version` or `action` property
@@ -159,8 +210,8 @@ null/false properties still count as present. Stop rejects `new` and `prompt`;
 resume rejects `before`; new rejects `expectedCwd`. All modes reject arbitrary
 properties, including legacy command/key/chain, options, cli, wait and focus.
 
-Main supplies lifecycle ports for open/resume/new. Stop retains
-`outcome:"refused"`, `reason:"session action not implemented in this build"`,
+Main supplies lifecycle ports for open/resume/new and stop. Without those ports,
+actions retain `outcome:"refused"`, `reason:"session action not implemented in this build"`,
 before target resolution, writes or renderer work. Calling the standalone
 actions helper without lifecycle ports keeps the same safe build refusal.
 
@@ -174,8 +225,8 @@ or cwd failures preserve one already validated text step.
 Open-resume starts with `resumed:false`; open-new starts with `created:false`.
 New allocates its ID only after project admission. Successful opens return
 `opened`, `ok:true`, `reason:null`; confirmed spawn flags and partial submission
-evidence survive later refusals. No `closed` result is produced while stop is
-disabled. OS/parser details belong in `error`, not stable codes.
+evidence survive later refusals. Stop returns `closed` only on pinned exit.
+OS/parser details belong in `error`, not stable codes.
 
 Versioned terminal results use the existing temporary-write/rename-retry helper
 at `processed/<uuid>.result.json`. Publication precedes input removal, and

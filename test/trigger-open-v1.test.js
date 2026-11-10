@@ -112,8 +112,9 @@ test('marker publication failure dispatches no action', async () => {
   f.ctx.lifecycle.broker.request = async (_op, save) => { try { await save(); } catch { return { ok: false, reason: 'action state could not be saved' }; } throw new Error('must not send'); };
   assert.equal((await f.open()).reason, 'action state could not be saved');
 });
-test('stop remains the slice B refusal', async () => {
-  const f = fixture(); const r = await createTriggerActions().execute({ version: 1, action: 'stop', sessionId: ID }, STEM, f.execution);
+test('lifecycle actions remain unavailable without injected lifecycle services', async () => {
+  const f = fixture(); delete f.ctx.lifecycle;
+  const r = await createTriggerActions().execute({ version: 1, action: 'stop', sessionId: ID }, STEM, f.execution);
   assert.equal(r.reason, 'session action not implemented in this build');
 });
 

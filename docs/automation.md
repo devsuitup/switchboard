@@ -291,7 +291,7 @@ a visible archived group with its ordinary + action remains eligible. New has
 a bucket of three launches, refilling one token every 20 seconds.
 
 Read `processed/<request-uuid>.result.json`. v1 results carry `version`, `action`,
-`ok`, `outcome`, `reason`, `sessionId`, `resumed` or `created`, `submitted`,
+`ok`, `outcome`, `reason`, `sessionId`, `resumed` or `created` for opens, `submitted`,
 `wrote` and `steps_total`, plus delivery evidence. `opened` means the terminal
 was acknowledged and any requested prompt finished submission verification;
 it does not mean the answer is complete. `submitted:"assumed"` stays assumed.
@@ -303,9 +303,31 @@ If startup, saving the name or delivery fails after spawn, the session remains
 open and the refusal retains its ID and true `created`/`resumed` evidence.
 `uncertain:true` means an interrupted action may have taken effect: do not retry
 automatically. A repeated UUID reuses its first terminal result; a persisted
-action marker interrupted by restart is refused without replay. v1 `stop`
-remains unavailable in this build and returns
-`session action not implemented in this build`.
+action marker interrupted by restart is refused without replay.
+
+Stop an already-open local session, optionally after one final note:
+
+```json
+{"version":1,"action":"stop","sessionId":"01234567-89ab-cdef-0123-456789abcdef","before":"Save a resume note and finish this turn","timeout_ms":300000}
+```
+
+Omit `before` for an immediate idle stop. Bare stop refuses busy, dialog,
+shell, unknown state and pending/unobservable input. An empty composer still
+needs the configured quiet interval; waiting for that silence shares the action
+deadline. `before` waits for idle, submits the note once through normal prompt
+delivery, and waits for its completed turn. Switchboard does not inspect note
+content. Failure returns `note step not finished` with `delivery` diagnostics
+and leaves the session running. A newly started turn after the note refuses
+`session busy` instead of terminating it.
+
+Stop never opens a closed session or stops siblings in a merged row. Remote,
+scheduled, background/attach and plain-terminal targets remain unsupported.
+`expectedCwd` is supported for stop and rechecked before termination. `closed`
+means the pinned PTY exited; timeout after requesting termination returns
+`session stop not confirmed`, `uncertain:true`. A recovered `stop-requested`
+marker likewise reports uncertainty without issuing another stop. Do not retry
+automatically. Closing Switchboard cancels pending work with
+`Switchboard is closing.`.
 
 ### Send to an already-open session (legacy)
 
