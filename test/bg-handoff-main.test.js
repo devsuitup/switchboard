@@ -31,7 +31,7 @@ function setup() {
     exitedRemoteSessionIds: new Set(),
     activityReporter: { sessionEnded: id => ended.push(id) },
     taskRecords: { ownerDied: id => dead.push(id) },
-    sessionCache: { releaseLiveSession: () => false },
+    writer: { releaseLiveSession: async () => false },
     notifyRendererProjectsChanged() {},
     log: { warn() {} },
     holdBackgroundExit: (s, finish) => { s.backgroundExit = finish; return true; },

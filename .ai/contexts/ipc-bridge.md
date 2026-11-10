@@ -6,6 +6,18 @@ This file is the **canonical inventory** of the IPC surface. When you add a new 
 
 ## Trigger renderer broker (#1022, slice C)
 
+Source-extraction fixtures for `get-projects` load both the IPC registration
+and `getProjectsSnapshot`, with the main-relative require, structured cloning
+and conflict notification dependencies. This applies to the shared
+`test/get-projects-handler.cjs`, the archive-writer child script and the
+during-scan fixture. `test/get-projects-archive-extraction.test.js` exercises
+the latter two extraction blocks with disposable in-memory dependencies under
+plain Node, without starting their Electron/SQLite processes. It also executes
+the remote-resize test's open/reattach/launch block with a main-relative require,
+and statically checks the excluded background-continuation exit contexts for
+`writer.releaseLiveSession`. The complete Electron integration tests remain
+separate qualification; these probes do not replace their assertions.
+
 Main instantiates `createTriggerRendererBridge`, binds it to each window and
 supplies it to the watcher. The renderer registers `handleTriggerSessionAction`
 before startup and announces readiness only after project load and restore

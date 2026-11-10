@@ -43,13 +43,18 @@ function scenario(name, body) {
         const source = fs.readFileSync('main.js', 'utf8');
         const start = source.indexOf("ipcMain.handle('get-projects'");
         const end = source.indexOf('\\n});', start) + 4;
+        assert.ok(start >= 0 && end > start, 'shipped get-projects registration must exist');
+        const helperStart = source.indexOf('async function getProjectsSnapshot(');
+        const helperEnd = source.indexOf('\\n}', helperStart) + 2;
+        assert.ok(helperStart >= 0 && helperEnd > helperStart, 'shipped snapshot helper must exist');
         let invoke;
         (async () => {
           try {
             await writer.ready;
             const db = require('./db');
-            vm.runInNewContext(source.slice(start, end), {
+            vm.runInNewContext(source.slice(helperStart, helperEnd) + '\\n' + source.slice(start, end), {
               ipcMain: { handle: (_name, fn) => { invoke = fn; } },
+              require: require('node:module').createRequire(path.resolve('main.js')), structuredClone,
               console, TRACE: { on: false }, performance, projectsReconciledAt: Date.now(),
               getSetting: db.getSetting, normalizeHosts: () => [],
               parseFolderKey: require('./src/main/remote/remote-hosts').parseFolderKey,
@@ -60,6 +65,7 @@ function scenario(name, body) {
               projectsClient: { request: async () => structuredClone(views) },
               mergePlaceholderSessions: rows => rows, annotateRemoteAttachable: rows => rows,
               cliSessionState: require('./cli-session-state'),
+              notifyRendererProjectsChanged() {},
             }, { filename: path.resolve('main.js'), lineOffset: source.slice(0, start).split(String.fromCharCode(10)).length - 1 });
             ${body}
           } finally { await writer.closeDb(); }

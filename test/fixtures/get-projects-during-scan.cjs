@@ -48,11 +48,14 @@ async function run() {
     }
     const snapshot = () => ({ version: db.getProjectsRevision(), liveVersion: 'stable', activeSessions: [], remoteRoots: [] });
     const source = fs.readFileSync(path.join(__dirname, '../../main.js'), 'utf8');
-    const applyStart = source.indexOf('  apply: async result => {', source.indexOf('const projectsClient'));
+    const applyStart = source.indexOf('async result => {', source.indexOf('const projectsClient'));
     const applyEnd = source.indexOf('\n  },', applyStart) + 4;
+    assert.ok(applyStart >= 0 && applyEnd > applyStart, 'shipped Projects apply callback must exist');
     const context = vm.createContext({ writer, projectsSnapshot: snapshot, projectsReconciledAt: 0, Date, structuredClone,
       require: createRequire(path.join(__dirname, '../../main.js')) });
-    const apply = vm.runInContext('({' + source.slice(applyStart, applyEnd) + '}).apply', context);
+    const apply = vm.runInContext(source.slice(applyStart, applyEnd), context, {
+      filename: require.resolve('../../main.js'), lineOffset: source.slice(0, applyStart).split('\n').length - 1,
+    });
     let applications = 0, reconciled = false, workers = 0;
     projectsClient = createProjectsWorkerClient({
       workerFactory: () => {
@@ -79,15 +82,22 @@ async function run() {
     });
     let invoke;
     Object.assign(context, {
-      ipcMain: { handle: (_name, fn) => { invoke = fn; } }, console, TRACE: { on: false },
+      ipcMain: { handle: (_name, fn) => { invoke = fn; } }, console, performance, TRACE: { on: false },
       getSetting: db.getSetting, isInitialScanComplete: db.isInitialScanComplete,
       isCachePopulated: db.isCachePopulated, isSearchIndexPopulated: db.isSearchIndexPopulated,
       populateCacheViaWorker() {}, backfillEntrypoints() {}, backfillCustomTitles() {}, projectsClient,
       mergePlaceholderSessions: projects => projects, annotateRemoteAttachable: projects => projects,
       cliSessionState: require('../../cli-session-state'),
+      normalizeHosts: () => [], parseFolderKey: require('../../src/main/remote/remote-hosts').parseFolderKey,
+      notifyRendererProjectsChanged() {},
     });
     const start = source.indexOf("ipcMain.handle('get-projects'");
-    vm.runInContext(source.slice(start, source.indexOf('\n});', start) + 4), context, {
+    const end = source.indexOf('\n});', start) + 4;
+    assert.ok(start >= 0 && end > start, 'shipped get-projects registration must exist');
+    const helperStart = source.indexOf('async function getProjectsSnapshot(');
+    const helperEnd = source.indexOf('\n}', helperStart) + 2;
+    assert.ok(helperStart >= 0 && helperEnd > helperStart, 'shipped snapshot helper must exist');
+    vm.runInContext(source.slice(helperStart, helperEnd) + '\n' + source.slice(start, end), context, {
       filename: require.resolve('../../main.js'), lineOffset: source.slice(0, start).split(String.fromCharCode(10)).length - 1,
     });
     hold = true;
