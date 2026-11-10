@@ -167,7 +167,10 @@ test('the sidebar projection supplies each static glyph without changing the slo
   try {
     const context = dom.getInternalVMContext();
     vm.runInContext(stateSource, context);
-    vm.runInContext(fs.readFileSync(path.join(publicDir, 'session-activity-dom.js'), 'utf8'), context);
+    const projectionFilename = path.join(publicDir, 'session-status-projection.js');
+    vm.runInContext(fs.readFileSync(projectionFilename, 'utf8'), context, { filename: projectionFilename });
+    const activityFilename = path.join(publicDir, 'session-activity-dom.js');
+    vm.runInContext(fs.readFileSync(activityFilename, 'utf8'), context, { filename: activityFilename });
     for (const rung of ['waitingForInput', 'idle', 'stale', 'archived']) {
       vm.runInContext(`writeIconSlot(document.querySelector('span'), renderSessionIcon(${JSON.stringify(rung === 'idle' ? {} : { [rung]: true })}))`, context);
       const slot = dom.window.document.querySelector('span');

@@ -204,6 +204,7 @@ function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmIm
   evalInWindow(dom, path.join(PUBLIC_DIR, 'modal-stack.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'splitter.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-state.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'session-status-projection.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity-dom.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'shortcuts.js'));

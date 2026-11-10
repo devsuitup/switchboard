@@ -4,6 +4,38 @@
 local PTY, local transcript and remote adapters. Shared projections select one
 activity icon for each conversation head across sidebar, grid and terminal.
 
+## Shared status projection (#380 S1a)
+
+Classic scripts load `session-state.js` → `session-status-projection.js` →
+`session-activity-dom.js` → `session-activity.js`. Whole-file VM loaders use
+the same dependency order. The projection also exports the same object through
+CommonJS; S1a adds no main-process consumer, trigger, writer or IPC.
+
+`sessionStatusProjection.projectHeadActivity(snapshot, turn, proof)` owns the
+effective head precedence. `proof.ptyHere` supplies local PTY liveness and
+`proof.background` (or `snapshot.backgroundJob`) excludes frozen background
+idle descriptors and untimestamped background prompt hints. Strictly newer
+idle/OSC evidence can close the head; a stale or equal hint cannot close an
+open head. The row delegates directly to this export and keeps its existing
+written-activity fields, unread/attention rules and property order.
+
+`projectSessionStatus(snapshot, turn, proof)` reuses that head and returns only
+`{ state, detail }`. Its priority is ambiguous ownership → confirmed dead exit
+→ no live proof → blocking dialog → open head → interactive shell → closed
+head/prompt → unknown head. `proof.blocking` means a current attributed dialog
+or blocked job, and `proof.shell` means a verified interactive shell.
+`waitingForInput`, `responseReady` and unread alone never prove blocking.
+`proof.confirmedExit` requires a dead generation with no live successor;
+ambiguity or positive liveness prevents an exit result. Missing descriptors
+alone leave the state unknown and preserve independently established head facts.
+
+Both exports are pure and perform no observation or ownership verification.
+Future callers must discard unowned/stale/competing generations before passing
+normalized evidence; descriptor freshness, evidence timestamps, pid/job identity,
+the 2000 ms probe bound and durable status results belong to S1b. The new tests
+exercise this pure boundary and the shipped renderer adapter, including 6144
+byte-identical row snapshots measured green before extraction.
+
 ## Live read-only message views (#814)
 
 `public/jsonl-viewer.js` owns one refresh controller for the current top-level
@@ -1451,10 +1483,11 @@ Same non-writer discipline as remote-ssh: every path ends in
 
 ## Shape
 
-Three files, one direction of dependency for data, the reverse for rendering:
+Four files, one direction of dependency for data, the reverse for rendering:
 
 ```
 public/session-state.js          pure domain — no DOM, no IPC, no electron
+public/session-status-projection.js pure head precedence and state/detail table
 public/session-activity-dom.js   DOM projection — the only file allowed to
                                   write .cli-busy/.needs-attention/
                                   .response-ready/.has-busy-agents

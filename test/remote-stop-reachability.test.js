@@ -56,6 +56,7 @@ test('style.css: .session-stop-btn shows for .is-alive alone, not only .has-runn
 // --- 2. The class writer, via the real remote-ssh adapter -------------------
 
 const STATE_SRC = path.join(__dirname, '..', 'public', 'session-state.js');
+const PROJECTION_SRC = path.join(__dirname, '..', 'public', 'session-status-projection.js');
 const DOM_SRC = path.join(__dirname, '..', 'public', 'session-activity-dom.js');
 const ACTIVITY_SRC = path.join(__dirname, '..', 'public', 'session-activity.js');
 const REMOTE_SRC = path.join(__dirname, '..', 'public', 'remote-activity-ui.js');
@@ -74,6 +75,8 @@ function setupRemoteAdapter(sessionIds = ['s1']) {
 
   const ctx = dom.getInternalVMContext();
   vm.runInContext(fs.readFileSync(STATE_SRC, 'utf8'), ctx, { filename: STATE_SRC });
+  vm.runInContext(fs.readFileSync(PROJECTION_SRC, 'utf8'), ctx, { filename: PROJECTION_SRC });
+
   vm.runInContext(fs.readFileSync(DOM_SRC, 'utf8'), ctx, { filename: DOM_SRC });
   vm.runInContext(fs.readFileSync(ACTIVITY_SRC, 'utf8'), ctx, { filename: ACTIVITY_SRC });
   vm.runInContext(fs.readFileSync(REMOTE_SRC, 'utf8'), ctx, { filename: REMOTE_SRC });

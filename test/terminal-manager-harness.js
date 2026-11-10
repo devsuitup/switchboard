@@ -242,7 +242,7 @@ function setupTerminalDom(opts = {}) {
   if (!opts.dom) {
     if (!opts.filePanel) files.unshift('process-exit.js');
     files.splice(1, 0, 'shortcuts.js');
-    files.unshift('session-state.js', 'session-activity-dom.js', 'session-activity.js');
+    files.unshift('session-state.js', 'session-status-projection.js', 'session-activity-dom.js', 'session-activity.js');
     files.push('grid-view.js');
   }
   // Same order as index.html: header-controls.js, process-exit.js and file-panel.js first, the panel-shell pair last.

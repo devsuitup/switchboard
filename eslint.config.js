@@ -264,6 +264,7 @@ const rendererCrossFileGlobals = {
   onSessionIdle: 'readonly',
   // public/session-state.js (pure domain, see .ai/contexts/session-state.md)
   createSessionState: 'readonly',
+  sessionStatusProjection: 'readonly',
   renderSessionIcon: 'readonly',
   // public/session-activity-dom.js — the only file allowed to write
   // .cli-busy/.needs-attention/.response-ready/.has-busy-agents, and the only
@@ -726,13 +727,14 @@ module.exports = [
   // those two globals are switched off here (same reasoning as
   // subagent-timing.js above).
   {
-    files: ['public/session-state.js'],
+    files: ['public/session-state.js', 'public/session-status-projection.js'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'script',
       globals: {
         module: 'writable',
         createSessionState: 'off',
+        sessionStatusProjection: 'off',
         renderSessionIcon: 'off',
       },
     },

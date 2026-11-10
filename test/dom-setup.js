@@ -161,6 +161,7 @@ function setupSidebarDom({ loadTaskRegistry = true, indexOrder = false } = {}) {
     // index.html. sidebar.js and remote-activity-ui.js call
     // setActivity/applyStateClasses/sessionItemEl from these.
     evalInWindow(dom, path.join(PUBLIC_DIR, 'session-state.js'));
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'session-status-projection.js'));
     evalInWindow(dom, path.join(PUBLIC_DIR, 'process-exit.js'));
     evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity-dom.js'));
     evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity.js'));

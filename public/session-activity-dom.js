@@ -93,16 +93,12 @@ function headActivitySnapshot(sessionId, snapshot, row, selection) {
   const s = snapshot || {};
   const turn = headTurns.get(sessionId);
   const ptyHere = typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId);
-  const alive = s.liveness === 'alive' || ptyHere;
   const background = typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId, row, selection)
     || s.backgroundJob;
-  const promptHint = s.promptHint && (!background || Number.isFinite(s.promptHintAt));
-  const idleNewer = !background && Number.isFinite(s.idleHintAt) && Number.isFinite(turn?.lastEntryAt) && s.idleHintAt > turn.lastEntryAt
-    || turn?.state === 'open' && Number.isFinite(s.promptHintAt) && Number.isFinite(turn?.observedAt) && s.promptHintAt > turn.observedAt;
-  const headTurn = idleNewer || (promptHint && (!turn || turn.state === 'unknown')) ? 'closed' : turn?.state || 'unknown';
-  return { ...s, ...writtenActivitySnapshot(sessionId), headTurn, busy: alive && headTurn === 'open',
-    responseReady: !s.attention && (!!turn?.ready || !!localPtyStates.get(sessionId)?.snapshot().manualUnread), waitingForInput: alive && headTurn !== 'open' && (!ptyHere || !!s.waitingForInput || !!turn?.ended),
-    liveness: alive ? 'alive' : s.liveness };
+  const head = sessionStatusProjection.projectHeadActivity(s, turn, { ptyHere, background });
+  return { ...s, ...writtenActivitySnapshot(sessionId), headTurn: head.headTurn, busy: head.busy,
+    responseReady: !s.attention && (!!turn?.ready || !!localPtyStates.get(sessionId)?.snapshot().manualUnread), waitingForInput: head.waitingForInput,
+    liveness: head.liveness };
 }
 
 function taskActivitySnapshot(sessionId, snapshot, row, selection) {
