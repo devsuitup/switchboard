@@ -51,6 +51,14 @@ async function transaction(name, fn, commitHook, execute = () => commitTransacti
 }
 
 function* units(name, args) {
+  for (const unit of targetUnits(name, args)) {
+    unit.producerCommand ||= name;
+    unit.producerArgs ||= args;
+    if (name === 'deleteCachedFolder') unit.producerFolder = args[0];
+    yield unit;
+  }
+}
+function* targetUnits(name, args) {
   if (name === 'cleanupWorktree') {
     const ids = db.getAllCached().filter(row => row.projectPath === args[0]).map(row => row.sessionId);
     for (const id of ids) { yield* units('deleteCachedSession', [id]); yield* units('deleteSearchSession', [id]); }
@@ -59,7 +67,7 @@ function* units(name, args) {
     yield* units('deleteSearchFolder', [folder]);
     yield () => { commands.cleanupWorktree(args[0]); return ids.length; };
   } else if (['upsertCachedSessions', 'setCachedEntrypoints', 'setCachedCustomTitles'].includes(name)) {
-    for (const row of args[0]) yield () => db[name]([row]);
+    for (const row of args[0]) yield Object.assign(() => db[name]([row]), { producerCommand: name, producerArgs: [[row]] });
   } else if (name === 'replaceSessionMetrics') {
     yield () => db.replaceSessionMetrics(...args);
   } else if (name === 'deleteCachedSession') {
@@ -67,14 +75,15 @@ function* units(name, args) {
   } else if (name === 'upsertSearchEntries') {
     for (const entry of args[0]) {
       const token = require('node:crypto').randomUUID();
-      yield () => db.beginSearchEntry(token, entry);
+      const tag = fn => Object.assign(fn, { producerCommand: name, producerArgs: [[entry]] });
+      yield tag(() => db.beginSearchEntry(token, entry));
       const body = (entry.body || '').slice(0, 32768);
-      for (let offset = 0; offset < body.length; offset += 8192) yield () => db.appendSearchBody(token, body.slice(offset, offset + 8192));
-      yield () => db.publishSearchEntry(token);
+      for (let offset = 0; offset < body.length; offset += 8192) yield tag(() => db.appendSearchBody(token, body.slice(offset, offset + 8192)));
+      yield tag(() => db.publishSearchEntry(token));
     }
   } else if (name === 'applySearchFileBatch') {
     const [type, deletes, entries] = args;
-    for (const id of deletes) yield () => db.applySearchFileBatch(type, [id], []);
+    for (const id of deletes) yield Object.assign(() => db.applySearchFileBatch(type, [id], []), { producerCommand: name, producerArgs: [type, [id], []] });
     for (const entry of entries) yield* units('upsertSearchEntries', [[entry]]);
   } else if (name === 'deleteCachedFolder') {
     for (const row of db.getCachedByFolder(args[0])) yield* units('deleteCachedSession', [row.sessionId]);
@@ -98,6 +107,12 @@ function* units(name, args) {
 }
 
 function* commandUnits(message) {
+  if (['completeProjectDeletion', 'fenceProjectDeletion'].includes(message.command)) {
+    for (const pending of queue) if (!pending.producerBinding?.length && !pending.bindingError) {
+      try { pending.producerBinding = bindDeletionProducer(db, pending.command, pending.args, true); }
+      catch (error) { pending.bindingError = error; }
+    }
+  }
   if (message.command === 'completeProjectDeletion') { yield* completeProjectDeletion(db, message.args[0]); return; }
   if (message.command === 'fenceWorkflow') {
     yield () => {
@@ -146,11 +161,11 @@ async function drain() {
       const unit = message.deferred || message.iterator.next();
       message.deferred = null;
       if (unit.done) {
-        parentPort.postMessage({ id: message.id, result: message.command === 'effects' ? { committedRevision: message.committedRevision } : message.result,
+        parentPort.postMessage({ id: message.id, ...(message.producerError ? { error: { message: message.producerError.message, code: message.producerError.code } }
+          : { result: message.command === 'effects' ? { committedRevision: message.committedRevision } : message.result }),
           ...(message.mutated ? { settings: settings() } : {}) });
       } else {
         if (message.bindingError) throw message.bindingError;
-        assertDeletionProducer(db, message.producerBinding || []);
         if (['close', 'drain', 'measurements', 'getProjectDeletionState', 'readProjectDeletionScope', 'querySessionRequestOutcome', 'readProjectArchiveEpochs', 'fenceWorkflow', 'retireWorkflow'].includes(message.command)) message.result = unit.value();
         else if (['fenceProjectDeletion', 'completeProjectDeletion'].includes(message.command)) {
           const before = db.getSetting('_writer_revision') || 0;
@@ -171,8 +186,15 @@ async function drain() {
             deferred = null;
             let next = unit, result, count = 0;
             while (!next.done) {
-              assertDeletionProducer(db, message.producerBinding || []);
-              const applied = db.chunkUnit(next.value, count);
+              const execute = () => {
+                try {
+                  assertDeletionProducer(db, message.producerBinding || [], next.value.producerCommand, next.value.producerArgs);
+                  if (next.value.producerFolder !== undefined) assertDeletionProducer(db, message.producerBinding || [], 'deleteCachedFolder', [next.value.producerFolder]);
+                }
+                catch (error) { message.producerError ||= error; return; }
+                return next.value();
+              };
+              const applied = db.chunkUnit(execute, count);
               if (applied.deferred) { deferred = next; break; }
               result = applied.result;
               count++;

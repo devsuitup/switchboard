@@ -82,8 +82,8 @@ for (const afterChunk of [1, 2]) {
   test(`T5.2 shipped writer preserves its committed ACK and refuses interleaved remaining effects, afterChunk=${afterChunk}`, async () => {
     const settings = new Map(), names = new Map(), replies = [];
     let changes = 0, handle, yielded = 0;
-    const db = { projectDeletion: { active: () => [], terminal: () => [], hasFences: () => false, fence: () => null },
-      getAllCached: () => [], getAllFolderMeta: () => new Map(), transact: fn => fn(), changeCount: () => changes,
+    const db = { projectDeletion: { active: () => [], terminal: () => [], hasHistory: () => false, hasFences: () => false, fence: () => null },
+      transact: fn => fn(), changeCount: () => changes,
       getSetting: key => settings.get(key), setSetting: (key, value) => { settings.set(key, value); changes++; },
       listSettingKeys: () => [...settings.keys()], setName: (id, name) => { names.set(id, name); changes++; },
       chunkUnit: fn => ({ result: fn() }), nextChunkSize: () => 1, searchFtsRecreated: false };

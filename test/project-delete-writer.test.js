@@ -89,6 +89,156 @@ function execute(h, input) {
   return { validated, units, state: progress.read(substrate) };
 }
 
+for (const [command, args] of [
+  ['setName', ['uncached', 'saved name']], ['toggleStar', ['uncached']],
+  ['setSetting', ['continuationChoice:uncached', 'chosen']],
+  ['upsertSearchEntries', [[{ id: 'uncached', type: 'session', folder: 'unknown', body: 'find me' }]]],
+]) test(`FIX474 reopen alone preserves uncached ${command}`, supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  assert.equal((await worker.post('revealAddedProject', h.root)).error, undefined);
+  assert.equal((await worker.post(command, ...args)).error, undefined, 'unblocked reopen is not deletion history');
+  if (command === 'setName') assert.equal(h.db.getMeta('uncached').name, 'saved name');
+  if (command === 'toggleStar') assert.equal(h.db.getMeta('uncached').starred, 1);
+  if (command === 'setSetting') assert.equal(h.db.getSetting(args[0]), 'chosen');
+  if (command === 'upsertSearchEntries') assert.equal(h.db.connection.prepare("SELECT count(*) AS n FROM search_map WHERE id='uncached'").get().n, 1);
+});
+
+test('FIX474 startup continuation sweep completes after Add project', supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  await worker.post('revealAddedProject', h.root);
+  const filename = require.resolve('../main.js');
+  const source = require('./app-source').extractFunction(fs.readFileSync(filename, 'utf8'), 'sweepContinuationChoices');
+  const context = { isInitialScanComplete: () => true, getAllCached: h.db.getAllCached, listSettingKeys: h.db.listSettingKeys,
+    deleteSetting: key => worker.client.request('deleteSetting', key) };
+  require('node:vm').runInNewContext(source, context, { filename });
+  await assert.doesNotReject(context.sweepContinuationChoices(), 'startup sweep must complete');
+  assert.equal(h.db.getSetting('continuationChoice:orphan'), null);
+  assert.ok(h.db.getSetting('continuationChoice:head'));
+});
+
+for (const batch of [false, true]) test(`FIX474 cross-project links without deletion preserve writes batch=${batch}`, supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  h.db.upsertCachedSessions([{ ...h.kept[0], parentSessionId: 'head' }]);
+  const reply = batch ? await worker.post('effects', [
+    { name: 'setName', args: ['head', 'ambiguous accepted'] }, { name: 'setName', args: ['remote', 'other accepted'] },
+  ], h.db.getSetting('_writer_revision') || 0) : await worker.post('setName', 'head', 'ambiguous accepted');
+  assert.equal(reply.error, undefined, 'ordinary shared links cannot refuse a producer');
+  assert.equal(h.db.getMeta('head').name, 'ambiguous accepted');
+  if (batch) assert.equal(h.db.getMeta('remote').name, 'other accepted');
+});
+
+test('FIX474 ordinary producers perform zero ownership scans or realpath calls', supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  await worker.post('revealAddedProject', h.root);
+  const counts = { cached: 0, folders: 0, realpath: 0 };
+  for (const [method, key] of [['getAllCached', 'cached'], ['getAllFolderMeta', 'folders']]) {
+    const original = h.db[method]; h.db[method] = (...args) => { counts[key]++; return original(...args); };
+  }
+  const realpath = fs.realpathSync.native;
+  fs.realpathSync.native = (...args) => { counts.realpath++; return realpath(...args); };
+  try {
+    for (const [command, args] of [['setName', ['head', 'new']], ['upsertCachedSessions', [[h.selected[0]]]],
+      ['effects', [[{ name: 'setName', args: ['head', 'effect'] }], h.db.getSetting('_writer_revision') || 0]]]) {
+      if (command === 'effects') args[1] = h.db.getSetting('_writer_revision');
+      assert.equal((await worker.post(command, ...args)).error, undefined);
+    }
+  } finally { fs.realpathSync.native = realpath; }
+  assert.deepEqual(counts, { cached: 0, folders: 0, realpath: 0 }, 'normal indexing must not inspect project ownership');
+});
+
+test('FIX474 malformed supplied path does not poison sibling cache targets', supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  const reply = await worker.post('upsertCachedSessions', [{ sessionId: 'bad-path', folder: 'bad', projectPath: 'relative' }, h.kept[0]]);
+  assert.equal(reply.error, undefined, 'legacy relative paths remain accepted without deletion');
+  assert.equal(h.db.getCachedSession('bad-path').projectPath, 'relative');
+  assert.ok(h.db.getCachedSession('mixed'));
+});
+
+for (const code of ['SQLITE_BUSY', 'SQLITE_BUSY_SNAPSHOT']) test(`FIX474 deletion retries ${code} without sealing partial`, supported, async t => {
+  const h = setup(t), input = h.manifest(true, true), original = h.db.transact;
+  let injected = false;
+  h.db.transact = fn => {
+    if (!injected && h.db.projectDeletion.operation(input.operationId)?.sealed === 0) {
+      injected = true; throw Object.assign(new Error('transient writer contention'), { code });
+    }
+    return original(fn);
+  };
+  const worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  const reply = await worker.post('completeProjectDeletion', input);
+  assert.equal(injected, true);
+  assert.equal(reply.error, undefined);
+  assert.equal(reply.result.state, 'committed', 'busy must reach worker retry instead of sealing partial');
+});
+
+test('FIX474 deletion history resolves only target owners and folders', supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  assert.equal((await worker.post('completeProjectDeletion', h.manifest(false, true))).result.state, 'committed');
+  const calls = { cached: 0, folders: 0, operations: 0 }, ids = [], folders = [];
+  for (const [method, key] of [['getAllCached', 'cached'], ['getAllFolderMeta', 'folders']]) {
+    const original = h.db[method]; h.db[method] = (...args) => { calls[key]++; return original(...args); };
+  }
+  for (const method of ['active', 'terminal']) {
+    const original = h.db.projectDeletion[method]; h.db.projectDeletion[method] = (...args) => { calls.operations++; return original(...args); };
+  }
+  if (h.db.projectDeletion.ownerRows) {
+    const original = h.db.projectDeletion.ownerRows;
+    h.db.projectDeletion.ownerRows = id => { ids.push(id); return original(id); };
+  }
+  const getFolder = h.db.getFolderMeta;
+  h.db.getFolderMeta = folder => { folders.push(folder); return getFolder(folder); };
+  assert.equal((await worker.post('upsertCachedSessions', [h.kept[1]])).error, undefined);
+  assert.deepEqual(calls, { cached: 0, folders: 0, operations: 0 }, 'deletion history must not rescan unrelated ownership');
+  assert.deepEqual(ids, ['remote']); assert.deepEqual(folders, ['host::remote']);
+});
+
+test('FIX474 ambiguous deleted target and malformed path do not poison unrelated batch targets', supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  assert.equal((await worker.post('completeProjectDeletion', h.manifest(false, true))).result.state, 'committed');
+  h.db.upsertCachedSessions([{ ...h.kept[0], parentSessionId: 'head' }]);
+  const reply = await worker.post('effects', [
+    { name: 'setName', args: ['head', 'must refuse'] },
+    { name: 'upsertCachedSessions', args: [[{ sessionId: 'bad-path', folder: 'bad', projectPath: 'relative' }]] },
+    { name: 'setName', args: ['remote', 'sibling survived'] },
+  ], h.db.getSetting('_writer_revision'));
+  assert.equal(h.db.getMeta('remote').name, 'sibling survived', 'refusal is per target, even before an unrelated sibling');
+  assert.equal(reply.error?.code, 'DELETION_OWNERSHIP');
+  assert.equal(h.db.getMeta('head'), null, 'refused name must not resurrect erased metadata');
+  assert.equal(h.db.getCachedSession('bad-path'), null);
+});
+
+test('FIX474 shared owners unrelated to a deletion bind together and remain writable', supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  assert.equal((await worker.post('completeProjectDeletion', h.manifest(false, true))).result.state, 'committed');
+  h.db.upsertCachedSessions([{ ...h.kept[0], continuationIndex: JSON.stringify({ ids: ['shared-id'] }) },
+    { ...h.kept[1], bridgeSessionId: 'shared-id' }]);
+  const reply = await worker.post('setName', 'shared-id', 'both unrelated');
+  assert.equal(reply.error, undefined, 'only deletion-related candidate ambiguity refuses');
+  assert.equal(h.db.getMeta('shared-id').name, 'both unrelated');
+});
+
+test('FIX474 ownership index refreshes after history is purged and deletion protection returns', supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db), input = h.manifest(false, true);
+  assert.equal((await worker.post('completeProjectDeletion', input)).result.state, 'committed');
+  assert.equal((await worker.post('setName', 'remote', 'indexed owner')).error, undefined);
+  const proof = await worker.client.request('readProjectArchiveEpochs', [h.project], true);
+  assert.equal((await worker.post('revealAddedProject', h.root, proof)).error, undefined);
+  h.db.projectDeletion.purgeOperation(input.operationId);
+  assert.equal((await worker.post('upsertCachedSessions', [{ ...h.kept[1], bridgeSessionId: 'post-purge-link' }])).error, undefined);
+  h.db.projectDeletion.setFence(shared.identity(h.project).key, 4, null, 1);
+  const reply = await worker.post('setName', 'post-purge-link', 'fresh owner');
+  assert.equal(reply.error, undefined, 'an unrelated link written without history remains owned when protection returns');
+  assert.equal(h.db.getMeta('post-purge-link').name, 'fresh owner');
+});
+
+for (const command of ['deleteCachedFolder', 'dropRemoteFolder']) test(`FIX474 ${command} retains its folder fence on nested session units`, supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  h.db.projectDeletion.setFence(shared.identity(h.project).key, 1, null, 1);
+  const reply = await worker.post(command, 'selected-b');
+  assert.equal(reply.error?.code, 'PROJECT_EPOCH_STALE');
+  assert.ok(h.db.getCachedSession('continuation'), 'nested row deletion must inherit the blocked folder fence');
+  assert.ok(h.db.getFolderMeta('selected-b'));
+});
+
 test('COMPLETE archives retained metadata, keeps unselected settings and seals final logical removal', supported, async t => {
   const h = setup(t), input = h.manifest();
   h.db.setSetting('scheduleProjects', [h.root, '/kept']);
