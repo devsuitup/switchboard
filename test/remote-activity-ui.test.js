@@ -24,6 +24,7 @@ const { JSDOM } = require('jsdom');
 // session-activity.js was split (see .ai/contexts/session-state.md); load its
 // three parts in index.html order before remote-activity-ui.js.
 const STATE_SRC = path.join(__dirname, '..', 'public', 'session-state.js');
+const PROJECTION_SRC = path.join(__dirname, '..', 'public', 'session-status-projection.js');
 const DOM_SRC = path.join(__dirname, '..', 'public', 'session-activity-dom.js');
 const ACTIVITY_SRC = path.join(__dirname, '..', 'public', 'session-activity.js');
 const SRC = path.join(__dirname, '..', 'public', 'remote-activity-ui.js');
@@ -64,6 +65,8 @@ function setup(sessionIds = ['s1']) {
 
   const ctx = dom.getInternalVMContext();
   vm.runInContext(fs.readFileSync(STATE_SRC, 'utf8'), ctx, { filename: STATE_SRC });
+  vm.runInContext(fs.readFileSync(PROJECTION_SRC, 'utf8'), ctx, { filename: PROJECTION_SRC });
+
   vm.runInContext(fs.readFileSync(DOM_SRC, 'utf8'), ctx, { filename: DOM_SRC });
   vm.runInContext(fs.readFileSync(ACTIVITY_SRC, 'utf8'), ctx, { filename: ACTIVITY_SRC });
   vm.runInContext(fs.readFileSync(SRC, 'utf8'), ctx, { filename: SRC });

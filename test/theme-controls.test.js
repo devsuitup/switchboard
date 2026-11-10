@@ -150,8 +150,8 @@ function setupPanel() {
   window.isMac = false;
   window.appShortcuts = {};
   for (const file of ['modal-stack.js', 'viewer-toolbar.js', 'viewer-panel.js', 'splitter.js', 'session-state.js',
-    'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'file-panel.js', 'touched-files-view.js']) {
-    evaluate(source(file));
+    'session-status-projection.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'file-panel.js', 'touched-files-view.js']) {
+    vm.runInContext(source(file), context, { filename: path.join(PUBLIC, file) });
   }
   evaluate('loadCodeMirrorBundle = () => Promise.resolve()');
   const editor = (parent, content) => {

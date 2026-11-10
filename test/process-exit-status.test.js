@@ -105,7 +105,7 @@ function setup() {
   const run = (src, filename) => vm.runInContext(src, ctx, { filename });
   run(fs.readFileSync(path.join(ROOT, 'public', 'utils.js'), 'utf8'), 'utils.js');
   run(PRELUDE, 'prelude.js');
-  for (const file of ['session-state.js', 'session-activity-dom.js', 'session-activity.js']) {
+  for (const file of ['session-state.js', 'session-status-projection.js', 'session-activity-dom.js', 'session-activity.js']) {
     run(fs.readFileSync(path.join(ROOT, 'public', file), 'utf8'), file);
   }
   run(`dropLocalPtySession = id => { localPtyStates.delete(id); calls.dropped.push(id); };`, 'drop-spy.js');

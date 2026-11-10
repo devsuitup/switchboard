@@ -122,7 +122,7 @@ function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThro
   const bundledMarked = window.marked;
   delete window.marked;
   window.loadCodeMirrorBundle = () => { window.marked = bundledMarked; return Promise.resolve(); };
-  for (const file of ['modal-stack.js', 'viewer-toolbar.js', 'splitter.js', 'session-state.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'file-panel.js', 'touched-files-view.js']) {
+  for (const file of ['modal-stack.js', 'viewer-toolbar.js', 'splitter.js', 'session-state.js', 'session-status-projection.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'file-panel.js', 'touched-files-view.js']) {
     evalInWindow(dom, path.join(PUBLIC_DIR, file));
   }
   window.openSessions = new Map();
