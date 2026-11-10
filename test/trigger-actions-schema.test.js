@@ -126,3 +126,10 @@ for (const payload of [base, { ...base, sessionId: id.toUpperCase(), prompt: ' a
     assert.equal(effects, 0);
   });
 }
+
+test('the standalone v1 validator keeps rejecting non-objects with its typed reason', () => {
+  const { validateTrigger } = require('../src/main/triggers/trigger-actions');
+  for (const value of [null, [], 7, 'text', true, undefined]) {
+    assert.equal(validateTrigger(value, request), 'trigger must be an object');
+  }
+});

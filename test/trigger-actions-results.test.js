@@ -585,3 +585,25 @@ test('startup scanning serializes case variants of one UUID into a single termin
   await r.settle();
   assert.deepEqual(fs.readFileSync(r.output), first);
 });
+
+for (const value of [[], null, 7, 'legacy', true]) {
+  for (const name of [request, request.toUpperCase()]) {
+    test(`non-object ${JSON.stringify(value)} under ${name === request ? 'a lowercase' : 'an uppercase'} UUID is legacy transport input with no lifecycle effect`, async t => {
+      const s = spies();
+      const r = await rig(t, { payload: value, name, ctx: s.ctx });
+      const legacy = await rig(t, { payload: value, name: 'legacy-non-object' });
+      const published = path.join(path.dirname(r.output), name + '.result.json');
+      const result = JSON.parse(fs.readFileSync(name === request ? r.output : published, 'utf8'));
+      assert.deepEqual(result, JSON.parse(fs.readFileSync(legacy.output, 'utf8')), 'UUID and non-UUID filenames give the same legacy result');
+      assert.equal(Object.hasOwn(result, 'outcome'), false);
+      assert.equal(Object.hasOwn(result, 'reason'), false);
+      assert.equal(Object.hasOwn(result, 'version'), false);
+      if (value === null) {
+        assert.equal(result.internal, true);
+        assert.match(result.error, /^internal error: /);
+      } else assert.equal(result.error, 'missing required field: sessionId');
+      assert.equal(fs.existsSync(r.input), false, 'input is cleaned');
+      assertNoDuplicateEffects(s);
+    });
+  }
+}
