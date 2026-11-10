@@ -554,3 +554,26 @@ for (const aliases of [1, 7]) {
     await until(() => fs.existsSync(r.output), 'the owner commits');
   });
 }
+
+test('a result committed in the journal while the owner publishes wins over the owner\'s pending outcome', async t => {
+  const { randomUUID } = require('node:crypto');
+  const { hashSessionRequestCommand } = require('../session-index-commands');
+  const base = createJournal();
+  const foreign = Buffer.from(JSON.stringify({ version: 1, action: 'open', ok: true, outcome: 'opened', reason: null, sessionId: id }) + '\n');
+  let raced = false;
+  const journal = { ...base, recordSessionResultPublication: async input => {
+    if (!raced) {
+      raced = true;
+      const rival = { ...input, actionToken: randomUUID(), resultBytes: foreign };
+      delete rival.argsHash;
+      await base.recordSessionResultPublication({ ...rival, argsHash: hashSessionRequestCommand('recordSessionResultPublication', rival) });
+    }
+    return base.recordSessionResultPublication(input);
+  } };
+  const s = spies();
+  const r = await rig(t, { payload: { version: 1, action: 'open' }, ctx: { ...s.ctx, sessionRequests: journal } });
+  assert.equal(raced, true);
+  assert.deepEqual(fs.readFileSync(r.output), foreign, 'the journal\'s first committed bytes are published');
+  assert.equal(fs.existsSync(r.input), false);
+  assertNoDuplicateEffects(s);
+});
