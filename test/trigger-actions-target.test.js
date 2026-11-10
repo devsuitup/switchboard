@@ -34,8 +34,11 @@ test('trigger resolution refuses local history under a local scoped bare mark', 
 });
 
 test('trigger resolution ignores relative hidden entries that resolve to a known project', async t => {
+  const prev = process.cwd();
+  t.after(() => process.chdir(prev));
   const r = rig(t);
-  const relative = path.relative(process.cwd(), r.project);
+  process.chdir(r.dir);
+  const relative = 'project';
   assert.equal(path.isAbsolute(relative), false);
   r.snapshot.hiddenProjects = [relative];
   const result = await resolveLocalTarget(id, r.deps);
@@ -44,12 +47,17 @@ test('trigger resolution ignores relative hidden entries that resolve to a known
 });
 
 test('trigger resolution ignores relative hidden entries for recorded worktree selection', async t => {
+  const prev = process.cwd();
+  t.after(() => process.chdir(prev));
   const r = rig(t);
+  process.chdir(r.dir);
   const cwd = path.join(r.project, '.worktrees', 'next');
   fs.mkdirSync(cwd, { recursive: true });
   fs.writeFileSync(r.transcript, JSON.stringify({ cwd }) + '\n');
   r.deps.extractVerifiedCwdFromJsonl = () => ({ complete: true, cwd });
-  r.snapshot.hiddenProjects = [path.relative(process.cwd(), cwd)];
+  const relative = path.join('project', '.worktrees', 'next');
+  assert.equal(path.isAbsolute(relative), false);
+  r.snapshot.hiddenProjects = [relative];
   const result = await resolveLocalTarget(id, r.deps);
   assert.equal(result.ok, true, 'a relative hidden entry must not select an unknown recorded worktree');
   assert.equal(result.project, r.project);

@@ -171,7 +171,8 @@ before known membership and directory existence, with `project is archived`
 for archive/delete/legacy hidden entries. Kind-only and remote-qualified entries
 do not deny a local path; group archive records do not deny known projects.
 The optional `hiddenProjectScopes` snapshot field qualifies each hidden
-entry by `{ alias: null|string }` through the shared `isProjectHidden` matcher.
+entry by `{ alias: null|string }` through the shared `projectHiddenMatcher`,
+with an identity target normaliser.
 A mark scoped to another host does not refuse a local trigger. Missing scopes
 retain legacy bare-path matching; callers supplying scopes must carry the
 current global map alongside the hidden entries. Only absolute hidden paths

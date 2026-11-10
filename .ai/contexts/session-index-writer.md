@@ -18,9 +18,9 @@ without a scope keep the prior global-record shape. Matching is shared with the
 renderer through `public/worktree-nesting.js`; see session-cache.md, Project
 Archive and Delete.
 
-Constraint for #474 A4: no current caller supplies a scope. The scoped deletion
-flow must resolve the existing `hideProject` scope-overwrite behaviour before
-supplying one: a later scoped call can replace a prior scope for the same entry.
+Before any caller supplies a scope, the scoped deletion flow must resolve the
+existing `hideProject` scope-overwrite behaviour: a later scoped call can replace
+a prior scope for the same entry.
 An existing unscoped mark must retain its every-host meaning.
 
 ## Ownership and startup
