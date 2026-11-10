@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const {
   parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, stripShellNoise, JOB_ID_RE,
-  dispatchRefusal, isHostedJob, SESSION_ID_RE, sessionIdFromLinkScanPath,
+  dispatchRefusal, isHostedJob, SESSION_ID_RE, sessionIdFromLinkScanPath, sessionIdField,
 } = require('./bg-agents-roster');
 const { resolveProjectRoots, projectRootFromPattern, worktreeRootFromPattern } = require('../../../project-root');
 const { classifyWorkerLiveness, workerTimestamp } = require('./bg-worker-liveness');
@@ -437,20 +437,33 @@ async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = 
   return { known: true, job: owners.values().next().value || null };
 }
 
-function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false } = {}) {
+function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false, findNewer = false, restoreScan } = {}) {
+  if (restoreScan && restoreScan.jobsDir !== jobsDir) {
+    restoreScan.jobsDir = jobsDir;
+    restoreScan.records.clear();
+    delete restoreScan.names;
+  }
   const same = value => typeof value === 'string' && value.toLowerCase() === sessionId.toLowerCase();
   const listed = id => roster.find(e => e.kind === 'background' && e.id === id) || null;
   const identity = (raw, id) => [raw?.sessionId, raw?.resumeSessionId,
     sessionIdFromLinkScanPath(raw?.linkScanPath), listed(id)?.sessionId].filter(value => typeof value === 'string' && value);
   const read = id => {
-    const text = fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8');
-    const raw = JSON.parse(text);
-    const job = parseJobState(text);
+    let record = restoreScan?.records.get(id);
+    if (!record) {
+      try {
+        const text = fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8');
+        record = { raw: JSON.parse(text), job: parseJobState(text) };
+      } catch (error) { record = { error }; }
+      restoreScan?.records.set(id, record);
+    }
+    if (record.error) throw record.error;
+    const { raw, job } = record;
     if (ignoreUnrelatedInvalid && !identity(raw, id).length) throw new Error(`job ${id} does not name its conversation; Switchboard uses the session id the Agents view last listed for that job; if Switchboard has no such list yet, a record that does not name its conversation refuses — open the Agents view, then retry`);
     if (!job?.state || (raw.id && raw.id !== id)) throw new Error(`job ${id} has an unknown or unreadable state`);
     const rawTarget = raw.resumeSessionId ?? raw.sessionId;
     const resumeTarget = typeof rawTarget === 'string' && SESSION_ID_RE.test(rawTarget) ? rawTarget.toLowerCase() : null;
-    return { job: { ...job, id, resumeTarget }, matches: ignoreUnrelatedInvalid ? identity(raw, id).some(same) : same(raw.sessionId) || same(raw.resumeSessionId) || same(job.sessionId) };
+    const ownSessionId = sessionIdFromLinkScanPath(raw.linkScanPath) || sessionIdField(raw.sessionId);
+    return { job: { ...job, id, resumeTarget }, ownSessionId, matches: ignoreUnrelatedInvalid ? identity(raw, id).some(same) : same(raw.sessionId) || same(raw.resumeSessionId) || same(job.sessionId) };
   };
   try {
     if (typeof attachJobId === 'string' && JOB_ID_RE.test(attachJobId)) {
@@ -462,6 +475,20 @@ function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false
         return { known: false, missing: true, reason: `no background job record for ${sessionId}` };
       }
       const record = read(attachJobId);
+      if (record.matches && findNewer) {
+        let newer;
+        try {
+          const names = restoreScan ? (restoreScan.names ??= fs.readdirSync(jobsDir)) : fs.readdirSync(jobsDir);
+          for (const id of names.filter(id => JOB_ID_RE.test(id) && id !== attachJobId)) {
+            try {
+              const candidate = read(id);
+              if (same(candidate.ownSessionId) && workerTimestamp(candidate.job.updatedAt) > workerTimestamp(record.job.updatedAt)
+                && (!newer || workerTimestamp(candidate.job.updatedAt) > workerTimestamp(newer.updatedAt))) newer = candidate.job;
+            } catch {}
+          }
+        } catch {}
+        if (newer) return { known: true, job: record.job, supersededBy: newer.id };
+      }
       return record.matches ? { known: true, job: record.job }
         : { known: false, reason: `job ${attachJobId} does not match saved session ${sessionId}` };
     }

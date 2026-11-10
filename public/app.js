@@ -488,11 +488,19 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
 }
 
 
-async function prepareBackgroundRestore(session, item, { attachOnly = false } = {}) {
+async function prepareBackgroundRestore(session, item, { attachOnly = false, interactive = false } = {}) {
   let result;
   try { result = await window.api.restoreBackgroundJob(item.sessionId, attachOnly ? { attachOnly: true } : undefined); }
   catch (err) { result = { action: 'refuse', reason: err.message || String(err) }; }
   const id = sessionActionNoticeId('Restore', session);
+  if (result?.action === 'retire') {
+    skippedWorkingSetEntries.delete(item.sessionId);
+    clearDormantRow(item.sessionId);
+    restoreInFlight.delete(item.sessionId);
+    clearAppNotice(id);
+    schedulePersistWorkingSet();
+    return interactive ? { retired: true } : null;
+  }
   const report = (reason, actionLabel, onAction) => showAppNotice({ id, kind: 'error',
     message: `Restore failed for ${sessionActionDescription(session)}${result?.jobId ? `, job ${result.jobId}` : ''}: ${reason}. Check the background session in the Agents view, then open it from the sidebar to retry attaching.`,
     actionLabel, onAction, dismissOnAction: false });
@@ -2554,13 +2562,15 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
   if (backgroundHeld?.item?.bg === true) {
     if (triggerAction) throw Object.assign(new Error('background session is not supported'), { reason: 'background session is not supported' });
     skippedWorkingSetEntries.set(session.sessionId, backgroundHeld);
-    const background = await prepareBackgroundRestore(session, backgroundHeld.item);
+    const background = await prepareBackgroundRestore(session, backgroundHeld.item, { interactive: !automatic });
     if (!background) return false;
-    live = background.live;
-    backgroundRestoreJobId = background.backgroundRestoreJobId;
-    automatic = true;
-    allowBgAttach = true;
-    continuationResolved = true;
+    if (!background.retired) {
+      live = background.live;
+      backgroundRestoreJobId = background.backgroundRestoreJobId;
+      automatic = true;
+      allowBgAttach = true;
+      continuationResolved = true;
+    }
   }
   let continuationNotice;
   if (!continuationResolved && customOptions?.type !== 'attach' && (chooseAgain || !openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
