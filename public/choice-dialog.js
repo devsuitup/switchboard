@@ -44,6 +44,9 @@ function openChoiceDialog({
   onChange = null,
 } = {}) {
   return new Promise((resolve) => {
+    if (onChange && choices.some(choice => choice.id === 'plan' || choice.id === 'choice')) {
+      throw new Error('Reserved choice ids: plan and choice.');
+    }
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay choice-dialog-overlay';
     const dialog = document.createElement('div');
@@ -174,7 +177,7 @@ function openChoiceDialog({
         confirmBtn.disabled = !!options && !radios.some(({ radio }) => radio.checked && !radio.disabled);
       } catch (error) {
         if (closed || request !== planRequest || !matchesCurrentValues(values)) return;
-        planError.textContent = error?.message || String(error || 'Unable to refresh the plan.');
+        planError.textContent = error?.message || (typeof error === 'string' && error) || 'Unable to refresh the plan.';
         planError.hidden = false;
       }
     }
@@ -185,10 +188,14 @@ function openChoiceDialog({
       for (const { choice, box, text } of boxes) {
         if (typeof choice.label === 'function') text.textContent = choice.label(box.checked);
       }
+    }
+    function changeChoices() {
+      updateChoices();
       if (onChange) void refreshPlan(currentValues());
     }
-    for (const { box } of boxes) box.addEventListener('change', updateChoices);
-    if (onChange) for (const { radio } of radios) radio.addEventListener('change', updateChoices);
+    updateChoices();
+    for (const { box } of boxes) box.addEventListener('change', changeChoices);
+    if (onChange) for (const { radio } of radios) radio.addEventListener('change', changeChoices);
     confirmBtn.textContent = confirmLabel || 'OK';
     confirmBtn.disabled = !!options && !radios.some(({ radio }) => radio.checked && !radio.disabled);
     const secondaryBtn = secondaryAction ? document.createElement('button') : null;
@@ -244,7 +251,7 @@ function openChoiceDialog({
     const unregister = registerModal({ overlay, cancel: () => close(null), enter, restoreFocus: false });
     closeOpenChoiceDialog = close;
     if (closeWith) closeWith.then(close, () => {});
-    updateChoices();
+    if (onChange) void refreshPlan(currentValues());
     (initialFocus === 'cancel' || (onChange && confirmBtn.disabled && !cancelBtn.hidden) ? cancelBtn : confirmBtn).focus();
   });
 }

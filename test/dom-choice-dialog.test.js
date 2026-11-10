@@ -45,6 +45,95 @@ function planRequests() {
 
 const flushPlans = () => new Promise(resolve => setImmediate(resolve));
 
+for (const withHook of [false, true]) {
+  for (const callback of ['danger', 'label']) {
+    test(`choice initialization: throwing ${callback} leaves no modal with hook ${withHook}`, async () => {
+      const ctx = setupSidebarDom();
+      try {
+        const failure = new Error('Invalid initial choices');
+        let labelCalls = 0;
+        const overrides = callback === 'danger'
+          ? { danger: () => { throw failure; } }
+          : { choices: [{ id: 'a', label: () => {
+            if (++labelCalls === 2) throw failure;
+            return 'Box A';
+          } }] };
+        let requests = 0;
+        if (withHook) overrides.onChange = () => { requests++; return {}; };
+        await assert.rejects(open(ctx, overrides), error => error === failure);
+        assert.equal(overlay(ctx), null, 'initialization failure must leave no overlay');
+        assert.equal(ctx.window.hasOpenModal(), false, 'initialization failure must leave no registered modal');
+        assert.equal(requests, 0, 'invalid choices must not request a plan');
+      } finally { ctx.destroy(); }
+    });
+  }
+}
+
+test('choice plan: the initial hook runs after mounting and registration', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    let mounted;
+    let registered;
+    const pending = open(ctx, { onChange: () => {
+      mounted = !!overlay(ctx);
+      registered = ctx.window.hasOpenModal();
+      return {};
+    } });
+    assert.equal(mounted, true);
+    assert.equal(registered, true);
+    cancelBtn(ctx).click();
+    assert.equal(await pending, null);
+  } finally { ctx.destroy(); }
+});
+
+for (const id of ['plan', 'choice']) {
+  test(`choice plan: reserved checkbox id ${id} rejects before mounting`, async () => {
+    const ctx = setupSidebarDom();
+    try {
+      let requests = 0;
+      const pending = open(ctx, {
+        choices: [{ id, label: 'Reserved' }],
+        onChange: () => { requests++; return {}; },
+      });
+      const rejected = assert.rejects(pending, /reserved.*(?:plan|choice)/i);
+      assert.equal(overlay(ctx), null, 'reserved choices must be rejected before mounting');
+      assert.equal(ctx.window.hasOpenModal(), false);
+      assert.equal(requests, 0);
+      await rejected;
+    } finally { ctx.destroy(); }
+  });
+
+  test(`choice dialog: checkbox id ${id} remains available without a hook`, async () => {
+    const ctx = setupSidebarDom();
+    try {
+      const pending = open(ctx, { choices: [{ id, label: 'Legacy', checked: true }] });
+      confirmBtn(ctx).click();
+      assert.deepEqual({ ...await pending }, { [id]: true });
+    } finally { ctx.destroy(); }
+  });
+}
+
+for (const [name, error, expected] of [
+  ['empty Error', new Error(''), 'Unable to refresh the plan.'],
+  ['empty string', '', 'Unable to refresh the plan.'],
+  ['plain object', {}, 'Unable to refresh the plan.'],
+  ['string', 'Planning unavailable', 'Planning unavailable'],
+]) {
+  test(`choice plan: ${name} refresh failure has a useful message`, async () => {
+    const ctx = setupSidebarDom();
+    try {
+      const pending = open(ctx, { onChange: () => { throw error; } });
+      await flushPlans();
+      const alert = shown(ctx).querySelector('[role="alert"]');
+      assert.equal(alert.textContent, expected, 'refresh errors must use a message or the fallback');
+      assert.equal(alert.hidden, false);
+      assert.equal(confirmBtn(ctx).disabled, true);
+      cancelBtn(ctx).click();
+      assert.equal(await pending, null);
+    } finally { ctx.destroy(); }
+  });
+}
+
 test('choice plan: restored answers request an initial plan and block click and Enter until ready', async () => {
   const ctx = setupSidebarDom();
   try {

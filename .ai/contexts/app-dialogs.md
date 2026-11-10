@@ -31,6 +31,10 @@ compute a preview, with no destructive effects. Its resolved value is an opaque
 plan (for example `{ token, details }`); primary acceptance returns
 `{ ...answers, plan }`. Choice ids must not use the reserved `plan` or `choice`
 keys. No caller uses this hook yet; project deletion will integrate it in #474 A4.
+When the hook is set, a reserved checkbox id rejects the opening promise before
+mounting or registering a modal. Dynamic labels and danger are also evaluated
+before mounting, so an initialization failure leaves no visible or registered
+modal; only the first plan refresh waits until registration is complete.
 
 Each request immediately discards the previous plan and disables Confirm,
 including synthetic click and container Enter acceptance. Only the newest
@@ -40,6 +44,8 @@ the snapshot, so changing a control programmatically without its `change` event
 cannot accept a mismatched plan; dispatch `change` to refresh it. Cancellation,
 replacement and other closure paths make late responses inert. Requests are
 ignored rather than aborted, so the hook owns any external request cleanup.
+Callers using the hook must bound their requests. The dialog adds no timeout;
+A4 will show a pending state while a request is outstanding.
 
 A synchronous throw or rejected refresh shows its message as literal inline
 `role=alert` text, leaves Confirm disabled and keeps Cancel available. Changing
