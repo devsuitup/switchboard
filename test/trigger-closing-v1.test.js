@@ -282,3 +282,27 @@ test('a stop queued behind another request is cancelled by a commit that is roll
   assert.equal(c.backend.length, 0);
   assert.equal(c.f.events.some(e => e[0] === 'release-fifo'), true, 'the session lock is released');
 });
+
+for (const commit of [false, true]) {
+  test(`a successful stop ${commit ? 'is normalized to the closing refusal when a close commits before publication' : 'publishes closed without a commit'}`, async t => {
+    const f = stopFixture(t);
+    let authorityValid = true; let killed = false;
+    f.lifecycle.captureAuthority = () => ({ valid: () => authorityValid });
+    Object.defineProperty(f.session, 'exited', { configurable: true, get() {
+      if (killed && commit) authorityValid = false;
+      return killed;
+    }, set(value) { killed = value; } });
+    const stopCall = f.lifecycle.stop;
+    f.lifecycle.stop = (...args) => { const out = stopCall(...args); killed = true; return out; };
+    f.start();
+    const result = await f.finish();
+    assert.equal(f.kills(), 1);
+    assert.equal(result.stop_requested, true);
+    if (commit) {
+      assert.equal(result.ok, false); assert.equal(result.outcome, 'refused'); assert.equal(result.reason, 'Switchboard is closing.');
+    } else {
+      assert.equal(result.ok, true); assert.equal(result.outcome, 'closed');
+    }
+    assert.equal(f.events.filter(e => e[0] === 'result').length, 1);
+  });
+}

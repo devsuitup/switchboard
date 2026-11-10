@@ -529,8 +529,8 @@ async function executeStop(trigger, execution) {
       { ...(!error.stopRefusal ? { error: error.message } : {}),
         ...(stopRequested || before && effects.enter_written && !noteFinished ? { uncertain: true } : {}), ...error.extra });
     }
-    if (!result.ok && !allowed() && result.reason !== 'Switchboard is closing.') {
-      result = { ...result, outcome: 'refused', reason: 'Switchboard is closing.', error: 'Switchboard is closing.' };
+    if (!allowed() && result.reason !== 'Switchboard is closing.') {
+      result = { ...result, ok: false, outcome: 'refused', reason: 'Switchboard is closing.', error: 'Switchboard is closing.' };
     }
     await execution.publish(result);
     return result;

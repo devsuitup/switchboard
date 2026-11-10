@@ -442,11 +442,12 @@ commitment happened after it, even after a rolled-back update makes
 `Switchboard is closing.` at every check, including the guarded prompt/Enter
 writes, keeping the confirmed `created`/`resumed` and partial-delivery evidence.
 Right before publication, open and stop normalize the result against the same
-capture: a failed result (an open's also when it succeeded) whose action was
-cancelled becomes the `Switchboard is closing.` refusal, so a late name-save,
-liveness or lookup failure cannot replace it. Established effects and
-`uncertain` stay on the result; a stop that already completed (`closed`) is not
-rewritten.
+capture: a result of an action that was cancelled, successful or not, becomes
+the `Switchboard is closing.` refusal, so a late name-save, liveness or lookup
+failure, or a close committed after a successful stop, cannot publish another
+outcome. Established effects (`created`, `resumed`, `stop_requested`, delivery
+evidence) and `uncertain` stay on the result. A result already published is
+never rewritten.
 
 ### Sandbox control directory
 
