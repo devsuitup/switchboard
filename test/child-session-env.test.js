@@ -90,7 +90,7 @@ function mainContext() {
     quoteArgvForShell: (_shell, args) => args.join(' '),
     resolveScheduleSandbox: () => false, isProjectSettingsArchived: () => false,
     activityReporter: { sessionStarted() {} },
-    cliSessionState: { trackScheduleRun() {}, ensureWatching: () => true },
+    cliSessionState: { trackScheduleRun() {}, ensureWatching: () => true, deliveryPtyStart: () => null },
     ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
     mainWindow: {}, activeSessions: new Map(),
     unsavedGuard: { launchAllowed: () => true },

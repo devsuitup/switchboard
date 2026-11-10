@@ -9,6 +9,20 @@ const { trackWindowsPty, killPty } = require('../src/main/terminals/pty-ops');
 const { performance } = require('node:perf_hooks');
 const espree = require('espree');
 
+test('PTY exit retains kernel tree death proof before releasing the job handle', async () => {
+  let exit, ended = true; const events = [];
+  const pty = { pid: 987, onExit: callback => { exit = callback; } };
+  await trackWindowsPty(pty, { platform: 'win32', jobs: {
+    assign: async () => true,
+    observe: async () => { events.push('observe'); return { ended, observedAt: 30 }; },
+    release: async () => { events.push('release'); return true; },
+  } });
+  exit();
+  assert.ok(pty.statusTreeExit?.then, 'exit must preserve a read-only tree observation before releasing its job');
+  assert.equal((await pty.statusTreeExit).ended, true);
+  assert.deepEqual(events, ['observe', 'release']);
+});
+
 test('main reads only supervisor and worker PIDs from the disposable daemon roster, best effort', async () => {
   const filename = require.resolve('../main'), source = fs.readFileSync(filename, 'utf8');
   assert.ok(/function readWindowsDaemonPids\(/.test(source), 'main must supply roster PIDs to termination');

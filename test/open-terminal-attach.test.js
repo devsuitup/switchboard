@@ -29,7 +29,7 @@ function launchFixture() {
     quoteArgvForShell: (_shell, args) => args.join(' '), shellArgs: (_shell, cmd) => [cmd],
     cleanPtyEnv: {}, scheduleProjects: () => ({ add: async () => {} }),
     activityReporter: { sessionStarted() {} },
-    cliSessionState: { ensureWatching: () => true },
+    cliSessionState: { ensureWatching: () => true, deliveryPtyStart: () => null },
     spawnPty: (...args) => { spawned.push(args); return { pid: 4242 }; }, trackWindowsPty() {},
     createComposerState: require('../src/main/terminals/composer-state').createComposerState,
     revealIfSdkSession() {}, notifyRendererProjectsChanged() {}, wireSessionPty() {}, getMcpState: () => null,

@@ -1296,6 +1296,30 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   try {
   guarded = await namespace.begin(uuid, triggerPath);
   if (guarded.done) return;
+  if (guarded.typed) {
+    const { statusEnvelope, openRefusal } = require('./session-request-contract');
+    const { request, reason, family } = guarded.typed;
+    let result = family === 'open-session' ? openRefusal(request, reason) : statusEnvelope(request);
+    if (reason) result.reason = reason;
+    else if (Date.now() - guarded.opened.stat.mtimeMs > getTriggerMaxAgeMs()) {
+      result.error = 'not admitted'; result.reason = 'trigger exceeds staleness limit';
+    }
+    else {
+      const author = ctx.sessionStatus?.author(request.from);
+      if (!author) { result.error = 'not admitted'; result.reason = 'from is not an open session in this instance'; }
+      else {
+        try {
+          const snapshot = await ctx.sessionStatus.gather(request.sessionId);
+          if (typeof author === 'function' && !author()) {
+            result.error = 'not admitted'; result.reason = 'from is not an open session in this instance';
+          } else result = { ...result, ...snapshot, ok: true, error: null, reason: null };
+        } catch { result.error = 'internal error'; result.reason = 'session request failed'; }
+      }
+    }
+    try { await guarded.publish(result); }
+    catch (error) { publicationFailed = true; throw error; }
+    return;
+  }
 
   // ── 1. lstat + size guard (C1 + C2) ──────────────────────────────────────
   const stat = guarded.opened.stat;

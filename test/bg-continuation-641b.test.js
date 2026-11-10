@@ -95,7 +95,7 @@ test('literal Ctrl+C inside bracketed paste does not cancel a pending handoff', 
 test('a split CLI cancellation message revokes the typed background command', t => {
   const h = fixture(t);
   let output;
-  const context = vm.createContext({ TRACE: { on: false }, ptyGenerationCounter: 0, log: { info() {} },
+  const context = vm.createContext({ activeSessions: h.activeSessions, TRACE: { on: false }, ptyGenerationCounter: 0, log: { info() {} },
     cancellationIn: require('../src/main/bg-agents/bg-handoff').cancellationIn,
     mainWindow: null, appendToOutputBuffer() {}, MAX_BUFFER_SIZE: 1024 });
   const { wireSessionPty } = loadAppFunctions(context, { functions: ['wireSessionPty'], sourcePath: path.join(__dirname, '../main.js') });
@@ -304,7 +304,7 @@ test('typed /bg, altscreen off, collision daemon fork and attach row produce one
   const terminal = w.createTerminalEntry(original);
   w.activeSessionId = OLD; w.activePtyIds.add(OLD);
   let output;
-  const context = vm.createContext({ TRACE: { on: false }, ptyGenerationCounter: 0, log: { info() {} },
+  const context = vm.createContext({ activeSessions: h.activeSessions, TRACE: { on: false }, ptyGenerationCounter: 0, log: { info() {} },
     cancellationIn: require('../src/main/bg-agents/bg-handoff').cancellationIn,
     mainWindow: null, appendToOutputBuffer() {}, MAX_BUFFER_SIZE: 1024 });
   const { wireSessionPty } = loadAppFunctions(context, { functions: ['wireSessionPty'], sourcePath: path.join(__dirname, '../main.js') });

@@ -47,7 +47,7 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
         queued.clear();
         continue;
       }
-      const match = /^(assigned|terminated|released|error) ([\w-]+)(?: (\d+))?$/.exec(line);
+      const match = /^(assigned|terminated|released|observed|error) ([\w-]+)(?: (\d+))?$/.exec(line);
       if (!match) return fail('invalid protocol response');
       const entry = pending.get(match[2]);
       if (!entry || (match[1] !== 'error' && match[1] !== entry.response)) return fail('unexpected protocol response');
@@ -55,7 +55,7 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
       if (match[1] === 'error') {
         try { warn(`[pty] Windows job ${entry.id} ${entry.op} failed: ${match[3]}`); } catch {}
       }
-      entry.resolve(match[1] !== 'error');
+      entry.resolve(match[1] === 'observed' ? { ended: match[3] === '0', observedAt: Date.now() } : match[1] !== 'error');
     }
   }
 
@@ -63,7 +63,7 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
     if (started) return readiness;
     started = true;
     try {
-      const script = fs.readFileSync(path.join(__dirname, 'windows-job-helper.ps1'), 'utf8');
+      const script = fs.readFileSync(path.join(__dirname, 'windows-job-helper.ps1'), 'utf8').replace(/\r\n/g, '\n');
       child = spawnChild(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
         ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
         { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -94,7 +94,7 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
     if (failed) return Promise.resolve(false);
     return new Promise(resolve => {
       const entry = { op, id, line: `${op} ${id}${args}`, current, resolve,
-        response: { assign: 'assigned', terminate: 'terminated', release: 'released' }[op] };
+        response: { assign: 'assigned', terminate: 'terminated', release: 'released', observe: 'observed' }[op] };
       pending.set(id, entry);
       if (ready) send(entry);
       else queued.set(id, entry);
@@ -136,6 +136,10 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
 
   return {
     start,
+    observe(id) {
+      if (!ready || failed || pending.has(id)) return Promise.resolve(null);
+      return request('observe', id).then(value => value && typeof value === 'object' ? value : null);
+    },
     assign(id, pid, spawnTime, current = () => true) {
       if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid || !Number.isSafeInteger(spawnTime)) return Promise.resolve(false);
       const done = request('assign', id, ` ${pid} ${spawnTime}`, current);

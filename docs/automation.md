@@ -1,5 +1,48 @@
 # Automation
 
+## Read-only session status
+
+Write a JSON file atomically to the configured triggers directory. Its UUID
+filename must match requestId, ignoring case. This request has exactly five fields:
+
+```json
+{"version":1,"type":"session-status","requestId":"10000000-0000-4000-8000-000000000003","from":"20000000-0000-4000-8000-000000000001","sessionId":"30000000-0000-4000-8000-000000000001"}
+```
+
+`from` must identify a current open local conversation owned by this Switchboard
+instance. The target can be any known local conversation. Status neither starts
+nor resumes a session and does not need the renderer. Evidence gathering has a
+shared 2000 ms deadline; insufficient ownership proof gives unknown.
+
+Read `processed/<exact-filename-stem>.result.json`. The result always contains
+version, type, requestId, ok, error, reason, submitted (`no`), requestedSessionId,
+sessionId, state, detail, liveness, headTurn, descriptorStatus, evidence,
+observed_at, evidence_at, pid and jobId. Nullable fields are explicit null.
+State is busy/waiting/idle/exited/unknown; liveness alive/dead/unknown; headTurn
+open/closed/unknown. Evidence is owned-pty/descriptor/sandbox-mapped-descriptor/
+background-job/confirmed-exit/none. descriptorStatus is busy/waiting/idle/shell
+or null. observed_at dates the request; evidence_at dates the decisive original
+observation. PIDs are historical information and grant no signaling authority.
+Unknown targets succeed with sessionId=null, state=unknown, detail=not-found,
+unknown head/liveness and null ownership fields. Waiting for ordinary prompt
+input does not mean a blocking dialog.
+
+Retries under the same requestId return the original committed bytes, even
+after caller closure, target changes or processed-result deletion. Use a fresh
+UUID to observe again. A different request under the same UUID produces an
+immutable `.conflict-<rawSHA256>.result.json` and archives its input as the
+adjacent `.request`; the original result survives. Failed publication retains
+input for retry. Journal durability uses WAL/NORMAL and covers process crashes,
+not power loss. Typed UTF-8, duplicate keys, unknown keys and mixed type/action
+requests are refused. The input limit is 65536 bytes inclusive.
+
+Typed open-session is currently journalled as `ok:false`, error=`invalid request`,
+reason=`unsupported trigger type`, phase=`validation`, submitted=`no`, with null
+session/process identities and text_written/enter_written=false. Its complete
+open envelope also contains version/type/requestId/kind/from/spawnedBy/forkedFrom,
+provisionalSessionId, created_at and completed_at. Retrying that UUID will keep
+the same refusal when future builds add opening support.
+
 Two mechanisms run Claude without you at the keyboard:
 
 - **Schedules** — recurring headless runs, defined as Markdown files and fired

@@ -21,6 +21,20 @@ function fixture(t, options = {}) {
   return { helper, child, writes, invocations, warnings };
 }
 
+test('read-only job observation never starts a helper and distinguishes live, ended and unavailable', async t => {
+  const f = fixture(t);
+  assert.equal(typeof f.helper.observe, 'function', 'job death requires a read-only kernel observation');
+  assert.equal(await f.helper.observe('one'), null);
+  assert.equal(f.invocations.length, 0, 'status cannot start a helper');
+  const assign = f.helper.assign('one', 897, 100);
+  f.child.stdout.emit('data', 'ready\nassigned one\n'); await assign;
+  const live = f.helper.observe('one');
+  assert.equal(f.writes.at(-1), 'observe one\n'); f.child.stdout.emit('data', 'observed one 1\n');
+  assert.equal((await live).ended, false);
+  const ended = f.helper.observe('one'); f.child.stdout.emit('data', 'observed one 0\n');
+  assert.equal((await ended).ended, true);
+});
+
 test('one hidden helper reads the packaged script and queues assigns until ready', async t => {
   const f = fixture(t);
   let alive = true;
@@ -31,7 +45,7 @@ test('one hidden helper reads the packaged script and queues assigns until ready
   const { program, args, opts } = f.invocations[0];
   assert.equal(program, path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'));
   assert.deepEqual(args.slice(0, 3), ['-NoProfile', '-NonInteractive', '-EncodedCommand']);
-  const script = fs.readFileSync(path.join(__dirname, '../src/main/terminals/windows-job-helper.ps1'), 'utf8');
+  const script = fs.readFileSync(path.join(__dirname, '../src/main/terminals/windows-job-helper.ps1'), 'utf8').replace(/\r\n/g, '\n');
   assert.equal(Buffer.from(args[3], 'base64').toString('utf16le'), script);
   assert.ok([program, ...args].join(' ').length < 32700);
   assert.equal(opts.windowsHide, true);

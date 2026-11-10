@@ -11,6 +11,21 @@ Classic scripts load `session-state.js` → `session-status-projection.js` →
 the same dependency order. The projection also exports the same object through
 CommonJS; S1a adds no main-process consumer, trigger, writer or IPC.
 
+S1b3's main-side `src/main/triggers/session-status.js` consumes both exports.
+Both normalize null/undefined proof with `proof ?? {}`. A single normalized
+snapshot/proof determines head, liveness and state. Ambiguity still precedes exit.
+Confirmed current tree death and no live successor set dead, confirmedExit and
+ptyHere=false together. PTY exit/attach exit/ownerDied/row removal alone do not.
+
+`wireSessionPty` records every OSC busy/idle observation, including repeated
+booleans, against the captured generation and PTY. Busy rise defeats older idle;
+an idle observation only closes an older open head. Late output/exit from a
+replaced generation is ignored. `workers/task-records.js` binds observedAt to
+the transcript head's original event time and preserves it on unchanged reads.
+Status read completion and request observed_at are separate from evidence_at.
+Current blocking waitingFor values other than input beat open/shell; unread,
+attention and response-ready are never blocking proof.
+
 `sessionStatusProjection.projectHeadActivity(snapshot, turn, proof)` owns the
 effective head precedence. `proof.ptyHere` supplies local PTY liveness and
 `proof.background` (or `snapshot.backgroundJob`) excludes frozen background
@@ -30,7 +45,7 @@ ambiguity or positive liveness prevents an exit result. Missing descriptors
 alone leave the state unknown and preserve independently established head facts.
 
 Both exports are pure and perform no observation or ownership verification.
-Future callers must discard unowned/stale/competing generations before passing
+Callers must discard unowned/stale/competing generations before passing
 normalized evidence; descriptor freshness, evidence timestamps, pid/job identity,
 the 2000 ms probe bound and durable status results belong to S1b. The new tests
 exercise this pure boundary and the shipped renderer adapter, including 6144

@@ -565,6 +565,7 @@ async function runExitHandler({ releaseLiveSession }) {
   const ctx = vm.createContext({
     resolveExitDrain: () => { calls.exitDrained = true; },
     ptyProcess: { onExit: (cb) => { handler = cb; } },
+    statusGeneration: session.generation,
     session,
     holdBackgroundExit: require('../src/main/bg-agents/bg-handoff').holdBackgroundExit,
     sessionTransitions: require('../session-transitions'),

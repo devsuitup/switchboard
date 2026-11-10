@@ -24,7 +24,8 @@ function readRequestFile(fs, file, { captureLimit = 65536, deadline = Date.now()
       if (size <= captureLimit) chunks.push(Buffer.from(buffer.subarray(0, count)));
     }
     if (size !== opened.size || !same(opened, fs.fstatSync(fd)) || !same(opened, fs.lstatSync(file))) throw new Error('request changed while reading');
-    return { rawHash: digest.digest('hex'), bytes: size <= captureLimit ? Buffer.concat(chunks) : null, stat: opened };
+    const captured = Buffer.concat(chunks);
+    return { rawHash: digest.digest('hex'), bytes: size <= captureLimit ? captured : null, prefix: captured, stat: opened };
   } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 

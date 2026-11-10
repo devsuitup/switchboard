@@ -14,8 +14,8 @@ function createTaskRecordsClient({ onSnapshot = () => {}, onRekey = () => {}, on
   let unavailable = false;
   const redirects = new Map();
   function resolve(id) { const seen = new Set(); while (redirects.has(id) && !seen.has(id)) { seen.add(id); id = redirects.get(id); } return id; }
-  function send(message) {
-    if (disposed || unavailable) return Promise.resolve();
+  function send(message, deadline) {
+    if (disposed || unavailable) return Promise.resolve(null);
     if (!worker) {
       worker = workerFactory();
       worker.on('message', message => {
@@ -48,7 +48,7 @@ function createTaskRecordsClient({ onSnapshot = () => {}, onRekey = () => {}, on
           onSnapshot(s);
         }
         if (message.error) onError(message.error);
-        if (message.requestId) { requests.get(message.requestId)?.(); requests.delete(message.requestId); }
+        if (message.requestId) { requests.get(message.requestId)?.(message.head ?? null); requests.delete(message.requestId); }
       });
       worker.on('error', error => {
         unavailable = true;
@@ -63,7 +63,12 @@ function createTaskRecordsClient({ onSnapshot = () => {}, onRekey = () => {}, on
       });
     }
     const requestId = ++seq;
-    const promise = new Promise(resolve => requests.set(requestId, resolve));
+    const promise = new Promise(resolve => {
+      let timer;
+      const settle = value => { clearTimeout(timer); requests.delete(requestId); resolve(value); };
+      if (Number.isFinite(deadline)) timer = setTimeout(() => settle(null), Math.max(0, deadline - Date.now()));
+      requests.set(requestId, settle);
+    });
     worker.postMessage({ ...message, requestId });
     return promise;
   }
@@ -78,6 +83,8 @@ function createTaskRecordsClient({ onSnapshot = () => {}, onRekey = () => {}, on
     return work.promise;
   }
   return { read,
+    readHeadForStatus: (file, parentSessionId, deadline) => Date.now() >= deadline ? Promise.resolve(null)
+      : send({ type: 'statusHead', file, parentSessionId, deadline }, deadline),
     readBatch: rows => send({ type: 'readBatch', rows }),
     job: (parentSessionId, evidence, { jobId } = {}) => send({ type: 'job', parentSessionId, evidence, jobId }),
     child: (file, parentSessionId, agentId) => send({ type: 'child', file, parentSessionId, agentId }),

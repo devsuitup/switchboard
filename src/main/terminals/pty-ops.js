@@ -16,10 +16,13 @@ function trackWindowsPty(pty, { platform = process.platform, spawnTime = Date.no
   jobsByPty.set(pty, record);
   pty.onExit(() => {
     record.exited = true;
-    if (!record.closing) void releaseWindowsPty(pty);
+    if (!record.closing && !record.released && typeof jobs.observe === 'function') {
+      pty.statusTreeExit = Promise.resolve(record.assignment).then(assigned => assigned ? jobs.observe(record.id) : null)
+        .catch(() => null).then(proof => { void releaseWindowsPty(pty); return proof; });
+    } else if (!record.closing) void releaseWindowsPty(pty);
   });
   const current = () => !record.exited && !record.released && pty._agent?.exitCode === undefined;
-  if (pty.pid > 0) return jobs.assign(record.id, pty.pid, spawnTime, current);
+  if (pty.pid > 0) return record.assignment = jobs.assign(record.id, pty.pid, spawnTime, current);
   return new Promise(resolve => {
     const socket = pty._agent?.outSocket;
     const finish = () => {
@@ -30,7 +33,7 @@ function trackWindowsPty(pty, { platform = process.platform, spawnTime = Date.no
     const connected = () => {
       clearTimeout(timer);
       if (!current() || record.closing) return finish();
-      resolve(jobs.assign(record.id, pty.pid, Date.now(), current));
+      resolve(record.assignment = jobs.assign(record.id, pty.pid, Date.now(), current));
     };
     const timer = setTimeout(finish, 5500);
     timer.unref?.();

@@ -1,5 +1,39 @@
 # Context: trigger-watcher
 
+## Typed read-only requests (#380 S1b3)
+
+An own `type` property selects the strict typed contract before action dispatch.
+`session-request-contract.js` checks the opened bytes with fatal UTF-8 decoding,
+bounded JSON nesting, duplicate decoded keys, prototype keys, exact fields and
+case-insensitive UUID filename matching. Invalid typed identities use a tagged
+raw hash; valid identities use sorted supplied JSON and normalized UUIDs.
+Unknown/null types and mixed type/action requests cannot enter either old family.
+Existing legacy/action schemas and action lowercase publication remain separate.
+The stable read retains a bounded prefix while streaming oversized hashes. A
+root-key prefix classifier can recognize typed intent in truncated/oversized
+inputs; it grants no validation or canonical identity. Such requests receive
+the complete undetermined refusal envelope and tagged raw identity. Canonical
+typed hashing still follows fatal UTF-8 and full strict parsing only.
+
+Typed requests do not claim an observation reservation. The namespace queries
+the ordered writer first, replays completed bytes before age/author checks, and
+only absent requests gather evidence. `recordConsumedSessionStatusRequest`
+commits the first candidate and receipt atomically before publication. Lost ACK
+or publication failure retains the input and retries the ordered outcome query.
+New typed owners use the exact physical input stem, including uppercase UUIDs.
+Completed raw/supplied identity replay precedes family mismatch handling too:
+an earlier build's saved result and original publication spelling remain
+authoritative when the same bytes are now recognized as typed.
+Typed `open-session` is durably refused as invalid request / unsupported trigger
+type with the complete open envelope and no lifecycle effects. A future launch
+implementation must replay this refusal for the same supplied request.
+
+`createTriggerContext` builds a separate status service. Caller authority uses
+the direct current local session/PTY/generation and is rechecked after gathering.
+Status follows no in-memory continuation alias and invokes no delivery/input,
+renderer, lifecycle, capability, profile or admission operation. A new UUID is
+required for a new observation. See [automation](../../docs/automation.md).
+
 ## Shared result namespace (#380 S1b2)
 
 `session-request-namespace.js` holds the ownership decision for every legacy
@@ -52,7 +86,7 @@ Retries query the writer before effects, so publication loss cannot repeat
 delivery, launch or stop. Watcher close cancels all retry timers. There is no
 input unlink in the watcher's finally branch. Tests inject the writer commands
 through `test/fixtures/session-request-journal.cjs`; real-store tests retain the
-Node20 unsupported-SQLite skip guard. No new typed endpoint is introduced.
+Node20 unsupported-SQLite skip guard. S1b3 adds the typed endpoint described above.
 
 Versioned trigger new/open and closed-session resume reserve the shared
 [project operation gate](project-operation-gate.md) in `open-terminal`, before

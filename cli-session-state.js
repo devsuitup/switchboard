@@ -70,6 +70,27 @@ function observeTabWriterV1(binding) {
   return v1Reader ? v1Reader.observeTabWriterV1(binding) : { uncertain: true };
 }
 
+async function readStatusEvidence(id, deadline) {
+  const bounded = async fn => {
+    let timer;
+    try { return await Promise.race([Promise.resolve().then(fn), new Promise(resolve => {
+      timer = setTimeout(() => resolve(null), Math.max(0, deadline - now()));
+    })]); } finally { clearTimeout(timer); }
+  };
+  if (now() >= deadline) return null;
+  if (platform === 'win32') {
+    await bounded(() => refreshProcessTable());
+    const evidence = readWorkerProcessEvidence();
+    if (!evidence.processTableFresh || now() - evidence.observedAt >= PROCESS_TABLE_TTL_MS || now() >= deadline) return null;
+  }
+  const result = await bounded(() => liveElsewhereV1Checked(id, () => false, () => [], { deadline, requireUnique: true }));
+  if (now() >= deadline || platform === 'win32' && (!processTableFresh()
+    || now() - processTable.observedAt >= PROCESS_TABLE_TTL_MS)) return null;
+  if (result?.ambiguous) return result;
+  if (!result?.known || result.live && (!result.live.procStart || platform === 'linux' && !result.live.namespace)) return null;
+  return result;
+}
+
 function trackScheduleRun(sessionId, child, cwd, scheduleName) {
   const key = sessionId.toLowerCase();
   const live = { kind: 'schedule', pid: child.pid, cwd, startedAt: Date.now(), scheduleName };
@@ -1142,6 +1163,7 @@ async function liveElsewhereMany(sessionIds, hasPty, ptyPids = () => []) {
 }
 
 module.exports = {
+  readStatusEvidence,
   liveElsewhereV1Checked,
   observeTabWriterV1,
   procStartMatches,
