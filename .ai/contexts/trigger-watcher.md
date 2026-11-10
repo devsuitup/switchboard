@@ -55,9 +55,23 @@ background. Its result is recorded only for the same session identity, PTY and
 generation. A rekey or replacement skips that proof, while normal owner death,
 renderer notification, session removal and live-row release run independently.
 
-The replay store-reopen fixture waits for result publication and input cleanup,
-not a fixed count of event-loop turns. A delayed ordered query reproduces the
-previous premature file assertion independently of OS scheduling.
+The real-store namespace and typed replay tests use `session-request-store.cjs`
+to allocate one disposable database per test, reused only for that test's reopen.
+They must not use the ambient data directory: both tests use the same UUID, with
+a mixed-case legacy owner and a lowercase typed request. Sharing the database
+makes the typed input a conflict; preserving the original result spelling then
+fails a lowercase lookup on Linux, while Windows can accept the wrong legacy
+bytes. The typed regression seeds that ambient owner, checks the exact directory
+entry and status envelope, and leaves the ambient owner unchanged. The fixture
+restores the data-directory environment synchronously after each open.
+Runner-level per-process data directories can mask the original cross-file
+coupling; seeding the ambient owner inside the regression keeps it observable.
+
+The replay fixture waits for result publication and input cleanup within the
+existing bound. Its delayed ordered query only tests asynchronous completion;
+it does not reproduce the shared-database defect. Publication retry timers in
+`session-request-watcher.cjs` remain manual so error tests can inspect retained
+input before explicitly advancing a retry. Production uses real backoff timers.
 
 ## Shared result namespace (#380 S1b2)
 

@@ -2,9 +2,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { rig, mutate, sha } = require('./fixtures/session-request-watcher.cjs');
 const openStore = require('./fixtures/conversation-store.cjs');
+const { createRequestStore } = require('./fixtures/session-request-store.cjs');
 const { createJournal } = require('./fixtures/session-request-journal.cjs');
 const file = path.join(__dirname, '../src/main/triggers/session-status.js');
 const status = fs.existsSync(file) ? require(file) : {};
@@ -325,28 +327,54 @@ test('typed unexpected parent flush failure retains visible committed bytes and 
   const bytes = fs.readFileSync(output); assert.deepEqual(fs.readFileSync(r.input), r.body);
   fail = false; await r.retry(); assert.deepEqual(fs.readFileSync(output), bytes); assert.equal(gathers, 1);
 });
-test('typed replay survives writer store reopen and processed deletion after author closes', {
+for (const polluted of [false, true]) test('typed replay survives writer store reopen and processed deletion after author closes' + (polluted ? ' with a mixed-case ambient owner' : ''), {
   skip: !openStore.supported && 'native SQLite ABI differs; node:sqlite requires Node 22',
 }, async t => {
-  let db = openStore(); t.after(() => db.closeDb());
+  let ambient;
+  if (polluted) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-ambient-owner-'));
+    const previous = process.env.SWITCHBOARD_DATA_DIR;
+    process.env.SWITCHBOARD_DATA_DIR = dir;
+    t.after(() => {
+      ambient.closeDb();
+      if (previous === undefined) delete process.env.SWITCHBOARD_DATA_DIR;
+      else process.env.SWITCHBOARD_DATA_DIR = previous;
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+    ambient = openStore();
+    await mutate(createJournal(ambient), 'claimSessionResultNamespace', { stemKey: id,
+      actualStem: 'AbCdEf01-2345-6789-abcd-0123456789ab', family: 'legacy',
+      suppliedHash: null, rawHash: sha(Buffer.from('{}')), resultBytes: Buffer.from('{"ok":false}\n') });
+  }
+  const open = createRequestStore(t);
+  let db = open();
   const journal = createJournal(db), query = journal.querySessionRequestOutcome;
   let delayed = false;
   journal.querySessionRequestOutcome = async input => {
     if (!delayed) { delayed = true; await new Promise(resolve => setTimeout(resolve, 80)); }
     return query(input);
   };
-  const r = await rig(t, { stem: id, payload, journal,
-    until: ({ processed, input }) => fs.existsSync(path.join(processed, id + '.result.json')) && !fs.existsSync(input),
+  let initialGathers = 0;
+  const until = ({ processed, input }) => fs.readdirSync(processed).includes(id + '.result.json') && !fs.existsSync(input);
+  const r = await rig(t, { stem: id, payload, journal, until,
     ctx: { sessionStatus: {
-    author: () => true, gather: async () => ({ state: 'idle', sessionId: id }),
+    author: () => true, gather: async () => { initialGathers++; return { state: 'idle', sessionId: id }; },
   } } });
   const output = path.join(r.processed, id + '.result.json'); assert.ok(fs.existsSync(output));
-  const bytes = fs.readFileSync(output); fs.unlinkSync(output); db.closeDb(); db = openStore();
+  const bytes = fs.readFileSync(output);
+  assert.equal(JSON.parse(bytes).type, 'session-status'); assert.equal(JSON.parse(bytes).state, 'idle');
+  assert.equal(initialGathers, 1, 'a fresh isolated request must gather its own status');
+  fs.unlinkSync(output); db.closeDb(); db = open();
   let gathers = 0;
   const next = await rig(t, { stem: id, payload, stale: true, journal: createJournal(db),
-    until: ({ processed, input }) => fs.existsSync(path.join(processed, id + '.result.json')) && !fs.existsSync(input),
+    until,
     ctx: { sessionStatus: {
     author: () => false, gather: async () => { gathers++; return { state: 'busy' }; },
   } } });
   assert.deepEqual(fs.readFileSync(path.join(next.processed, id + '.result.json')), bytes); assert.equal(gathers, 0);
+  if (ambient) {
+    const outcome = await createJournal(ambient).querySessionRequestOutcome({ stemKey: id });
+    assert.equal(outcome.owner.family, 'legacy');
+    assert.equal(outcome.owner.actualStem, 'AbCdEf01-2345-6789-abcd-0123456789ab');
+  }
 });
