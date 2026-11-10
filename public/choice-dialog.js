@@ -41,8 +41,12 @@ function openChoiceDialog({
   secondaryAction = null,
   returnFocus,
   closeWith = null,
+  onChange = null,
 } = {}) {
   return new Promise((resolve) => {
+    if (onChange && choices.some(choice => choice.id === 'plan' || choice.id === 'choice')) {
+      throw new Error('Reserved choice ids: plan and choice.');
+    }
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay choice-dialog-overlay';
     const dialog = document.createElement('div');
@@ -136,7 +140,47 @@ function openChoiceDialog({
     cancelBtn.hidden = cancelLabel === null;
     const confirmBtn = document.createElement('button');
     confirmBtn.type = 'button';
+    const planError = onChange ? document.createElement('p') : null;
+    if (planError) {
+      planError.setAttribute('role', 'alert');
+      planError.hidden = true;
+      body.appendChild(planError);
+    }
+    let closed = false;
+    let plan;
+    let planValues = null;
+    let planRequest = 0;
     let isDanger;
+    function currentValues() {
+      const values = Object.fromEntries(boxes.map(({ choice, box }) => [choice.id, box.checked]));
+      const selected = radios.find(({ radio }) => radio.checked && !radio.disabled);
+      if (selected) return { choice: selected.option.id, ...values };
+      return values;
+    }
+    function matchesCurrentValues(values) {
+      const current = currentValues();
+      return Object.keys(values).length === Object.keys(current).length &&
+        Object.keys(values).every(id => values[id] === current[id]);
+    }
+    async function refreshPlan(values) {
+      const request = ++planRequest;
+      plan = undefined;
+      planValues = null;
+      confirmBtn.disabled = true;
+      planError.hidden = true;
+      planError.textContent = '';
+      try {
+        const nextPlan = await onChange(Object.freeze({ ...values }));
+        if (closed || request !== planRequest || !matchesCurrentValues(values)) return;
+        plan = nextPlan;
+        planValues = values;
+        confirmBtn.disabled = !!options && !radios.some(({ radio }) => radio.checked && !radio.disabled);
+      } catch (error) {
+        if (closed || request !== planRequest || !matchesCurrentValues(values)) return;
+        planError.textContent = error?.message || (typeof error === 'string' && error) || 'Unable to refresh the plan.';
+        planError.hidden = false;
+      }
+    }
     function updateChoices() {
       const values = Object.fromEntries(boxes.map(({ choice, box }) => [choice.id, box.checked]));
       isDanger = typeof danger === 'function' ? danger(values) : danger;
@@ -145,8 +189,13 @@ function openChoiceDialog({
         if (typeof choice.label === 'function') text.textContent = choice.label(box.checked);
       }
     }
-    for (const { box } of boxes) box.addEventListener('change', updateChoices);
+    function changeChoices() {
+      updateChoices();
+      if (onChange) void refreshPlan(currentValues());
+    }
     updateChoices();
+    for (const { box } of boxes) box.addEventListener('change', changeChoices);
+    if (onChange) for (const { radio } of radios) radio.addEventListener('change', changeChoices);
     confirmBtn.textContent = confirmLabel || 'OK';
     confirmBtn.disabled = !!options && !radios.some(({ radio }) => radio.checked && !radio.disabled);
     const secondaryBtn = secondaryAction ? document.createElement('button') : null;
@@ -163,7 +212,6 @@ function openChoiceDialog({
 
     const buttons = [closeBtn, cancelBtn, secondaryBtn, confirmBtn].filter(Boolean);
 
-    let closed = false;
     function close(value) {
       if (closed) return;
       closed = true;
@@ -175,6 +223,7 @@ function openChoiceDialog({
     }
 
     function accept() {
+      if (closed || confirmBtn.disabled || (onChange && (!planValues || !matchesCurrentValues(planValues)))) return;
       const selected = radios.find(({ radio }) => radio.checked && !radio.disabled);
       if (options && !selected) return;
       const result = {};
@@ -183,6 +232,7 @@ function openChoiceDialog({
         result[choice.id] = box.checked;
         if (choice.rememberKey) writeRememberedChoice(choice.rememberKey, box.checked);
       }
+      if (onChange) result.plan = plan;
       close(result);
     }
 
@@ -201,6 +251,7 @@ function openChoiceDialog({
     const unregister = registerModal({ overlay, cancel: () => close(null), enter, restoreFocus: false });
     closeOpenChoiceDialog = close;
     if (closeWith) closeWith.then(close, () => {});
-    (initialFocus === 'cancel' ? cancelBtn : confirmBtn).focus();
+    if (onChange) void refreshPlan(currentValues());
+    (initialFocus === 'cancel' || (onChange && confirmBtn.disabled && !cancelBtn.hidden) ? cancelBtn : confirmBtn).focus();
   });
 }

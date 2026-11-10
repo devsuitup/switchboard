@@ -22,6 +22,40 @@ are restored and on each checkbox change. The resolved danger state also
 governs container Enter. Folder Archive uses these to name stopped sessions
 and require a focused button when the checked sessions include live targets.
 
+`showChoiceDialog` optionally accepts `onChange(answers)`, a read-only async plan
+hook. It runs when the dialog actually opens, after remembered checkbox values
+and the initial radio selection are restored, and on each checkbox/radio change.
+The argument is a frozen snapshot of checkbox booleans and, for radio dialogs,
+`choice: selectedId` when an enabled option is selected. The hook must only
+compute a preview, with no destructive effects. Its resolved value is an opaque
+plan (for example `{ token, details }`); primary acceptance returns
+`{ ...answers, plan }`. Choice ids must not use the reserved `plan` or `choice`
+keys. No caller uses this hook yet; project deletion will integrate it in #474 A4.
+When the hook is set, a reserved checkbox id rejects the opening promise before
+mounting or registering a modal. Dynamic labels and danger are also evaluated
+before mounting, so an initialization failure leaves no visible or registered
+modal; only the first plan refresh waits until registration is complete.
+
+Each request immediately discards the previous plan and disables Confirm,
+including synthetic click and container Enter acceptance. Only the newest
+request whose snapshot still matches the live answers can install its plan.
+Returning to earlier answers still requires a new response. Acceptance rechecks
+the snapshot, so changing a control programmatically without its `change` event
+cannot accept a mismatched plan; dispatch `change` to refresh it. Cancellation,
+replacement and other closure paths make late responses inert. Requests are
+ignored rather than aborted, so the hook owns any external request cleanup.
+Callers using the hook must bound their requests. The dialog adds no timeout;
+A4 will show a pending state while a request is outstanding.
+
+A synchronous throw or rejected refresh shows its message as literal inline
+`role=alert` text, leaves Confirm disabled and keeps Cancel available. Changing
+an answer clears the error and retries. During initial planning, focus falls
+back to visible Cancel when Confirm would otherwise receive focus. All-disabled
+radio options stay unconfirmable even after a plan resolves. Secondary actions
+and `closeWith` retain their explicit independent result contracts; the hook
+gates primary acceptance only. Without `onChange`, result shapes, remembered
+answers, focus, dynamic labels/danger, queueing and cancellation are unchanged.
+
 ## Question queue and the unsaved guard
 
 `showChoiceDialog({ replace: true })` is the one way to jump the queue: it cancels the open choice dialog (resolving it as Cancel) and enqueues its question at the front (`enqueueModalQuestion(open, { front: true })`). `closeWith`, a promise, closes the dialog with the value it resolves to; both paths close through the same function that unregisters from the modal stack. The window-close question (#478, [window-frame](window-frame.md), "Closing the window") uses both.
