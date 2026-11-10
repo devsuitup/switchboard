@@ -28,25 +28,69 @@ function fixture(t) {
 
 for (const state of ['done', 'failed', 'stopped']) {
   for (const liveness of ['unknown', 'dead', 'live']) {
-    test(`1065 ${state}/${liveness} without pending work is retired without respawn`, async t => {
+    const expected = liveness === 'live' || liveness === 'dead' && state !== 'stopped' ? 'attach'
+      : state === 'done' && liveness === 'unknown' ? 'retire' : 'refuse';
+    test(`1065 ${state}/${liveness} without pending work returns ${expected}`, async t => {
       const write = fixture(t);
       write('aaaaaaaa', { state, updatedAt: '2026-11-04T06:28:00Z' });
       const handlers = new Map();
       const calls = [];
-      t.mock.method(bg, 'conversationCheck', async () => ({ known: true, state, workerLiveness: liveness }));
+      let checked = 0;
+      t.mock.method(bg, 'conversationCheck', async () => {
+        checked++;
+        return { known: true, state, workerLiveness: liveness, sessionIds: [SID] };
+      });
       t.mock.method(bg, 'runVerb', async (...args) => { calls.push(args); return { ok: true }; });
       require('../src/main/bg-agents/bg-agents-ipc').init({
         ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, bgAgents: bg,
         getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map(),
         getSetting: () => ({ openWorkingSet: [{ sessionId: SID, bg: true, attachJobId: 'aaaaaaaa' }] }),
-        cliSessionState: { readAllDescriptors: () => [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID }], onDescriptorsChanged: () => () => {} },
+        sessionHasPty: () => false, ptyPids: () => [],
+        cliSessionState: { readAllDescriptors: () => [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID }], onDescriptorsChanged: () => () => {},
+          liveElsewhereChecked: async () => ({ known: true, live: null }) },
       });
       const result = await handlers.get('restore-background-job')({}, SID);
-      assert.equal(result.action, 'retire', 'finished saved job must not produce a restore failure');
-      assert.deepEqual(calls, [], 'finished saved job must never respawn automatically');
+      assert.equal(result.action, expected, `${state}/${liveness} must preserve worker recovery`);
+      assert.ok(checked > 0, 'worker classification must precede retirement');
+      assert.deepEqual(calls, liveness === 'dead' && state !== 'stopped' ? [['respawn', 'aaaaaaaa']] : []);
     });
   }
 }
+
+test('1065 m1 concurrent restore lookups scan the jobs directory once per call cycle', async t => {
+  const write = fixture(t);
+  write('aaaaaaaa', { sessionId: SID });
+  write('bbbbbbbb', { sessionId: OTHER });
+  const readdir = fs.readdirSync;
+  const read = fs.readFileSync;
+  let scans = 0;
+  const reads = new Map();
+  t.mock.method(fs, 'readdirSync', function(file, ...args) {
+    if (file === write.jobsDir) scans++;
+    return readdir.call(this, file, ...args);
+  });
+  t.mock.method(fs, 'readFileSync', function(file, ...args) {
+    if (String(file).startsWith(write.jobsDir) && String(file).endsWith('state.json')) reads.set(String(file), (reads.get(String(file)) || 0) + 1);
+    return read.call(this, file, ...args);
+  });
+  t.mock.method(bg, 'conversationCheck', async () => ({ known: true, state: 'working', workerLiveness: 'unknown' }));
+  const handlers = new Map();
+  const saved = [{ sessionId: SID, bg: true, attachJobId: 'aaaaaaaa' }, { sessionId: OTHER, bg: true, attachJobId: 'bbbbbbbb' }];
+  require('../src/main/bg-agents/bg-agents-ipc').init({
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, bgAgents: bg,
+    getMainWindow: () => null, log: { warn() {} }, getSetting: () => ({ openWorkingSet: saved }),
+  });
+  const restore = handlers.get('restore-background-job');
+  const results = await Promise.all([restore({}, SID), restore({}, OTHER)]);
+  assert.deepEqual(results.map(result => result.action), ['refuse', 'refuse']);
+  assert.equal(scans, 1, 'concurrent saved entries share one directory scan');
+  assert.deepEqual([...reads.values()], [1, 1], 'each state is read once in the restore call cycle');
+  await new Promise(resolve => setImmediate(resolve));
+  write('aaaaaaaa', { state: 'done', sessionId: SID, updatedAt: '2026-11-04T06:28:00Z' });
+  await restore({}, SID);
+  assert.equal(scans, 2, 'the next call cycle must refresh the directory');
+  assert.deepEqual([...reads.values()], [2, 2], 'the next call cycle must read fresh job records');
+});
 
 test('1065 a newer job must match the conversation before superseding a saved job', t => {
   const write = fixture(t);
@@ -54,6 +98,10 @@ test('1065 a newer job must match the conversation before superseding a saved jo
   write('bbbbbbbb', { updatedAt: '2026-11-10T06:28:00Z', sessionId: OTHER });
   assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa', { findNewer: true }).supersededBy, undefined);
   write('bbbbbbbb', { updatedAt: '2026-11-10T06:28:00Z', sessionId: OTHER, resumeSessionId: SID });
+  assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa', { findNewer: true }).supersededBy, undefined, 'fork origin must not supersede its parent conversation');
+  write('bbbbbbbb', { updatedAt: '2026-11-10T06:28:00Z', sessionId: SID });
+  assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa', { findNewer: true }).supersededBy, 'bbbbbbbb');
+  write('bbbbbbbb', { updatedAt: '2026-11-10T06:28:00Z', sessionId: OTHER, linkScanPath: '/fixture/' + SID + '.jsonl' });
   assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa', { findNewer: true }).supersededBy, 'bbbbbbbb');
 });
 
@@ -77,7 +125,7 @@ for (const fields of [
   });
 }
 
-for (const [state, liveness, action] of [['done', 'unknown', 'retire'], ['working', 'dead', 'retire'], ['working', 'unknown', 'refuse']]) {
+for (const [state, liveness, action] of [['done', 'unknown', 'retire'], ['working', 'dead', 'retire'], ['working', 'unknown', 'retire'], ['done', 'live', 'attach']]) {
   test(`1065 superseded ${state}/${liveness} returns ${action} without respawn`, async t => {
     const write = fixture(t);
     write('aaaaaaaa', { state, updatedAt: '2026-11-04T06:28:00Z', inFlight: { tasks: 1, kinds: ['local_agent'] } });
@@ -90,6 +138,7 @@ for (const [state, liveness, action] of [['done', 'unknown', 'retire'], ['workin
       ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, bgAgents: bg,
       getMainWindow: () => null, log: { warn() {} },
       getSetting: () => ({ openWorkingSet: [{ sessionId: SID, bg: true, attachJobId: 'aaaaaaaa' }] }),
+      cliSessionState: { readAllDescriptors: () => [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID }], onDescriptorsChanged: () => () => {} },
     });
     assert.equal((await handlers.get('restore-background-job')({}, SID)).action, action);
     assert.deepEqual(calls, []);

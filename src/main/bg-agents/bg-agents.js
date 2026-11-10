@@ -437,15 +437,22 @@ async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = 
   return { known: true, job: owners.values().next().value || null };
 }
 
-function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false, findNewer = false } = {}) {
+function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false, findNewer = false, restoreScan } = {}) {
   const same = value => typeof value === 'string' && value.toLowerCase() === sessionId.toLowerCase();
   const listed = id => roster.find(e => e.kind === 'background' && e.id === id) || null;
   const identity = (raw, id) => [raw?.sessionId, raw?.resumeSessionId,
     sessionIdFromLinkScanPath(raw?.linkScanPath), listed(id)?.sessionId].filter(value => typeof value === 'string' && value);
   const read = id => {
-    const text = fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8');
-    const raw = JSON.parse(text);
-    const job = parseJobState(text);
+    let record = restoreScan?.records.get(id);
+    if (!record) {
+      try {
+        const text = fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8');
+        record = { raw: JSON.parse(text), job: parseJobState(text) };
+      } catch (error) { record = { error }; }
+      restoreScan?.records.set(id, record);
+    }
+    if (record.error) throw record.error;
+    const { raw, job } = record;
     if (ignoreUnrelatedInvalid && !identity(raw, id).length) throw new Error(`job ${id} does not name its conversation; Switchboard uses the session id the Agents view last listed for that job; if Switchboard has no such list yet, a record that does not name its conversation refuses — open the Agents view, then retry`);
     if (!job?.state || (raw.id && raw.id !== id)) throw new Error(`job ${id} has an unknown or unreadable state`);
     const rawTarget = raw.resumeSessionId ?? raw.sessionId;
@@ -465,10 +472,11 @@ function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false
       if (record.matches && findNewer) {
         let newer;
         try {
-          for (const id of fs.readdirSync(jobsDir).filter(id => JOB_ID_RE.test(id) && id !== attachJobId)) {
+          const names = restoreScan ? (restoreScan.names ??= fs.readdirSync(jobsDir)) : fs.readdirSync(jobsDir);
+          for (const id of names.filter(id => JOB_ID_RE.test(id) && id !== attachJobId)) {
             try {
               const candidate = read(id);
-              if (candidate.matches && workerTimestamp(candidate.job.updatedAt) > workerTimestamp(record.job.updatedAt)
+              if (same(candidate.job.sessionId) && workerTimestamp(candidate.job.updatedAt) > workerTimestamp(record.job.updatedAt)
                 && (!newer || workerTimestamp(candidate.job.updatedAt) > workerTimestamp(newer.updatedAt))) newer = candidate.job;
             } catch {}
           }
