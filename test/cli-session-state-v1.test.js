@@ -301,39 +301,47 @@ function trackAfter(w, state, target, names) {
     object[name] = (...args) => { if (state.fired) state.after.push(name); return original(...args); };
   }
 }
-test('expiry after a descriptor lstat starts no content read', t => {
-  const w = createWorld(t);
-  const state = expireOnce(w, 'descriptor', 'lstatSync');
-  trackAfter(w, state, 'descriptor', ['readFileSync']);
-  assert.equal(observe(w).uncertain, true);
-  assert.deepEqual(state.after, []);
-});
-test('expiry after the descriptor revalidation lstat starts no content reread', t => {
-  const w = createWorld(t);
-  let lstats = 0; const lstat = w.descriptorFs.lstatSync; const state = { fired: false, after: [] };
-  w.descriptorFs.lstatSync = (...args) => { const value = lstat(...args); if (++lstats === 2) { state.fired = true; w.setClock(w.deadline + 1); } return value; };
-  const read = w.descriptorFs.readFileSync;
-  w.descriptorFs.readFileSync = (...args) => { if (state.fired) state.after.push('readFileSync'); return read(...args); };
-  assert.equal(observe(w).uncertain, true);
-  assert.deepEqual(state.after, []);
-});
-test('expiry after a /proc status read starts no stat or namespace read', t => {
-  const w = createWorld(t);
-  const state = { fired: false, after: [] };
-  const read = w.procFs.readFileSync;
-  w.procFs.readFileSync = (p, ...args) => { if (state.fired) state.after.push(p); const value = read(p, ...args); if (!state.fired && p.endsWith('/status')) { state.fired = true; w.setClock(w.deadline + 1); } return value; };
-  const link = w.procFs.readlinkSync;
-  w.procFs.readlinkSync = p => { if (state.fired) state.after.push(p); return link(p); };
-  assert.equal(observe(w).uncertain, true);
-  assert.deepEqual(state.after, []);
-});
-test('expiry after a /proc stat read starts no namespace read', t => {
-  const w = createWorld(t);
-  const state = { fired: false, after: [] };
-  const read = w.procFs.readFileSync;
-  w.procFs.readFileSync = (p, ...args) => { const value = read(p, ...args); if (!state.fired && p.endsWith('/stat')) { state.fired = true; w.setClock(w.deadline + 1); } return value; };
-  const link = w.procFs.readlinkSync;
-  w.procFs.readlinkSync = p => { if (state.fired) state.after.push(p); return link(p); };
-  assert.equal(observe(w).uncertain, true);
-  assert.deepEqual(state.after, []);
-});
+for (const offset of [0, 1]) {
+  test(`expiry after a descriptor lstat starts no content read at deadline + ${offset}`, t => {
+    const w = createWorld(t);
+    const state = expireOnce(w, 'descriptor', 'lstatSync', offset);
+    trackAfter(w, state, 'descriptor', ['readFileSync']);
+    assert.equal(observe(w).uncertain, true);
+    assert.deepEqual(state.after, []);
+  });
+}
+for (const offset of [0, 1]) {
+  test(`expiry after the descriptor revalidation lstat starts no content reread at deadline + ${offset}`, t => {
+    const w = createWorld(t);
+    let lstats = 0; const lstat = w.descriptorFs.lstatSync; const state = { fired: false, after: [] };
+    w.descriptorFs.lstatSync = (...args) => { const value = lstat(...args); if (++lstats === 2) { state.fired = true; w.setClock(w.deadline + offset); } return value; };
+    const read = w.descriptorFs.readFileSync;
+    w.descriptorFs.readFileSync = (...args) => { if (state.fired) state.after.push('readFileSync'); return read(...args); };
+    assert.equal(observe(w).uncertain, true);
+    assert.deepEqual(state.after, []);
+  });
+}
+for (const offset of [0, 1]) {
+  test(`expiry after a /proc status read starts no stat or namespace read at deadline + ${offset}`, t => {
+    const w = createWorld(t);
+    const state = { fired: false, after: [] };
+    const read = w.procFs.readFileSync;
+    w.procFs.readFileSync = (p, ...args) => { if (state.fired) state.after.push(p); const value = read(p, ...args); if (!state.fired && p.endsWith('/status')) { state.fired = true; w.setClock(w.deadline + offset); } return value; };
+    const link = w.procFs.readlinkSync;
+    w.procFs.readlinkSync = p => { if (state.fired) state.after.push(p); return link(p); };
+    assert.equal(observe(w).uncertain, true);
+    assert.deepEqual(state.after, []);
+  });
+}
+for (const offset of [0, 1]) {
+  test(`expiry after a /proc stat read starts no namespace read at deadline + ${offset}`, t => {
+    const w = createWorld(t);
+    const state = { fired: false, after: [] };
+    const read = w.procFs.readFileSync;
+    w.procFs.readFileSync = (p, ...args) => { const value = read(p, ...args); if (!state.fired && p.endsWith('/stat')) { state.fired = true; w.setClock(w.deadline + offset); } return value; };
+    const link = w.procFs.readlinkSync;
+    w.procFs.readlinkSync = p => { if (state.fired) state.after.push(p); return link(p); };
+    assert.equal(observe(w).uncertain, true);
+    assert.deepEqual(state.after, []);
+  });
+}
