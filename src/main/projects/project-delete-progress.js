@@ -5,6 +5,7 @@ const { createHash, randomUUID } = require('node:crypto');
 const { normalizeProjectPath } = require('../shared/normalize-project-path');
 const { parseFolderKey, isValidAlias } = require('../remote/remote-hosts');
 const { isProjectHidden } = require('../../../public/worktree-nesting');
+const { durableRowLinks } = require('./project-delete-identity');
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const stable = value => Array.isArray(value) ? `[${value.map(stable).join(',')}]`
   : value && typeof value === 'object' ? `{${Object.keys(value).sort().filter(key => value[key] !== undefined).map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}` : JSON.stringify(value);
@@ -71,7 +72,7 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
         try { return projectIdentity({ alias: identity.alias, projectPath: row.projectPath }).key === identity.key; }
         catch { return false; }
       });
-      const ids = new Set(rows.map(row => row.sessionId));
+      const ids = new Set(rows.flatMap(row => [row.sessionId, ...durableRowLinks(row)]));
       const metadata = [...db.getAllMeta(true).values()].filter(row => ids.has(row.sessionId));
       const fields = store.metadataFields().filter(row => ids.has(row.sessionId));
       const folders = [...db.getAllFolderMeta()].sort((a, b) => String(a[0]).localeCompare(String(b[0])));
@@ -278,4 +279,4 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
   return { readScope, admit, stage, apply, read, fence, recover, purge };
 }
 
-module.exports = { createProjectDeleteProgress, operationId, commitTransaction, projectIdentity };
+module.exports = { createProjectDeleteProgress, operationId, commitTransaction, projectIdentity, bind };

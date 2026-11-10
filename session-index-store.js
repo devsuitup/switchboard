@@ -968,6 +968,12 @@ return preparedDeletionStatements ??= {
 };
 }
 const projectDeletion = {
+  eraseMetadata: id => {
+    db.prepare('DELETE FROM session_meta WHERE sessionId=?').run(id);
+    db.prepare('DELETE FROM session_meta_fields WHERE sessionId=?').run(id);
+  },
+  clearSearchStaging: id => db.prepare("DELETE FROM search_staging WHERE id=? AND type='session'").run(id),
+  deleteFolderMeta: folder => stmts.metaDelete.run(folder),
   hasFences: () => !!deletionStatements().hasFences.get(),
   fence: key => deletionStatements().fence.get(key) || null,
   setFence: (key, epoch, id, blocked) => deletionStatements().setFence.run(key, epoch, id, blocked),

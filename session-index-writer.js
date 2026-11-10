@@ -11,7 +11,7 @@ const { createWhatsNew } = require('./src/main/app/changelog');
 const { remapProjectTranscripts } = require('./project-remap');
 const { createWriterWorkerClient } = require('./session-index-writer-client');
 const { createCacheEffects } = require('./cache-effects');
-const { projectArchiveWorkflows } = require('./src/main/projects/project-archive-workflow');
+const { projectArchiveWorkflows, archiveProjectIdentity } = require('./src/main/projects/project-archive-workflow');
 const { worktreeParentPath } = require('./public/worktree-nesting');
 
 // see .ai/contexts/session-index-writer.md
@@ -250,7 +250,10 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
           scheduleName: () => null,
         });
         if (!updates.has('archivedProjects')) break;
-        const entries = Object.keys(archived).filter(entry => !Object.hasOwn(updates.get('archivedProjects'), entry));
+        const lease = workflows.current();
+        const entries = Object.keys(archived).filter(entry => !Object.hasOwn(updates.get('archivedProjects'), entry)
+          && (!lease || lease.projects.some(project => project.key === archiveProjectIdentity(entryProject(entry)).key)));
+        if (!entries.length) break;
         try {
           const proof = workflowProof();
           await request('retireArchivedEntries', entries, snapshot, ...(proof === undefined ? [] : [proof]));
@@ -379,7 +382,11 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         if (['reenableOfferedSchedules', 'dismissReenableOffer'].includes(name) && (typeof args[0] !== 'string' || !args[0])) return admit(() => fn(...args));
         return track(commandScope.run(owner, () => workflows.run(workflowTargets[name](...args), async lease => {
           await ready;
-          if (name !== 'applyAndPersistArchived' || backend.projectDeletion?.hasFences?.() !== false) {
+          let needsProof = true;
+          if (name === 'applyAndPersistArchived') {
+            try { needsProof = backend.projectDeletion?.hasFences?.() !== false; } catch { /* see .ai/contexts/project-delete.md */ }
+          }
+          if (needsProof) {
             lease.proof = await request('readProjectArchiveEpochs', lease.projects.map(({ alias, projectPath }) => ({ alias, projectPath })), ['applyAndPersistArchived', 'unhideProject', 'revealAddedProject'].includes(name));
           }
           return fn(...args);

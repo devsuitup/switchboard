@@ -1,46 +1,9 @@
 'use strict';
 
 const path = require('node:path');
-const { createHash } = require('node:crypto');
-const { normalizeProjectPath } = require('../shared/normalize-project-path');
-const { parseFolderKey, isValidAlias } = require('../remote/remote-hosts');
+const { parseFolderKey } = require('../remote/remote-hosts');
 const { worktreeParentPath } = require('../../../public/worktree-nesting');
-
-const OPTION_KEYS = ['sessions', 'settings', 'schedules', 'transcripts', 'stopBackgroundJobs'];
-const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-const text = value => typeof value === 'string' && value.length > 0 && !value.includes('\0');
-const fail = (code, error) => Object.assign(new Error(error), { code });
-
-function canonicalPath(value, alias, memo = new Map()) {
-  if (!text(value)) throw fail('IDENTITY_UNAVAILABLE', 'A known absolute project path is required.');
-  if (alias !== null) {
-    if (!isValidAlias(alias) || !path.posix.isAbsolute(value)) throw fail('IDENTITY_UNAVAILABLE', 'Remote identity is unavailable.');
-    return path.posix.normalize(value).replace(/\/$/, '') || '/';
-  }
-  if (!path.isAbsolute(value)) throw fail('IDENTITY_UNAVAILABLE', 'A local absolute path is required.');
-  const absolute = path.resolve(value);
-  if (!memo.has(absolute)) {
-    const normalized = normalizeProjectPath(absolute);
-    memo.set(absolute, process.platform === 'win32' ? normalized.toLowerCase() : normalized);
-  }
-  return memo.get(absolute);
-}
-
-function identity(value, memo) {
-  if (!isRecord(value) || !Object.hasOwn(value, 'alias')) throw fail('IDENTITY_UNAVAILABLE', 'Ownership must include an explicit host.');
-  const alias = value.alias;
-  const projectPath = canonicalPath(value.projectPath, alias, memo);
-  return { key: JSON.stringify([alias, projectPath]), entry: alias === null ? path.resolve(value.projectPath) : `${alias}::${projectPath}`, alias, projectPath };
-}
-
-function stable(value) {
-  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
-  if (isRecord(value)) return `{${Object.keys(value).sort().filter(key => value[key] !== undefined).map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}`;
-  return JSON.stringify(value);
-}
-
-const digest = value => createHash('sha256').update(stable(value)).digest('hex');
-const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+const { OPTION_KEYS, isRecord, text, fail, canonicalPath, identity, stable, digest, compare, membershipRecord } = require('./project-delete-identity');
 
 function validateRequest(request) {
   if (!isRecord(request) || Object.keys(request).some(key => !['projectPath', 'folderKey', 'options'].includes(key))
@@ -270,13 +233,7 @@ function createProjectDeletePlanner(deps) {
         for (const [kind, rows] of Object.entries({ groups, members, tabs, jobs, schedules })) {
           const identities = [];
           await each(rows, row => {
-            const record = { alias: row.alias, projectPath: canonicalPath(row.projectPath, row.alias, memo) };
-            for (const key of ['id', 'folderKey', 'runtime', 'conversationId', 'partId', 'subagentId', 'parentSessionId', 'sessionId', 'jobId', 'scheduleId', 'sessionFile', 'path', 'effect', 'kind']) {
-              if (Object.hasOwn(row, key)) record[key] = row[key];
-            }
-            for (const key of ['cwd', 'parentProjectPath']) {
-              if (Object.hasOwn(row, key)) record[key] = rowPath(row, key, kind === 'groups' ? 'GROUP_OWNERSHIP' : 'MEMBER_OWNERSHIP');
-            }
+            const record = membershipRecord(row, memo, (value, key) => rowPath(value, key, kind === 'groups' ? 'GROUP_OWNERSHIP' : 'MEMBER_OWNERSHIP'));
             identities.push(record);
           });
           membership[kind] = await ordered(identities);
@@ -287,7 +244,7 @@ function createProjectDeletePlanner(deps) {
         const revision = await deps.readRevision(budget);
         expired();
         if (revision !== snapshot.revision) throw fail('SNAPSHOT_STALE', 'Writer changed during discovery; request a fresh preview.');
-        return { ok: true, plan: { project, groups, members, tabs, stops, schedules, categories,
+        return { ok: true, plan: { project, groups, members, tabs, jobs, stops, schedules, categories,
           counts: { conversations: new Set(members.map(row => row.conversationId)).size,
             parts: new Set(members.filter(row => !row.subagentId).map(row => row.partId)).size,
             subagents: members.filter(row => row.subagentId).length, transcripts: members.length, tabs: tabs.length,

@@ -307,8 +307,35 @@ test('list containing a fenced project succeeds while retirement still guards af
   assert.equal(withRetirement.length, 2);
   assert.equal(h.db.getSetting('archivedProjects')[otherEntry], undefined, 'only the retired entry needs an unblocked epoch');
   h.db.setSetting('archivedProjects', { [h.entry]: { knownSessionIds: [], disabledSchedules: [h.file] } });
-  await assert.rejects(h.writer.applyAndPersistArchived([{ projectPath: h.root, sessions: [{ sessionId: 'new' }] }], false), { code: 'PROJECT_EPOCH_STALE' });
+  const listed = await h.writer.applyAndPersistArchived([{ projectPath: h.root, sessions: [{ sessionId: 'new' }] }], false)
+    .then(value => ({ value }), error => ({ error: error.code }));
+  assert.equal(listed.error, undefined, 'blocked retirement must not fail the list');
   assert.ok(h.db.getSetting('archivedProjects')[h.entry], 'blocked retirement preserves record');
+});
+
+test('list skips reserved retirement while unrelated project retires', supported, async t => {
+  const h = setup(t); await h.writer.ready;
+  const other = path.join(h.root, 'other'), otherEntry = archive.archivedEntry(null, other);
+  h.db.setSetting('archivedProjects', { [h.entry]: { knownSessionIds: [] }, [otherEntry]: { knownSessionIds: [] } });
+  const hold = reserve(h.writer, [h.project]); await hold.ready;
+  try {
+    const listed = await h.writer.applyAndPersistArchived([h.root, other].map(projectPath => ({ projectPath, sessions: [{ sessionId: 'new' }] })), false)
+      .then(value => ({ value }), error => ({ error: error.code }));
+    assert.equal(listed.error, undefined, 'reservation must not fail a list');
+    assert.ok(h.db.getSetting('archivedProjects')[h.entry], 'held entry stays archived');
+    assert.equal(h.db.getSetting('archivedProjects')[otherEntry], undefined, 'unheld entry retires');
+  } finally { hold.release(); }
+});
+
+test('readonly fence lookup error falls back to worker proof', supported, async t => {
+  const h = setup(t); await h.writer.ready;
+  h.db.projectDeletion.hasFences = () => { throw new Error('SQLITE_BUSY'); };
+  const request = h.client.request.bind(h.client), calls = [];
+  h.client.request = async (name, ...args) => { calls.push(name); return request(name, ...args); };
+  const result = await h.writer.applyAndPersistArchived([{ projectPath: h.root, sessions: [] }], false)
+    .then(value => ({ value }), error => ({ error: error.message }));
+  assert.equal(result.error, undefined, 'readonly lookup failure must use writer fallback');
+  assert.ok(calls.includes('readProjectArchiveEpochs'));
 });
 
 test('list carries a relative remote cwd through without rejecting other identities', supported, async t => {

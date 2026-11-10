@@ -126,6 +126,6 @@ test('remote root guards retain supplied epoch proofs and refuse a later deletio
   assert.deepEqual(structuredClone(h.db.getSetting('global').hiddenProjects), [entry]);
   h.db.projectDeletion.setFence(key, 3, null, 1);
   await h.writer.setSetting('archivedProjects', { [entry]: { knownSessionIds: [] } });
-  await assert.rejects(h.writer.applyAndPersistArchived(h.projects, false), { code: 'PROJECT_EPOCH_STALE' });
+  await assert.doesNotReject(h.writer.applyAndPersistArchived(h.projects, false));
   assert.ok(h.db.getSetting('archivedProjects')[entry], 'blocked root retirement retains its exact archive key');
 });

@@ -338,6 +338,69 @@ asserts disposable schedule/claim bytes, sibling sharing, async callbacks,
 epoch ABA refusal and queue cancellation. A4b4 still owes the real completion
 integration witness for AC10; no metadata-deletion completion is claimed here.
 
+## A4b3 dormant metadata engine
+
+`project-delete-identity.js` supplies the planner's unchanged canonical path,
+stable serialization, identity projection and membership hash. The planner now
+returns jobs, which were already included in its digests. Nullable paths,
+sorting and per-preview normalization memoization retain their previous meaning.
+
+`project-delete-writer.js` exports `readDurableScope`,
+`validateDeletionManifest`, `buildDeletionUnits`, `applyDeletionUnit` and
+`buildFinalizationUnits`. No completion command, deletion IPC or UI calls them.
+The validator binds the operation ID, integer revision, epoch, durable digest,
+five explicit boolean options and identical inventory/member/group copies.
+It recomputes membership, checks persisted row/folder ownership and refuses
+foreign, duplicate, missing or unproven targets. Session IDs have no host column;
+conflicting durable links refuse rather than granting ID-wide authority.
+Metadata-only history requires a parent, merged-part, continuation or bridge link
+from an owned persisted row and no foreign reference. Unowned orphan metadata
+stays outside the manifest. Linked historical
+metadata and provenance participate in the durable scope digest as well.
+
+Settings erasure independently requires durable row/folder ownership evidence.
+A path-only key alone cannot establish that evidence. Shared host/path owners,
+missing ownership and ambiguous key spellings refuse before all effects.
+Remote POSIX settings keys retain case even when the writer runs on Windows;
+local Windows normalization cannot authorize erasing another remote spelling.
+This proves only the available persisted inventory: A4c must independently
+validate runtime-only ownership under its admission hold.
+
+Each session unit archives the exact retained ID or erases both metadata tables,
+then invalidates only that ID's cache, metrics, session FTS/map/content, temporary
+search staging and continuation choice. Archive retains name/star provenance.
+Only exclusively owned folder markers are removed; no folder-wide cache/search
+delete is used. Memory and work-file search entries remain. Unit effects execute
+synchronously inside A4b1 progress transactions: effect, ledger and the single
+writer revision commit or roll back together. No #380 request journal is purged.
+
+Finalization is prepared separately, outside normal deletion units, for A4b4's
+atomic final group. It merges current global visibility and working-set fields,
+preserves unscoped legacy marks, directly subtracts archive/offer keys matching
+the selected canonical identity, and subtracts only the selected local stored
+schedule registration.
+Remote finalization never removes local registration; absent registries are
+never seeded. Restore pruning requires a selected member/tab ID plus matching
+host/path, including transcriptless dormant tabs from the admitted inventory.
+The returned invalidation targets do not touch mainTouchedCache or renderer
+maps/pending saves. A4d must also serialize the whole-global working-set producer.
+The finalization helper itself supplies neither cancellation nor admission;
+A4b4 owns revision/epoch/ownership revalidation before every chunk and the final
+atomic group. Raw producers starting after deletion are also A4b4's boundary.
+
+Step-0 corrections: project lists omit reserved identities from leases/proofs
+and retirement, while unrelated identities continue. Writer retirement drops
+currently blocked entries before guarding the remainder, but supplied stale
+epochs still refuse. A readonly hasFences failure falls back to the writer
+epoch request. New archive/Undo/offer mutations still refuse reservations.
+
+Real-store tests cover the settings/session matrix, exact parts/subagents,
+historical/orphan sentinels, shared-key refusal, rollback, temporary publication,
+and retained disposable transcripts reindexed by the production cache/effects
+facade after reopen. These are AC2/AC3 engine witnesses; A4b4 still owns complete
+command integration, and A4c/d own stop/IPC/renderer behavior. Node 20 skips real
+stores when the native ABI and node:sqlite fallback are unavailable.
+
 ## Evidence boundary
 
 `test/project-delete-plan.test.js` loads the production module with plain
