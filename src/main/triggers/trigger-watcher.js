@@ -1248,6 +1248,24 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   let recoveryError;
   const canonicalName = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid);
 
+  const uuidShaped = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid);
+  const canonicalStem = uuid.toLowerCase();
+
+  // see .ai/contexts/trigger-watcher.md, "Committed result precedence"
+  function yieldsToCommittedResult() {
+    const canonicalResult = path.join(processedDir, canonicalStem + '.result.json');
+    try {
+      if (!actions.committedResult(canonicalResult)) return false;
+    } catch (err) {
+      if (onEntryRetained) onEntryRetained();
+      safeLogError(ctx, '[trigger-watcher] Existing result could not be inspected, input left untouched:', name, err.message);
+      return true;
+    }
+    actions.publish({ resultPath: canonicalResult, triggerPath, markerPath: path.join(processedDir, canonicalStem + '.action.json'),
+      retained: onEntryRetained, committed: true });
+    return true;
+  }
+
   function canonicalizePaths() {
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
       resultPath = path.join(processedDir, uuid.toLowerCase() + '.result.json');
@@ -1263,6 +1281,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       actions.publish({ result, resultPath, triggerPath, markerPath, retained: onEntryRetained });
       return;
     }
+    if (uuidShaped && yieldsToCommittedResult()) return;
     // Every result carries `submitted`; an unstated one is the safe value.
     if (result.submitted === undefined) result.submitted = SUBMITTED_NO;
     if (result.wrote === undefined) result.wrote = writeAttempted;
@@ -1319,6 +1338,8 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   }
 
   try {
+
+  if (uuidShaped && yieldsToCommittedResult()) return;
 
   // ── 1. lstat + size guard (C1 + C2) ──────────────────────────────────────
   let stat;
@@ -2177,17 +2198,28 @@ function start(ctx) {
   // see docs/decisions/0003-trigger-delivery-per-tab.md
   const { acquireTabInput: acquireTabLock } = require('../terminals/tab-input-lock');
 
+  // see .ai/contexts/trigger-watcher.md, "Canonical request ownership"
+  const owners = new Set();
+  const ownerKey = filename => {
+    const stem = filename.slice(0, -5);
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(stem) ? stem.toLowerCase() : null;
+  };
+  const ownedElsewhere = filename => { const key = ownerKey(filename); return key !== null && owners.has(key); };
+
   function scheduleNext() {
-    while (waitQueue.length > 0 && inFlight.size < MAX_INFLIGHT) {
-      const filename = waitQueue.shift();
-      // Dedup: may have been enqueued twice before a slot opened
-      if (inFlight.has(filename) || retained.has(filename)) continue;
+    for (let index = 0; index < waitQueue.length && inFlight.size < MAX_INFLIGHT;) {
+      const filename = waitQueue[index];
+      if (inFlight.has(filename) || retained.has(filename)) { waitQueue.splice(index, 1); continue; }
+      if (ownedElsewhere(filename)) { index++; continue; }
+      waitQueue.splice(index, 1);
       dispatch(filename);
     }
   }
 
   function dispatch(filename) {
     inFlight.add(filename);
+    const key = ownerKey(filename);
+    if (key !== null) owners.add(key);
     processTriggerFile(filename, ctx, triggersDir, processedDir, () => retained.add(filename), acquireSessionLock, acquireTabLock, actions)
       .catch((err) => {
         retained.add(filename);
@@ -2196,6 +2228,7 @@ function start(ctx) {
       })
       .finally(() => {
         inFlight.delete(filename);
+        if (key !== null) owners.delete(key);
         scheduleNext();
       });
   }
@@ -2224,9 +2257,8 @@ function start(ctx) {
       catch { return; }
     }
 
-    if (inFlight.size >= MAX_INFLIGHT) {
-      // W4: backpressure — queue for later
-      waitQueue.push(filename);
+    if (inFlight.size >= MAX_INFLIGHT || ownedElsewhere(filename)) {
+      if (!waitQueue.includes(filename)) waitQueue.push(filename);
       return;
     }
     dispatch(filename);

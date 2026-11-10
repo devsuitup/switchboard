@@ -23,10 +23,11 @@ async function rig(t, options = {}) {
   if (options.prior) fs.writeFileSync(output, JSON.stringify(options.prior) + '\n');
   if (options.marker) fs.writeFileSync(marker, JSON.stringify(options.marker));
   if (options.readError) fs.writeFileSync(options.errorOnMarker ? marker : output, '{}');
-  const body = JSON.stringify(Object.hasOwn(options, 'payload') ? options.payload : payload);
-  if (!options.orphan && !options.live) fs.writeFileSync(input, body);
+  const body = options.raw ?? JSON.stringify(Object.hasOwn(options, 'payload') ? options.payload : payload);
+  const makeInput = () => (options.directoryInput ? fs.mkdirSync(input) : fs.writeFileSync(input, body));
+  if (!options.orphan && !options.live) makeInput();
   if (!options.live) options.setup?.({ input, output, marker });
-  if (options.stale && !options.orphan) fs.utimesSync(input, new Date(0), new Date(0));
+  if (options.stale && !options.orphan && !options.live) fs.utimesSync(input, new Date(0), new Date(0));
   let notify;
   let publications = 0;
   let recoveryReads = 0;
@@ -54,6 +55,10 @@ async function rig(t, options = {}) {
     },
     closeSync(fd) { descriptors.delete(fd); return fs.closeSync(fd); },
     watch: (_dir, _opts, callback) => { notify = callback; return { on() {}, close() {} }; },
+    lstatSync(file, ...args) {
+      if (options.inspectError && file === input) throw options.inspectError;
+      return fs.lstatSync(file, ...args);
+    },
     unlinkSync(file) {
       events.push(path.basename(file));
       if (options.failUnlink && file === input) throw new Error('unlink denied');
@@ -78,15 +83,16 @@ async function rig(t, options = {}) {
   t.after(() => { watcher.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   if (options.live) {
     options.setup?.({ input, output, marker });
-    fs.writeFileSync(input, body);
+    makeInput();
+    if (options.stale) fs.utimesSync(input, new Date(0), new Date(0));
     notify('rename', name + '.json');
   }
   async function settle() { for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve)); }
   await settle();
-  return { input, output, marker, events, errors, publications: () => publications, recoveryReads: () => recoveryReads, notify: () => notify('rename', request + '.json'), settle };
+  return { dir, input, output, marker, events, errors, notifyFile: file => notify('rename', file), publications: () => publications, recoveryReads: () => recoveryReads, notify: () => notify('rename', request + '.json'), settle };
 }
 
-for (const state of ['result', 'marker']) {
+for (const state of ['marker']) {
   test(`uppercase v1 refuses its filename despite existing ${state}`, async t => {
     const r = await rig(t, { name: request.toUpperCase(), live: true,
       setup({ output, marker }) {
@@ -250,6 +256,13 @@ for (const errorOnMarker of [false, true]) {
       test(`recovery ${failure} on ${errorOnMarker ? 'marker' : 'result'} lets legacy=${legacy} finish`, async t => {
         const readError = failure === 'SyntaxError' ? new SyntaxError('corrupt JSON') : Object.assign(new Error(failure), { code: failure });
         const r = await rig(t, { readError, errorOnMarker, payload: legacy ? {} : payload });
+        if (!errorOnMarker) {
+          assert.equal(fs.existsSync(r.input), true, 'an uninspectable result keeps its input untouched');
+          assert.equal(fs.readFileSync(r.output, 'utf8'), '{}', 'an uninspectable result is never overwritten');
+          assert.equal(r.publications(), 0);
+          assert.ok(r.errors.length);
+          return;
+        }
         assert.equal(fs.existsSync(r.input), false, 'recovery errors must not strand a readable trigger');
         const result = JSON.parse(fs.readFileSync(r.output, 'utf8'));
         if (legacy) assert.deepEqual(result, { ok: false, error: 'missing required field: sessionId', sessionId: null, submitted: 'no', wrote: false, steps_total: 0 });
@@ -382,4 +395,193 @@ test('v1 input deletion failure retains immutable result and suppresses extra pu
   r.notify();
   await r.settle();
   assert.equal(r.publications(), 1);
+});
+
+const other = '11234567-89ab-cdef-0123-456789abcdef';
+const committed = { version: 1, action: 'open', ok: true, outcome: 'opened', sessionId: id, resumed: true,
+  submitted: 'no', wrote: false, steps_total: 0 };
+const committedBytes = JSON.stringify(committed) + '\n';
+
+function deferred() {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+}
+async function until(predicate, label) {
+  const end = performance.now() + 3000;
+  while (!predicate() && performance.now() < end) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(predicate(), label);
+}
+function spies() {
+  const s = { lookups: [], writes: [], effects: 0, dispatches: 0, gate: null, onDispatch: null };
+  const lifecycle = {
+    launchAllowed: () => true, activeSessions: new Map(),
+    remoteTarget: async () => { s.effects++; return false; },
+    liveElsewhere: async () => { s.effects++; return { known: true, live: null }; },
+    resolveTarget: async () => { s.effects++; return { ok: true, cwd: '/p', project: '/p', transcript: 't', transcriptIdentity: 'i' }; },
+    saveName: async () => { s.effects++; return { name: 'n' }; },
+    broker: { request: async (_operation, beforeSpawn) => {
+      await beforeSpawn();
+      s.dispatches++;
+      s.onDispatch?.();
+      await s.gate;
+      return { ok: false, reason: 'renderer refused' };
+    } },
+  };
+  s.ctx = { getPtyForSession: sessionId => { s.lookups.push(sessionId); return null; },
+    getComposerState: () => ({ pending: 0, lastInputAt: 0 }), isSessionBusy: () => false, lifecycle };
+  return s;
+}
+function assertNoDuplicateEffects(s) {
+  assert.deepEqual(s.writes, []);
+  assert.equal(s.dispatches, 0);
+  assert.equal(s.effects, 0);
+  assert.deepEqual(s.lookups, [], 'no target lookup is attributable to a duplicate');
+}
+
+const duplicates = {
+  'legacy input for the same target': { payload: { sessionId: id, command: 'replay', wait: 'none', timeout_ms: 500 } },
+  'legacy input for another target': { payload: { sessionId: other, command: 'replay to B', wait: 'none' } },
+  'valid versioned input': { payload: { version: 1, action: 'open', sessionId: other } },
+  'invalid versioned input': { payload: { version: 1, action: 'open' } },
+  'stale legacy input': { payload: { sessionId: id, command: 'replay' }, stale: true },
+  'stale versioned input': { payload, stale: true },
+  'oversized input': { payload: { version: 1, action: 'open', sessionId: id, prompt: 'x'.repeat(70000) } },
+  'malformed JSON': { raw: '{not json' },
+  'null JSON': { payload: null },
+  'nonregular input': { directoryInput: true },
+  'input inspection failure': { inspectError: Object.assign(new Error('denied'), { code: 'EACCES' }) },
+};
+for (const [kind, extra] of Object.entries(duplicates)) {
+  for (const live of [false, true]) {
+    for (const name of [request, request.toUpperCase()]) {
+      test(`a committed result survives a ${kind} (${live ? 'live' : 'startup'}, ${name === request ? 'lowercase' : 'uppercase'} UUID)`, async t => {
+        const s = spies();
+        const r = await rig(t, { ...extra, name, live, prior: committed, ctx: s.ctx });
+        assert.equal(fs.readFileSync(r.output, 'utf8'), committedBytes);
+        assert.equal(r.publications(), 0);
+        assert.deepEqual(fs.readdirSync(path.dirname(r.output)), [request + '.result.json'], 'no other result file is published');
+        assertNoDuplicateEffects(s);
+        assert.equal(fs.existsSync(r.input), Boolean(extra.directoryInput), 'removable duplicates are cleaned, nonregular ones are never deleted recursively');
+        r.notifyFile(name + '.json');
+        await r.settle();
+        assert.equal(fs.readFileSync(r.output, 'utf8'), committedBytes);
+        assertNoDuplicateEffects(s);
+        if (extra.directoryInput) assert.equal(r.events.filter(event => event === name + '.json').length, 1, 'a retained input is not processed again');
+      });
+    }
+  }
+}
+test('a committed result keeps its bytes and a retained duplicate is not retried after an unlink failure', async t => {
+  const s = spies();
+  const r = await rig(t, { prior: committed, failUnlink: true, payload: { sessionId: other, command: 'replay' }, ctx: s.ctx });
+  assert.equal(fs.readFileSync(r.output, 'utf8'), committedBytes);
+  r.notify();
+  await r.settle();
+  assert.equal(r.events.filter(event => event === request + '.json').length, 1);
+  assert.equal(fs.existsSync(r.input), true);
+  assertNoDuplicateEffects(s);
+  assert.ok(r.errors.length);
+});
+test('an unreadable committed result is never overwritten and its duplicate input is retained', async t => {
+  const s = spies();
+  const r = await rig(t, { readError: Object.assign(new Error('EBUSY'), { code: 'EBUSY' }), payload: { sessionId: other, command: 'replay' }, ctx: s.ctx });
+  assert.equal(fs.readFileSync(r.output, 'utf8'), '{}');
+  assert.equal(fs.existsSync(r.input), true);
+  r.notify();
+  await r.settle();
+  assert.equal(r.publications(), 0);
+  assertNoDuplicateEffects(s);
+});
+
+for (const [kind, variant] of [['versioned', payload], ['legacy for another target', { sessionId: other, command: 'replay to B' }]]) {
+  test(`an uppercase ${kind} duplicate queues behind the active owner and cannot touch its result`, async t => {
+    const s = spies();
+    const gate = deferred();
+    const reached = deferred();
+    s.gate = gate.promise;
+    s.onDispatch = reached.resolve;
+    const r = await rig(t, { live: true, ctx: s.ctx });
+    await reached.promise;
+    const upper = path.join(r.dir, request.toUpperCase() + '.json');
+    fs.writeFileSync(upper, JSON.stringify(variant));
+    r.notifyFile(request.toUpperCase() + '.json');
+    r.notifyFile(request.toUpperCase() + '.json');
+    await r.settle();
+    assert.equal(s.dispatches, 1, 'the variant is not a second owner');
+    assert.equal(fs.existsSync(upper), true, 'the variant stays queued');
+    assert.equal(fs.existsSync(r.output), false, 'the variant publishes no filename refusal while the owner is active');
+    assert.equal(fs.existsSync(r.marker), true, "the active owner's marker is untouched");
+    assert.equal(s.lookups.includes(other), false);
+
+    const unrelated = '99999999-9999-4999-8999-999999999999';
+    fs.writeFileSync(path.join(r.dir, unrelated + '.json'), JSON.stringify({ version: 1, action: 'open' }));
+    r.notifyFile(unrelated + '.json');
+    await until(() => fs.existsSync(path.join(r.dir, 'processed', unrelated + '.result.json')), 'an unrelated UUID progresses while the first ACK is held');
+    assert.equal(fs.existsSync(upper), true);
+
+    gate.resolve();
+    await until(() => fs.existsSync(r.output), 'the owner commits its result');
+    const first = fs.readFileSync(r.output);
+    assert.equal(JSON.parse(first).reason, 'renderer refused');
+    await until(() => !fs.existsSync(upper), 'the queued variant drains after release');
+    fs.writeFileSync(r.input, JSON.stringify({ sessionId: other, command: 'late legacy duplicate' }));
+    r.notify();
+    r.notify();
+    await until(() => !fs.existsSync(r.input), 'the late duplicate is removed');
+    await r.settle();
+    assert.deepEqual(fs.readFileSync(r.output), first);
+    assert.equal(r.publications(), 1, 'exactly one terminal commit');
+    assert.equal(s.dispatches, 1);
+    assert.deepEqual(s.writes, []);
+    assert.equal(s.lookups.includes(other), false);
+  });
+}
+test('a committed result that appears while the owner waits is preserved at publication', async t => {
+  const s = spies();
+  const gate = deferred();
+  const reached = deferred();
+  s.gate = gate.promise;
+  s.onDispatch = reached.resolve;
+  const r = await rig(t, { live: true, ctx: s.ctx });
+  await reached.promise;
+  const external = JSON.stringify({ version: 1, action: 'open', ok: false, outcome: 'refused', reason: 'external', sessionId: id }) + '\n';
+  fs.writeFileSync(r.output, external);
+  gate.resolve();
+  await until(() => !fs.existsSync(r.input), 'the owner finishes');
+  await r.settle();
+  assert.equal(fs.readFileSync(r.output, 'utf8'), external);
+  assert.equal(r.publications(), 0);
+  assert.equal(fs.existsSync(r.marker), false);
+});
+for (const failure of ['failPublish', 'failUnlink']) {
+  test(`ownership is released after ${failure}: the queued variant is drained`, async t => {
+    const s = spies();
+    const gate = deferred();
+    const reached = deferred();
+    s.gate = gate.promise;
+    s.onDispatch = reached.resolve;
+    const r = await rig(t, { live: true, ctx: s.ctx, [failure]: true });
+    await reached.promise;
+    const upper = path.join(r.dir, request.toUpperCase() + '.json');
+    fs.writeFileSync(upper, JSON.stringify(payload));
+    r.notifyFile(request.toUpperCase() + '.json');
+    await r.settle();
+    assert.equal(fs.existsSync(upper), true);
+    gate.resolve();
+    if (failure === 'failUnlink') await until(() => !fs.existsSync(upper), 'the variant sees the committed result and is cleaned');
+    else await until(() => r.errors.filter(entry => /publication failed/.test(entry[0])).length >= 2, 'the variant is processed once the owner released');
+    assert.equal(s.dispatches, 1);
+  });
+}
+test('startup scanning serializes case variants of one UUID into a single terminal commit', async t => {
+  const s = spies();
+  const r = await rig(t, { ctx: s.ctx, setup: ({ input }) => fs.writeFileSync(path.join(path.dirname(input), request.toUpperCase() + '.json'), JSON.stringify(payload)) });
+  await until(() => !fs.existsSync(r.input) && !fs.existsSync(path.join(r.dir, request.toUpperCase() + '.json')), 'both variants are consumed');
+  assert.equal(r.publications(), 1, 'one terminal commit for the canonical UUID');
+  const first = fs.readFileSync(r.output);
+  r.notifyFile(request.toUpperCase() + '.json');
+  r.notify();
+  await r.settle();
+  assert.deepEqual(fs.readFileSync(r.output), first);
 });
