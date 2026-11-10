@@ -132,3 +132,14 @@ for (const offset of [0, 1]) {
     assert.equal(pinned.binding.observation.uncertain, true);
   });
 }
+
+for (const historical of [false, true]) {
+  test(`real reader: a writer replaced right after the first admission observation is refused (historical=${historical})`, async t => {
+    const w = createWorld(t, { historical });
+    const first = w.source.observeTabWriterV1; let reads = 0;
+    w.source.observeTabWriterV1 = args => { const observed = first(args); if (++reads === 1) w.writer('31'); return observed; };
+    const p = w.pin();
+    await assert.rejects(p.binding.admit(w.deadline), /session target changed/);
+    assert.deepEqual(w.writes, []);
+  });
+}
