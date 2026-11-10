@@ -221,3 +221,41 @@ test('v1 observation expiring during the descriptor reread is refused', t => {
   w.descriptorFs.readFileSync = (p, ...args) => { const value = fs.readFileSync(p, ...args); if (++reads === 2) w.expire(); return value; };
   assert.equal(observe(w).uncertain, true);
 });
+
+function addProcess(w, pid, { inner = pid, start = '5' } = {}) {
+  const dir = path.join(w.root, 'proc', String(pid));
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'status'), `Name:\tother\nNSpid:\t${pid}\t${inner}\n`);
+  fs.writeFileSync(path.join(dir, 'stat'), `${pid} (other) ${['S', 1, ...Array(17).fill('0'), start].join(' ')}`);
+}
+function denyNamespace(w, pid, code) {
+  const readLink = w.procFs.readlinkSync;
+  w.procFs.readlinkSync = p => { if (p === `/proc/${pid}/ns/pid`) throw Object.assign(new Error(code), { code }); return readLink(p); };
+}
+test('a process whose PID namespace link is denied but whose identity cannot match the writer does not make the scan incomplete', t => {
+  const w = createWorld(t);
+  addProcess(w, 900, { inner: 777 }); denyNamespace(w, 900, 'EACCES');
+  const observed = observe(w);
+  assert.equal(observed.uncertain, false);
+  assert.equal(observed.writer.sessionId, ID);
+});
+test('a denied PID namespace link on a process matching the writer identity keeps the observation uncertain', t => {
+  const w = createWorld(t);
+  addProcess(w, 900, { inner: 3, start: '30' }); denyNamespace(w, 900, 'EACCES');
+  assert.equal(observe(w).uncertain, true);
+});
+test('any other failure reading a process still makes the scan incomplete', t => {
+  const w = createWorld(t);
+  addProcess(w, 900, { inner: 777 }); denyNamespace(w, 900, 'EIO');
+  assert.equal(observe(w).uncertain, true);
+});
+
+for (const code of ['ENOENT', 'ESRCH']) {
+  test(`a process that exits during the scan (${code}) does not make the scan incomplete`, t => {
+    const w = createWorld(t);
+    addProcess(w, 900, { inner: 777 });
+    const readFile = w.procFs.readFileSync;
+    w.procFs.readFileSync = (p, ...args) => { if (p === '/proc/900/status') throw Object.assign(new Error(code), { code }); return readFile(p, ...args); };
+    assert.equal(observe(w).uncertain, false);
+  });
+}

@@ -40,11 +40,13 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
     if (expired(deadline)) throw new Error('deadline');
     const status = procFs.readFileSync(`/proc/${pid}/status`, 'utf8');
     const stat = procFs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const namespace = procFs.readlinkSync(`/proc/${pid}/ns/pid`);
+    let namespace;
+    try { namespace = procFs.readlinkSync(`/proc/${pid}/ns/pid`); }
+    catch (error) { if (error?.code !== 'EACCES' && error?.code !== 'EPERM') throw error; namespace = null; }
     const match = /^NSpid:\s*(\d+(?:\s+\d+)*)\s*$/m.exec(status);
     const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
     const pids = match?.[1].trim().split(/\s+/).map(Number);
-    if (!namespace || !pids?.length || pids[0] !== pid || !/^\d+$/.test(fields[19])
+    if (namespace === '' || !pids?.length || pids[0] !== pid || !/^\d+$/.test(fields[19])
       || !Number.isInteger(Number(fields[1]))) throw new Error('incomplete proc identity');
     return { pid, parent: Number(fields[1]), start: fields[19], namespace, inner: pids.at(-1), live: !['Z', 'X', 'x'].includes(fields[0]) };
   }
@@ -58,14 +60,14 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
     for (const name of names.slice(0, 32768)) {
       if (expired(deadline)) { complete = false; break; }
       try { table.set(Number(name), proc(Number(name), deadline)); }
-      catch { complete = false; }
+      catch (error) { if (error?.code !== 'ENOENT' && error?.code !== 'ESRCH') complete = false; }
     }
     return { table, complete: complete && !expired(deadline) };
   }
   function mapped(candidate, scan) {
     if (!scan.complete || !/^\d+$/.test(String(candidate.raw.procStart))) return null;
     const matches = [...scan.table.values()].filter(p => p.live && p.inner === candidate.raw.pid && p.start === String(candidate.raw.procStart));
-    return matches.length === 1 ? matches[0] : null;
+    return matches.length === 1 && matches[0].namespace !== null ? matches[0] : null;
   }
   function unchangedProc(identity, deadline) {
     try { return JSON.stringify(proc(identity.pid, deadline)) === JSON.stringify(identity); }
@@ -173,7 +175,7 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
     const scan = rawScan(deadline);
     const table = procScan(deadline);
     const anchor = table.table.get(pty.pid);
-    if (!scan.complete || !table.complete || !anchor || !anchor.live || anchor.start !== String(ptyStart)) return unavailable;
+    if (!scan.complete || !table.complete || !anchor || !anchor.live || anchor.namespace === null || anchor.start !== String(ptyStart)) return unavailable;
     const eligible = [];
     for (const candidate of scan.candidates) {
       const writer = mapped(candidate, table);
