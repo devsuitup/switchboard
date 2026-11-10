@@ -89,6 +89,45 @@ function execute(h, input) {
   return { validated, units, state: progress.read(substrate) };
 }
 
+for (const boundary of ['admission', 'fence', 'tiny']) test(`FIX2 producers received during ${boundary} BUSY backoff retain their epoch`, supported, async t => {
+  const tiny = boundary === 'tiny', h = setup(t, { empty: tiny });
+  if (tiny) h.groups.length = 0;
+  const input = h.manifest(false, true), before = h.db.getSetting('_writer_revision');
+  const worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  const transact = h.db.transact, during = [];
+  let injected = false;
+  h.db.transact = fn => {
+    if (!injected) {
+      injected = true;
+      queueMicrotask(() => {
+        assert.equal(h.db.projectDeletion.hasHistory(), false, 'producers arrive before durable deletion history');
+        during.push(worker.post('upsertCachedSessions', [{ sessionId: 'head', folder: h.groups[0]?.folderKey || 'selected-a', projectPath: h.root, messageCount: 2 }]));
+        during.push(worker.post('upsertSearchEntries', [{ id: 'head', type: 'session', folder: 'selected-a', body: 'late resurrected body' }]));
+        during.push(worker.post('setName', 'head', 'late resurrected name'));
+      });
+      throw Object.assign(new Error('admission lock contention'), { code: 'SQLITE_BUSY' });
+    }
+    return transact(fn);
+  };
+  const reply = await worker.post(boundary === 'fence' ? 'fenceProjectDeletion' : 'completeProjectDeletion', input);
+  const replies = await Promise.all(during);
+  assert.equal(injected, true);
+  assert.equal(replies.length, 3);
+  for (const [index, producer] of replies.entries()) assert.equal(producer.error?.code, 'PROJECT_EPOCH_STALE', `producer ${index} received during ${boundary} backoff must be refused`);
+  assert.equal(reply.error, undefined);
+  assert.equal(reply.result.state, boundary === 'fence' ? 'notStarted' : 'committed');
+  if (boundary === 'fence') {
+    assert.equal(h.db.getMeta('head').name, 'app head');
+    assert.equal(h.db.getCachedSession('head').messageCount, 1);
+    assert.equal(h.db.connection.prepare("SELECT body FROM search_content JOIN search_map USING(rowid) WHERE id='head'").get().body, 'sentinel');
+  } else {
+    assert.equal(h.db.getMeta('head'), null, 'erased names stay erased');
+    assert.equal(h.db.getCachedSession('head'), null, 'erased cache stays erased');
+    assert.equal(h.db.connection.prepare("SELECT count(*) AS n FROM search_map WHERE id='head'").get().n, 0, 'erased search stays erased');
+    if (tiny) assert.equal(reply.result.lastRevision, before + 1, 'tiny deletion commits once');
+  }
+});
+
 for (const [command, args] of [
   ['setName', ['uncached', 'saved name']], ['toggleStar', ['uncached']],
   ['setSetting', ['continuationChoice:uncached', 'chosen']],
@@ -138,6 +177,7 @@ test('FIX474 ordinary producers perform zero ownership scans or realpath calls',
   fs.realpathSync.native = (...args) => { counts.realpath++; return realpath(...args); };
   try {
     for (const [command, args] of [['setName', ['head', 'new']], ['upsertCachedSessions', [[h.selected[0]]]],
+      ['upsertSearchEntries', [[{ id: 'head', type: 'session', folder: 'selected-a', body: 'ordinary indexing' }]]],
       ['effects', [[{ name: 'setName', args: ['head', 'effect'] }], h.db.getSetting('_writer_revision') || 0]]]) {
       if (command === 'effects') args[1] = h.db.getSetting('_writer_revision');
       assert.equal((await worker.post(command, ...args)).error, undefined);
@@ -189,6 +229,16 @@ test('FIX474 deletion history resolves only target owners and folders', supporte
   assert.equal((await worker.post('upsertCachedSessions', [h.kept[1]])).error, undefined);
   assert.deepEqual(calls, { cached: 0, folders: 0, operations: 0 }, 'deletion history must not rescan unrelated ownership');
   assert.deepEqual(ids, ['remote']); assert.deepEqual(folders, ['host::remote']);
+});
+
+test('FIX2 known session owner does not load its entire folder after deletion', supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  assert.equal((await worker.post('completeProjectDeletion', h.manifest(false, true))).result.state, 'committed');
+  const getCachedByFolder = h.db.getCachedByFolder, loaded = [];
+  h.db.getCachedByFolder = folder => { loaded.push(folder); return getCachedByFolder(folder); };
+  assert.equal((await worker.post('upsertCachedSessions', [h.kept[1]])).error, undefined);
+  assert.equal((await worker.post('upsertSearchEntries', [{ id: 'remote', type: 'session', folder: 'host::remote', body: 'kept' }])).error, undefined);
+  assert.deepEqual(loaded, [], 'known target IDs must not materialize folder siblings');
 });
 
 test('FIX474 ambiguous deleted target and malformed path do not poison unrelated batch targets', supported, async t => {

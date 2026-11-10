@@ -18,6 +18,7 @@ const rawCommands = new Set(['setSetting', 'deleteSetting', 'toggleStar', 'setSt
   'setCachedContinuationIndex', 'setCachedFileSize', 'setInitialScanComplete']);
 const settings = () => db.listSettingKeys('').map(key => [key, db.getSetting(key)]);
 const queue = [];
+const pendingDeletionHistory = new Set();
 const sealedWorkflows = new Set();
 const assertWorkflow = message => {
   if (message.workflowId && sealedWorkflows.has(message.workflowId)) throw Object.assign(new Error('project workflow is sealed'), { code: 'WORKFLOW_SEALED' });
@@ -120,6 +121,7 @@ function* commandUnits(message) {
       sealedWorkflows.add(workflowId);
       for (let i = queue.length - 1; i >= 0; i--) if (queue[i].workflowId === workflowId) {
         const cancelled = queue.splice(i, 1)[0];
+        pendingDeletionHistory.delete(cancelled);
         parentPort.postMessage({ id: cancelled.id, error: { message: 'project workflow is sealed', code: 'WORKFLOW_SEALED' },
           ...(cancelled.mutated ? { settings: settings() } : {}) });
       }
@@ -161,6 +163,7 @@ async function drain() {
       const unit = message.deferred || message.iterator.next();
       message.deferred = null;
       if (unit.done) {
+        pendingDeletionHistory.delete(message);
         parentPort.postMessage({ id: message.id, ...(message.producerError ? { error: { message: message.producerError.message, code: message.producerError.code } }
           : { result: message.command === 'effects' ? { committedRevision: message.committedRevision } : message.result }),
           ...(message.mutated ? { settings: settings() } : {}) });
@@ -170,6 +173,7 @@ async function drain() {
         else if (['fenceProjectDeletion', 'completeProjectDeletion'].includes(message.command)) {
           const before = db.getSetting('_writer_revision') || 0;
           message.result = await transaction(message.command, null, undefined, unit.value);
+          if (db.projectDeletion.hasHistory()) pendingDeletionHistory.delete(message);
           message.mutated ||= (db.getSetting('_writer_revision') || 0) !== before;
         }
         else if (message.command === 'beginOffer') {
@@ -212,6 +216,7 @@ async function drain() {
         else queue.push(message);
       }
     } catch (error) {
+      pendingDeletionHistory.delete(message);
       parentPort.postMessage({ id: message.id, error: { message: error.message, code: error.code }, settings: settings() });
     }
     await yieldTurn();
@@ -222,7 +227,8 @@ async function drain() {
 const heartbeat = setInterval(() => parentPort.postMessage({ heartbeat: true }), 1000);
 heartbeat.unref();
 parentPort.on('message', message => {
-  try { message.producerBinding = bindDeletionProducer(db, message.command, message.args); }
+  if (['completeProjectDeletion', 'fenceProjectDeletion'].includes(message.command)) pendingDeletionHistory.add(message);
+  try { message.producerBinding = bindDeletionProducer(db, message.command, message.args, pendingDeletionHistory.size > 0); }
   catch (error) { message.bindingError = error; }
   queue.push(message); void drain();
 });

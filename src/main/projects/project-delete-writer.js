@@ -250,8 +250,9 @@ function bindDeletionProducer(db, command, args, force = false) {
       add(folderOwners, row.folder, project);
     } catch {}
   }
+  const fallbackFolders = new Set([...folders, ...sessions.filter(target => !owners.get(target.id)?.size && !target.projectPath).map(target => target.folder)]);
   for (const folder of new Set([...folders, ...sessions.map(row => row.folder), ...projects.map(row => row.folder)].filter(Boolean))) {
-    for (const row of [...db.getCachedByFolder(folder), db.getFolderMeta(folder)].filter(Boolean)) {
+    for (const row of [...(fallbackFolders.has(folder) ? db.getCachedByFolder(folder) : []), db.getFolderMeta(folder)].filter(Boolean)) {
       add(folderOwners, folder, { alias: parseFolderKey(folder).alias, projectPath: row.projectPath });
     }
     for (const row of db.projectDeletion.folderHistory(folder)) {

@@ -467,6 +467,12 @@ and protection subsequently returns. Nested session units of a folder deletion
 retain their enclosing folder binding as well as any session binding.
 Each producer looks up only its target IDs, folders and matching deletion units;
 it never materializes all cached rows, folder metadata or operation headers.
+The owner-row statement is cached with the deletion statements, prepared lazily
+after the temporary reverse-link table exists. A known session owner or supplied
+project path does not load sibling cache rows from its folder. Folder commands
+and sessions lacking both proofs retain the complete folder fallback, including
+mixed-folder ambiguity checks. Folder metadata and deletion history still
+participate in the same identity resolution.
 The binding survives every requeued unit and is rechecked before each effect,
 including staged FTS publication. Ownership comes from supplied row paths,
 durable rows/links/folder mappings and deletion-unit history. Multiple owners

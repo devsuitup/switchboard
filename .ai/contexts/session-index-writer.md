@@ -524,6 +524,17 @@ revision/epoch/ownership fenced. Final logical removal and receipt sealing are
 atomic, subject to the documented indivisible oversized-setting exception.
 Producer epoch bindings are captured on message receipt and rechecked across
 all selected cache/FTS/metadata units, including search-staging publication.
+Receipt of either completion or fence synchronously registers that message in
+a pending-history set, before binding or starting its first transaction. While
+any such message remains, incoming producers force an epoch binding even when
+durable deletion history is still absent. This covers producers received during
+the first transaction's SQLITE_BUSY backoff, including tiny one-transaction
+completions. Each message leaves the set after a successful turn makes history
+visible, or on completion, error or workflow cancellation. Multiple queued
+deletions therefore cannot clear one another's protection. The existing forced
+binding of already queued producers at deletion start still covers earlier
+receipts. With neither pending deletion nor durable history, producers retain
+their constant-time early exit without ownership queries or path resolution.
 The facade holds archive exclusion through unknown outcomes and only releases
 after terminal/no-late-commit proof. No main/IPC/UI caller is connected yet.
 

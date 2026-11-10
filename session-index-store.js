@@ -987,6 +987,7 @@ function prepareProducerOwners() {
 let preparedDeletionStatements;
 function deletionStatements() {
 return preparedDeletionStatements ??= {
+  ownerRows: null,
   hasFences: db.prepare('SELECT 1 FROM project_delete_fences LIMIT 1'),
   hasHistory: db.prepare('SELECT 1 FROM project_delete_operations UNION ALL SELECT 1 FROM project_delete_fences WHERE blocked=1 LIMIT 1'),
   sessionHistory: db.prepare("SELECT DISTINCT o.projectKey FROM project_delete_units u JOIN project_delete_operations o USING(operationId) WHERE u.category='session' AND json_extract(u.targetJson, '$.id')=?"),
@@ -1022,7 +1023,7 @@ const projectDeletion = {
     return history;
   },
   prepareProducerOwners,
-  ownerRows: id => db.prepare('SELECT s.* FROM session_owner_links l JOIN session_cache s ON s.sessionId=l.sourceId WHERE l.targetId=?').all(id),
+  ownerRows: id => (deletionStatements().ownerRows ??= db.prepare('SELECT s.* FROM session_owner_links l JOIN session_cache s ON s.sessionId=l.sourceId WHERE l.targetId=?')).all(id),
   sessionHistory: id => deletionStatements().sessionHistory.all(id),
   folderHistory: folder => deletionStatements().folderHistory.all(folder),
   projectHistory: key => !!deletionStatements().projectHistory.get(key),
