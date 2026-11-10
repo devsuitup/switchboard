@@ -165,29 +165,48 @@ test('a new trigger deadline after entry creation removes all placeholder state'
   assert.deepEqual(disk.read().openWorkingSet, [], 'an expired placeholder must not be persisted as fresh');
 });
 
-for (const refusal of ['deadline after defaults', 'notLive', 'backend refusal']) {
-  test(`a held startup entry survives trigger ${refusal} and a later working-set save`, async t => {
-    const h = fixture(t); const disk = persistence(t, h); const op = request();
-    const held = { item: { sessionId: ID, projectPath: '/project', active: false }, index: 0 };
-    h.w.skippedWorkingSetEntries.set(ID, held);
-    await disk.persistWorkingSet();
-    assert.deepEqual(disk.read().openWorkingSet, [held.item]);
-    if (refusal === 'deadline after defaults') {
-      h.w.resolveDefaultSessionOptions = async () => { op.deadline = 0; return {}; };
-    } else {
-      h.w.api.openTerminal = async () => refusal === 'notLive'
-        ? { ok: false, notLive: true }
-        : { ok: false, error: 'blocked', reason: 'session live elsewhere' };
-    }
-    await h.f.handleTriggerSessionAction(op);
-    assert.equal(h.calls.find(c => c[0] === 'ack')?.[1].ok, false);
-    assert.equal(h.w.openSessions.has(ID), false);
-    assert.equal(h.w.skippedWorkingSetEntries.get(ID), held, 'trigger cleanup must retain the original held startup entry');
-    assert.equal(h.calls.some(c => c[0] === 'notice' || c[0] === 'persist'), false);
-    await disk.persistWorkingSet();
-    assert.deepEqual(disk.read().openWorkingSet, [held.item], 'a later save must retain the held conversation');
-  });
+for (const closed of [false, true]) {
+  for (const refusal of ['guard refusal', 'deadline after guard', 'deadline after defaults', 'notLive', 'backend refusal']) {
+    test(`a held startup entry${closed ? ' with a closed tab' : ''} survives trigger ${refusal} and a later working-set save`, async t => {
+      const h = fixture(t); const disk = persistence(t, h); const op = request();
+      const held = { item: { sessionId: ID, projectPath: '/project', active: false }, index: 0 };
+      h.w.skippedWorkingSetEntries.set(ID, held);
+      if (closed) h.w.openSessions.set(ID, { session: op.session, closed: true });
+      await disk.persistWorkingSet();
+      assert.deepEqual(disk.read().openWorkingSet, [held.item]);
+      if (refusal === 'guard refusal') {
+        h.w.guardResume = async () => false;
+      } else if (refusal === 'deadline after guard') {
+        h.w.guardResume = async () => { op.deadline = 0; return true; };
+      } else if (refusal === 'deadline after defaults') {
+        h.w.resolveDefaultSessionOptions = async () => { op.deadline = 0; return {}; };
+      } else {
+        h.w.api.openTerminal = async () => refusal === 'notLive'
+          ? { ok: false, notLive: true }
+          : { ok: false, error: 'blocked', reason: 'session live elsewhere' };
+      }
+      await h.f.handleTriggerSessionAction(op);
+      assert.equal(h.calls.find(c => c[0] === 'ack')?.[1].ok, false);
+      assert.equal(h.w.openSessions.has(ID), false);
+      assert.equal(h.w.skippedWorkingSetEntries.get(ID), held, 'trigger cleanup must retain the original held startup entry');
+      assert.equal(h.calls.some(c => c[0] === 'notice' || c[0] === 'persist'), false);
+      await disk.persistWorkingSet();
+      assert.deepEqual(disk.read().openWorkingSet, [held.item], 'a later save must retain the held conversation');
+    });
+  }
 }
+
+test('a successful trigger resume consumes a held startup entry with a closed tab', async t => {
+  const h = fixture(t); const disk = persistence(t, h);
+  h.w.skippedWorkingSetEntries.set(ID, { item: { sessionId: ID, projectPath: '/project' }, index: 0 });
+  h.w.openSessions.set(ID, { session: request().session, closed: true });
+  await h.f.handleTriggerSessionAction(request());
+  assert.equal(h.calls.find(c => c[0] === 'ack')?.[1].ok, true);
+  assert.equal(h.w.skippedWorkingSetEntries.has(ID), false, 'successful resume must consume the held entry');
+  assert.equal(h.w.openSessions.get(ID)?.closed, undefined);
+  await disk.persistWorkingSet();
+  assert.equal(disk.read().openWorkingSet.filter(item => item.sessionId === ID).length, 1);
+});
 
 for (const refusal of ['deadline', 'absent result', 'backend refusal', 'backend throw']) {
   test(`a new trigger ${refusal} removes only the empty project rows it created`, async t => {

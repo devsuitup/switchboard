@@ -16,9 +16,9 @@ module.exports = function loadGetProjectsHandler(context) {
   const helperStart = source.indexOf('async function getProjectsSnapshot(');
   const helperEnd = source.indexOf('\n}', helperStart) + 2;
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
-  vm.runInNewContext(source.slice(helperStart, helperEnd) + '\n' + source.slice(start, end), {
+  vm.runInNewContext(source.slice(helperStart, end), {
     console, performance, structuredClone, Buffer, cliSessionState, require: createRequire(filename), ...context,
     ipcMain: { handle: (name, callback) => { assert.equal(name, 'get-projects'); handler = callback; } },
-  }, { filename, lineOffset: source.slice(0, start).split('\n').length - 1 });
+  }, { filename, lineOffset: source.slice(0, helperStart).split('\n').length - 1 });
   return handler;
 };

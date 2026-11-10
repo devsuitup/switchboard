@@ -2623,7 +2623,9 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
   if (openSessions.has(resolvedOpenId)) {
     const entry = openSessions.get(resolvedOpenId);
     if (entry.closed) {
+      const held = triggerAction && skippedWorkingSetEntries.get(resolvedOpenId);
       destroySession(resolvedOpenId);
+      if (held) skippedWorkingSetEntries.set(resolvedOpenId, held);
     } else {
       for (const target of restoreNoticeSessions) clearAppNotice(sessionActionNoticeId('Restore', target));
       if (clearDormantRow(resolvedOpenId)) schedulePersistWorkingSet();

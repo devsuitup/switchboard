@@ -58,7 +58,10 @@ Prompt delivery still requires the new launch's descriptor readiness proof.
 Renderer trigger refusals destroy the terminal without restore notices, new skipped
 restore entries or working-set writes. Cleanup preserves any existing held startup
 entry across deadline, not-live and backend refusals so a later working-set save
-retains that conversation. Failed or expired new opens also remove their
+retains that conversation. When a prior manual failure left a closed error tab,
+trigger resume also preserves that entry around the closed-tab destruction before
+the resume guard runs. Guard refusal and deadline expiry after the guard retain
+it; a successful open consumes it. Failed or expired new opens also remove their
 pending/sidebar rows and any empty project rows created by that launch. Existing
 project rows and created rows that gained another session survive cleanup so a
 later save cannot retain a fresh placeholder.

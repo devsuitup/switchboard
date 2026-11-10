@@ -97,8 +97,8 @@ async function run() {
     const helperStart = source.indexOf('async function getProjectsSnapshot(');
     const helperEnd = source.indexOf('\n}', helperStart) + 2;
     assert.ok(helperStart >= 0 && helperEnd > helperStart, 'shipped snapshot helper must exist');
-    vm.runInContext(source.slice(helperStart, helperEnd) + '\n' + source.slice(start, end), context, {
-      filename: require.resolve('../../main.js'), lineOffset: source.slice(0, start).split(String.fromCharCode(10)).length - 1,
+    vm.runInContext(source.slice(helperStart, end), context, {
+      filename: require.resolve('../../main.js'), lineOffset: source.slice(0, helperStart).split(String.fromCharCode(10)).length - 1,
     });
     hold = true;
     scan = writer.writeScannedFolder({ folder: 'scan-one', projectPath: root, sessions: [], indexMtimeMs: 1 });

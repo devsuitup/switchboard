@@ -10,8 +10,11 @@ Source-extraction fixtures for `get-projects` load both the IPC registration
 and `getProjectsSnapshot`, with the main-relative require, structured cloning
 and conflict notification dependencies. This applies to the shared
 `test/get-projects-handler.cjs`, the archive-writer child script and the
-during-scan fixture. `test/get-projects-archive-extraction.test.js` exercises
-the latter two extraction blocks with disposable in-memory dependencies under
+during-scan fixture. Each evaluates one contiguous slice from the snapshot helper
+through the registration, with `lineOffset` measured at the helper start so
+coverage retains the original `main.js` lines.
+`test/get-projects-archive-extraction.test.js` verifies that source mapping for
+all three fixtures and exercises the archive and scan extraction blocks under
 plain Node, without starting their Electron/SQLite processes. It also executes
 the remote-resize test's open/reattach/launch block with a main-relative require,
 and statically checks the excluded background-continuation exit contexts for

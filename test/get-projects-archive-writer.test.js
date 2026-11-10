@@ -52,7 +52,7 @@ function scenario(name, body) {
           try {
             await writer.ready;
             const db = require('./db');
-            vm.runInNewContext(source.slice(helperStart, helperEnd) + '\\n' + source.slice(start, end), {
+            vm.runInNewContext(source.slice(helperStart, end), {
               ipcMain: { handle: (_name, fn) => { invoke = fn; } },
               require: require('node:module').createRequire(path.resolve('main.js')), structuredClone,
               console, TRACE: { on: false }, performance, projectsReconciledAt: Date.now(),
@@ -66,7 +66,7 @@ function scenario(name, body) {
               mergePlaceholderSessions: rows => rows, annotateRemoteAttachable: rows => rows,
               cliSessionState: require('./cli-session-state'),
               notifyRendererProjectsChanged() {},
-            }, { filename: path.resolve('main.js'), lineOffset: source.slice(0, start).split(String.fromCharCode(10)).length - 1 });
+            }, { filename: path.resolve('main.js'), lineOffset: source.slice(0, helperStart).split(String.fromCharCode(10)).length - 1 });
             ${body}
           } finally { await writer.closeDb(); }
         })().catch(error => { console.error(error); process.exitCode = 1; });

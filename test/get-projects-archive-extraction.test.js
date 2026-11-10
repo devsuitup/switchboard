@@ -11,6 +11,18 @@ const espree = require('espree');
 const root = path.join(__dirname, '..');
 const filename = path.join(__dirname, 'get-projects-archive-writer.test.js');
 
+function assertMainSlice(source, options) {
+  const mainSource = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const start = mainSource.indexOf('async function getProjectsSnapshot(');
+  const handler = mainSource.indexOf("ipcMain.handle('get-projects'");
+  const end = mainSource.indexOf('\n});', handler) + 4;
+  assert.ok(start >= 0 && handler > start && end > handler);
+  assert.equal(options.filename, path.join(root, 'main.js'));
+  assert.equal(options.lineOffset, mainSource.slice(0, start).split('\n').length - 1,
+    'coverage must start at the snapshot helper main.js line');
+  assert.equal(source, mainSource.slice(start, end), 'coverage must use one contiguous shipped source slice');
+}
+
 function archiveExtraction() {
   const source = fs.readFileSync(filename, 'utf8');
   const ast = espree.parse(source, { ecmaVersion: 'latest' });
@@ -42,7 +54,10 @@ test('archive fixture extracts a callable get-projects handler with its snapshot
   const context = vm.createContext({
     fs: { readFileSync: () => fs.readFileSync(path.join(root, 'main.js'), 'utf8') },
     path: { resolve: () => path.join(root, 'main.js') },
-    vm, console, performance, structuredClone, views, assert,
+    vm: { runInNewContext: (source, context, options) => {
+      assertMainSlice(source, options);
+      return vm.runInNewContext(source, context, options);
+    } }, console, performance, structuredClone, views, assert,
     require: createRequire(path.join(root, 'main.js')),
     db: { getSetting() {} },
     writer: { applyAndPersistArchived: async (projects, archived) => {
@@ -76,7 +91,10 @@ test('scan fixture extracts a callable get-projects handler with its snapshot de
     writer: { applyAndPersistArchived: async projects => projects },
     Date, structuredClone, projectsReconciledAt: Date.now(), require: createRequire(mainFilename),
   });
-  const outer = vm.createContext({ context, vm, console, performance, assert,
+  const outer = vm.createContext({ context, vm: { runInContext: (source, context, options) => {
+    assertMainSlice(source, options);
+    return vm.runInContext(source, context, options);
+  } }, console, performance, assert,
     source: fs.readFileSync(mainFilename, 'utf8'),
     require: createRequire(fixture),
     db: { getSetting() {}, isInitialScanComplete: () => true,
@@ -89,6 +107,15 @@ test('scan fixture extracts a callable get-projects handler with its snapshot de
   await assert.doesNotReject(async () => { result = await invoke(null, 'both'); },
     'scan fixture handler must resolve with its extracted dependencies');
   assert.deepEqual(JSON.parse(JSON.stringify(result)), { defaultProjects: rows, allProjects: rows });
+});
+
+test('shared get-projects handler preserves production coverage line attribution', t => {
+  const run = vm.runInNewContext;
+  t.mock.method(vm, 'runInNewContext', (source, context, options) => {
+    assertMainSlice(source, options);
+    return run(source, context, options);
+  });
+  assert.equal(typeof require('./get-projects-handler.cjs')({}), 'function');
 });
 
 test('remote resize fixture loads the open-terminal handler dependencies before attach and reattach', async () => {
