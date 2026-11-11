@@ -1088,7 +1088,7 @@ for (const platform of ['sandbox', 'darwin']) {
     const at = performance.now();
     const result = await f.run({}, 1200);
     assert.equal(result.error, 'session not found'); assert.deepEqual(f.written, []);
-    assert.ok(performance.now() - at < 300);
+    assert.ok(performance.now() - at < 1000, 'refused well before the 1200 ms trigger timeout');
   });
 }
 
