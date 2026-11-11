@@ -4,6 +4,36 @@
 
 This file is the **canonical inventory** of the IPC surface. When you add a new IPC, you change three places — main handler, preload bridge, renderer caller — and every IPC name should appear here.
 
+## Dormant project deletion callbacks (#474 A4c3)
+
+`registerProjectDeleteIpc({ipcMain, service, getMainWindow, announce})` is an
+internal factory with no main/preload/renderer caller yet. It registers:
+
+- `preview-project-delete({projectPath, folderKey?, options})`: five explicit
+  boolean options, inspectable plan and token, or token:null on refusal.
+- `delete-project({token, fingerprint})`: accepted main-owned operation ID and
+  truthful completed/kept/failed/skipped/stopped lists; no extra options.
+- `project-delete-state({operationId})`: only registry-authorized operation IDs,
+  with committed/partial/unknown/notStarted state and receipt invalidation.
+
+`attach(win)` requires the current trusted main window with its app URL already
+loaded, captures the actual webContents/mainFrame and URL, and revokes authority
+on committed cross-document main-frame navigation (`did-navigate`), renderer exit,
+destruction or window replacement. Results recheck authority after awaits.
+Cancelled `did-start-navigation` events leave the current document authorized.
+`did-finish-load` binds a replacement only at the captured trusted URL, then calls `announce` with
+existing main-owned operation IDs. Internal `rebind()` returns the current IDs
+for main to announce after recovery. Old documents cannot read
+those results and tokens cannot cross document/boot boundaries. Dispose removes
+the exact callbacks and listeners without releasing main-owned operations.
+`announce` is an injected main lifecycle callback, not renderer-supplied input.
+
+Legacy `remove-project(projectPath, folderKey)` and its existing preload
+contract are unchanged. Service sequencing and recovery are documented in
+[project-delete.md](project-delete.md). Main composition must await bounded
+initial recovery before enabling these callbacks and retain #1090's background
+worker-incarnation gate.
+
 ## Trigger renderer broker (#1022, slice C)
 
 Source-extraction fixtures for `get-projects` load both the IPC registration

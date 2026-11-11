@@ -1,6 +1,106 @@
-# Project deletion: dormant backend (#474 A4a–A4c2)
+# Project deletion: dormant backend (#474 A4a–A4c3)
 
-## Current state: dormant stop composition complete (A4c2); A4c3 next
+## Current state: dormant service and registered callbacks complete (A4c3)
+
+`createProjectDeleteService` in `project-delete.js` composes the real planner,
+inventory, stop adapter, launch gate and writer facade. `project-delete-ipc.js`
+registers its three internal callbacks. There is still no main, preload or
+renderer caller. A4c4 owns composition and A4d owns the user-facing action.
+
+Call `initialize()` before admitting previews. Recovery enumerates bounded
+writer receipts, including committed lost replies, and reads/fences rather than
+replaying completion. Initialization failure leaves the service not ready;
+`recover()` reconciles retained ownership before retrying initialization. Main
+must call this lifecycle hook on writer bootstrap/replacement and rebind the
+current trusted document after recovery. Enumeration caps at 4,096 headers;
+the registry retains at most 32 unresolved operations and 128 terminal results
+for 24 hours. If recovery cannot acquire a hold or reaches the live cap, it
+refuses initialization without registering an unowned operation. Unresolved
+holds and identities never expire, including on dispose. Receipt timestamps
+remain authoritative across restart. Recovered historical stops and file
+manifests are explicitly unknown.
+
+Sealed receipt headers are already terminal proof: recovery reads them without
+acquiring either hold or consuming the unresolved-operation cap. A failed read
+keeps details unknown and can be retried, but does not fence historical work.
+Multiple retained epochs of one project therefore cannot block each other,
+regardless of their lexicographic operation-ID order. Only unsealed operations
+acquire exclusion.
+
+The service, inventory and planner share optional `now/schedule/cancel` clock ports
+allow expiry, deadlines and retention to share one clock. Tokens are 32 random
+bytes, five-minute, boot/document-bound, with 32 outstanding globally. Preview
+rechecks document authority after discovery/scope reads before minting. Input
+options remain the five booleans; extra fields and physical/worktree choices
+refuse. Reply timeout is separate from accepted main-owned work. The operation
+ID and registry entry precede the first await, and readState cannot fence work
+still admitting or stopping. Reuse/foreign tokens never submit or stop twice.
+
+Execution reserves both launch and archive exclusion synchronously, awaits
+both ready promises, revalidates the fingerprint and epoch, then preflights and
+stops all targets. Every `effect != 'none'`, including a failed attempted stop,
+is preserved in the returned stopped-work list. Before completion it compares
+membership rather than the volatile full fingerprint. Only a positively proven
+stop can preserve a disappeared tab/job identity. It then rereads the writer
+scope, re-inventories and independently verifies death after that await.
+Completion is invoked once. Unknown outcomes cause fresh reads/fencing and
+bounded retained-file observation; no second completion call occurs even if
+the facade could deduplicate it. Both holds survive unavailable read/fence.
+After the 60-second completion wait, successful absent/inProgress reads are
+polled using the injected scheduler, backing off from 100 ms to 2 seconds.
+Advancing nextUnit or lastRevision resets a 60-second stall budget; readRevision
+does not. Each read has its own 10-second transport deadline. A transport loss
+or exhausted stall budget permits fencing; elapsed completion time alone does
+not. Progress can extend reconciliation beyond 60 seconds, while IPC replies
+retain their separate short deadline. Reads share the operation's reconciliation.
+Release requires known non-submission or terminal/noLateCommit proof, after
+reservation readiness. Partial and unknown outcomes publish no final refresh.
+
+Committed results forward exactly the receipt invalidation to `notifyProjects`
+and `notifySchedules` once per operation/revision per service lifetime. Both ports
+have a 10-second bound. Their arguments are `(invalidation, operationId, change)`;
+`change` contains `operationId`, `expectedProjectEpoch`, and `committedRevision`.
+The writer forwards the same change identity as the second argument of its
+session invalidation callback. Recovery may repeat these invalidations after a
+restart: there is no durable notification acknowledgement. Consumers must
+deduplicate by operation/revision and reject stale epochs when reusing cached
+project state; process-local deduplication cannot promise once across restarts.
+Late async callbacks remain responsible for that identity check as well.
+Notification/file observation failure preserves a proven
+commit with a separate warning. Detailed outcomes are always receipt-derived;
+purged receipts stay unknown. `whenIdle()` is an internal drain for tests and
+shutdown coordination, not a reason to discard unresolved holds.
+
+Once a terminal/noLateCommit result and its bounded notification/file inspection
+have settled, status returns a cloned cached view. Its observations describe the
+recorded readRevision, not a new filesystem scan. Receipt eviction or subsequent
+file changes do not erase a previously observed commit. Recovery reads with
+unavailable details remain retryable as reads. Operation-ID construction errors
+after token consumption return a coded failure and never acquire either hold.
+
+The planner liveness port must include `identity` (PID/start/generation or
+remote boot/session identity) and the stable `targetId`, with `sessionKey` when
+different. Job records carry their exact `sessionIds` and conversation ID;
+member/job aliases deduplicate to one target with the explicit job ID or the
+job-source target ID. Each target's sessionIds union includes only rows naming
+that live target; the conversation list separately retains all members,
+including stopped continuations. Scheduled jobs require schedule/claim correlation.
+No-tab jobs remain controlled by the landed stop adapter. **#1090 remains a
+gate: A4c4 must not enable user-facing background-job deletion until the atomic
+worker-incarnation stop gap is resolved or explicitly accepted by JB.**
+
+For A4c4, `readTarget` must not remove a tab from activeSessions before its PTY
+exits. Otherwise the adapter retains proven-dead work but fails safely while
+waiting for exitDrain. The main composition must preserve captured references
+through actual exit housekeeping.
+
+`test/project-delete-ipc.test.js` invokes actual registered callbacks on a fake
+ipcMain with real inventory/planner/stop/service, writer facade, full worker
+fixture and disposable SQLite. Process/tree and transport edges are injected;
+no native death or real Electron event proof is claimed. Node 20 real-store
+cases retain the supported fixture guard. The carried #1074 `kept` correction
+is already in `session-index-writer.js`: skipped retirements are removed from
+rendered unarchived results through `keepArchived`; no duplicate fix is needed.
 
 A4c2a adds opt-in stop evidence to the existing PTY, background job and remote
 adapters. `stopPtyWithEvidence` pins the PTY object, PID and generation; Windows
@@ -17,8 +117,8 @@ Windows helper section of [ipc-bridge.md](ipc-bridge.md) for contracts/limits.
 
 `project-delete-stop.js` now composes those seams through
 `createProjectDeleteStop(ports).preflight/stop/verify`. It has no production
-caller. A4c3 next supplies the token service and callback tests; A4c4 supplies
-main wiring. No deletion, preload, UI or scheduler stop is enabled.
+main caller. A4c3 supplies the internal token service and callback tests;
+A4c4 supplies main wiring. No preload, UI or scheduler stop is enabled.
 `cliSessionState.getScheduleRunSnapshot` was already exported by A4c1;
 headless schedules remain named blocking targets without safe tree control.
 

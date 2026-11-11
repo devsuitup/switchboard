@@ -137,7 +137,8 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     return track(commandScope.run(owner, () => Promise.resolve().then(fn)));
   };
   const deletionResult = (input, state) => {
-    if (state.state === 'committed' && state.invalidation) notify(state.invalidation.sessionIds);
+    if (state.state === 'committed' && state.invalidation) notify(state.invalidation.sessionIds,
+      { operationId: input.operationId, expectedProjectEpoch: input.expectedProjectEpoch, committedRevision: state.committedRevision });
     workflows.settleDeletion(input, state);
     return state;
   };
