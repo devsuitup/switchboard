@@ -429,6 +429,18 @@ notice changes neither the open state nor that activity timestamp. Restricting
 the skip to a transcript-closed turn would revive the original bug: OSC may
 have closed the projection while the raw transcript still classifies as open.
 
+`test/sidebar-informational-idle.test.js` (#1085) feeds a disposable transcript
+to the real task worker and the shipped sidebar scripts in jsdom. OSC idle,
+then a timestamped local idle descriptor, then an informational append leaves
+the row without `cli-busy`, both with an already observed head and with its
+first delivery delayed until after the notice. A later real prompt plus
+information still wins over those stale idle hints. These scenarios do not
+reproduce the live report of #1085 (a row still busy ~16 s after the notice)
+or establish its cause. A live witness of it needs, for the same session: the
+renderer's OSC receipt time, the head's revision, `lastEntryAt` and
+`observedAt`, the descriptor's `status` and `statusUpdatedAt`, the causes of
+each projects notification, and the times the row's classes were applied.
+
 The row's animation is selected from its `headSessionId || sessionId`, with
 three transcript states: `open`, `closed`, and `unknown`. `transcript-turn.js`
 retains its existing `closed` API for trigger delivery and adds `state`.
