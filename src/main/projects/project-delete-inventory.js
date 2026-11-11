@@ -3,10 +3,10 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { parseFolderKey } = require('../remote/remote-hosts');
-const { resolveJsonlPath } = require('../../../read-session-file');
+const { resolveJsonlPath, subagentSessionId } = require('../../../read-session-file');
+const { classifyTranscriptPath } = require('../../../subagent-attribution');
 const { durableRowLinks, fail } = require('./project-delete-identity');
 const { encodeProjectPath } = require('../../../encode-project-path');
-const { resolveWorktreePath } = require('../../../derive-project-path');
 const { worktreeParentPath } = require('../../../public/worktree-nesting');
 const { parseFrontmatter, isRunnerScheduleFileName, scheduleStateKey } = require('../schedules/schedule-runner');
 
@@ -121,17 +121,28 @@ function createProjectDeleteInventory(deps) {
       }
       const after = await bounded(c, () => handle.stat());
       if ((!head && size !== stat.size) || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ino !== stat.ino) throw fail('DISCOVERY_CANDIDATE', 'File changed during inspection.');
-      let content = buffer.toString('utf8', 0, size);
+      const prefix = buffer.toString('utf8', 0, size);
+      let content = prefix;
       if (head && size < stat.size) content = content.slice(0, content.lastIndexOf('\n') + 1);
-      return { path: file, size: stat.size, mtimeMs: stat.mtimeMs, content };
+      return { path: file, size: stat.size, mtimeMs: stat.mtimeMs, content, ...(head ? { prefix } : {}) };
     } finally { await handle.close(); }
   }
   async function pages(c, section, revision) {
     const rows = [];
     let cursor = null;
     do {
-      const page = await bounded(c, () => deps.writer.readProjectDeletionSnapshot({ section, cursor,
-        expectedRevision: revision, limit: Math.min(256, Math.max(1, c.limit - c.items)), maxBytes: Math.min(1048576, Math.max(1, maxBytes - c.bytes)) }));
+      const ceiling = Math.min(8 << 20, Math.max(1, maxBytes - c.bytes));
+      let page, pageBytes = Math.min(1048576, ceiling), limit = Math.min(256, Math.max(1, c.limit - c.items));
+      for (;;) {
+        try {
+          page = await bounded(c, () => deps.writer.readProjectDeletionSnapshot({ section, cursor,
+            expectedRevision: revision, limit, maxBytes: pageBytes }));
+          break;
+        } catch (error) {
+          if (section !== 'settings' || error.code !== 'DISCOVERY_LIMIT' || pageBytes >= ceiling) throw error;
+          limit = 1; pageBytes = Math.min(ceiling, pageBytes * 2);
+        }
+      }
       if (page.revision !== revision) throw fail('SNAPSHOT_STALE', 'Inventory revision changed.');
       charge(c, page.rows.length, page.bytes);
       rows.push(...page.rows);
@@ -198,12 +209,13 @@ function createProjectDeleteInventory(deps) {
       charge(c, 0, Buffer.byteLength(JSON.stringify(remote)));
       return remote;
     }
-    const parentPath = cwd => resolveWorktreePath(cwd) !== cwd ? resolveWorktreePath(cwd)
-      : worktreeParentPath(cwd?.replaceAll('\\', '/'))
-        || cwd?.replaceAll('\\', '/').match(/^(.+)\/\.work-files\/worktrees\/[^/]+\/?$/)?.[1];
-    const belongs = cwd => typeof cwd === 'string' && path.isAbsolute(cwd)
-      && (normalize(c, cwd) === normalize(c, project.projectPath)
-        || (parentPath(cwd) && normalize(c, parentPath(cwd)) === normalize(c, project.projectPath)));
+    const belongs = async cwd => {
+      if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return false;
+      await registerPath(c, cwd);
+      const normalized = normalize(c, cwd), selected = normalize(c, project.projectPath);
+      const parent = normalized.match(/^(.+?)\/\.(?:claude\/worktrees|claude-worktrees|worktrees|work-files\/worktrees)\/[^/]+\/?$/)?.[1];
+      return normalized === selected || parent === selected;
+    };
     const ownFolders = new Set(snapshot.folders.filter(row => owned(c, { alias: null, projectPath: row.projectPath }, project)
       && parseFolderKey(row.folder).alias === null).map(row => row.folder));
     for (const row of snapshot.sessions) if (parseFolderKey(row.folder).alias === null
@@ -249,6 +261,16 @@ function createProjectDeleteInventory(deps) {
         const inspected = await inspect(c, file, true);
         let cwd, identified = false;
         const validIds = new Set([row.sessionId, row.bridgeSessionId, row.parentSessionId].filter(Boolean));
+        if (runtime === 'claude') {
+          identified = !row.parentSessionId && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(row.sessionId)
+            && path.basename(file, '.jsonl') === row.sessionId;
+          const match = inspected.prefix.match(/"sessionId"\s*:\s*"([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})"/i);
+          if (match) {
+            charge(c, 1);
+            if (!validIds.has(match[1])) throw new Error('Transcript identity contradicts its indexed mapping.');
+            identified = true;
+          }
+        }
         for (const line of inspected.content.split('\n')) {
           if (!line.trim()) continue;
           charge(c, 1);
@@ -263,7 +285,8 @@ function createProjectDeleteInventory(deps) {
           if (cwd && identified) break;
         }
         if (!identified) throw new Error('Transcript identity is unavailable.');
-        if (!belongs(cwd)) throw new Error('Transcript ownership unavailable or changed.');
+        if (!cwd && runtime === 'claude' && encodeProjectPath(path.resolve(row.projectPath)) === row.folder) cwd = row.projectPath;
+        if (!await belongs(cwd)) throw new Error('Transcript ownership unavailable or changed.');
         member.present = true; member.size = inspected.size; member.mtimeMs = inspected.mtimeMs;
         member.liveness = deps.readLiveness ? await bounded(c, () => deps.readLiveness(member, budget)) : { state: 'unknown' };
       } catch (error) { propagate(error); candidate(file, error.message); }
@@ -271,11 +294,8 @@ function createProjectDeleteInventory(deps) {
     groups.push(...groupMap.values());
     const ids = new Set(members.map(row => row.id));
     const durableIds = new Set(snapshot.sessions.flatMap(row => [row.sessionId, ...durableRowLinks(row)]));
-    for (const row of [...snapshot.metadata, ...snapshot.fields]) {
-      if (!durableIds.has(row.sessionId) && (belongs(row.projectPath || row.cwd) || folderBelongs(row.folder))) {
-        candidate(row.sessionId, 'Historical metadata has no durable ownership.');
-      }
-    }
+    const orphanIds = new Set([...snapshot.metadata, ...snapshot.fields].map(row => row.sessionId).filter(id => !durableIds.has(id)));
+    const attributableOrphans = new Set();
     for (const row of local.filter(row => owned(c, { alias: null, projectPath: row.projectPath }, project))) {
       for (const id of durableRowLinks(row)) if (!ids.has(id)) candidate(id, 'Durable continuation ownership has no indexed transcript.');
     }
@@ -288,6 +308,12 @@ function createProjectDeleteInventory(deps) {
         return;
       }
       await entries(c, directory, async (entry, file) => {
+        if (folderBelongs(folder) && !entry.isDirectory() && entry.name.endsWith('.jsonl')) {
+          const layout = classifyTranscriptPath(path.relative(path.join(deps.projectsDir, folder), file));
+          const id = layout?.parentSessionId && layout.agentId ? subagentSessionId(layout.parentSessionId, layout.agentId)
+            : layout ? path.basename(file, '.jsonl') : null;
+          if (orphanIds.has(id)) attributableOrphans.add(id);
+        }
         if (entry.isSymbolicLink()) { if (folderBelongs(folder)) candidate(file, 'Linked transcript candidate.'); return; }
         if (entry.isDirectory()) { await scan(file, folder, depth + 1); return; }
         if (!entry.name.endsWith('.jsonl') || knownFiles.has(normalize(c, file))) return;
@@ -302,7 +328,7 @@ function createProjectDeleteInventory(deps) {
             if (cwd) break;
           }
         } catch (error) { propagate(error); if (folderBelongs(folder)) candidate(file, error.message); return; }
-        if (cwd ? belongs(cwd) : folderBelongs(folder)) candidate(file, 'Unindexed or unmappable transcript candidate.');
+        if (folderBelongs(folder) || await belongs(cwd)) candidate(file, 'Unindexed or unmappable transcript candidate.');
       });
     }
     try {
@@ -315,6 +341,7 @@ function createProjectDeleteInventory(deps) {
         catch (error) { propagate(error); if (folderBelongs(entry.name)) candidate(file, error.message); }
       });
     } catch (error) { propagate(error); candidate(deps.projectsDir, error.message); }
+    for (const id of attributableOrphans) candidate(id, 'Historical metadata has no durable ownership.');
     if (budget.options?.settings && !groups.some(row => owned(c, row, project))) candidate(project.projectPath, 'Settings ownership is unavailable for this empty registered project.');
     return { complete: true, groups, members, candidates };
   }

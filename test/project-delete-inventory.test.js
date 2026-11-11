@@ -322,8 +322,18 @@ test('A4c1FIX two MiB settings paginate within page budget', supported, async t 
   assert.equal(snapshot.settings.filter(row => row.key.startsWith('large-setting-')).length, 64);
 });
 
-test('A4c1FIX single oversized setting refuses with coded limit', supported, async t => {
+test('A4c1FIX2 single oversized setting retries within the store hard cap', supported, async t => {
   const h = await setup(t); h.db.setSetting('oversized', 'x'.repeat(1048576));
+  const bounds = [], read = h.writer.readProjectDeletionSnapshot;
+  h.writer.readProjectDeletionSnapshot = async input => { bounds.push(input.maxBytes); return read(input); };
+  let snapshot, error;
+  try { snapshot = await h.inventory.readSnapshot(budget()); } catch (e) { error = e; }
+  assert.equal(error, undefined, 'a lone setting below the hard cap must retry');
+  assert.equal(JSON.parse(snapshot.settings.find(row => row.key === 'oversized').value).length, 1048576);
+  assert.ok(bounds.some(bound => bound > 1048576));
+  assert.ok(bounds.every(bound => bound <= 8 << 20));
+  await assert.rejects(inventoryModule.createProjectDeleteInventory({ ...h.deps, maxBytes: 1048576 }).readSnapshot(budget()), { code: 'DISCOVERY_LIMIT' });
+  h.db.setSetting('oversized', 'x'.repeat(2 << 20));
   await assert.rejects(h.inventory.readSnapshot(budget()), { code: 'DISCOVERY_LIMIT' });
 });
 
@@ -372,4 +382,89 @@ test('A4c1FIX unmapped cache head belonging to selected project remains a candid
   const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
   assert.equal(result.ok, true);
   assert.ok(result.plan.refusals.some(row => row.target?.endsWith('unmapped-member.jsonl')), 'bounded cwd must attribute unmappable cached members');
+});
+
+for (const shape of ['real main head', '40 KiB subagent record']) test('A4c1FIX2 bounded identity and verified cwd for ' + shape, supported, async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+  const reads = new Map(), io = Object.create(fs.promises);
+  io.open = async (file, ...args) => {
+    const handle = await fs.promises.open(file, ...args), read = handle.read.bind(handle);
+    handle.read = async (...values) => { const result = await read(...values); reads.set(file, (reads.get(file) || 0) + result.bytesRead); return result; };
+    return handle;
+  };
+  const h = await setup(t, { fs: io }), parent = '11111111-1111-4111-8111-111111111111';
+  const subagent = shape.startsWith('40'), id = subagent ? `subagent:${parent}:worker` : parent;
+  const folder = require('../encode-project-path').encodeProjectPath(h.project.projectPath);
+  const file = path.join(h.projectsDir, folder, subagent ? `${parent}/subagents/agent-worker.jsonl` : id + '.jsonl');
+  const prefix = subagent ? JSON.stringify({ type: 'user', sessionId: parent, message: { content: 'x'.repeat(40 << 10) }, cwd: h.project.projectPath }) + '\n'
+    : ['custom-title', 'agent-name', 'mode', 'permission-mode', 'atis-latch'].map(type => JSON.stringify({ type, value: 'recorded metadata' }) + '\n').join('')
+      + JSON.stringify({ type: 'progress', data: 'x'.repeat(1100000) }) + '\n' + JSON.stringify({ sessionId: id, cwd: h.project.projectPath }) + '\n';
+  h.write(file, prefix); fs.truncateSync(file, 24 << 20);
+  h.db.setFolderMeta(folder, h.project.projectPath, 1);
+  h.db.upsertCachedSessions([{ sessionId: id, folder, projectPath: h.project.projectPath, runtime: 'claude',
+    parentSessionId: subagent ? parent : null, agentId: subagent ? 'worker' : null }]);
+  if (subagent) {
+    h.write(path.join(h.projectsDir, folder, parent + '.jsonl'), JSON.stringify({ sessionId: parent, cwd: h.project.projectPath }) + '\n');
+    h.db.upsertCachedSessions([{ sessionId: parent, folder, projectPath: h.project.projectPath, runtime: 'claude' }]);
+  }
+  let pageBytes = 0;
+  const readPage = h.writer.readProjectDeletionSnapshot;
+  h.writer.readProjectDeletionSnapshot = async input => { const result = await readPage(input); pageBytes += result.bytes; return result; };
+  const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(result.plan.refusals, [], 'real transcript shapes must have provable identity and cwd');
+  assert.ok(result.plan.members.some(row => row.id === id && row.present && row.size === (24 << 20)));
+  assert.equal(reads.get(file), 16 << 10, 'large transcript uses only one bounded prefix');
+  const bytes = [...reads.values()].reduce((sum, value) => sum + value, 0) + pageBytes + Buffer.byteLength(JSON.stringify({ complete: true, jobs: [] })) + 2;
+  const exact = await createProjectDeletePlanner(inventoryModule.createProjectDeleteInventory({ ...h.deps, maxBytes: bytes })).preview({ projectPath: h.project.projectPath, options });
+  assert.equal(exact.ok, true); assert.deepEqual(exact.plan.refusals, []);
+  const short = await createProjectDeletePlanner(inventoryModule.createProjectDeleteInventory({ ...h.deps, maxBytes: bytes - 1 })).preview({ projectPath: h.project.projectPath, options });
+  assert.equal(short.code, 'DISCOVERY_LIMIT', 'every prefix byte must be charged');
+});
+
+test('A4c1FIX2 verified foreign cwd stays outside selected members', supported, async t => {
+  const h = await setup(t), foreign = path.join(h.root, 'foreign'), id = '22222222-2222-4222-8222-222222222222';
+  const folder = require('../encode-project-path').encodeProjectPath(foreign);
+  h.write(path.join(h.projectsDir, folder, id + '.jsonl'), JSON.stringify({ sessionId: id, cwd: foreign }) + '\n');
+  h.db.setFolderMeta(folder, foreign, 1);
+  h.db.upsertCachedSessions([{ sessionId: id, folder, projectPath: foreign, runtime: 'claude' }]);
+  const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
+  assert.deepEqual(result.plan.refusals, []);
+  assert.ok(!result.plan.members.some(row => row.id === id));
+});
+
+test('A4c1FIX2 orphan metadata follows transcript identity in an owned folder', supported, async t => {
+  const h = await setup(t);
+  h.db.setName('own-orphan', 'own'); h.db.setName('foreign-orphan', 'foreign');
+  h.db.connection.prepare('INSERT INTO session_meta_fields (sessionId,field,revision,source) VALUES (?,?,?,?)').run('fields-orphan', 'name', 1, 'user');
+  for (const id of ['own-orphan', 'fields-orphan']) h.write(path.join(h.projectsDir, 'local', id + '.jsonl'), JSON.stringify({ sessionId: id, cwd: h.project.projectPath }) + '\n');
+  h.write(path.join(h.projectsDir, 'foreign', 'foreign-orphan.jsonl'), JSON.stringify({ sessionId: 'foreign-orphan', cwd: path.join(h.root, 'foreign') }) + '\n');
+  const b = budget(); await h.inventory.readSnapshot(b);
+  const result = await h.inventory.discoverOwnership(h.project, b);
+  for (const id of ['own-orphan', 'fields-orphan']) assert.ok(result.candidates.some(row => row.path === id && /metadata/i.test(row.reason)), 'attributable orphan metadata must refuse: ' + id);
+  assert.ok(!result.candidates.some(row => row.path === 'foreign-orphan'), 'unrelated orphan metadata is ignored');
+});
+
+test('A4c1FIX2 worktree cwd uses normalized bounded io without synchronous probes', supported, async t => {
+  const realpaths = new Map(), io = Object.create(fs.promises);
+  io.realpath = async file => { realpaths.set(file, (realpaths.get(file) || 0) + 1); return fs.promises.realpath(file); };
+  const h = await setup(t, { fs: io });
+  const cwd = path.join(h.project.projectPath, '.claude', 'worktrees', 'branch');
+  h.write(path.join(h.projectsDir, 'local', 'head/subagents/agent-worker.jsonl'), JSON.stringify({ sessionId: 'head', cwd }) + '\n');
+  const b = budget(); await h.inventory.readSnapshot(b);
+  let syncCalls = 0;
+  const original = fs.existsSync;
+  t.mock.method(fs, 'existsSync', (...args) => { syncCalls++; return original(...args); });
+  const result = await h.inventory.discoverOwnership(h.project, b);
+  assert.equal(syncCalls, 0, 'ownership must not bypass the bounded injected io');
+  assert.deepEqual(result.candidates, []);
+  assert.ok(realpaths.size > 0);
+  assert.ok([...realpaths.values()].every(count => count === 1), 'realpath checks are memoized');
+});
+
+test('A4c1FIX2 unindexed foreign cwd in an owned folder refuses', supported, async t => {
+  const h = await setup(t), file = path.join(h.projectsDir, 'local', 'contradiction.jsonl');
+  h.write(file, JSON.stringify({ sessionId: 'contradiction', cwd: path.join(h.root, 'foreign') }) + '\n');
+  const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
+  assert.ok(result.plan.refusals.some(row => row.target === file && row.code === 'DISCOVERY_CANDIDATE'), 'owned-folder foreign cwd must remain a refusal candidate');
 });

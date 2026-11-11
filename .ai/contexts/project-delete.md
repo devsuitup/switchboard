@@ -54,26 +54,41 @@ remain A4c2–A4d/CI obligations, not A4c1 claims.
 
 ### Review corrections (A4c1fix)
 
-Transcript discovery reads at most the first 16 KiB, drops an incomplete trailing
-record, and uses the first recorded cwd and first identity. It charges bytes
-actually read, while preserving full stat size and mtime for the member manifest.
+Transcript discovery reads at most the first 16 KiB and parses only complete
+records for cwd. Claude main transcripts also use their UUID filename identity;
+a raw sessionId UUID scan identifies subagents even when their first record is
+longer than the window. A missing cwd may use the indexed projectPath only when
+its resolved encodeProjectPath exactly matches the transcript folder. A recorded
+foreign cwd or contradictory identity still refuses that indexed member.
+It charges bytes actually read, while preserving full stat size and mtime for
+the member manifest.
 Recognized child worktree cwds (including .work-files/worktrees) resolve to their
 parent for transcript attribution; child cache groups remain separately retained.
+Worktree attribution is lexical after bounded, memoized realpath registration;
+it does not call the synchronous filesystem worktree resolver.
 Schedules and retained evidence still require bounded complete reads.
 
-Orphan metadata without project provenance stays outside the manifest. Durable
-links to absent indexed parts still refuse the owning project. Unmapped cache
+Orphan session_meta and session_meta_fields IDs are matched to transcript paths
+during the bounded owned-folder walk, including subagent layouts. Attributable
+orphans refuse because they lack durable ownership; unrelated orphans stay
+outside the manifest. This does not grant metadata deletion authority from a
+filesystem observation alone. Durable links to absent indexed parts still refuse
+the owning project. Unmapped cache
 rows refuse only with selected-folder evidence. Unindexed files are attributed
-by their bounded first cwd, falling back to the selected folder mapping or exact
-encodeProjectPath encoding when cwd is unavailable. Known foreign folders are
-skipped; foreign cwd heads do not create candidates for the selected project.
+by their bounded first cwd or the selected folder mapping/exact encodeProjectPath
+encoding. A foreign cwd in a selected folder remains a refusal candidate. Known
+foreign folders are skipped; foreign heads outside selected folders are excluded.
 Settings ownership is required only when settings deletion is selected.
 
 Snapshot reads restart from the first section/page on SNAPSHOT_STALE, at most
 three attempts by default (snapshotAttempts injection, hard cap five). The
 injected now clock, original deadline, item and byte budgets cover all attempts;
-discarded pages still consume budget. Other errors never retry. Raw settings use
-the same JSON-parse-or-string fallback as getSetting.
+discarded pages still consume budget. A settings page whose first row exceeds
+the 1 MiB page bound retries that same cursor with limit=1 and a doubled bound,
+up to the lesser of the remaining aggregate budget and the store's 8 MiB hard
+cap. The store's conservative JSON byte bound still applies (six times raw
+string bytes plus overhead); failed sizing probes fetch no payload. Other errors
+never retry. Raw settings use the same JSON-parse-or-string fallback as getSetting.
 
 ## Historical landing: persisted progress substrate (#474 A4b1)
 
