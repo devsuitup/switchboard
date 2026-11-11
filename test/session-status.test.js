@@ -30,6 +30,45 @@ test('owned descriptorless PTY with closed head is idle with original proof time
   assert.equal(result.evidence_at, new Date(30).toISOString());
 });
 
+test('1083FIX: status straddles first PID publication and captures its start', async () => {
+  const h = gather({ session: { pty: { pid: 0 }, statusPtyStart: null },
+    getPtyStart: pid => pid === 42 ? '100' : 'idle-process',
+    readHead: async () => { h.session.pty.pid = 42; return { state: 'closed', observedAt: 30 }; } });
+  const result = await h.service.gather(id);
+  assert.equal(result.state, 'idle');
+  assert.equal(result.evidence, 'owned-pty');
+  assert.equal(result.pid, 42);
+  assert.equal(h.session.statusPtyStart, '100');
+});
+
+test('1083FIX: status captures a late start and refuses later same-PID reuse', async () => {
+  let start = null;
+  const h = gather({ session: { statusPtyStart: null }, getPtyStart: () => start,
+    readHead: async () => { start = '100'; return { state: 'closed', observedAt: 30 }; } });
+  assert.equal((await h.service.gather(id)).state, 'idle');
+  assert.equal(h.session.statusPtyStart, '100');
+  start = '200';
+  assert.equal((await h.service.gather(id)).detail, 'ambiguous');
+});
+
+for (const change of ['pid', 'pty', 'generation', 'start']) {
+  test(`1083FIX: status refuses ${change} replacement after first PID capture`, async () => {
+    let start = '100';
+    const h = gather({ session: { pty: { pid: 0 }, statusPtyStart: null }, getPtyStart: () => start,
+      observeOwned: session => { session.pty.pid = 42; return null; },
+      readHead: async () => {
+        if (change === 'pid') h.session.pty.pid = 43;
+        if (change === 'pty') h.session.pty = { pid: 42 };
+        if (change === 'generation') h.session.generation++;
+        if (change === 'start') start = '200';
+        return { state: 'closed', observedAt: 30 };
+      } });
+    const result = await h.service.gather(id);
+    assert.equal(result.detail, 'ambiguous');
+    assert.equal(result.evidence, 'none');
+  });
+}
+
 test('1083: auto-mode information after OSC idle preserves idle status through the real head reader', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'status-info-1083-'));
   const transcript = path.join(root, id + '.jsonl');
@@ -48,6 +87,24 @@ test('1083: auto-mode information after OSC idle preserves idle status through t
   assert.equal(result.evidence_at, new Date(200).toISOString());
   append({ type: 'user', timestamp: new Date(4000).toISOString(), message: { content: 'Next prompt' } });
   assert.equal((await h.service.gather(id)).state, 'busy');
+});
+
+test('1083FIX: active turn plus information stays busy against a stale idle hint', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'status-active-info-'));
+  const transcript = path.join(root, id + '.jsonl');
+  const { createTaskRecordsClient } = require('../task-records-client');
+  const client = createTaskRecordsClient();
+  t.after(async () => { await client.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
+  const append = entry => fs.appendFileSync(transcript, JSON.stringify(entry) + '\n');
+  append({ type: 'user', timestamp: new Date(3000).toISOString(), message: { content: 'Active work' } });
+  const h = gather({ session: { _statusOsc: { generation: 1, idleAt: 2000 } },
+    readHead: (_id, _row, _session, deadline) => client.readHeadForStatus(transcript, id, deadline), now: Date.now });
+  assert.equal((await h.service.gather(id)).state, 'busy');
+  append({ type: 'system', subtype: 'informational', content: 'auto mode', timestamp: new Date(4000).toISOString() });
+  const result = await h.service.gather(id);
+  assert.equal(result.state, 'busy');
+  assert.equal(result.headTurn, 'open');
+  assert.equal(result.evidence_at, new Date(3000).toISOString());
 });
 test('open head wins shell and preserves the head evidence timestamp', async () => {
   const h = gather({ observeOwned: () => ({ writer: { status: 'shell', statusUpdatedAt: 50 } }),
@@ -201,7 +258,8 @@ test('owned status does not initiate a Windows table probe when the existing tab
   const activeSessions = new Map([[id, { generation: 1, pty: { pid: 42 }, startedAt: 10 }]]);
   let observations = 0;
   const context = createTriggerContext({ activeSessions, log: {}, statusSources: { readHead: async () => ({ state: 'closed', observedAt: 20 }) },
-    cliSessionState: { deliveryProcessTableFresh: () => false, observeTabWriter() { observations++; return null; } } });
+    cliSessionState: { deliveryPtyStart: () => null,
+      deliveryProcessTableFresh: () => false, observeTabWriter() { observations++; return null; } } });
   const result = await context.sessionStatus.gather(id);
   assert.equal(result.state, 'idle');
   if (process.platform === 'win32') assert.equal(observations, 0, 'owned PTY status must not initiate a global Windows refresh');

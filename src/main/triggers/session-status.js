@@ -5,7 +5,7 @@ const iso = at => Number.isFinite(at) ? new Date(at).toISOString() : null;
 const key = id => String(id).toLowerCase();
 
 function createSessionStatus({ activeSessions, getKnown = () => null, readHead = async () => null,
-  probe = async () => null, observeOwned = () => null, hosted = () => null, exits = new Map(),
+  probe = async () => null, observeOwned = () => null, getPtyStart = () => null, hosted = () => null, exits = new Map(),
   now = Date.now, schedule = setTimeout, cancel = clearTimeout } = {}) {
   function direct(id) {
     return [...new Set([...activeSessions].filter(([name, session]) => key(session?.realSessionId || name) === key(id)
@@ -38,20 +38,32 @@ function createSessionStatus({ activeSessions, getKnown = () => null, readHead =
     const result = { sessionId: known || matches.length || job || exit ? key(id) : null,
       state: 'unknown', detail: 'not-found', liveness: 'unknown', headTurn: 'unknown', descriptorStatus: null,
       evidence: 'none', evidence_at: null, pid: null, jobId: null };
-    const pin = session && { generation: session.generation, pty: session.pty, pid: session.pty?.pid,
+    const pin = session && { generation: session.generation, pty: session.pty, pid: session.pty?.pid === 0 ? null : session.pty?.pid,
       start: session.statusPtyStart };
-    const current = () => !session || session.isAttach || direct(id).length === 1 && direct(id)[0] === session && !session.exited
-      && session.generation === pin.generation && session.pty === pin.pty && session.pty?.pid === pin.pid
-      && session.statusPtyStart === pin.start;
+    const current = () => {
+      if (!session || session.isAttach) return true;
+      if (direct(id).length !== 1 || direct(id)[0] !== session || session.exited
+        || session.generation !== pin.generation || session.pty !== pin.pty) return false;
+      if (pin.pid === null && Number.isInteger(session.pty?.pid) && session.pty.pid > 0) pin.pid = session.pty.pid;
+      if (pin.pid !== null && session.pty?.pid !== pin.pid) return false;
+      const start = Number.isInteger(pin.pid) && pin.pid > 0 ? getPtyStart(pin.pid) : null;
+      if (pin.start != null && start != null && pin.start !== start) return false;
+      if (pin.start != null && session.statusPtyStart !== pin.start) return false;
+      pin.start ??= session.statusPtyStart ?? start;
+      session.statusPtyStart ??= pin.start;
+      return true;
+    };
     let snapshot = { liveness: 'unknown' }, proof = { ambiguous: matches.length > 1 }, decisive = null;
     let descriptor, ownedIdentity, probeObservation;
     const identity = observation => observation?.writer && JSON.stringify([observation.identity,
       observation.writer.pid, observation.writer.procStart, observation.writer.namespace, observation.writer.rawPid, observation.writer.sessionId]);
     if (session && !session.isAttach && pin.pty && Number.isInteger(pin.generation)) {
+      if (!current()) proof.ambiguous = true;
       snapshot.liveness = 'alive'; proof.ptyHere = true;
       result.evidence = 'owned-pty'; result.pid = pin.pid > 0 ? pin.pid : null; decisive = session.startedAt ?? session.launchStartedAt;
       const observation = observeOwned(session, deadline);
       if (observation && !observation.uncertain) { descriptor = observation.writer; ownedIdentity = identity(observation); }
+      if (!current()) proof.ambiguous = true;
     } else if (job?.verified && job.live) {
       snapshot.liveness = 'alive'; proof.background = true;
       descriptor = job.descriptor; result.evidence = 'background-job'; result.jobId = job.id;
@@ -89,6 +101,8 @@ function createSessionStatus({ activeSessions, getKnown = () => null, readHead =
       snapshot = { liveness: 'dead' }; proof = { confirmedExit: true, ptyHere: false };
       result.evidence = 'confirmed-exit'; decisive = exit.at;
     }
+    if (!current()) proof.ambiguous = true;
+    if (proof.ptyHere) result.pid = pin.pid > 0 ? pin.pid : null;
     if (proof.ambiguous) {
       snapshot = { liveness: 'unknown' }; descriptor = null; proof.ptyHere = false;
       result.evidence = 'none'; result.pid = null; result.jobId = null; decisive = null;

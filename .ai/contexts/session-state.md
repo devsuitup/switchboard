@@ -354,6 +354,18 @@ classification; actual prompts, assistant records, queue events and closure
 evidence retain their existing ordering. Tests use the real task reader and
 status gatherer, and the renderer's sidebar projection after OSC idle.
 
+The #1083 review searched repository tests, fixtures, docs and the CLI-state
+format notes. The transcript examples are the synthetic auto-mode notice and
+the watcher negative control that changes a compaction record's subtype to
+`informational`; no exhaustive CLI informational-content catalogue is present.
+The filter therefore does not assume these records occur only after a turn.
+During an active turn, its real prompt/assistant timestamp still outranks an
+older OSC idle hint even if an informational line follows it. Status and sidebar
+regressions exercise that ordering through the real task worker. Skipping the
+notice changes neither the open state nor that activity timestamp. Restricting
+the skip to a transcript-closed turn would revive the original bug: OSC may
+have closed the projection while the raw transcript still classifies as open.
+
 The row's animation is selected from its `headSessionId || sessionId`, with
 three transcript states: `open`, `closed`, and `unknown`. `transcript-turn.js`
 retains its existing `closed` API for trigger delivery and adds `state`.

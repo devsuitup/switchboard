@@ -95,6 +95,7 @@ function createTriggerContext(deps) {
   if (deps.lifecycle) ctx.lifecycle = deps.lifecycle;
   ctx.sessionRequests = deps.sessionRequests;
   ctx.sessionStatus = deps.sessionStatus || createSessionStatus({ activeSessions, ...deps.statusSources,
+    getPtyStart: pid => source.deliveryPtyStart(pid),
     probe: (id, deadline) => source.readStatusEvidence(id, deadline),
     observeOwned: (session, deadline) => {
       if (session.sandbox) return source.observeTabWriterV1({ session, pty: session.pty, generation: session.generation,

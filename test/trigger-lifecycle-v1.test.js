@@ -15,7 +15,7 @@ const { resolveLocalTarget, resolveProject } = require('../src/main/triggers/tri
 const { validateTriggerOpen } = require('../src/main/triggers/trigger-launch');
 const { encodeProjectPath } = require('../encode-project-path');
 
-async function fixture(t, { windowsStartup = false, delayedPid = false, startupChange } = {}) {
+async function fixture(t, { windowsStartup = false, delayedPid = false, freshTable = false, startupChange } = {}) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sw-lifecycle-')));
   const dirs = Object.fromEntries(['sessions', 'projects', 'project', 'triggers'].map(name => [name, path.join(root, name)]));
   Object.values(dirs).forEach(dir => fs.mkdirSync(dir));
@@ -56,10 +56,12 @@ async function fixture(t, { windowsStartup = false, delayedPid = false, startupC
       isProcessAlive: () => true, readProcStart: pid => pid === writerPid ? writerStart : shellStart,
       readProcessTable: async () => {
         tableReads++;
-        if (tableReads === 1) throw new Error('process table unreadable once');
-        return new Map([[process.pid, { ppid: 1, created: shellStart, commandLine: 'bash.exe' }],
+        if (!freshTable && tableReads === 1) throw new Error('process table unreadable once');
+        return new Map([[0, { ppid: 0, created: '134000000000000000', commandLine: 'System Idle Process' }],
+          [process.pid, { ppid: 1, created: shellStart, commandLine: 'bash.exe' }],
           [writerPid, { ppid: process.pid, created: writerStart, commandLine: 'claude.exe' }]]);
       } });
+    if (freshTable) await cli.refreshProcessTable({ force: true });
   }
   const folder = encodeProjectPath(dirs.project);
   fs.mkdirSync(path.join(dirs.projects, folder));
@@ -125,13 +127,12 @@ async function fixture(t, { windowsStartup = false, delayedPid = false, startupC
 }
 
 for (const mode of ['new', 'resume']) {
-  for (const delayedPid of [false, true]) {
-    test(`Windows ${mode}: ${delayedPid ? 'ConPTY publishes its first PID later' : 'known PID with initially unreadable start'} stays alive until CLI idle`, async t => {
-      const f = await fixture(t, { windowsStartup: true, delayedPid });
+  for (const [delayedPid, freshTable] of [[false, false], [true, false], [true, true]]) {
+    test(`Windows ${mode}: ${freshTable ? 'fresh table includes PID zero' : delayedPid ? 'ConPTY publishes its first PID later' : 'known PID with initially unreadable start'} stays alive until CLI idle`, async t => {
+      const f = await fixture(t, { windowsStartup: true, delayedPid, freshTable });
       const payload = mode === 'new' ? { new: { project: f.dirs.project, name: 'Windows startup' } } : { sessionId: ID };
       const result = await f.publish({ version: 1, action: 'open', ...payload, prompt: 'hello', timeout_ms: 4000 });
       assert.equal([...f.main.map.values()][0].exited, false, 'the starting PTY is still alive');
-      assert.equal([...f.main.map.values()][0].hostPtyStart, null, 'spawn-time start identity was unavailable');
       assert.equal(result.outcome, 'opened', JSON.stringify(result));
       assert.deepEqual(f.writes, ['hello', '\r']);
       assert.equal(result[mode === 'new' ? 'created' : 'resumed'], true);

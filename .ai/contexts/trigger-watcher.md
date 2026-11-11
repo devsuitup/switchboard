@@ -10,14 +10,18 @@ deadline and captures the first positive PID exactly once. A later positive
 PID change, PTY replacement, generation change or exit still invalidates the
 binding. No prompt is admitted while the PID remains unpublished.
 
-Spawn-time process start identity can also be unavailable while the Windows
-process table refreshes. The existing start comparison keeps rereading it and
-captures the first observed value; absence alone is not exit evidence. Once
-known, a different start still refuses. First-writer revocation and independent
-status pins are unchanged. Tests exercise the real file watcher, action/broker,
-renderer and extracted main open handler with delayed shell PID publication,
-a failed process-table read, and a later descendant CLI descriptor. No live
-ConPTY or Electron is launched by those tests.
+With a fresh Windows process table, PID zero can have a start identity: WMI's
+System Idle Process creation time. `deliveryPtyStart` ignores every PID that is
+not a positive integer, so this unrelated identity cannot become the spawn pin.
+Delivery captures the first available start of the published shell PID and
+refuses a later different start; absence alone is not exit evidence.
+First-writer revocation remains unchanged. Status independently accepts the
+first positive PID and fills `statusPtyStart` from that PID, checking both pins
+before and after its asynchronous head read. Later PID/start changes, replaced
+PTYs and generations remain ambiguous. Tests exercise the real file watcher,
+action/broker, renderer and extracted main open handler with delayed shell PID
+publication, both a fresh table containing PID zero and a failed table read,
+and a later descendant CLI descriptor. No live ConPTY or Electron is launched.
 
 ## Typed read-only requests (#380 S1b3)
 
@@ -54,7 +58,8 @@ renderer, lifecycle, capability, profile or admission operation. A new UUID is
 required for a new observation. See [automation](../../docs/automation.md).
 
 The owned status pin uses the actual PTY object, its generation, PID and a
-separate `statusPtyStart` captured at spawn. The v1 delivery `hostPtyStart`
+separate `statusPtyStart` captured at spawn or, when missing, from the first
+available start of the published positive PID. The v1 delivery `hostPtyStart`
 remains captured only for trigger launches. A missing or uncertain second
 descriptor observation drops descriptor evidence while preserving the current
 owned PTY; two present writers with different identities are ambiguous.

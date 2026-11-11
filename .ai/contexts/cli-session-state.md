@@ -2,6 +2,11 @@
 
 ## Bounded status evidence (#380 S1b3)
 
+`deliveryPtyStart` accepts only positive integer PIDs (#1083). A fresh WMI
+table can include PID zero with System Idle Process's creation time; ConPTY's
+pending PID zero must never inherit it. Both delivery and status capture a
+missing start from the first published real PID and reject later changes.
+
 `readStatusEvidence(id, deadline)` is a read-only adapter over the v1 reader,
 not `findLiveProcess` or a PID-only handle. Windows first races the shared
 process-table refresh against the remaining deadline and verifies table age

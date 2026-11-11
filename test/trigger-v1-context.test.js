@@ -44,6 +44,35 @@ test('same-number PTY PID reuse invalidates the bound start identity', () => {
   assert.deepEqual(f.writes, []);
 });
 
+test('1083FIX: delivery captures the first real PID start and refuses its later reuse', () => {
+  const f = fixture();
+  f.session.pty.pid = 0;
+  f.session.hostPtyStart = null;
+  let start = '10';
+  f.source.deliveryPtyStart = pid => pid > 0 ? start : null;
+  const pinned = f.ctx.pinDelivery(ID, f.ctx.getPtyForSession(ID), false, { v1: true });
+  pinned.binding.beginStep('hello');
+  f.session.pty.pid = 12345;
+  pinned.handle.write('hello');
+  start = '20';
+  assert.throws(() => pinned.handle.write('\r'), /generation binding changed/);
+  assert.deepEqual(f.writes, ['hello']);
+});
+
+test('1083FIX: trigger status reads the real PID start from its configured CLI source', async () => {
+  const f = fixture();
+  f.session.pty.pid = 0;
+  f.session.statusPtyStart = null;
+  f.source.deliveryPtyStart = pid => pid > 0 ? '10' : null;
+  await f.ctx.sessionStatus.gather(ID);
+  assert.equal(f.session.statusPtyStart, null);
+  f.session.pty.pid = 12345;
+  assert.equal((await f.ctx.sessionStatus.gather(ID)).liveness, 'alive');
+  assert.equal(f.session.statusPtyStart, '10');
+  f.source.deliveryPtyStart = () => '20';
+  assert.equal((await f.ctx.sessionStatus.gather(ID)).detail, 'ambiguous');
+});
+
 test('a positive pinned PID cannot be replaced by another positive PID', () => {
   const f = fixture(); f.session.pty.pid++;
   assert.throws(() => f.pinned.handle.write('hello'), /generation binding changed/);
