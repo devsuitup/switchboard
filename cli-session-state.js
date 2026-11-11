@@ -1009,7 +1009,7 @@ function observeTabWriter(ptyPid, snapshot) {
 }
 
 function deliveryPtyStart(pid) {
-  if (!deliveryInitialized) return null;
+  if (!deliveryInitialized || !Number.isInteger(pid) || pid <= 0) return null;
   if (processTableEnabled) return processTableFresh() ? tableEntry(pid)?.created?.toString() ?? null : null;
   if (platform !== 'linux') return null;
   try { const start = readProcStart(pid); return start == null ? null : String(start); } catch { return null; }
