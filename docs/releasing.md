@@ -80,10 +80,11 @@ gh's default here is the upstream repository, `doctly/switchboard`.
 
    The download directory must not exist yet. Merge its `dist-*` artifact
    directories into one fresh directory containing only the assets to upload.
-   Both Linux jobs produce `switchboard-doctly-<v>.pacman` with the same
-   filename: keep the copy from `dist-linux-x64` and discard the arm64 copy.
-   (CI merges the artifacts with `merge-multiple`, so which copy CI publishes
-   depends on download order: v0.0.104 shipped the aarch64 copy.) If macOS
+   Keep both Linux pacman packages: `switchboard-doctly-<v>-x64.pacman`
+   from `dist-linux-x64` and `switchboard-doctly-<v>-aarch64.pacman` from
+   `dist-linux-arm64`. Their distinct names let both coexist in the merged
+   directory. Verify that `latest-linux.yml` and `latest-linux-arm64.yml`
+   reference their respective packages with matching sizes and hashes. If macOS
    artifacts are absent, omit `latest-mac.yml`. Never copy a previous release's
    mac manifest: upload it only when its version, filenames, sizes and hashes
    match the macOS files actually attached to this release.
@@ -112,10 +113,10 @@ gh's default here is the upstream repository, `doctly/switchboard`.
 
    After all builds succeed, the publish job:
    - creates a **draft** release named after the version;
-   - uploads each artifact separately, retrying each up to five times — 19
+   - uploads each artifact separately, retrying each up to five times — 20
      assets for a full build (dmg, zip and their blockmaps for arm64 and x64; the
-     Windows installer and its blockmap; two AppImages, two debs, one pacman
-     package; four `latest*.yml` update manifests);
+     Windows installer and its blockmap; two AppImages, two debs, two pacman
+     packages (`-x64.pacman` and `-aarch64.pacman`); four `latest*.yml` update manifests);
    - writes the release notes: the text of the tag's `CHANGELOG.md` section,
      without its heading (`scripts/changelog-section.js`), then a **Full
      changelog** link comparing the previous tag with this one. It fails

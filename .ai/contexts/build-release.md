@@ -37,8 +37,20 @@ in its API path; draft creation and every upload attempt pass
 `--repo "${GITHUB_REPOSITORY}"`, so a clone's gh default cannot redirect writes.
 The script tests execute Bash with a fake gh boundary and cover repository
 selection, missing configuration, draft guards and upload retries. Manual
-recovery downloads the tag run's artifacts, keeps the x64 copy of the colliding
-pacman filename, then uses this script; see the release guide for commands.
+recovery downloads the tag run's artifacts, keeps both architecture-specific
+pacman packages, then uses this script; see the release guide for commands.
+
+The pacman `artifactName` in `package.json` includes `${arch}` so publish's
+`merge-multiple: true` cannot overwrite one Linux package with the other.
+electron-builder's pacman artifact macro expands to `x64` and `aarch64`
+(the latter is the arm64 job), producing `switchboard-doctly-<v>-x64.pacman`
+and `switchboard-doctly-<v>-aarch64.pacman`. The package name remains
+`switchboard-doctly`. A full release now has 20 assets, including both pacman
+packages; each Linux update manifest must reference its own package and hash.
+`test/build-workflow.test.js` loads the real package configuration and builder
+macro helpers to check that both matrix entries retain distinct filenames.
+This guard does not build packages or generate manifests; verify those in the
+tag build before publishing.
 
 Windows stays pinned to `windows-2022`: the Server 2025 image behind
 `windows-latest` lacks the Visual Studio C++ toolchain needed by node-gyp for

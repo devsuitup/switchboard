@@ -144,7 +144,7 @@
     },
     "pacman": {
       "packageName": "switchboard-doctly",
-      "artifactName": "switchboard-doctly-${version}.${ext}",
+      "artifactName": "switchboard-doctly-${version}-${arch}.${ext}",
       "depends": [
         "gtk3",
         "nss",
