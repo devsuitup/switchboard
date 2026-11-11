@@ -1,11 +1,111 @@
-# Project deletion: read-only planning (#474 A4a)
+# Project deletion: dormant backend (#474 A4a–A4c1)
 
-## Persisted progress substrate (#474 A4b1)
+## Current state: bounded inventory and recovery reads (A4c1)
+
+A4b4 already supplies `completeProjectDeletion`, integer writer revision and
+project epoch fences, exact groups/members plus jobs/tabs/schedules inventory,
+terminal/noLateCommit outcomes and committed invalidation targets. Main, IPC
+and the two user entry points still have no new deletion caller. The earlier
+substrate sections below describe their historical landing boundary.
+
+`createProjectDeleteInventory` supplies the six planner ports, with an explicit
+writer, projects directory, data directory, active-session Map, scheduler
+snapshot and authoritative job/liveness readers. It does not populate caches,
+seed schedule registration, claim minutes or refresh projects. Missing liveness
+or job authority refuses; headless schedule runs remain external uncontrolled
+processes. Saved working-set identities are unioned with active tabs; durable
+cache ownership preserves remote hosts and uncertain fresh restores refuse.
+
+The ordered worker snapshot pages sessions (including archived cache rows and
+continuation links), folders, metadata/provenance, settings and project fences.
+All pages and the final revision read must agree. Each SQL page bounds row count
+and projected byte size before fetching payloads. Receipt pages also include
+retained committed headers, so bootstrap's interrupted-only list is insufficient
+by itself. Neither read route increments revision or enters mutation routing.
+
+Discovery bounds aggregate entries/records (20,000 default, 50,000 hard), bytes
+(32 MiB default, 64 MiB hard), transcript heads (16 KiB), other files
+(8 MiB default, 16 MiB hard), each port
+(3 s default) and the whole observation (10 s default, 15 s hard). The clock and
+timer ports are injectable. Directory iteration and file reads are asynchronous;
+realpaths are memoized within an observation. Attributable unindexed/unmapped
+transcripts, missing parts, linked files/directories, mixed ownership and
+unreadable schedules remain refusal candidates. Unrelated orphan metadata does
+not refuse another project. Empty registered projects without durable settings
+ownership refuse only when settings erasure is selected. Remote
+ownership and schedules need authoritative bounded readers; unavailable remote
+discovery refuses and cached absence never proves completeness. These ports retain
+declared host and POSIX identity; they never apply local path normalization.
+
+Disabled and malformed schedule filenames remain visible. Existing matching
+schedule-state claims and schedule-runs results are read without pruning or
+claiming. `inspectRetainedFiles` returns a bounded size/mtime/path manifest;
+it grants no unlink authority. All source, transcript and schedule files remain.
+Live PTY objects are projected to cloneable identity/generation/PID fields.
+Transcript IDs must agree with the indexed identity or its parent/bridge binding.
+Expired open/opendir calls dispose their handles even when the IO resolves late.
+
+After a committed completion/fence unit, failure of the auxiliary `hasHistory`
+read keeps the pending-history guard conservatively armed. The written result,
+settings ACK and producer fencing survive. Transaction failures still reject.
+Plain-Node real-store tests exercise this worker path, restart sealing and lost
+committed replies. Actual handler, stop/death, native crash and renderer acceptance
+remain A4c2–A4d/CI obligations, not A4c1 claims.
+
+### Review corrections (A4c1fix)
+
+Transcript discovery reads at most the first 16 KiB and parses only complete
+records. For a Claude main transcript, UUID filename identity means a file exists
+at the mapped path and the bounded prefix does not contradict it. A raw sessionId
+UUID scan can also establish identity. Subagents whose sessionId follows a large
+message use the matching parent directory and agent filename plus a bounded raw
+agentId string scan; contradictory identities still refuse.
+When complete records supply no cwd, a bounded raw cwd string scan takes priority
+over the indexed projectPath. Only absence of a cwd key in that prefix allows the
+row fallback, and its resolved encodeProjectPath must exactly match the folder.
+Encoding is not injective, so it cannot override a recorded cwd. An incomplete or
+non-string cwd value does not permit the fallback. Main transcripts retain strict
+cwd ownership. A subagent in its indexed parent's folder follows that parent's
+project ownership regardless of its own cwd; a cwd under the selected project is
+also acceptable for a matching subagent layout.
+It charges bytes actually read, while preserving full stat size and mtime for
+the member manifest.
+Recognized child worktree cwds (including .work-files/worktrees) resolve to their
+parent for transcript attribution; child cache groups remain separately retained.
+Worktree attribution is lexical after bounded, memoized realpath registration;
+it does not call the synchronous filesystem worktree resolver.
+Schedules and retained evidence still require bounded complete reads.
+
+Orphan session_meta and session_meta_fields IDs are matched to transcript paths
+during the bounded owned-folder walk, including subagent layouts. Attributable
+orphans refuse because they lack durable ownership; unrelated orphans stay
+outside the manifest. This does not grant metadata deletion authority from a
+filesystem observation alone. Durable links to absent indexed parts still refuse
+the owning project. Unmapped cache
+rows refuse only with selected-folder evidence. Unindexed files are attributed
+by their bounded first cwd or the selected folder mapping/exact encodeProjectPath
+encoding. A foreign cwd in a selected folder remains a refusal candidate. Known
+foreign folders are skipped; foreign heads outside selected folders are excluded.
+Per-file cwd realpath failures remain candidates and scanning continues through
+the folder; deadline and budget errors still propagate immediately.
+Settings ownership is required only when settings deletion is selected.
+
+Snapshot reads restart from the first section/page on SNAPSHOT_STALE, at most
+three attempts by default (snapshotAttempts injection, hard cap five). The
+injected now clock, original deadline, item and byte budgets cover all attempts;
+discarded pages still consume budget. A settings page whose first row exceeds
+the 1 MiB page bound retries that same cursor with limit=1 and a doubled bound,
+up to the lesser of the remaining aggregate budget and the store's 8 MiB hard
+cap. The store's conservative JSON byte bound still applies (six times raw
+string bytes plus overhead); failed sizing probes fetch no payload. Other errors
+never retry. Raw settings use the same JSON-parse-or-string fallback as getSetting.
+
+## Historical landing: persisted progress substrate (#474 A4b1)
 
 `project-delete-progress.js` is a dormant backend library. Its store schema,
 transaction hooks, budgets and worker routing are documented in
 [session-index-writer.md](session-index-writer.md#dormant-project-deletion-substrate-474-a4b1).
-There is no `completeProjectDeletion` command or production deletion caller.
+At the A4b1 landing there was no `completeProjectDeletion` command or production deletion caller.
 The existing planner and its fingerprint semantics are unchanged.
 
 `operationId(project, expectedEpoch, uuid?)` binds a canonical `[alias,path]`

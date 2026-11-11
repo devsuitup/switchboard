@@ -1,7 +1,7 @@
 'use strict';
 
 // see .ai/contexts/session-index-writer.md
-function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusyCounts = () => {}, timeoutMs = 30000, maxRestarts = 3,
+function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusyCounts = () => {}, onBootstrap = () => {}, timeoutMs = 30000, maxRestarts = 3,
   now = () => Date.now(), setTimeout = global.setTimeout, clearTimeout = global.clearTimeout, heartbeatMs = 30000, log = console }) {
   let worker, closing, stopped = false, terminated = false, nextId = 0, restartTimer;
   const restarts = [];
@@ -11,7 +11,7 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
   const sealedWorkflows = new Set();
   const retiredWorkflows = new Set();
   const workflowTerminations = new Map();
-  let bootResolve, bootReject;
+  let bootResolve, bootReject, bootstrapWarning = false;
   const ready = new Promise((resolve, reject) => { bootResolve = resolve; bootReject = reject; });
   ready.catch(() => {});
 
@@ -113,8 +113,15 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
       }
       if (message.heartbeat) return;
       if (message.ready) {
+        if (current.writerReady) return;
         clearTimeout(current.bootTimer);
         onSettings(message.settings);
+        try { onBootstrap(message); } catch (error) {
+          if (!bootstrapWarning) {
+            bootstrapWarning = true;
+            try { log.warn('[session-index-writer] bootstrap observer failed: ' + (error?.message ?? String(error))); } catch {}
+          }
+        }
         current.writerReady = true;
         bootResolve(message);
         dispatch();

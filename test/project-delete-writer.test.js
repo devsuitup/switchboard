@@ -1044,3 +1044,103 @@ test('remote settings keys preserve POSIX case even when the writer runs on Wind
   deep(h.db.getSetting('project:/srv/Other'), { sentinel: 'different case project' }, 'unselected POSIX case-sensitive settings key stays');
   assert.equal(h.db.getSetting('project:/srv/other'), null);
 });
+for (const command of ['completeProjectDeletion', 'fenceProjectDeletion']) test(`A4c1 postcommit history failure preserves ${command} ACK and producer fencing`, supported, async t => {
+  const h = setup(t), input = h.manifest(false, true), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  const original = h.db.projectDeletion.hasHistory, transact = h.db.transact;
+  let afterCommit = false, injected = 0, producer;
+  h.db.transact = fn => {
+    const result = transact(fn);
+    afterCommit = true;
+    return result;
+  };
+  h.db.projectDeletion.hasHistory = () => {
+    if (afterCommit) {
+      afterCommit = false; injected++;
+      producer ||= worker.post('upsertCachedSessions', [{ ...h.selected[0], messageCount: 42 }]);
+      throw new Error('postcommit history unavailable');
+    }
+    return original();
+  };
+  const reply = await worker.post(command, input);
+  assert.ok(injected > 0, 'fault occurred after a committed transaction');
+  assert.equal(reply.error, undefined, 'auxiliary history read must not rewrite a committed ACK as failure');
+  assert.equal(reply.result.state, command === 'completeProjectDeletion' ? 'committed' : 'notStarted');
+  assert.ok(reply.settings, 'committed settings acknowledgment is preserved');
+  assert.equal((await producer).error?.code, 'PROJECT_EPOCH_STALE', 'queued producer stays fenced');
+});
+
+test('A4c1 worker ordered bounded snapshot pages do not mutate and reject a changed revision', supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  const writer = createSessionIndexWriter({ client: worker.client, readonlyBackend: h.db }, cache); await writer.ready;
+  assert.equal(typeof writer.readProjectDeletionSnapshot, 'function', 'bounded snapshot read must be exported');
+  const before = h.db.changeCount(), revision = await writer.readProjectDeletionRevision();
+  let cursor = null, rows = [];
+  do {
+    const page = await writer.readProjectDeletionSnapshot({ section: 'sessions', cursor, limit: 2, expectedRevision: revision });
+    assert.equal(page.revision, revision); assert.ok(page.rows.length <= 2);
+    rows.push(...page.rows); cursor = page.nextCursor;
+  } while (cursor !== null);
+  deep(rows.map(row => row.sessionId).sort(), [...h.selected, ...h.kept].map(row => row.sessionId).sort());
+  assert.equal(h.db.changeCount(), before, 'snapshot reads do not change any table or writer revision');
+  await assert.rejects(writer.readProjectDeletionSnapshot({ section: 'sessions', maxBytes: 1 }), { code: 'DISCOVERY_LIMIT' });
+  await worker.client.request('setName', 'head', 'changed');
+  await assert.rejects(writer.readProjectDeletionSnapshot({ section: 'sessions', expectedRevision: revision }), { code: 'SNAPSHOT_STALE' });
+});
+
+test('A4c1 recovery exposes sealed interruption and enumerates a committed lost reply through real client and facade', supported, async t => {
+  const h = setup(t), first = h.manifest(false, false);
+  const worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  assert.equal((await worker.post('completeProjectDeletion', first)).result.state, 'committed');
+  const second = h.manifest(false, false), progress = createProjectDeleteProgress(h.db);
+  progress.admit({ ...second, units: [] });
+  h.reopen();
+  const observed = [];
+  const fixture = require('./fixtures/project-deletion-worker.cjs');
+  assert.equal(typeof fixture.createWorker, 'function', 'full worker fixture must expose a real-client transport');
+  const writer = createSessionIndexWriter({ workerFactory: () => fixture.createWorker(h.db), readonlyBackend: { ...h.openReader(), applySettingsAcknowledgment() {} },
+    onBootstrap: bootstrap => observed.push(bootstrap) }, cache);
+  t.after(() => writer.terminate());
+  await writer.ready;
+  assert.equal(observed.length, 1);
+  assert.ok(observed[0].recoveredProjectDeletions.some(row => row.operationId === second.operationId), 'sealed interrupted operation must reach the facade');
+  const bootstrap = writer.getRecoveryBootstrap();
+  bootstrap.recoveredProjectDeletions.length = 0;
+  assert.equal(writer.getRecoveryBootstrap().recoveredProjectDeletions.length, 1, 'recovery snapshot is detached');
+  const before = h.db.changeCount(), revision = await writer.readProjectDeletionRevision();
+  const operations = [];
+  let cursor = null;
+  do {
+    const page = await writer.listProjectDeletionOperations({ cursor, limit: 1, expectedRevision: revision });
+    operations.push(...page.rows); cursor = page.nextCursor;
+  } while (cursor !== null);
+  assert.ok(operations.some(row => row.operationId === first.operationId && row.state === 'committed'), 'committed lost reply is discoverable');
+  assert.ok(operations.some(row => row.operationId === second.operationId && row.sealed), 'interruption is sealed before ready');
+  assert.equal(h.db.changeCount(), before, 'receipt enumeration never resumes deletion');
+  await writer.closeDb();
+});
+
+test('A4c1 provenance pages seek a stable key without sorting the entire metadata table', supported, t => {
+  const h = setup(t), plans = [];
+  h.db.connection.prepare('DELETE FROM session_meta_fields').run();
+  h.db.connection.prepare('INSERT INTO session_meta_fields(sessionId, field, revision, source) VALUES (?, ?, ?, ?)').run('page-a', 'name', 1, 'app');
+  h.db.connection.prepare('INSERT INTO session_meta_fields(sessionId, field, revision, source) VALUES (?, ?, ?, ?)').run('page-b', 'name', 1, 'app');
+  const originalPrepare = Object.getPrototypeOf(h.db.connection).prepare;
+  h.db.connection.prepare = function (sql) {
+    const statement = originalPrepare.call(this, sql), connection = this;
+    return new Proxy(statement, { get(target, key) {
+      if (key === 'all') return (...args) => {
+        plans.push(...originalPrepare.call(connection, 'EXPLAIN QUERY PLAN ' + sql).all(...args));
+        return target.all(...args);
+      };
+      const value = target[key]; return typeof value === 'function' ? value.bind(target) : value;
+    } });
+  };
+  try {
+    const first = h.db.projectDeletionSnapshot.read({ section: 'fields', limit: 1 });
+    assert.equal(first.rows.length, 1); assert.equal(typeof first.nextCursor, 'string');
+    const second = h.db.projectDeletionSnapshot.read({ section: 'fields', limit: 1, cursor: first.nextCursor });
+    assert.notEqual(first.rows[0].sessionId, second.rows[0].sessionId);
+  } finally { h.db.connection.prepare = originalPrepare; }
+  assert.ok(plans.length >= 2, 'inspect the actual SQLite plans for both pages');
+  assert.ok(plans.every(row => !/USE TEMP B-TREE/i.test(row.detail)), 'bounded provenance page must not sort the full table');
+});

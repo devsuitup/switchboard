@@ -942,3 +942,14 @@ Exact open attach facts may choose a proven conversation representative/head.
 They do not grant daemon hosting, process ownership, resumability or authority to
 stop/delete a conversation. Live-elsewhere/resume questions and fresh per-member
 Delete checks retain their existing process evidence and refusal behavior.
+
+## Read-only scheduled-run inventory (#474 A4c1)
+
+`getScheduleRunSnapshot()` returns detached records containing normalized
+sessionId, kind, PID, cwd, startedAt and scheduleName from `trackScheduleRun`.
+Mutating a returned array/record cannot change the tracked Map. Existing child
+exit/error release semantics remain unchanged, including replacement protection.
+This snapshot grants no process-tree stop authority. Deletion discovery keeps
+headless runs visible as uncontrolled external execution until a later guarded
+stop adapter supplies matching ownership and death evidence. No scheduler claim,
+launch or status-evidence behavior is changed.
