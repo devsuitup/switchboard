@@ -136,12 +136,30 @@ function createProjectDeleteService(deps) {
         const key = name + ':' + state.committedRevision;
         if (op.notified.has(key)) continue;
         op.notified.add(key);
-        try { await deps[name]?.(structuredClone(state.invalidation), op.id); }
+        try { await bounded(() => deps[name]?.(structuredClone(state.invalidation), op.id,
+          { operationId: op.id, expectedProjectEpoch: op.epoch, committedRevision: state.committedRevision })); }
         catch (error) { op.result.refresh = true; op.result.notificationWarning = error.message; }
       }
     }
     Object.assign(op.result, await retained(op));
+    op.resultReady = op.released;
     return view(op);
+  }
+  async function observe(op) {
+    let lastProgress = now(), nextUnit = -1, lastRevision = -1, delay = 100;
+    for (;;) {
+      const state = await bounded(() => writer.getProjectDeletionState(binding(op)));
+      if (op.released || state.terminal || state.noLateCommit || !['absent', 'inProgress'].includes(state.state)) return state;
+      if (state.nextUnit > nextUnit || state.lastRevision > lastRevision) {
+        nextUnit = Math.max(nextUnit, state.nextUnit ?? -1);
+        lastRevision = Math.max(lastRevision, state.lastRevision ?? -1);
+        lastProgress = now(); delay = 100;
+      }
+      const remaining = 60000 - (now() - lastProgress);
+      if (remaining <= 0) return state;
+      await new Promise(resolve => schedule(resolve, Math.min(delay, remaining)));
+      delay = Math.min(delay * 2, 2000);
+    }
   }
   async function reconcile(op) {
     if (op.reconciling) return op.reconciling;
@@ -149,7 +167,7 @@ function createProjectDeleteService(deps) {
       try {
         await op.admission;
         let state, readError;
-        try { state = await bounded(() => writer.getProjectDeletionState(binding(op))); }
+        try { state = await observe(op); }
         catch (error) { state = null; readError = error; }
         if ((!state || !state.terminal && !state.noLateCommit) && !op.released) {
           try { state = await bounded(() => writer.fenceProjectDeletion(binding(op))); }
@@ -207,7 +225,10 @@ function createProjectDeleteService(deps) {
     const busy = projects.get(token.plan.project.key);
     if (busy) { busy.authorities.add(sender); return Promise.resolve(failure('BUSY', { operationId: busy.id })); }
     if ([...operations.values()].filter(op => !op.released).length >= 32) return Promise.resolve(failure('OPERATION_LIMIT'));
-    const op = { id: operationId(token.plan.project, token.epoch, (deps.randomUUID || randomUUID)()), project: token.plan.project,
+    let id;
+    try { id = operationId(token.plan.project, token.epoch, (deps.randomUUID || randomUUID)()); }
+    catch (error) { return Promise.resolve(failure(error.code || 'DELETION_ID')); }
+    const op = { id, project: token.plan.project,
       epoch: token.epoch, plan: token.plan, options: token.options, stopped: [], authorities: new Set([sender]), notified: new Set(), running: true };
     operations.set(op.id, op); projects.set(op.project.key, op);
     try { acquire(op); }
@@ -222,7 +243,7 @@ function createProjectDeleteService(deps) {
     prune();
     const op = operations.get(input.operationId);
     if (!valid(sender) || !op?.authorities.has(sender)) return Promise.resolve(failure('UNAUTHORIZED'));
-    if (op.running || op.released && !op.submitted) return Promise.resolve(view(op));
+    if (op.running || op.released && (!op.submitted || op.resultReady)) return Promise.resolve(structuredClone(view(op)));
     return reply(op, track(reconcile(op)));
   }
   function rebind(sender) {
@@ -245,16 +266,18 @@ function createProjectDeleteService(deps) {
           const [alias, projectPath] = JSON.parse(row.projectKey);
           const op = { id: row.operationId, project: { alias, projectPath, key: row.projectKey }, epoch: row.expectedEpoch,
             options: JSON.parse(row.optionsJson), historicalFinished: row.finishedAt, stopped: [], historyUnknown: true,
-            submitted: true, authorities: new Set(), notified: new Set() };
+            submitted: true, released: !!row.sealed, finished: row.finishedAt, authorities: new Set(), notified: new Set() };
           recovered.push(op);
         }
         if (page.nextCursor !== null && page.nextCursor === cursor) throw fail('RECOVERY_LIMIT', 'Receipt enumeration did not advance.');
         cursor = page.nextCursor;
       } while (cursor !== null);
       for (const op of recovered) {
-        if ([...operations.values()].filter(value => !value.released).length >= 32) throw fail('OPERATION_LIMIT', 'Resolve retained operations before recovering more.');
-        acquire(op);
-        operations.set(op.id, op); projects.set(op.project.key, op);
+        if (!op.released) {
+          if ([...operations.values()].filter(value => !value.released).length >= 32) throw fail('OPERATION_LIMIT', 'Resolve retained operations before recovering more.');
+          acquire(op); projects.set(op.project.key, op);
+        }
+        operations.set(op.id, op);
         await reconcile(op);
       }
       ready = true; prune();

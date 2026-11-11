@@ -16,6 +16,21 @@ const { operationId } = require('../src/main/projects/project-delete-progress');
 const supported = { skip: !openStore.supported && 'real SQLite requires Node 22 or matching native ABI' };
 const options = { sessions: true, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: true };
 const flush = () => new Promise(resolve => setImmediate(resolve));
+async function finishReconciliation(h, start) {
+  const hook = h.transport.hook;
+  let observed;
+  const firstRead = new Promise(resolve => { observed = resolve; });
+  h.transport.hook = async (command, result) => {
+    await hook?.(command, result);
+    if (command === 'getProjectDeletionState') observed();
+  };
+  const pending = start(); await firstRead;
+  let done = false;
+  const idle = Promise.all([pending, h.service.whenIdle()]).then(() => { done = true; });
+  for (let i = 0; i < 200 && !done; i++) { h.time.advance(1000); await flush(); }
+  assert.ok(done, 'reconciliation must settle within the fake-clock bound');
+  await idle; h.transport.hook = hook;
+}
 function clock() {
   let time = Date.now(), sequence = 0;
   const timers = new Map();
@@ -25,6 +40,7 @@ function clock() {
 function windowFixture() {
   const win = new EventEmitter(), wc = new EventEmitter();
   win.webContents = wc; win.isDestroyed = wc.isDestroyed = () => false; wc.mainFrame = {};
+  wc.url = 'file:///switchboard/index.html'; wc.getURL = () => wc.url;
   return win;
 }
 async function setup(t, running = false) {
@@ -57,7 +73,9 @@ async function setup(t, running = false) {
     await transport.hook?.(command, result);
     return result;
   };
-  const writer = createSessionIndexWriter({ client: worker.client, readonlyBackend: db }, {}); await writer.ready;
+  const sessionNotifications = [];
+  const writer = createSessionIndexWriter({ client: worker.client, readonlyBackend: db,
+    onSessionsChanged: (...args) => sessionNotifications.push(args) }, {}); await writer.ready;
   let submissions = 0;
   const complete = writer.completeProjectDeletion;
   writer.completeProjectDeletion = input => { submissions++; return complete(input); };
@@ -82,7 +100,7 @@ async function setup(t, running = false) {
       return { ended: true, generation: 1, pid: 123 };
     } };
   const inventory = createProjectDeleteInventory({ writer, projectsDir, dataDir: path.join(root, 'data'), activeSessions,
-    now: time.now, setTimeout: time.schedule, clearTimeout: time.cancel,
+    now: time.now, schedule: time.schedule, cancel: time.cancel,
     getScheduleRunSnapshot: () => [], readJobs: async () => ({ complete: true, jobs: running === 'job' ? [{ id: 'job', jobId: 'job',
       conversationId: 'part', sessionIds: ['part'], projectPath, alias: null, runtime: 'claude', verified: true,
       liveness: state.alive ? { state: 'running', source: 'job', targetId: 'job', identity: { ...identity } } : { state: 'stopped', source: 'job' } }] : [] }),
@@ -108,7 +126,7 @@ async function setup(t, running = false) {
   const execute = p => invoke('delete-project', { token: p.token, fingerprint: p.plan.fingerprint });
   const count = () => submissions;
   t.after(() => { registration.dispose(); service.dispose(); db.closeDb(); fs.rmSync(root, { recursive: true, force: true }); });
-  return { root, db, writer, worker, calls, transport, time, gate, state, effects, notifications, identity, session, activeSessions,
+  return { root, db, writer, worker, calls, transport, time, gate, state, effects, notifications, sessionNotifications, identity, session, activeSessions,
     service, serviceDeps, registration, handlers, invoke, event, win, preview, execute, count, minted: () => minted, projectPath, transcript,
     replace() { currentWindow = windowFixture(); registration.attach(currentWindow); return currentWindow; },
     restartWorker() { request = require('./fixtures/project-deletion-worker.cjs')(db).client.request; } };
@@ -192,6 +210,7 @@ test('read and fence failures retain both holds; queued command is fenced before
   assert.throws(() => h.writer.reserveProjectDeletion([{ alias: null, projectPath: h.projectPath }]), { code: 'WORKFLOW_BUSY' });
   assert.deepEqual(h.notifications, []);
   h.transport.readFail = h.transport.fenceFail = false;
+  await finishReconciliation(h, () => h.invoke('project-delete-state', { operationId: result.operationId }));
   const state = await h.invoke('project-delete-state', { operationId: result.operationId });
   assert.equal(state.state, 'notStarted', JSON.stringify(state)); assert.equal(h.count(), 1);
   await assert.rejects(h.transport.queued());
@@ -229,7 +248,7 @@ test('foreign sender and subframe cannot consume a legitimate token or read an o
 
 test('navigation during preview cannot mint a token and old document cannot read rebound results', supported, async t => {
   const h = await setup(t); let navigated = false;
-  h.state.discovery = () => { if (!navigated) { navigated = true; h.win.webContents.emit('did-start-navigation', {}, 'app', false, true); } };
+  h.state.discovery = () => { if (!navigated) { navigated = true; h.win.webContents.emit('did-navigate', {}, 'app'); } };
   const p = await h.preview(); assert.equal(p.token, null, 'preview must recheck document before minting'); assert.equal(p.code, 'UNAUTHORIZED');
   assert.equal(h.minted(), 0, 'navigation must prevent token minting even when IPC suppresses the reply');
   h.state.discovery = null; h.replace();
@@ -261,12 +280,14 @@ test('32-token capacity expires with injected time; restart invalidates tokens',
 });
 
 test('receipt eviction yields unknown details and never replays completion', supported, async t => {
-  const h = await setup(t), result = await h.execute(await h.preview());
-  assert.equal(result.state, 'committed');
+  const h = await setup(t); h.transport.mode = 'lost'; h.transport.readFail = h.transport.fenceFail = true;
+  const result = await h.execute(await h.preview());
+  assert.equal(result.state, 'unknown');
   h.db.projectDeletion.purgeOperation(result.operationId);
+  h.transport.readFail = h.transport.fenceFail = false;
   const read = await h.invoke('project-delete-state', { operationId: result.operationId });
   assert.equal(read.state, 'unknown'); assert.equal(read.ok, false); assert.deepEqual(read.completed, []);
-  assert.equal(h.count(), 1); assert.equal(h.notifications.length, 2);
+  assert.equal(h.count(), 1); assert.equal(h.notifications.length, 0);
 });
 
 test('restart enumerates committed lost replies and rebinds only the replacement trusted document', supported, async t => {
@@ -329,14 +350,13 @@ test('recovery fence waits for the archive reservation ready before any writer f
   const pending = h.execute(await h.preview()); await flush(); h.time.advance(1000);
   const result = await pending;
   assert.equal(result.state, 'unknown'); assert.equal(h.calls.includes('fenceProjectDeletion'), false); assert.equal(h.count(), 0);
-  finish(); await lease; await h.service.whenIdle();
+  await finishReconciliation(h, async () => { finish(); await lease; });
   assert.equal((await h.invoke('project-delete-state', { operationId: result.operationId })).state, 'notStarted');
 });
 
 test('notification failure preserves committed state and a retained-file warning never replays', supported, async t => {
   const h = await setup(t);
-  h.serviceDeps.notifyProjects = () => { throw new Error('notification unavailable'); };
-  h.transport.hook = command => { if (command === 'getProjectDeletionState') fs.rmSync(h.transcript, { force: true }); };
+  h.serviceDeps.notifyProjects = () => { fs.rmSync(h.transcript, { force: true }); throw new Error('notification unavailable'); };
   const result = await h.execute(await h.preview());
   assert.equal(result.state, 'committed'); assert.equal(result.refresh, true); assert.match(result.notificationWarning, /notification/);
   const read = await h.invoke('project-delete-state', { operationId: result.operationId });
@@ -347,6 +367,8 @@ test('recovery acquisition failure cannot leave an unfenced operation registered
   const h = await setup(t), project = { alias: null, projectPath: h.projectPath };
   const id = operationId(project, 0);
   await h.worker.client.request('fenceProjectDeletion', { project, operationId: id, expectedProjectEpoch: 0 });
+  const list = h.writer.listProjectDeletionOperations;
+  h.writer.listProjectDeletionOperations = async input => { const page = await list(input); return { ...page, rows: page.rows.map(row => ({ ...row, sealed: 0 })) }; };
   const held = h.gate.hold(h.projectPath); await held.ready;
   const service = serviceModule.createProjectDeleteService(h.serviceDeps), sender = { valid: () => true };
   await assert.rejects(service.initialize());
@@ -358,7 +380,7 @@ test('worker replacement seals an interrupted command and service only reconcile
   const h = await setup(t, true); h.transport.mode = 'queued'; h.transport.readFail = h.transport.fenceFail = true;
   const result = await h.execute(await h.preview());
   h.restartWorker(); h.transport.readFail = h.transport.fenceFail = false;
-  await h.service.recover();
+  await finishReconciliation(h, () => h.service.recover());
   const read = await h.invoke('project-delete-state', { operationId: result.operationId });
   assert.equal(read.state, 'notStarted'); assert.equal(read.stopped[0].effect, 'proven-dead'); assert.equal(h.count(), 1);
   assert.equal(h.time.timers.size, 0);
@@ -371,6 +393,8 @@ test('recovery never exceeds 32 unresolved holds and retries after those outcome
     await h.worker.client.request('fenceProjectDeletion', { project, operationId: operationId(project, 0), expectedProjectEpoch: 0 });
   }
   h.transport.readFail = h.transport.fenceFail = true;
+  const list = h.writer.listProjectDeletionOperations;
+  h.writer.listProjectDeletionOperations = async input => { const page = await list(input); return { ...page, rows: page.rows.map(row => ({ ...row, sealed: 0 })) }; };
   const service = serviceModule.createProjectDeleteService(h.serviceDeps), sender = { valid: () => true };
   await assert.rejects(service.initialize(), { code: 'OPERATION_LIMIT' });
   assert.equal(service.rebind(sender).length, 32);
@@ -383,12 +407,13 @@ for (const event of ['render-process-gone', 'destroyed']) test(`${event} revokes
   const h = await setup(t), p = await h.preview();
   h.win.webContents.emit(event);
   assert.equal((await h.execute(p)).code, 'UNAUTHORIZED'); assert.equal(h.count(), 0);
-  h.registration.dispose(); assert.equal(h.handlers.size, 0); assert.equal(h.win.webContents.listenerCount('did-start-navigation'), 0);
+  h.registration.dispose(); assert.equal(h.handlers.size, 0); assert.equal(h.win.webContents.listenerCount('did-navigate'), 0);
 });
 
 test('navigation while state read is pending cannot deliver a previous document result', supported, async t => {
-  const h = await setup(t), result = await h.execute(await h.preview());
-  h.transport.hook = command => { if (command === 'getProjectDeletionState') h.win.webContents.emit('did-start-navigation', {}, 'app', false, true); };
+  const h = await setup(t); h.transport.mode = 'lost'; h.transport.readFail = h.transport.fenceFail = true;
+  const result = await h.execute(await h.preview()); h.transport.readFail = false;
+  h.transport.hook = command => { if (command === 'getProjectDeletionState') h.win.webContents.emit('did-navigate', {}, 'app'); };
   const read = await h.invoke('project-delete-state', { operationId: result.operationId });
   assert.equal(read.code, 'UNAUTHORIZED', 'asynchronous state result must remain document-bound'); assert.equal(h.count(), 1);
 });
@@ -442,9 +467,9 @@ test('actual execute callback caps live operations at 32 while their launches dr
   assert.equal(result.code, 'OPERATION_LIMIT'); assert.equal(h.count(), 0);
   h.time.advance(1000); const pending = await Promise.all(replies);
   assert.equal(new Set(pending.map(row => row.operationId)).size, 32);
-  h.db.setSetting('_writer_revision', (h.db.getSetting('_writer_revision') || 0) + 1);
+  h.serviceDeps.planner.revalidate = async () => ({ same: false });
   for (const admission of admissions) admission.release();
-  await h.service.whenIdle();
+  await h.service.whenIdle(); assert.equal(h.count(), 0);
 });
 
 test('worker restart seals a committed prefix while main preserves its holds and stopped effects', supported, async t => {
@@ -466,10 +491,129 @@ test('worker restart seals a committed prefix while main preserves its holds and
   assert.deepEqual(h.notifications, []); assert.equal(h.count(), 1);
 });
 
-test('unavailable observation after a proven commit retains success with a fresh-read warning', supported, async t => {
+test('released terminal view is cached without receipt or retained-file rescans', supported, async t => {
   const h = await setup(t), committed = await h.execute(await h.preview());
-  assert.equal(committed.state, 'committed'); h.transport.readFail = true;
+  assert.equal(committed.state, 'committed');
+  const reads = h.calls.filter(c => c === 'getProjectDeletionState').length;
+  let inspections = 0;
+  h.serviceDeps.inventory.inspectRetainedFiles = async () => { inspections++; return []; };
   const read = await h.invoke('project-delete-state', { operationId: committed.operationId });
-  assert.equal(read.state, 'committed'); assert.equal(read.refresh, true, 'failed fresh observation must not look like a fresh successful read');
-  assert.match(read.readbackWarning, /transport unavailable/); assert.equal(h.count(), 1);
+  assert.deepEqual(read, committed);
+  assert.equal(h.calls.filter(c => c === 'getProjectDeletionState').length, reads, 'terminal polls must not reread receipts');
+  assert.equal(inspections, 0, 'terminal polls must not rescan retained files');
+});
+
+test('cancelled navigation preserves authority but committed foreign navigation remains unauthorized after load', supported, async t => {
+  const h = await setup(t), p = await h.preview(), wc = h.win.webContents;
+  wc.emit('did-start-navigation', {}, 'https://example.invalid', false, true);
+  assert.ok((await h.preview()).token, 'a cancelled navigation must preserve preview authority');
+  const result = await h.execute(p);
+  assert.equal(result.state, 'committed');
+  assert.equal((await h.invoke('project-delete-state', { operationId: result.operationId })).state, 'committed');
+  wc.emit('did-navigate', {}, 'https://example.invalid'); wc.url = 'https://example.invalid';
+  assert.equal((await h.preview()).code, 'UNAUTHORIZED');
+  wc.emit('did-finish-load');
+  assert.equal((await h.preview()).code, 'UNAUTHORIZED', 'a foreign committed document cannot rebind');
+});
+
+test('progressing multi-chunk completion outlives sixty seconds without being fenced', supported, async t => {
+  const h = await setup(t), transact = h.db.transact, complete = h.writer.completeProjectDeletion;
+  const rows = Array.from({ length: 30 }, (_, index) => ({ sessionId: 'chunk-' + index, folder: 'folder', projectPath: h.projectPath, runtime: 'claude' }));
+  for (const row of rows) fs.writeFileSync(path.join(path.dirname(h.transcript), row.sessionId + '.jsonl'),
+    JSON.stringify({ type: 'user', sessionId: row.sessionId, cwd: h.projectPath, message: { content: 'keep' } }) + '\n');
+  h.db.upsertCachedSessions(rows);
+  let chunks = 0, started;
+  let finished;
+  const completion = new Promise(resolve => { finished = resolve; });
+  h.writer.completeProjectDeletion = input => {
+    started = h.time.now();
+    h.db.transact = fn => { const result = transact(fn); chunks++; h.time.advance(3000); return result; };
+    return complete(input).finally(finished);
+  };
+  const first = await h.execute(await h.preview());
+  await completion; h.time.advance(2000); await flush();
+  await h.service.whenIdle();
+  const result = await h.invoke('project-delete-state', { operationId: first.operationId });
+  assert.ok(chunks > 2 && h.time.now() - started > 60000, 'real worker completion must span multiple slow chunks');
+  assert.equal(result.state, 'committed', 'advancing completion must not be sealed partial at sixty seconds');
+  assert.equal(h.calls.includes('fenceProjectDeletion'), false);
+});
+
+test('stalled completion is polled before fencing after its progress deadline', supported, async t => {
+  const h = await setup(t);
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  h.writer.completeProjectDeletion = () => { entered(); return new Promise(() => {}); };
+  let reads = 0, fences = 0;
+  h.writer.getProjectDeletionState = async () => { reads++; return { state: 'inProgress', nextUnit: 1, lastRevision: 10 }; };
+  const fence = h.writer.fenceProjectDeletion;
+  h.writer.fenceProjectDeletion = (...args) => { fences++; return fence(...args); };
+  const pending = h.execute(await h.preview()); await started; h.time.advance(60000); await flush();
+  const first = await pending;
+  assert.equal(fences, 0, 'a successful inProgress read must not immediately fence');
+  for (let i = 0; i < 65; i++) { h.time.advance(1000); await flush(); }
+  await h.service.whenIdle();
+  assert.ok(reads > 1, 'stalled progress must be observed repeatedly'); assert.equal(fences, 1);
+  assert.equal((await h.invoke('project-delete-state', { operationId: first.operationId })).state, 'notStarted');
+  assert.equal(h.time.timers.size, 0);
+});
+
+test('sealed receipts sharing a project recover without holds even when the first read fails', supported, async t => {
+  const h = await setup(t), project = { alias: null, projectPath: h.projectPath };
+  const progress = require('../src/main/projects/project-delete-progress').createProjectDeleteProgress(h.db, { now: h.time.now });
+  const ids = [];
+  for (let i = 0; i < 12; i++) {
+    const epoch = progress.readScope({ project }).projectEpoch, id = operationId(project, epoch);
+    progress.fence({ project, operationId: id, expectedProjectEpoch: epoch }); ids.push(id);
+  }
+  const first = ids.slice().sort()[0], read = h.writer.getProjectDeletionState;
+  h.writer.getProjectDeletionState = input => input.operationId === first ? Promise.reject(new Error('read unavailable')) : read(input);
+  h.transport.fenceFail = true;
+  const service = serviceModule.createProjectDeleteService(h.serviceDeps); t.after(() => service.dispose());
+  let error;
+  try { await service.initialize(); } catch (caught) { error = caught; }
+  assert.equal(error, undefined, 'sealed receipt recovery must not acquire conflicting holds');
+  assert.equal(service.rebind({ valid: () => true }).length, 12);
+  assert.equal(h.calls.includes('fenceProjectDeletion'), false, 'sealed history needs no fence');
+});
+
+test('restart invalidations carry stable operation epoch and revision for downstream deduplication', supported, async t => {
+  const h = await setup(t), notices = [];
+  h.serviceDeps.notifyProjects = (...args) => notices.push(args);
+  const result = await h.execute(await h.preview());
+  h.service.dispose();
+  const service = serviceModule.createProjectDeleteService(h.serviceDeps); t.after(() => service.dispose());
+  await service.initialize();
+  assert.equal(notices.length, 2);
+  assert.equal(notices[0][1], result.operationId);
+  assert.ok(Number.isSafeInteger(notices[0][2]?.expectedProjectEpoch), 'project invalidation must include its epoch');
+  assert.ok(Number.isSafeInteger(notices[0][2]?.committedRevision), 'project invalidation must include its receipt revision');
+  assert.deepEqual(notices[1][2], notices[0][2]);
+  const sessionChanges = h.sessionNotifications;
+  assert.equal(sessionChanges[0][1]?.operationId, result.operationId, 'session invalidation must carry its operation identity');
+  assert.deepEqual(sessionChanges.at(-1)[1], sessionChanges[0][1]);
+});
+
+test('hanging notification ports are bounded and preserve the committed result', supported, async t => {
+  const h = await setup(t);
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  h.serviceDeps.notifyProjects = h.serviceDeps.notifySchedules = () => { entered(); return new Promise(() => {}); };
+  const first = h.execute(await h.preview());
+  await started;
+  for (let i = 0; i < 3; i++) { h.time.advance(10000); await flush(); }
+  const result = await first;
+  const read = await h.invoke('project-delete-state', { operationId: result.operationId });
+  assert.equal(read.state, 'committed');
+  assert.equal(read.refresh, true, 'notification timeout must produce a warning');
+  assert.match(read.notificationWarning, /unavailable/i);
+  await h.service.whenIdle(); assert.equal(h.time.timers.size, 0);
+});
+
+test('operation ID failure after token consumption returns a coded failure with no holds', supported, async t => {
+  const h = await setup(t), p = await h.preview(); h.serviceDeps.randomUUID = () => 'invalid';
+  const result = await h.execute(p).catch(error => ({ thrown: error.message }));
+  assert.equal(result.code, 'DELETION_ID', 'invalid operation identity must return a coded failure');
+  assert.equal((await h.execute(p)).code, 'INVALID_TOKEN'); assert.equal(h.count(), 0);
+  const admission = h.gate.tryAdmit(h.projectPath); assert.ok(admission); admission.release();
 });

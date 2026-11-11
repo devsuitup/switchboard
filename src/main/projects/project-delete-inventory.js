@@ -37,12 +37,12 @@ function createProjectDeleteInventory(deps) {
     const work = Promise.resolve().then(fn);
     try {
       const value = await Promise.race([work, new Promise((_, reject) => {
-        timer = (deps.setTimeout || setTimeout)(() => reject(fail('DISCOVERY_TIMEOUT', 'Inventory port deadline expired.')),
+        timer = (deps.schedule || setTimeout)(() => reject(fail('DISCOVERY_TIMEOUT', 'Inventory port deadline expired.')),
           Math.max(1, Math.min(c.deadline - now(), cap(deps.portTimeoutMs, 3000, 15000))));
       })]);
       c.check(); accepted = true; return value;
     } finally {
-      (deps.clearTimeout || clearTimeout)(timer);
+      (deps.cancel || clearTimeout)(timer);
       if (dispose && !accepted) void work.then(dispose, () => {}).catch(() => {});
     }
   }

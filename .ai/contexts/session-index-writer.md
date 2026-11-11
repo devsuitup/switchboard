@@ -5,6 +5,13 @@ connection remains for the existing synchronous reads. Independent read workers,
 removal of main's connection and general outcome recovery belong to step 2.
 The dormant #474 A4b1 deletion substrate below provides operation-specific receipts.
 
+Deletion completion/readback session notifications carry a second argument
+`{operationId, expectedProjectEpoch, committedRevision}`. Receipts can be reread
+after restart, so consumers can deduplicate the same operation/revision and
+discard invalidations from an older project epoch. This is delivery identity,
+not a durable acknowledgement or a once-across-restarts guarantee. See
+[project-delete.md](project-delete.md) for the matching project/schedule ports.
+
 ## Consumed-request journal (#380 S1b1/S1b2)
 
 Main passes the admitted writer facade as `sessionRequests` through

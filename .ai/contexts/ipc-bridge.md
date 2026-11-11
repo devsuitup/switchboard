@@ -16,10 +16,12 @@ internal factory with no main/preload/renderer caller yet. It registers:
 - `project-delete-state({operationId})`: only registry-authorized operation IDs,
   with committed/partial/unknown/notStarted state and receipt invalidation.
 
-`attach(win)` requires the current trusted main window, captures the actual
-webContents/mainFrame and revokes authority on navigation, renderer exit,
+`attach(win)` requires the current trusted main window with its app URL already
+loaded, captures the actual webContents/mainFrame and URL, and revokes authority
+on committed cross-document main-frame navigation (`did-navigate`), renderer exit,
 destruction or window replacement. Results recheck authority after awaits.
-`did-finish-load` binds the replacement document and calls `announce` with
+Cancelled `did-start-navigation` events leave the current document authorized.
+`did-finish-load` binds a replacement only at the captured trusted URL, then calls `announce` with
 existing main-owned operation IDs. Internal `rebind()` returns the current IDs
 for main to announce after recovery. Old documents cannot read
 those results and tokens cannot cross document/boot boundaries. Dispose removes

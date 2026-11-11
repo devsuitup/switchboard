@@ -13,8 +13,9 @@ function registerProjectDeleteIpc({ ipcMain, service, getMainWindow, announce = 
     detach();
     if (disposed || !win || win !== getMainWindow() || win.isDestroyed() || win.webContents.isDestroyed()) return;
     const wc = win.webContents;
+    const trustedUrl = wc.getURL();
     const bind = () => {
-      if (disposed || win !== getMainWindow() || win.isDestroyed() || wc.isDestroyed()) return;
+      if (disposed || win !== getMainWindow() || win.isDestroyed() || wc.isDestroyed() || wc.getURL() !== trustedUrl) return;
       const state = { win, wc, frame: wc.mainFrame };
       state.valid = () => document === state && !disposed && win === getMainWindow()
         && !win.isDestroyed() && !wc.isDestroyed() && wc.mainFrame === state.frame;
@@ -22,7 +23,7 @@ function registerProjectDeleteIpc({ ipcMain, service, getMainWindow, announce = 
       announce(service.rebind(state));
     };
     const listen = (emitter, name, fn) => { emitter.on(name, fn); listeners.push([emitter, name, fn]); };
-    listen(wc, 'did-start-navigation', (_event, _url, inPlace, mainFrame) => { if (mainFrame && !inPlace) revoke(); });
+    listen(wc, 'did-navigate', revoke);
     listen(wc, 'did-finish-load', bind);
     listen(wc, 'render-process-gone', revoke);
     listen(wc, 'destroyed', detach);

@@ -248,8 +248,8 @@ test('A4c1 a timed-out file-open port closes its late handle with an injected ti
   let entered, release, closed = 0;
   const opened = new Promise(resolve => { entered = resolve; });
   const h = await setup(t, { fs: io,
-    setTimeout(fn) { const timer = { fn }; timers.add(timer); return timer; },
-    clearTimeout(timer) { timers.delete(timer); } });
+    schedule(fn) { const timer = { fn }; timers.add(timer); return timer; },
+    cancel(timer) { timers.delete(timer); } });
   const b = budget(); await h.inventory.readSnapshot(b);
   io.open = () => new Promise(resolve => { release = resolve; entered(); });
   const pending = h.inventory.inspectRetainedFiles([h.schedule], b);

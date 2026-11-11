@@ -20,7 +20,14 @@ holds and identities never expire, including on dispose. Receipt timestamps
 remain authoritative across restart. Recovered historical stops and file
 manifests are explicitly unknown.
 
-The service's `now/schedule/cancel` and planner's matching optional clock ports
+Sealed receipt headers are already terminal proof: recovery reads them without
+acquiring either hold or consuming the unresolved-operation cap. A failed read
+keeps details unknown and can be retried, but does not fence historical work.
+Multiple retained epochs of one project therefore cannot block each other,
+regardless of their lexicographic operation-ID order. Only unsealed operations
+acquire exclusion.
+
+The service, inventory and planner share optional `now/schedule/cancel` clock ports
 allow expiry, deadlines and retention to share one clock. Tokens are 32 random
 bytes, five-minute, boot/document-bound, with 32 outstanding globally. Preview
 rechecks document authority after discovery/scope reads before minting. Input
@@ -39,15 +46,37 @@ scope, re-inventories and independently verifies death after that await.
 Completion is invoked once. Unknown outcomes cause fresh reads/fencing and
 bounded retained-file observation; no second completion call occurs even if
 the facade could deduplicate it. Both holds survive unavailable read/fence.
+After the 60-second completion wait, successful absent/inProgress reads are
+polled using the injected scheduler, backing off from 100 ms to 2 seconds.
+Advancing nextUnit or lastRevision resets a 60-second stall budget; readRevision
+does not. Each read has its own 10-second transport deadline. A transport loss
+or exhausted stall budget permits fencing; elapsed completion time alone does
+not. Progress can extend reconciliation beyond 60 seconds, while IPC replies
+retain their separate short deadline. Reads share the operation's reconciliation.
 Release requires known non-submission or terminal/noLateCommit proof, after
 reservation readiness. Partial and unknown outcomes publish no final refresh.
 
 Committed results forward exactly the receipt invalidation to `notifyProjects`
-and `notifySchedules` once per operation/revision. The writer already owns
-session invalidation. Notification/file observation failure preserves a proven
+and `notifySchedules` once per operation/revision per service lifetime. Both ports
+have a 10-second bound. Their arguments are `(invalidation, operationId, change)`;
+`change` contains `operationId`, `expectedProjectEpoch`, and `committedRevision`.
+The writer forwards the same change identity as the second argument of its
+session invalidation callback. Recovery may repeat these invalidations after a
+restart: there is no durable notification acknowledgement. Consumers must
+deduplicate by operation/revision and reject stale epochs when reusing cached
+project state; process-local deduplication cannot promise once across restarts.
+Late async callbacks remain responsible for that identity check as well.
+Notification/file observation failure preserves a proven
 commit with a separate warning. Detailed outcomes are always receipt-derived;
 purged receipts stay unknown. `whenIdle()` is an internal drain for tests and
 shutdown coordination, not a reason to discard unresolved holds.
+
+Once a terminal/noLateCommit result and its bounded notification/file inspection
+have settled, status returns a cloned cached view. Its observations describe the
+recorded readRevision, not a new filesystem scan. Receipt eviction or subsequent
+file changes do not erase a previously observed commit. Recovery reads with
+unavailable details remain retryable as reads. Operation-ID construction errors
+after token consumption return a coded failure and never acquire either hold.
 
 The planner liveness port must include `identity` (PID/start/generation or
 remote boot/session identity) and the stable `targetId`, with `sessionKey` when
