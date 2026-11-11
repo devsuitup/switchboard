@@ -1,6 +1,6 @@
-# Project deletion: dormant backend (#474 A4a–A4c2a)
+# Project deletion: dormant backend (#474 A4a–A4c2)
 
-## Current state: inventory/recovery reads and dormant stop seams (A4c2a)
+## Current state: dormant stop composition complete (A4c2); A4c3 next
 
 A4c2a adds opt-in stop evidence to the existing PTY, background job and remote
 adapters. `stopPtyWithEvidence` pins the PTY object, PID and generation; Windows
@@ -15,12 +15,83 @@ proof has `scope: 'process'`; it does not certify descendants or successors.
 See [session-state.md](session-state.md), [bg-agents.md](bg-agents.md) and the
 Windows helper section of [ipc-bridge.md](ipc-bridge.md) for contracts/limits.
 
-These seams have no new production caller. A4c2b still owes
-`project-delete-stop.js` with preflight/stop/verify, pinned map/incarnation checks,
-post-stop continuation/tree checks and exit-drain composition. A4c3/A4c4 still
-owe service and main wiring. No deletion, preload, UI or scheduler stop is
-enabled. `cliSessionState.getScheduleRunSnapshot` was already exported by A4c1;
+`project-delete-stop.js` now composes those seams through
+`createProjectDeleteStop(ports).preflight/stop/verify`. It has no production
+caller. A4c3 next supplies the token service and callback tests; A4c4 supplies
+main wiring. No deletion, preload, UI or scheduler stop is enabled.
+`cliSessionState.getScheduleRunSnapshot` was already exported by A4c1;
 headless schedules remain named blocking targets without safe tree control.
+
+### A4c2b stop adapter contract
+
+`preflight({project, targets, conversations, stopBackgroundJobs})` captures a
+private batch and returns an opaque, instance-bound handle. `project.projectPath`
+is the canonical selected scope. Conversations name `{id, sessionIds}` including
+every continuation part. Each target names `{id, kind, conversationId, sessionIds,
+identity, sessionKey?, jobId?, scheduleId?, claimId?}`. Kinds are `pty`, `job`,
+and `remote`. Identity requires positive PID and OS `procStart`; PTYs also
+require generation, remote targets alias/sessionId/bootId. The request and
+bindings are copied so caller mutation cannot widen consent. A returned handle
+can be stopped once; a failure never authorizes replay.
+
+The composition ports are explicit, authoritative reads:
+
+- `readTarget(target)` returns the same identity/ownership fields plus
+  `supported: true`, the actual `session` object where applicable, a remote
+  `descriptor`, and `attachments: [{sessionKey, session}]`. Supported means
+  the pinned runtime has the landed evidence capability, including a tracked
+  Windows job or strict remote host capability; a cached descriptor alone must
+  never set it. This reader must detect replacement workers, generations and
+  job incarnations, including jobs without tabs. It returns absent when removed.
+- `readConversation({id, sessionIds})` returns `{known:true, complete:true,
+  owners:[{id, identity, treeState:'live'|'dead'}]}` from exhaustive independent
+  process/tree evidence, including background, schedule and non-PTY continuation
+  owners. Owner IDs correlate to target IDs. Dead owners stay represented with
+  pinned identities; disappearance alone cannot be translated to dead. A
+  successor, new owner, unknown tree or changed incarnation refuses.
+- `activeSessions` supplies the authoritative tab map. `getScheduleRunSnapshot`
+  is the A4c1 read port; `bg` is the landed init result with `checkStop/runStop`;
+  `remote` is the strict remote adapter. The optional `stopPtyWithEvidence` port
+  defaults to the landed PTY function. `detach(pinnedAttachment)` is only invoked
+  after independent death and must close precisely that captured attachment.
+- `now/schedule/cancel` bound all adapter reads/effects. The absolute 60 s batch
+  deadline starts at preflight; each stop gets at most 15 s within it, including
+  death reads and exit housekeeping. Inject the same clock into background and
+  remote compositions. Native PTY/helper seams retain their own real deadline
+  implementation. An expired asynchronous effect is unknown, never cancelled
+  retroactively or replayed; adapter timers are cleared in finally.
+
+Preflight checks every binding, capability, consent, guarded job ownership,
+conversation and schedule before the first stop. Unsupported local platforms
+refuse. Live schedule snapshots are blocking named targets; future #611 records
+must correlate scheduleName/claimId/jobId/sessionId to a freshly consented job
+target. No daemon ID is invented from a current headless run. Schedule reads
+repeat before each effect and at final verification.
+
+Stops run sequentially. The first failure returns individual stopped/failed/
+skipped entries and prevents all subsequent stops. The adapter rechecks pinned
+objects, PID/start/generation, membership and death around awaits. Missing active
+rows are tolerated only after a positive stop proof, with retained bindings and
+independent full conversation evidence. Background jobs stop before attachment
+detach; remote process proof is followed by independent tree/conversation proof
+before closing SSH. Kill ACK, exited, job done, detach, absent descriptor or gate
+readiness never suffice. Known exitDrain promises are awaited before completion.
+`verify(handle)` repeats identity, schedule and whole-conversation death reads
+within the original deadline after a successful batch. This is stop evidence,
+not a replacement for the service's post-stop membershipDigest re-inventory or
+writer fencing; no writer/deletion port exists here.
+
+For the #1081 natural-exit obligation, the adapter re-reads the pinned PTY's
+`statusTreeExit` after a refused stop. A positive empty-job proof can recover a
+natural exit only while object/PID/start/generation still match, followed by
+independent conversation proof and exitDrain. A replacement generation refuses
+even when that late natural proof exists. Main's earlier one-shot read is not
+relied upon; main needs no change for this dormant adapter.
+
+Plain-Node tests use production modules and fake external/process ports, plus
+the unchanged seam suites. They are not native process-death, daemon or SSH
+acceptance. Native Windows evidence and actual callback acceptance remain CI
+and A4c3/A4c4 obligations.
 
 An unknown transcript folder with an inaccessible cwd only refuses the selected
 project when that cwd is lexically under the project path (including equality).

@@ -53,11 +53,19 @@ checks the pinned process has not exited, and signals that fd. The code never
 falls back to numeric PID or tmux signalling in strict mode. A second remote
 command independently reads death on the same boot. Exit zero without the
 exact identity-bound marker, signal ACK alone, unreachable host, changed start
-or a surviving PID refuses. Six bounded live polls precede escalation; the
+or a surviving PID refuses. Up to six bounded live polls precede escalation; the
 whole operation is capped at 15 seconds. Positive evidence explicitly has
-`scope: 'process'`: it proves that process only. A4c2b must still check other
-conversation members/descendants and must not turn this into whole-tree proof.
+`scope: 'process'`: it proves that process only. A4c2b independently checks other
+conversation members/descendants before accepting whole-tree death.
 Legacy two-argument remote stop keeps its existing behavior and result shape.
+
+Strict mode accepts injected `now/schedule/cancel` ports. With the full 15 s
+budget, TERM and its observations share a deadline 7 s before the final one,
+preserving more than the 5 s SSH connection allowance plus a round trip for
+KILL. TERM observations stop when that sub-budget cannot fund another SSH
+command. Callers with at most 12 s remaining retain the existing short-budget
+attempt without an escalation guarantee; exhausted evidence stays unknown.
+Every read and polling timer is bounded and cancelled after completion.
 
 ## Shared status projection (#380 S1a)
 

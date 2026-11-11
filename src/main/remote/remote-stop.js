@@ -107,39 +107,44 @@ function buildStopCommand(pid, tmuxTarget) {
 function createRemoteStopAdapter(opts = {}) {
   const runRemoteCommand = opts.runRemoteCommand || defaultRunRemoteCommand;
   const log = opts.log || { info() {}, warn() {}, error() {} };
+  const { now = Date.now, schedule = setTimeout, cancel = clearTimeout } = opts;
 
   async function stopStrict(alias, descriptor, options) {
     const unknown = error => ({ ok: false, ended: false, error });
-    const identity = options.identity && { ...options.identity }, deadline = Math.min(options.deadline, Date.now() + DEFAULT_STOP_TIMEOUT_MS);
+    const identity = options.identity && { ...options.identity }, deadline = Math.min(options.deadline, now() + DEFAULT_STOP_TIMEOUT_MS);
     const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
     if (!identity || identity.alias !== alias || !alias || !isValidPid(identity.pid) || identity.pid !== descriptor?.pid
       || identity.sessionId !== descriptor?.sessionId || !uuid.test(identity.sessionId)
       || typeof identity.procStart !== 'string' || !/^\d{1,20}$/.test(identity.procStart) || identity.procStart !== descriptor?.procStart
       || typeof identity.bootId !== 'string' || !uuid.test(identity.bootId) || identity.bootId !== descriptor?.bootId
-      || !Number.isFinite(deadline) || deadline <= Date.now()) return unknown('strict stop identity or deadline is unavailable');
+      || !Number.isFinite(deadline) || deadline <= now()) return unknown('strict stop identity or deadline is unavailable');
     const suffix = `${identity.pid} ${identity.procStart} ${identity.sessionId} ${identity.bootId}`;
-    const read = async phase => {
-      const remaining = deadline - Date.now();
+    const read = async (phase, phaseDeadline = deadline) => {
+      const remaining = phaseDeadline - now();
       const remoteRemaining = remaining - SSH_CONNECT_ALLOWANCE_MS;
       if (remoteRemaining <= 0) throw new Error('stop deadline expired');
       let timer;
       try {
         const result = await Promise.race([runRemoteCommand(alias, buildStrictStopCommand(identity, phase, remoteRemaining), { timeoutMs: remaining }),
-          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('stop deadline expired')), remaining); })]);
-        if (Date.now() >= deadline || result?.code !== 0) throw new Error('remote observation unavailable');
+          new Promise((_, reject) => { timer = schedule(() => reject(new Error('stop deadline expired')), remaining); })]);
+        if (now() >= phaseDeadline || result?.code !== 0) throw new Error('remote observation unavailable');
         const text = String(result.stdout || '').trim();
         return ['STOP_SIGNALLED', 'STOP_ENDED', 'STOP_LIVE', 'STOP_REUSED'].find(marker => text === `${marker} ${suffix}`) || 'UNKNOWN';
-      } finally { clearTimeout(timer); }
+      } finally { cancel(timer); }
     };
     try {
       for (const phase of ['TERM', 'KILL']) {
-        if (await read(phase) !== 'STOP_SIGNALLED') return unknown('remote signal identity was not acknowledged');
+        const phaseDeadline = phase === 'TERM' && deadline - now() > 12000 ? deadline - 7000 : deadline;
+        if (await read(phase, phaseDeadline) !== 'STOP_SIGNALLED') return unknown('remote signal identity was not acknowledged');
         for (let i = 0; i < TERM_WAIT_TICKS; i++) {
-          const state = await read('observe');
-          if (state === 'STOP_ENDED') return { ok: true, ended: true, scope: 'process', identity, observedAt: Date.now(), method: `pid-${phase.toLowerCase()}` };
+          if (phase === 'TERM' && phaseDeadline - now() <= SSH_CONNECT_ALLOWANCE_MS) break;
+          const state = await read('observe', phaseDeadline);
+          if (state === 'STOP_ENDED') return { ok: true, ended: true, scope: 'process', identity, observedAt: now(), method: `pid-${phase.toLowerCase()}` };
           if (state !== 'STOP_LIVE') return unknown('remote death is unknown or the pid was reused');
-          if (deadline <= Date.now()) return unknown('stop deadline expired');
-          await new Promise(resolve => setTimeout(resolve, Math.min(50, deadline - Date.now())));
+          if (phaseDeadline <= now()) return unknown('stop deadline expired');
+          let timer;
+          try { await new Promise(resolve => { timer = schedule(resolve, Math.min(50, phaseDeadline - now())); }); }
+          finally { cancel(timer); }
         }
       }
       return unknown('remote process is still live');
