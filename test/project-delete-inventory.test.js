@@ -186,10 +186,10 @@ test('A4c1 saved remote tab uses durable host ownership and pending restores sta
   assert.ok(local.candidates.some(row => row.id === 'pending'), 'pending restore without durable identity cannot be certified');
 });
 
-test('A4c1 historical metadata without durable owner is an explicit candidate', supported, async t => {
+test('A4c1FIX unrelated orphan metadata does not refuse another project', supported, async t => {
   const h = await setup(t); h.db.setName('orphan', 'historical');
   const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
-  assert.ok(result.plan.refusals.some(row => row.target === 'orphan'), 'unowned metadata must not disappear');
+  assert.deepEqual(result.plan.refusals, [], 'unrelated orphan metadata must not block this project');
 });
 
 test('A4c1 active PTY objects are projected to cloneable pinned runtime identities', supported, async t => {
@@ -231,12 +231,12 @@ test('A4c1 a timed-out file-open port closes its late handle with an injected ti
   assert.equal(timers.size, 0);
 });
 
-test('A4c1 cached rows without a project mapping remain unmappable candidates', supported, async t => {
+test('A4c1FIX cached rows without attributable ownership do not block another project', supported, async t => {
   const h = await setup(t);
   h.db.upsertCachedSessions([{ sessionId: 'lost-cache', folder: 'unknown', projectPath: null }]);
   const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
   assert.equal(result.ok, true, JSON.stringify(result));
-  assert.ok(result.plan.refusals.some(row => row.target === 'lost-cache'), 'unmappable cached row must not be silently omitted');
+  assert.deepEqual(result.plan.refusals, [], 'unattributed cache rows must not block this project');
 });
 
 test('A4c1 authoritative remote readers preserve both hosts and POSIX schedule identities', supported, async t => {
@@ -258,4 +258,118 @@ test('A4c1 authoritative remote readers preserve both hosts and POSIX schedule i
     assert.equal(result.plan.schedules[0].path, '/srv/Repo/.claude/commands/schedule-kept.md');
   }
   assert.equal(h.db.changeCount(), before);
+});
+
+for (const [count, size] of [[1, 20 << 20], [40, 2 << 20]]) test('A4c1FIX bounded transcript heads ' + count, supported, async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+  let bytesRead = 0, pageBytes = 0;
+  const io = Object.create(fs.promises);
+  io.open = async (...args) => {
+    const handle = await fs.promises.open(...args), read = handle.read.bind(handle);
+    handle.read = async (...values) => { const result = await read(...values); bytesRead += result.bytesRead; return result; };
+    return handle;
+  };
+  const h = await setup(t, { fs: io });
+  for (let i = 0; i < count; i++) {
+    const id = 'large-' + i, file = path.join(h.projectsDir, 'local', id + '.jsonl');
+    h.write(file, JSON.stringify({ sessionId: id, cwd: h.project.projectPath }) + '\n');
+    fs.truncateSync(file, size);
+    h.db.upsertCachedSessions([{ sessionId: id, folder: 'local', projectPath: h.project.projectPath, runtime: 'claude' }]);
+  }
+  const readPage = h.writer.readProjectDeletionSnapshot;
+  h.writer.readProjectDeletionSnapshot = async input => { const result = await readPage(input); pageBytes += result.bytes; return result; };
+  const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
+  assert.equal(result.ok, true, 'large transcripts must fit discovery: ' + JSON.stringify(result));
+  assert.deepEqual(result.plan.refusals, []);
+  assert.ok(bytesRead < (count + 10) * 16384, 'only bounded transcript heads are read');
+  const exactBytes = bytesRead + pageBytes + Buffer.byteLength(JSON.stringify({ complete: true, jobs: [] })) + 2;
+  bytesRead = 0; pageBytes = 0;
+  const exact = await createProjectDeletePlanner(inventoryModule.createProjectDeleteInventory({ ...h.deps, maxBytes: exactBytes })).preview({ projectPath: h.project.projectPath, options });
+  assert.equal(exact.ok, true, 'budget must charge bytes read, not transcript sizes: ' + JSON.stringify(exact));
+  const short = await createProjectDeletePlanner(inventoryModule.createProjectDeleteInventory({ ...h.deps, maxBytes: exactBytes - 1 })).preview({ projectPath: h.project.projectPath, options });
+  assert.equal(short.code, 'DISCOVERY_LIMIT', 'every byte actually read is charged');
+});
+
+test('A4c1FIX subagent accepts known worktree and first recorded cwd', supported, async t => {
+  const h = await setup(t);
+  h.write(path.join(h.projectsDir, 'local', 'head/subagents/agent-worker.jsonl'),
+    JSON.stringify({ sessionId: 'head', cwd: h.child }) + '\n' + JSON.stringify({ sessionId: 'head', cwd: path.join(h.root, 'later') }) + '\n');
+  const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.plan.refusals, [], 'first cwd in known child worktree belongs to the parent');
+});
+
+test('A4c1FIX unindexed foreign head excluded and own members refuse', supported, async t => {
+  const h = await setup(t);
+  h.write(path.join(h.projectsDir, 'foreign', 'other.jsonl'), JSON.stringify({ cwd: path.join(h.root, 'foreign') }) + '\n');
+  let result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
+  assert.deepEqual(result.plan.refusals, [], 'another project unindexed transcript must be excluded');
+  h.write(path.join(h.projectsDir, 'unmapped', 'own.jsonl'), JSON.stringify({ cwd: h.project.projectPath }) + '\n');
+  const encoded = require('../encode-project-path').encodeProjectPath(h.project.projectPath);
+  h.write(path.join(h.projectsDir, encoded, 'empty.jsonl'), '');
+  result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
+  assert.ok(result.plan.refusals.some(row => row.target?.endsWith('own.jsonl')));
+  assert.ok(result.plan.refusals.some(row => row.target?.endsWith('empty.jsonl')));
+  assert.ok(!result.plan.refusals.some(row => row.target?.endsWith('other.jsonl')));
+});
+
+test('A4c1FIX two MiB settings paginate within page budget', supported, async t => {
+  const h = await setup(t);
+  for (let i = 0; i < 64; i++) h.db.setSetting('large-setting-' + i, 'x'.repeat(32768));
+  let snapshot, error;
+  try { snapshot = await h.inventory.readSnapshot(budget()); } catch (e) { error = e; }
+  assert.equal(error, undefined, 'rows below budget must shorten pages instead of refusing');
+  assert.equal(snapshot.settings.filter(row => row.key.startsWith('large-setting-')).length, 64);
+});
+
+test('A4c1FIX single oversized setting refuses with coded limit', supported, async t => {
+  const h = await setup(t); h.db.setSetting('oversized', 'x'.repeat(1048576));
+  await assert.rejects(h.inventory.readSnapshot(budget()), { code: 'DISCOVERY_LIMIT' });
+});
+
+for (const persistent of [false, true]) test('A4c1FIX snapshot restart persistent=' + persistent, supported, async t => {
+  const h = await setup(t, { snapshotAttempts: 3 });
+  for (let i = 0; i < 260; i++) h.db.setSetting('paged-' + i, i);
+  const read = h.writer.readProjectDeletionSnapshot;
+  let bumps = 0, starts = 0;
+  h.writer.readProjectDeletionSnapshot = async input => {
+    if (input.section === 'sessions' && input.cursor === null) starts++;
+    const result = await read(input);
+    if (input.section === 'settings' && result.nextCursor !== null && (persistent || !bumps)) {
+      bumps++; await h.writer.setSetting('_writer_revision', result.revision + 1);
+    }
+    return result;
+  };
+  let snapshot, error;
+  try { snapshot = await h.inventory.readSnapshot(budget()); } catch (e) { error = e; }
+  if (persistent) { assert.equal(error?.code, 'SNAPSHOT_STALE'); assert.equal(starts, 3, 'retry count is bounded'); }
+  else { assert.equal(error, undefined, 'one indexing revision change must retry'); assert.equal(starts, 2); assert.equal(snapshot.complete, true); }
+});
+
+test('A4c1FIX empty project settings refusal follows selected option', supported, async t => {
+  const h = await setup(t), empty = path.join(h.root, 'empty'); fs.mkdirSync(empty);
+  h.db.setSetting('scheduleProjects', [empty]);
+  for (const settings of [false, true]) {
+    const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: empty, options: { ...options, settings } });
+    assert.equal(result.ok, true);
+    assert.equal(result.plan.refusals.some(row => /settings.*ownership/i.test(row.error)), settings, 'settings ownership is only required for erasure');
+  }
+});
+
+test('A4c1FIX raw string setting uses getSetting fallback', supported, async t => {
+  const h = await setup(t);
+  h.db.connection.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('raw', 'not JSON');
+  let snapshot, error;
+  try { snapshot = await h.inventory.readSnapshot(budget()); } catch (e) { error = e; }
+  assert.equal(error, undefined, 'raw strings must not throw SyntaxError');
+  assert.equal(snapshot.settings.find(row => row.key === 'raw').value, h.db.getSetting('raw'));
+});
+
+test('A4c1FIX unmapped cache head belonging to selected project remains a candidate', supported, async t => {
+  const h = await setup(t);
+  h.db.upsertCachedSessions([{ sessionId: 'unmapped-member', folder: 'unknown', projectPath: null }]);
+  h.write(path.join(h.projectsDir, 'unknown', 'unmapped-member.jsonl'), JSON.stringify({ sessionId: 'unmapped-member', cwd: h.project.projectPath }) + '\n');
+  const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
+  assert.equal(result.ok, true);
+  assert.ok(result.plan.refusals.some(row => row.target?.endsWith('unmapped-member.jsonl')), 'bounded cwd must attribute unmappable cached members');
 });

@@ -24,13 +24,15 @@ retained committed headers, so bootstrap's interrupted-only list is insufficient
 by itself. Neither read route increments revision or enters mutation routing.
 
 Discovery bounds aggregate entries/records (20,000 default, 50,000 hard), bytes
-(32 MiB default, 64 MiB hard), each file (8 MiB default, 16 MiB hard), each port
+(32 MiB default, 64 MiB hard), transcript heads (16 KiB), other files
+(8 MiB default, 16 MiB hard), each port
 (3 s default) and the whole observation (10 s default, 15 s hard). The clock and
 timer ports are injectable. Directory iteration and file reads are asynchronous;
-realpaths are memoized within an observation. Unindexed/unmapped transcripts,
-missing parts, linked files/directories, mixed ownership, unreadable schedules
-and unowned historical metadata remain refusal candidates. Empty registered
-projects without durable settings ownership conservatively refuse. Remote
+realpaths are memoized within an observation. Attributable unindexed/unmapped
+transcripts, missing parts, linked files/directories, mixed ownership and
+unreadable schedules remain refusal candidates. Unrelated orphan metadata does
+not refuse another project. Empty registered projects without durable settings
+ownership refuse only when settings erasure is selected. Remote
 ownership and schedules need authoritative bounded readers; unavailable remote
 discovery refuses and cached absence never proves completeness. These ports retain
 declared host and POSIX identity; they never apply local path normalization.
@@ -49,6 +51,29 @@ settings ACK and producer fencing survive. Transaction failures still reject.
 Plain-Node real-store tests exercise this worker path, restart sealing and lost
 committed replies. Actual handler, stop/death, native crash and renderer acceptance
 remain A4c2–A4d/CI obligations, not A4c1 claims.
+
+### Review corrections (A4c1fix)
+
+Transcript discovery reads at most the first 16 KiB, drops an incomplete trailing
+record, and uses the first recorded cwd and first identity. It charges bytes
+actually read, while preserving full stat size and mtime for the member manifest.
+Recognized child worktree cwds (including .work-files/worktrees) resolve to their
+parent for transcript attribution; child cache groups remain separately retained.
+Schedules and retained evidence still require bounded complete reads.
+
+Orphan metadata without project provenance stays outside the manifest. Durable
+links to absent indexed parts still refuse the owning project. Unmapped cache
+rows refuse only with selected-folder evidence. Unindexed files are attributed
+by their bounded first cwd, falling back to the selected folder mapping or exact
+encodeProjectPath encoding when cwd is unavailable. Known foreign folders are
+skipped; foreign cwd heads do not create candidates for the selected project.
+Settings ownership is required only when settings deletion is selected.
+
+Snapshot reads restart from the first section/page on SNAPSHOT_STALE, at most
+three attempts by default (snapshotAttempts injection, hard cap five). The
+injected now clock, original deadline, item and byte budgets cover all attempts;
+discarded pages still consume budget. Other errors never retry. Raw settings use
+the same JSON-parse-or-string fallback as getSetting.
 
 ## Historical landing: persisted progress substrate (#474 A4b1)
 

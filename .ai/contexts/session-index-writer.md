@@ -565,18 +565,24 @@ independent budgets and admission rules.
 and `listProjectDeletionOperations` are worker-ordered keyset reads. Sections are
 sessions, folders, metadata, fields, settings, fences and operations. Pages have
 `{revision,rows,bytes,nextCursor}`; the default limit is 256 (hard 1000), default
-page byte cap 1 MiB (hard 8 MiB). Invalid/oversized pages refuse DISCOVERY_LIMIT;
+page byte cap 1 MiB (hard 8 MiB). Invalid requests or a single oversized row refuse DISCOVERY_LIMIT;
+a page stops before the first row that would exceed its conservative byte bound
+and returns the last included key as nextCursor;
 a changed expected revision refuses SNAPSHOT_STALE. The store checks a conservative
 JSON-escaping byte bound before constructing/fetching JSON payloads. Provenance
 pages seek rowid under the unchanged revision, avoiding a whole-table sort.
 SQL stays inside session-index-store; the snapshot module validates the page
 contract and revision. `readProjectDeletionRevision()`
 returns the numeric fence without writes. Read routes bypass transaction/mutation
-routing and never emit a settings ACK or advance the revision. No schema change
+routing and never advance the revision. Successful reads omit a settings ACK;
+the existing drain error path attaches current settings to refused reads. No schema change
 or access to the #380 request journal tables is involved.
 
 The client invokes `onBootstrap` once per ready worker generation, after settings
-delivery and before dispatch. Observer exceptions cannot break transport. A
+delivery and before dispatch. Observer exceptions cannot break transport. The
+client logs the first bootstrap observer exception through its existing log port
+once per client lifetime, including facade observer failures; a throwing logger
+also cannot interrupt transport. A
 replacement generation updates the facade's detached `getRecoveryBootstrap()`
 snapshot and optional observer even though `ready` remains a one-shot promise.
 Old-worker messages cannot replace current recovery evidence. Bootstrap contains

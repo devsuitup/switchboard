@@ -1085,19 +1085,23 @@ function readProjectDeletionPage(section, cursor, limit, maxBytes) {
   const byteBound = `${overhead} + 6 * (${columns.map(column => `COALESCE(length(CAST(${column} AS BLOB)), 4)`).join(' + ')})`;
   const sizes = db.prepare(`SELECT CASE WHEN length(CAST(${key} AS BLOB)) <= ${maxBytes} THEN CAST(${key} AS TEXT) ELSE NULL END AS cursor, ${byteBound} AS bytes FROM ${table}
     WHERE ${cursor === null ? '1' : `${key} > ?`} ORDER BY ${key} LIMIT ?`).all(...(cursor === null ? [] : [cursor]), limit + 1);
-  let bound = 0;
+  let bound = 0, count = 0;
   for (const row of sizes.slice(0, limit)) {
+    if (bound + row.bytes > maxBytes) {
+      if (!count) throw Object.assign(new Error('Snapshot row exceeds byte budget.'), { code: 'DISCOVERY_LIMIT' });
+      break;
+    }
     bound += row.bytes;
-    if (bound > maxBytes) throw Object.assign(new Error('Snapshot page exceeds byte budget.'), { code: 'DISCOVERY_LIMIT' });
+    count++;
   }
   const get = db.prepare(`SELECT ${payload} AS payload FROM ${table} WHERE ${key} = ?`);
   let bytes = 0;
-  const rows = sizes.slice(0, limit).map(row => {
+  const rows = sizes.slice(0, count).map(row => {
     const value = get.get(row.cursor).payload;
     bytes += Buffer.byteLength(value);
     return JSON.parse(value);
   });
-  return { rows, bytes, nextCursor: sizes.length > limit ? sizes[limit - 1].cursor : null };
+  return { rows, bytes, nextCursor: sizes.length > count ? sizes[count - 1].cursor : null };
 }
 
 return {

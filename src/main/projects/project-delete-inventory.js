@@ -5,6 +5,8 @@ const path = require('node:path');
 const { parseFolderKey } = require('../remote/remote-hosts');
 const { resolveJsonlPath } = require('../../../read-session-file');
 const { durableRowLinks, fail } = require('./project-delete-identity');
+const { encodeProjectPath } = require('../../../encode-project-path');
+const { resolveWorktreePath } = require('../../../derive-project-path');
 const { worktreeParentPath } = require('../../../public/worktree-nesting');
 const { parseFrontmatter, isRunnerScheduleFileName, scheduleStateKey } = require('../schedules/schedule-runner');
 
@@ -102,24 +104,26 @@ function createProjectDeleteInventory(deps) {
     } catch (error) { if (!(missing && error.code === 'ENOENT')) throw error; }
     finally { if (dir) await dir.close(); }
   }
-  async function inspect(c, file) {
+  async function inspect(c, file, head = false) {
     const stat = await bounded(c, () => io.lstat(file));
     if (!stat.isFile() || stat.isSymbolicLink()) throw fail('DISCOVERY_CANDIDATE', 'Linked or non-regular file.');
     await unlinked(c, file);
-    if (stat.size > maxFileBytes) throw fail('DISCOVERY_LIMIT', 'File exceeds inventory byte budget.');
-    charge(c, 0, stat.size);
+    if (!head && stat.size > maxFileBytes) throw fail('DISCOVERY_LIMIT', 'File exceeds inventory byte budget.');
     const handle = await bounded(c, () => io.open(file, 'r'), late => late.close());
     try {
-      const buffer = Buffer.alloc(Math.min(stat.size + 1, maxFileBytes + 1));
+      const buffer = Buffer.alloc(head ? Math.min(stat.size, 16 << 10) : Math.min(stat.size + 1, maxFileBytes + 1));
       let size = 0;
       while (size < buffer.length) {
         const read = await bounded(c, () => handle.read(buffer, size, buffer.length - size, null));
         if (!read.bytesRead) break;
+        charge(c, 0, read.bytesRead);
         size += read.bytesRead;
       }
       const after = await bounded(c, () => handle.stat());
-      if (size !== stat.size || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ino !== stat.ino) throw fail('DISCOVERY_CANDIDATE', 'File changed during inspection.');
-      return { path: file, size, mtimeMs: stat.mtimeMs, content: buffer.toString('utf8', 0, size) };
+      if ((!head && size !== stat.size) || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ino !== stat.ino) throw fail('DISCOVERY_CANDIDATE', 'File changed during inspection.');
+      let content = buffer.toString('utf8', 0, size);
+      if (head && size < stat.size) content = content.slice(0, content.lastIndexOf('\n') + 1);
+      return { path: file, size: stat.size, mtimeMs: stat.mtimeMs, content };
     } finally { await handle.close(); }
   }
   async function pages(c, section, revision) {
@@ -137,10 +141,25 @@ function createProjectDeleteInventory(deps) {
     return rows;
   }
   async function readSnapshot(budget) {
+    const c = context(budget), attempts = Math.floor(cap(deps.snapshotAttempts, 3, 5));
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try { return await readSnapshotOnce(budget); }
+      catch (error) {
+        c.snapshot = null;
+        if (error.code !== 'SNAPSHOT_STALE' || attempt + 1 === attempts) throw error;
+        c.check();
+      }
+    }
+  }
+  async function readSnapshotOnce(budget) {
     const c = context(budget), revision = await bounded(c, () => deps.writer.readProjectDeletionRevision());
     const snapshot = { complete: true, revision: String(revision), projects: [], declaredHosts: [] };
     for (const section of ['sessions', 'folders', 'metadata', 'fields', 'settings', 'fences']) snapshot[section] = await pages(c, section, revision);
-    const settings = Object.fromEntries(snapshot.settings.map(row => [row.key, JSON.parse(row.value)]));
+    const settings = Object.fromEntries(snapshot.settings.map(row => {
+      let value;
+      try { value = JSON.parse(row.value); } catch { value = row.value; }
+      return [row.key, value];
+    }));
     snapshot.initialScanComplete = settings.initial_scan_complete === true;
     snapshot.declaredHosts = (settings.remoteHosts || []).map(row => row.alias);
     for (const row of [...snapshot.folders, ...snapshot.sessions]) if (parseFolderKey(row.folder).alias === null) await registerPath(c, row.projectPath);
@@ -179,15 +198,29 @@ function createProjectDeleteInventory(deps) {
       charge(c, 0, Buffer.byteLength(JSON.stringify(remote)));
       return remote;
     }
+    const parentPath = cwd => resolveWorktreePath(cwd) !== cwd ? resolveWorktreePath(cwd)
+      : worktreeParentPath(cwd?.replaceAll('\\', '/'))
+        || cwd?.replaceAll('\\', '/').match(/^(.+)\/\.work-files\/worktrees\/[^/]+\/?$/)?.[1];
+    const belongs = cwd => typeof cwd === 'string' && path.isAbsolute(cwd)
+      && (normalize(c, cwd) === normalize(c, project.projectPath)
+        || (parentPath(cwd) && normalize(c, parentPath(cwd)) === normalize(c, project.projectPath)));
+    const ownFolders = new Set(snapshot.folders.filter(row => owned(c, { alias: null, projectPath: row.projectPath }, project)
+      && parseFolderKey(row.folder).alias === null).map(row => row.folder));
+    for (const row of snapshot.sessions) if (parseFolderKey(row.folder).alias === null
+      && owned(c, { alias: null, projectPath: row.projectPath }, project)) ownFolders.add(row.folder);
+    const folderCase = value => process.platform === 'win32' ? value?.toLowerCase() : value;
+    const encodedFolders = new Set([project.projectPath, ...snapshot.projects.filter(row => owned(c, row, project)).map(row => row.projectPath)]
+      .map(value => folderCase(encodeProjectPath(value))));
+    const folderBelongs = folder => ownFolders.has(folder) || encodedFolders.has(folderCase(folder));
     const local = snapshot.sessions.filter(row => parseFolderKey(row.folder).alias === null), folderOwners = new Map();
     for (const row of local) {
       c.check();
-      if (typeof row.projectPath !== 'string' || !path.isAbsolute(row.projectPath)) candidate(row.sessionId, 'Cached row has no absolute project ownership.');
+      if ((typeof row.projectPath !== 'string' || !path.isAbsolute(row.projectPath)) && folderBelongs(row.folder)) candidate(row.sessionId, 'Cached row has no absolute project ownership.');
       const owners = folderOwners.get(row.folder) || new Set();
       owners.add(row.projectPath ? normalize(c, row.projectPath) : null);
       folderOwners.set(row.folder, owners);
       const file = row.runtime === 'codex' ? row.sessionFile : resolveJsonlPath(deps.projectsDir, row);
-      if (file && path.isAbsolute(file)) knownFiles.set(normalize(c, file), row);
+      if (file && path.isAbsolute(file) && typeof row.projectPath === 'string' && path.isAbsolute(row.projectPath)) knownFiles.set(normalize(c, file), row);
     }
     const groupMap = new Map();
     for (const row of local) {
@@ -213,7 +246,7 @@ function createProjectDeleteInventory(deps) {
       if (!file || !path.isAbsolute(file)) { candidate(row.sessionId, 'Missing transcript mapping.'); continue; }
       knownFiles.set(normalize(c, file), row);
       try {
-        const inspected = await inspect(c, file);
+        const inspected = await inspect(c, file, true);
         let cwd, identified = false;
         const validIds = new Set([row.sessionId, row.bridgeSessionId, row.parentSessionId].filter(Boolean));
         for (const line of inspected.content.split('\n')) {
@@ -226,10 +259,11 @@ function createProjectDeleteInventory(deps) {
             identified = true;
           }
           const recordedCwd = runtime === 'codex' ? record.payload?.cwd : record.cwd;
-          if (recordedCwd) { if (cwd && normalize(c, cwd) !== normalize(c, recordedCwd)) throw new Error('Conflicting transcript ownership.'); cwd = recordedCwd; }
+          if (!cwd && recordedCwd) cwd = recordedCwd;
+          if (cwd && identified) break;
         }
         if (!identified) throw new Error('Transcript identity is unavailable.');
-        if (!cwd || normalize(c, cwd) !== normalize(c, row.projectPath)) throw new Error('Transcript ownership unavailable or changed.');
+        if (!belongs(cwd)) throw new Error('Transcript ownership unavailable or changed.');
         member.present = true; member.size = inspected.size; member.mtimeMs = inspected.mtimeMs;
         member.liveness = deps.readLiveness ? await bounded(c, () => deps.readLiveness(member, budget)) : { state: 'unknown' };
       } catch (error) { propagate(error); candidate(file, error.message); }
@@ -237,8 +271,10 @@ function createProjectDeleteInventory(deps) {
     groups.push(...groupMap.values());
     const ids = new Set(members.map(row => row.id));
     const durableIds = new Set(snapshot.sessions.flatMap(row => [row.sessionId, ...durableRowLinks(row)]));
-    for (const id of new Set([...snapshot.metadata, ...snapshot.fields].map(row => row.sessionId))) {
-      if (!durableIds.has(id)) candidate(id, 'Historical metadata has no durable ownership.');
+    for (const row of [...snapshot.metadata, ...snapshot.fields]) {
+      if (!durableIds.has(row.sessionId) && (belongs(row.projectPath || row.cwd) || folderBelongs(row.folder))) {
+        candidate(row.sessionId, 'Historical metadata has no durable ownership.');
+      }
     }
     for (const row of local.filter(row => owned(c, { alias: null, projectPath: row.projectPath }, project))) {
       for (const id of durableRowLinks(row)) if (!ids.has(id)) candidate(id, 'Durable continuation ownership has no indexed transcript.');
@@ -246,17 +282,40 @@ function createProjectDeleteInventory(deps) {
     for (const folder of snapshot.folders.filter(row => owned(c, { alias: null, projectPath: row.projectPath }, project) && parseFolderKey(row.folder).alias === null)) {
       if (!groupMap.has(folder.folder)) groups.push({ alias: null, projectPath: folder.projectPath, folderKey: folder.folder, runtime: 'claude', verified: true });
     }
-    async function scan(directory, depth = 0) {
-      if (depth > 8) throw fail('DISCOVERY_LIMIT', 'Transcript layout exceeds depth budget.');
+    async function scan(directory, folder, depth = 0) {
+      if (depth > 8) {
+        if (folderBelongs(folder)) throw fail('DISCOVERY_LIMIT', 'Transcript layout exceeds depth budget.');
+        return;
+      }
       await entries(c, directory, async (entry, file) => {
-        if (entry.isSymbolicLink()) { candidate(file, 'Linked transcript candidate.'); return; }
-        if (entry.isDirectory()) { await scan(file, depth + 1); return; }
-        if (entry.name.endsWith('.jsonl') && !knownFiles.has(normalize(c, file))) candidate(file, 'Unindexed or unmappable transcript candidate.');
+        if (entry.isSymbolicLink()) { if (folderBelongs(folder)) candidate(file, 'Linked transcript candidate.'); return; }
+        if (entry.isDirectory()) { await scan(file, folder, depth + 1); return; }
+        if (!entry.name.endsWith('.jsonl') || knownFiles.has(normalize(c, file))) return;
+        let cwd;
+        try {
+          const inspected = await inspect(c, file, true);
+          for (const line of inspected.content.split('\n')) {
+            if (!line.trim()) continue;
+            let record;
+            try { record = JSON.parse(line); } catch { continue; }
+            cwd = record.cwd || (record.type === 'session_meta' ? record.payload?.cwd : null);
+            if (cwd) break;
+          }
+        } catch (error) { propagate(error); if (folderBelongs(folder)) candidate(file, error.message); return; }
+        if (cwd ? belongs(cwd) : folderBelongs(folder)) candidate(file, 'Unindexed or unmappable transcript candidate.');
       });
     }
-    try { await scan(deps.projectsDir); }
-    catch (error) { propagate(error); candidate(deps.projectsDir, error.message); }
-    if (!groups.some(row => owned(c, row, project))) candidate(project.projectPath, 'Settings ownership is unavailable for this empty registered project.');
+    try {
+      await entries(c, deps.projectsDir, async (entry, file) => {
+        if (entry.isSymbolicLink()) { if (folderBelongs(entry.name)) candidate(file, 'Linked transcript candidate.'); return; }
+        if (!entry.isDirectory()) return;
+        const knownOwners = snapshot.folders.filter(row => row.folder === entry.name && row.projectPath);
+        if (knownOwners.length && !folderBelongs(entry.name)) return;
+        try { await scan(file, entry.name); }
+        catch (error) { propagate(error); if (folderBelongs(entry.name)) candidate(file, error.message); }
+      });
+    } catch (error) { propagate(error); candidate(deps.projectsDir, error.message); }
+    if (budget.options?.settings && !groups.some(row => owned(c, row, project))) candidate(project.projectPath, 'Settings ownership is unavailable for this empty registered project.');
     return { complete: true, groups, members, candidates };
   }
   async function discoverSchedules(project, budget) {

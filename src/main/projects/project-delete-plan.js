@@ -95,7 +95,7 @@ function createProjectDeletePlanner(deps) {
         if (snapshot.initialScanComplete !== true || !text(snapshot.revision)) throw fail('SNAPSHOT_INCOMPLETE', 'Wait for the normal initial index and writer fence.');
         items(snapshot.projects); items(snapshot.declaredHosts);
         const { project, known } = await resolveProject(request, snapshot, boundKey, memo, each, ordered);
-        const ownership = structuredClone(await deps.discoverOwnership(project, { ...budget, snapshot }));
+        const ownership = structuredClone(await deps.discoverOwnership(project, { ...budget, snapshot, options: request.options }));
         expired(); complete(ownership);
         const rawGroups = items(ownership.groups), rawMembers = items(ownership.members);
         const ownershipCandidates = items(ownership.candidates);

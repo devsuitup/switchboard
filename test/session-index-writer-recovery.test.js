@@ -5,7 +5,7 @@ const { EventEmitter } = require('node:events');
 const { createWriterWorkerClient } = require('../session-index-writer-client');
 
 test('bootstrap observers run before dispatch on every generation and cannot break transport', async () => {
-  const workers = [], observed = [], dispatched = [], timers = new Set();
+  const workers = [], observed = [], dispatched = [], timers = new Set(), warnings = [];
   const client = createWriterWorkerClient({
     workerFactory() {
       const worker = new EventEmitter();
@@ -15,7 +15,7 @@ test('bootstrap observers run before dispatch on every generation and cannot bre
     },
     setTimeout(fn, ms) { const timer = { fn, ms }; timers.add(timer); return timer; },
     clearTimeout(timer) { timers.delete(timer); }, now: () => 0,
-    log: { warn() {}, info() {} },
+    log: { warn(message) { warnings.push(message); }, info() {} },
     onBootstrap(message) { observed.push(message.recoveredProjectDeletions); throw new Error('observer failure'); },
   });
   const first = client.request('readProjectDeletionRevision');
@@ -35,4 +35,5 @@ test('bootstrap observers run before dispatch on every generation and cannot bre
   workers[0].emit('message', { ready: true, settings: [], recoveredProjectDeletions: ['stale'] });
   assert.equal(observed.length, 2);
   await client.terminate();
+  assert.equal(warnings.filter(message => /bootstrap.*observer failure/i.test(message)).length, 1, 'bootstrap observer failure is logged once');
 });
