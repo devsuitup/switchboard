@@ -1,5 +1,28 @@
 # Context: trigger-watcher
 
+## Windows startup PID publication (#1083)
+
+ConPTY returns the same PTY object with PID zero before its output worker
+connects; node-pty publishes the shell PID on `ready_datapipe`. A v1 delivery
+pins the session object, PTY object and generation immediately, but treats this
+zero as an unpublished PID. Admission waits within the action's existing
+deadline and captures the first positive PID exactly once. A later positive
+PID change, PTY replacement, generation change or exit still invalidates the
+binding. No prompt is admitted while the PID remains unpublished.
+
+With a fresh Windows process table, PID zero can have a start identity: WMI's
+System Idle Process creation time. `deliveryPtyStart` ignores every PID that is
+not a positive integer, so this unrelated identity cannot become the spawn pin.
+Delivery captures the first available start of the published shell PID and
+refuses a later different start; absence alone is not exit evidence.
+First-writer revocation remains unchanged. Status independently accepts the
+first positive PID and fills `statusPtyStart` from that PID, checking both pins
+before and after its asynchronous head read. Later PID/start changes, replaced
+PTYs and generations remain ambiguous. Tests exercise the real file watcher,
+action/broker, renderer and extracted main open handler with delayed shell PID
+publication, both a fresh table containing PID zero and a failed table read,
+and a later descendant CLI descriptor. No live ConPTY or Electron is launched.
+
 ## Typed read-only requests (#380 S1b3)
 
 An own `type` property selects the strict typed contract before action dispatch.
@@ -35,7 +58,8 @@ renderer, lifecycle, capability, profile or admission operation. A new UUID is
 required for a new observation. See [automation](../../docs/automation.md).
 
 The owned status pin uses the actual PTY object, its generation, PID and a
-separate `statusPtyStart` captured at spawn. The v1 delivery `hostPtyStart`
+separate `statusPtyStart` captured at spawn or, when missing, from the first
+available start of the published positive PID. The v1 delivery `hostPtyStart`
 remains captured only for trigger launches. A missing or uncertain second
 descriptor observation drops descriptor evidence while preserving the current
 owned PTY; two present writers with different identities are ambiguous.

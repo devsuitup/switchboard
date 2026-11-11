@@ -9,6 +9,20 @@ const { EventEmitter } = require('node:events');
 const state = require('../cli-session-state');
 
 const ID = '01234567-89ab-cdef-0123-456789abcdef';
+for (const platform of ['win32', 'linux']) {
+  test(`1083FIX: ${platform} start identity ignores every non-positive-integer PID`, async t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-pid-guard-'));
+    t.after(() => { state.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
+    const invalid = [0, -1, 1.5, '42', null, undefined, NaN, Infinity];
+    state.init({ dir, platform, activeSessions: new Map(), onIdle() {},
+      readProcStart: () => '100',
+      readProcessTable: async () => new Map([...invalid, 42].map(pid => [pid, { ppid: 1, created: '100' }])) });
+    if (platform === 'win32') await state.refreshProcessTable({ force: true });
+    for (const pid of invalid) assert.equal(state.deliveryPtyStart(pid), null, `invalid PID ${String(pid)}`);
+    assert.equal(state.deliveryPtyStart(42), '100');
+  });
+}
+
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-v1-'));
   t.after(() => { state.stop(); fs.rmSync(dir, { recursive: true, force: true }); });

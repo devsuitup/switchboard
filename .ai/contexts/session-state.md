@@ -345,6 +345,27 @@ pending notice clears, including after the final project reload.
 
 ## Conversation head turn and the single spinner (#625)
 
+`system/informational` transcript records (including the CLI's auto-mode
+notice) do not advance the head's `lastEntryAt` (#1083). Otherwise a resumed
+transcript whose last prompt still classifies as open acquires a timestamp
+newer than OSC idle, and both status and sidebar revive that old turn. The
+shared transcript reader ignores only this informational subtype for turn
+classification; actual prompts, assistant records, queue events and closure
+evidence retain their existing ordering. Tests use the real task reader and
+status gatherer, and the renderer's sidebar projection after OSC idle.
+
+The #1083 review searched repository tests, fixtures, docs and the CLI-state
+format notes. The transcript examples are the synthetic auto-mode notice and
+the watcher negative control that changes a compaction record's subtype to
+`informational`; no exhaustive CLI informational-content catalogue is present.
+The filter therefore does not assume these records occur only after a turn.
+During an active turn, its real prompt/assistant timestamp still outranks an
+older OSC idle hint even if an informational line follows it. Status and sidebar
+regressions exercise that ordering through the real task worker. Skipping the
+notice changes neither the open state nor that activity timestamp. Restricting
+the skip to a transcript-closed turn would revive the original bug: OSC may
+have closed the projection while the raw transcript still classifies as open.
+
 The row's animation is selected from its `headSessionId || sessionId`, with
 three transcript states: `open`, `closed`, and `unknown`. `transcript-turn.js`
 retains its existing `closed` API for trigger delivery and adds `state`.
