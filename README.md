@@ -21,7 +21,7 @@ fit. `git log --oneline upstream/main..main` lists what the fork carries.
 |---|---|
 | macOS | `.dmg` or `.zip`, Apple Silicon (`arm64`) and Intel (`x64`) |
 | Windows | `Switchboard-Setup-<version>.exe` (NSIS installer, x64 and arm64) |
-| Linux | `.AppImage` (x64, arm64), `.deb` (amd64, arm64), `switchboard-doctly-<version>.pacman` |
+| Linux | `.AppImage` (x64, arm64), `.deb` (amd64, arm64), `switchboard-doctly-<version>-x64.pacman` or `-aarch64.pacman` |
 
 The builds are not code-signed. macOS Gatekeeper and Windows SmartScreen warn
 on first launch.
