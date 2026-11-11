@@ -408,6 +408,17 @@ pending notice clears, including after the final project reload.
 
 ## Conversation head turn and the single spinner (#625)
 
+The #1085 plain-Node investigation adds `test/sidebar-informational-idle.test.js`:
+a disposable transcript feeds the real task worker and the shipped sidebar
+scripts in jsdom. OSC idle, then a timestamped local idle descriptor, then an
+informational append leaves the row without `cli-busy`, both with an already
+observed head and with its first delivery delayed until after the notice.
+A later real prompt plus information still wins over those stale idle hints.
+These scenarios already pass with #1084; they do not reproduce the remaining
+live report or establish its cause. Removing the informational filter makes
+the idle assertion fail; treating information as closure makes the active-turn
+assertion fail. No production behavior or refresh cadence changed for #1085.
+
 `system/informational` transcript records (including the CLI's auto-mode
 notice) do not advance the head's `lastEntryAt` (#1083). Otherwise a resumed
 transcript whose last prompt still classifies as open acquires a timestamp
