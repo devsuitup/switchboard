@@ -558,3 +558,34 @@ settings reads retain the acknowledged mirror. No-op applies retain the pre-awai
 Only post-ACK accepted final results advance projectsReconciledAt, including
 accepted callerless reconciliation. Archive retirement and shutdown keep their
 independent budgets and admission rules.
+
+## Bounded deletion reads and generation observation (#474 A4c1)
+
+`readProjectDeletionSnapshot({section,cursor,limit,maxBytes,expectedRevision})`
+and `listProjectDeletionOperations` are worker-ordered keyset reads. Sections are
+sessions, folders, metadata, fields, settings, fences and operations. Pages have
+`{revision,rows,bytes,nextCursor}`; the default limit is 256 (hard 1000), default
+page byte cap 1 MiB (hard 8 MiB). Invalid/oversized pages refuse DISCOVERY_LIMIT;
+a changed expected revision refuses SNAPSHOT_STALE. The store checks a conservative
+JSON-escaping byte bound before constructing/fetching JSON payloads. Provenance
+pages seek rowid under the unchanged revision, avoiding a whole-table sort.
+SQL stays inside session-index-store; the snapshot module validates the page
+contract and revision. `readProjectDeletionRevision()`
+returns the numeric fence without writes. Read routes bypass transaction/mutation
+routing and never emit a settings ACK or advance the revision. No schema change
+or access to the #380 request journal tables is involved.
+
+The client invokes `onBootstrap` once per ready worker generation, after settings
+delivery and before dispatch. Observer exceptions cannot break transport. A
+replacement generation updates the facade's detached `getRecoveryBootstrap()`
+snapshot and optional observer even though `ready` remains a one-shot promise.
+Old-worker messages cannot replace current recovery evidence. Bootstrap contains
+the interrupted operations sealed by startup; bounded receipt enumeration also
+finds retained committed operations whose original reply was lost. Observation
+does not replay work or release unresolved archive reservations.
+
+The post-commit history probe is auxiliary: a failed probe retains the pending
+history guard and preserves the committed ACK/settings bookkeeping. The original
+transaction error path is unchanged. The full worker is tested with a real guarded
+SQLite fixture and the real client/facade; generation replacement uses a fake
+worker in `test/session-index-writer-recovery.test.js`, without Electron.

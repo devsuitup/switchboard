@@ -18,6 +18,7 @@ const { stable } = require('./src/main/projects/project-delete-identity');
 // see .ai/contexts/session-index-writer.md
 function createSessionIndexWriter(options = {}, cache = require('./session-cache')) {
   const mirror = new Map();
+  let recoveryBootstrap = null;
   const notify = (ids, change) => {
     try { options.onSessionsChanged?.(ids, change); }
     catch (error) { (options.log || console).warn('[session-index-writer] sessions observer failed: ' + (error?.message ?? String(error))); }
@@ -46,6 +47,10 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     workerFactory: options.workerFactory || (() => new Worker(path.join(__dirname, 'workers', 'session-index-writer.js'))),
     onSettings: entries => { mirror.clear(); for (const [key, value] of entries) mirror.set(key, value); if (backend) backend.applySettingsAcknowledgment(entries); },
     ...options.clientOptions,
+    onBootstrap: message => {
+      recoveryBootstrap = structuredClone({ recoveredProjectDeletions: message.recoveredProjectDeletions || [] });
+      options.onBootstrap?.(structuredClone(recoveryBootstrap));
+    },
   });
   const workflows = projectArchiveWorkflows(client);
   const workflowProof = () => workflows.current()?.proof;
@@ -138,6 +143,10 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
   };
   const writer = {
     ready,
+    getRecoveryBootstrap: () => structuredClone(recoveryBootstrap),
+    readProjectDeletionSnapshot: input => request('readProjectDeletionSnapshot', input),
+    readProjectDeletionRevision: () => request('readProjectDeletionRevision'),
+    listProjectDeletionOperations: input => request('listProjectDeletionOperations', input),
     initializeCache(ctx) {
       if (!backend) throw new Error('await writer.ready before initializeCache');
       recorder.begin();
@@ -413,7 +422,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     }),
   };
   for (const [name, fn] of Object.entries(writer)) {
-    if (typeof fn !== 'function' || ['initializeCache', 'withCache', 'reserveProjectDeletion', 'completeProjectDeletion', 'scheduleRegistry', 'createWhatsNew', 'closeDb', 'drain', 'beginShutdown', 'terminate', 'releaseLiveSession'].includes(name)) continue;
+    if (typeof fn !== 'function' || ['getRecoveryBootstrap', 'initializeCache', 'withCache', 'reserveProjectDeletion', 'completeProjectDeletion', 'scheduleRegistry', 'createWhatsNew', 'closeDb', 'drain', 'beginShutdown', 'terminate', 'releaseLiveSession'].includes(name)) continue;
     if (workflowTargets[name]) {
       writer[name] = (...args) => {
         if (!admitted()) return Promise.reject(new Error('writer is closing'));

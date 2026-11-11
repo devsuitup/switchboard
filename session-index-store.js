@@ -1069,8 +1069,40 @@ const sessionRequests = {
     row.rawHash, row.outcomeJson, row.revision, row.createdAt),
 };
 
+const deletionReadSections = {
+  sessions: ['session_cache', 'sessionId', ['sessionId', 'folder', 'projectPath', 'runtime', 'sessionFile', 'parentSessionId', 'agentId', 'workflowRunId', 'mergedIntoSessionId', 'bridgeSessionId', 'continuationIndex']],
+  folders: ['cache_meta', 'folder', ['folder', 'projectPath']],
+  metadata: ['session_meta', 'sessionId', ['sessionId', 'name', 'starred', 'archived']],
+  fields: ['session_meta_fields', 'rowid', ['sessionId', 'field', 'revision', 'source', 'transcriptTitle']],
+  settings: ['settings', 'key', ['key', 'value']],
+  fences: ['project_delete_fences', 'projectKey', ['projectKey', 'epoch', 'operationId', 'blocked']],
+  operations: ['project_delete_operations', 'operationId', ['operationId', 'projectKey', 'expectedEpoch', 'ownedEpoch', 'state', 'phase', 'sealed', 'createdAt', 'finishedAt', 'optionsJson', 'lastRevision']],
+};
+function readProjectDeletionPage(section, cursor, limit, maxBytes) {
+  const [table, key, columns] = deletionReadSections[section];
+  const payload = `json_object(${columns.map(column => `'${column}', ${column}`).join(', ')})`;
+  const overhead = 2 + columns.reduce((sum, column) => sum + Buffer.byteLength(JSON.stringify(column)) + 4, 0);
+  const byteBound = `${overhead} + 6 * (${columns.map(column => `COALESCE(length(CAST(${column} AS BLOB)), 4)`).join(' + ')})`;
+  const sizes = db.prepare(`SELECT CASE WHEN length(CAST(${key} AS BLOB)) <= ${maxBytes} THEN CAST(${key} AS TEXT) ELSE NULL END AS cursor, ${byteBound} AS bytes FROM ${table}
+    WHERE ${cursor === null ? '1' : `${key} > ?`} ORDER BY ${key} LIMIT ?`).all(...(cursor === null ? [] : [cursor]), limit + 1);
+  let bound = 0;
+  for (const row of sizes.slice(0, limit)) {
+    bound += row.bytes;
+    if (bound > maxBytes) throw Object.assign(new Error('Snapshot page exceeds byte budget.'), { code: 'DISCOVERY_LIMIT' });
+  }
+  const get = db.prepare(`SELECT ${payload} AS payload FROM ${table} WHERE ${key} = ?`);
+  let bytes = 0;
+  const rows = sizes.slice(0, limit).map(row => {
+    const value = get.get(row.cursor).payload;
+    bytes += Buffer.byteLength(value);
+    return JSON.parse(value);
+  });
+  return { rows, bytes, nextCursor: sizes.length > limit ? sizes[limit - 1].cursor : null };
+}
+
 return {
   sessionRequests,
+  projectDeletionSnapshot: require('./src/main/projects/project-delete-snapshot').createProjectDeleteSnapshot(readProjectDeletionPage, () => getSetting('_writer_revision') || 0),
   projectDeletion,
   beginSearchEntry, appendSearchBody, publishSearchEntry,
   connection: db, transact, chunkUnit, changeCount: totalChanges, measurements: () => measured.slice(), nextChunkSize: () => chunkSize,

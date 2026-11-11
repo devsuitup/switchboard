@@ -86,6 +86,10 @@ export type SessionResultNamespace = SessionRequestCommand & {
 
 export interface SessionIndexWriter {
   readonly ready: Promise<void>;
+  getRecoveryBootstrap(): { recoveredProjectDeletions: DeletionReference[] } | null;
+  readProjectDeletionRevision(): Promise<number>;
+  readProjectDeletionSnapshot(input: ProjectDeletionPageRequest): Promise<ProjectDeletionPage>;
+  listProjectDeletionOperations(input?: Omit<ProjectDeletionPageRequest, 'section'>): Promise<ProjectDeletionPage>;
   querySessionRequestOutcome(input: { stemKey: string; suppliedHash?: string; rawHash?: string }): Promise<SessionRequestOutcome>;
   recordConsumedSessionStatusRequest(input: ConsumedSessionStatusRequest): Promise<SessionRequestOutcome>;
   recordSessionRequestConflict(input: SessionRequestCommand & { rawHash: string; resultBytes: Uint8Array }): Promise<SessionRequestOutcome>;
@@ -145,6 +149,14 @@ export interface SessionIndexWriter {
   closeDb(): Promise<void>;
 }
 
+export type ProjectDeletionPageRequest = {
+  section?: 'sessions' | 'folders' | 'metadata' | 'fields' | 'settings' | 'fences' | 'operations';
+  cursor?: string | null; limit?: number; maxBytes?: number; expectedRevision?: number;
+};
+export type ProjectDeletionPage = {
+  revision: number; rows: Array<Record<string, unknown>>; bytes: number; nextCursor: string | null;
+};
+
 export function createSessionIndexWriter(options?: {
   workerFactory?: () => import('node:worker_threads').Worker;
   client?: unknown;
@@ -152,5 +164,6 @@ export function createSessionIndexWriter(options?: {
   clientOptions?: { timeoutMs?: number; maxRestarts?: number };
   log?: Logger;
   onBusyCounts?: (counts: Record<string, { retries: number; exhaustions: number }>) => void;
+  onBootstrap?: (bootstrap: { recoveredProjectDeletions: DeletionReference[] }) => void;
   onSessionsChanged?: (ids: string[] | null, change?: { upsertOnly?: boolean }) => void;
 }, cache?: Cache): SessionIndexWriter;

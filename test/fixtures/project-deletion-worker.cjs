@@ -36,3 +36,19 @@ module.exports = function workerHarness(db, onMessage = () => {}) {
   } };
   return { post, client, messages };
 };
+
+module.exports.createWorker = function createWorker(db) {
+  const worker = new EventEmitter(), port = new EventEmitter();
+  let stopped = false;
+  port.postMessage = message => { if (!stopped) worker.emit('message', message); };
+  worker.postMessage = message => port.emit('message', message);
+  worker.terminate = async () => { stopped = true; };
+  const filename = require.resolve('../../workers/session-index-writer');
+  const nativeRequire = createRequire(filename);
+  queueMicrotask(() => vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    require: name => name === 'node:worker_threads' ? { parentPort: port }
+      : name === '../session-index-store' ? { openSessionIndexStore: () => db } : nativeRequire(name),
+    Buffer, setInterval: () => ({ unref() {} }), clearInterval() {},
+  }, { filename }));
+  return worker;
+};

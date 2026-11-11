@@ -88,6 +88,10 @@ function isScheduleRunLive(sessionId) {
   return scheduledRuns.has(sessionId.toLowerCase());
 }
 
+function getScheduleRunSnapshot() {
+  return Array.from(scheduledRuns, ([sessionId, run]) => ({ sessionId, ...run }));
+}
+
 function annotateScheduleRuns(projects) {
   for (const project of projects) for (const session of project.sessions) {
     const ids = [...new Set([session.sessionId, session.headSessionId, ...(session.mergedMemberIds || [])].filter(Boolean))];
@@ -1185,4 +1189,5 @@ module.exports = {
   DEFAULT_DIR,
   FLUSH_MS,
   MIN_RESCAN_INTERVAL_MS,
+  getScheduleRunSnapshot,
 };

@@ -1,11 +1,61 @@
-# Project deletion: read-only planning (#474 A4a)
+# Project deletion: dormant backend (#474 A4a–A4c1)
 
-## Persisted progress substrate (#474 A4b1)
+## Current state: bounded inventory and recovery reads (A4c1)
+
+A4b4 already supplies `completeProjectDeletion`, integer writer revision and
+project epoch fences, exact groups/members plus jobs/tabs/schedules inventory,
+terminal/noLateCommit outcomes and committed invalidation targets. Main, IPC
+and the two user entry points still have no new deletion caller. The earlier
+substrate sections below describe their historical landing boundary.
+
+`createProjectDeleteInventory` supplies the six planner ports, with an explicit
+writer, projects directory, data directory, active-session Map, scheduler
+snapshot and authoritative job/liveness readers. It does not populate caches,
+seed schedule registration, claim minutes or refresh projects. Missing liveness
+or job authority refuses; headless schedule runs remain external uncontrolled
+processes. Saved working-set identities are unioned with active tabs; durable
+cache ownership preserves remote hosts and uncertain fresh restores refuse.
+
+The ordered worker snapshot pages sessions (including archived cache rows and
+continuation links), folders, metadata/provenance, settings and project fences.
+All pages and the final revision read must agree. Each SQL page bounds row count
+and projected byte size before fetching payloads. Receipt pages also include
+retained committed headers, so bootstrap's interrupted-only list is insufficient
+by itself. Neither read route increments revision or enters mutation routing.
+
+Discovery bounds aggregate entries/records (20,000 default, 50,000 hard), bytes
+(32 MiB default, 64 MiB hard), each file (8 MiB default, 16 MiB hard), each port
+(3 s default) and the whole observation (10 s default, 15 s hard). The clock and
+timer ports are injectable. Directory iteration and file reads are asynchronous;
+realpaths are memoized within an observation. Unindexed/unmapped transcripts,
+missing parts, linked files/directories, mixed ownership, unreadable schedules
+and unowned historical metadata remain refusal candidates. Empty registered
+projects without durable settings ownership conservatively refuse. Remote
+ownership and schedules need authoritative bounded readers; unavailable remote
+discovery refuses and cached absence never proves completeness. These ports retain
+declared host and POSIX identity; they never apply local path normalization.
+
+Disabled and malformed schedule filenames remain visible. Existing matching
+schedule-state claims and schedule-runs results are read without pruning or
+claiming. `inspectRetainedFiles` returns a bounded size/mtime/path manifest;
+it grants no unlink authority. All source, transcript and schedule files remain.
+Live PTY objects are projected to cloneable identity/generation/PID fields.
+Transcript IDs must agree with the indexed identity or its parent/bridge binding.
+Expired open/opendir calls dispose their handles even when the IO resolves late.
+
+After a committed completion/fence unit, failure of the auxiliary `hasHistory`
+read keeps the pending-history guard conservatively armed. The written result,
+settings ACK and producer fencing survive. Transaction failures still reject.
+Plain-Node real-store tests exercise this worker path, restart sealing and lost
+committed replies. Actual handler, stop/death, native crash and renderer acceptance
+remain A4c2–A4d/CI obligations, not A4c1 claims.
+
+## Historical landing: persisted progress substrate (#474 A4b1)
 
 `project-delete-progress.js` is a dormant backend library. Its store schema,
 transaction hooks, budgets and worker routing are documented in
 [session-index-writer.md](session-index-writer.md#dormant-project-deletion-substrate-474-a4b1).
-There is no `completeProjectDeletion` command or production deletion caller.
+At the A4b1 landing there was no `completeProjectDeletion` command or production deletion caller.
 The existing planner and its fingerprint semantics are unchanged.
 
 `operationId(project, expectedEpoch, uuid?)` binds a canonical `[alias,path]`

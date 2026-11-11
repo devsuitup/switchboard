@@ -132,6 +132,9 @@ function* commandUnits(message) {
   if (message.command === 'retireWorkflow') { yield () => sealedWorkflows.delete(message.args[0]); return; }
   if (message.command === 'getProjectDeletionState') { yield () => deletionProgress.read(message.args[0]); return; }
   if (message.command === 'readProjectDeletionScope') { yield () => deletionProgress.readScope(message.args[0]); return; }
+  if (message.command === 'readProjectDeletionSnapshot') { yield () => db.projectDeletionSnapshot.read(message.args[0]); return; }
+  if (message.command === 'readProjectDeletionRevision') { yield () => db.projectDeletionSnapshot.revision(); return; }
+  if (message.command === 'listProjectDeletionOperations') { yield () => db.projectDeletionSnapshot.operations(message.args[0]); return; }
   if (message.command === 'fenceProjectDeletion') { yield () => deletionProgress.fence(message.args[0]); return; }
   if (message.command === 'close') { yield () => { clearInterval(busyTimer); flushBusyCounts(); db.closeDb(); }; return; }
   if (message.command === 'drain') { yield () => {}; return; }
@@ -169,11 +172,11 @@ async function drain() {
           ...(message.mutated ? { settings: settings() } : {}) });
       } else {
         if (message.bindingError) throw message.bindingError;
-        if (['close', 'drain', 'measurements', 'getProjectDeletionState', 'readProjectDeletionScope', 'querySessionRequestOutcome', 'readProjectArchiveEpochs', 'fenceWorkflow', 'retireWorkflow'].includes(message.command)) message.result = unit.value();
+        if (['close', 'drain', 'measurements', 'getProjectDeletionState', 'readProjectDeletionScope', 'readProjectDeletionSnapshot', 'readProjectDeletionRevision', 'listProjectDeletionOperations', 'querySessionRequestOutcome', 'readProjectArchiveEpochs', 'fenceWorkflow', 'retireWorkflow'].includes(message.command)) message.result = unit.value();
         else if (['fenceProjectDeletion', 'completeProjectDeletion'].includes(message.command)) {
           const before = db.getSetting('_writer_revision') || 0;
           message.result = await transaction(message.command, null, undefined, unit.value);
-          if (db.projectDeletion.hasHistory()) pendingDeletionHistory.delete(message);
+          try { if (db.projectDeletion.hasHistory()) pendingDeletionHistory.delete(message); } catch { /* see .ai/contexts/project-delete.md */ }
           message.mutated ||= (db.getSetting('_writer_revision') || 0) !== before;
         }
         else if (message.command === 'beginOffer') {
