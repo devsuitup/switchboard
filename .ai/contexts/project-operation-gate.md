@@ -2,7 +2,8 @@
 
 `src/main/shared/project-operation-gate.js` exports the main-process singleton
 `projectOperationGate`, a factory for isolated tests, and `PROJECT_OPERATION_ERROR`.
-There is no deletion caller in A3 and no renderer API. This slice takes
+The dormant A4c3 deletion service now calls the factory; main still has no
+deletion caller and there is no renderer API. This slice takes
 `no-changelog` when published.
 
 `tryAdmit(projectPath, alias = null)` synchronously checks and reserves admission.
@@ -22,7 +23,11 @@ a lifetime lock for an already running session.
 `hold(projectPath, alias = null)` synchronously refuses subsequent admissions for
 that identity and returns `{ ready, release() }`. The future operation caller
 must await `ready` before inspecting/stopping the admitted work, hold through the
-whole operation, and release in `finally`. `ready` drains every previously
+whole operation, and release only after known non-submission or terminal /
+noLateCommit evidence. The IPC reply timeout does not release the hold. A4c3
+also reserves the separate archive workflow gate and awaits both readiness
+promises before revalidation, stopping or fencing. Unknown outcomes remain
+main-owned through navigation, disposal and worker replacement. `ready` drains every previously
 admitted launch; holding does not cancel those launches. A second simultaneous
 hold throws the shared operation error. Releasing a hold is idempotent and allows
 admission again. Releasing and reacquiring while launches drain preserves both

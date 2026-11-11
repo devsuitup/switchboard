@@ -72,6 +72,18 @@ test('local real paths and their relative spelling share admission', () => {
   held.release();
 });
 
+test('an unresolved deletion hold survives unrelated launches until its owner releases', async () => {
+  const gate = createProjectOperationGate(), held = gate.hold('/deletion');
+  await held.ready;
+  for (let i = 0; i < 32; i++) {
+    const other = gate.tryAdmit('/other'); other.release();
+    assert.equal(gate.tryAdmitAll(['/other', '/deletion']) === null, true, 'held project must stay excluded');
+  }
+  assert.throws(() => gate.hold('/deletion'));
+  held.release();
+  const next = gate.tryAdmitAll(['/other', '/deletion']); assert.ok(next); next.release();
+});
+
 for (const alias of [null, 'vps']) {
   test(`missing project entries do not reserve a fallback identity for host ${alias}`, async () => {
     const gate = createProjectOperationGate();

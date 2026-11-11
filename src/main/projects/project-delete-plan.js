@@ -40,6 +40,7 @@ async function resolveProject(request, snapshot, boundKey, memo, each, ordered) 
 }
 
 function createProjectDeletePlanner(deps) {
+  const { now = Date.now, schedule = setTimeout, cancel = clearTimeout } = deps;
   const timeoutMs = Number.isFinite(deps.timeoutMs) ? Math.max(1, Math.min(deps.timeoutMs, 15000)) : 10000;
   const maxItems = Number.isInteger(deps.maxItems) ? Math.max(1, Math.min(deps.maxItems, 50000)) : 20000;
 
@@ -51,20 +52,20 @@ function createProjectDeletePlanner(deps) {
       try { request = structuredClone(input); }
       catch { throw fail('INVALID_REQUEST', 'Request fields must be cloneable data.'); }
       validateRequest(request);
-      const budget = { signal: controller.signal, limit: maxItems, deadline: Date.now() + timeoutMs };
+      const budget = { signal: controller.signal, limit: maxItems, deadline: now() + timeoutMs };
       const expired = () => {
-        if (controller.signal.aborted || Date.now() >= budget.deadline) throw fail('DISCOVERY_TIMEOUT', 'Planning timed out; retry after indexing settles.');
+        if (controller.signal.aborted || now() >= budget.deadline) throw fail('DISCOVERY_TIMEOUT', 'Planning timed out; retry after indexing settles.');
       };
       const memo = new Map();
-      let batchCount = 0, batchStart = Date.now();
+      let batchCount = 0, batchStart = now();
       const each = async (values, visit) => {
         for (const value of values) {
           expired();
           visit(value);
-          if (++batchCount >= 32 || Date.now() - batchStart >= 8) {
+          if (++batchCount >= 32 || now() - batchStart >= 8) {
             await new Promise(resolve => setImmediate(resolve));
             expired();
-            batchCount = 0; batchStart = Date.now();
+            batchCount = 0; batchStart = now();
           }
         }
       };
@@ -252,12 +253,12 @@ function createProjectDeletePlanner(deps) {
           warnings, refusals, membershipDigest, fingerprint, revision } };
       };
       return await Promise.race([collect(), new Promise((_, reject) => {
-        timer = setTimeout(() => { controller.abort(); reject(fail('DISCOVERY_TIMEOUT', 'Planning timed out; retry after indexing settles.')); }, timeoutMs);
+        timer = schedule(() => { controller.abort(); reject(fail('DISCOVERY_TIMEOUT', 'Planning timed out; retry after indexing settles.')); }, timeoutMs);
       })]);
     } catch (error) {
       return { ok: false, code: error.code || 'DISCOVERY_UNAVAILABLE', error: error.message || 'Read-only planning unavailable.' };
     } finally {
-      clearTimeout(timer);
+      cancel(timer);
       controller.abort();
     }
   }
