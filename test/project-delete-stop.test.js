@@ -95,12 +95,18 @@ for (const mode of ['kill ACK', 'never exiting tree', 'protected child', 'exited
       f.effects.push(`stop:${id}`);
       if (mode === 'exited flag') session.exited = true;
       if (mode === 'missing active session') f.sessions.delete(id);
-      return { ok: true, ended: false, generation: session.generation, pid: session.pty.pid };
+      if (mode === 'never exiting tree') return new Promise(() => {});
+      if (mode === 'kill ACK') return { ok: true, generation: session.generation, pid: session.pty.pid };
+      return { ok: true, ended: mode === 'protected child', generation: session.generation, pid: session.pty.pid };
     };
-    const { result } = await execute(f);
+    const pending = execute(f);
+    if (mode === 'never exiting tree') { await flush(); f.time.advance(15000); }
+    const { result } = await pending;
+    assert.equal(result.failed[0].code, mode === 'never exiting tree' ? 'STOP_TIMEOUT'
+      : mode === 'protected child' ? 'CONVERSATION_CHANGED' : 'STOP_UNKNOWN');
     assert.equal(result.ok, false, 'kill ACK is not death');
     assert.equal(result.stopped.length, 0);
-    assert.equal(result.failed.length, 1);
+    assert.equal(result.failed.length, mode === 'protected child' ? 2 : 1);
     assert.equal(result.skipped.length, 1);
     assert.deepEqual(f.effects, ['stop:target-0']);
   });
@@ -190,7 +196,9 @@ test('non-PTY continuation owners and successors invalidate whole conversation p
     return result;
   };
   const { result } = await execute(f);
-  assert.equal(result.ok, false); assert.equal(result.failed.length, 1);
+  assert.equal(result.ok, false); assert.equal(result.failed.length, 2);
+  assert.equal(result.failed[0].scope, 'batch');
+  assert.equal(result.failed[1].id, 'target-0');
 });
 
 test('live headless schedule snapshot is a named blocking target before mutation', async () => {
@@ -267,7 +275,7 @@ test('strict remote TERM observations reserve more than 5 seconds plus a round t
   const adapter = createRemoteStopAdapter({ ...time, runRemoteCommand: async (_alias, command, options) => {
     const payload = JSON.parse(Buffer.from(command.match(/'([^']+)'$/)[1], 'base64').toString());
     phases.push({ phase: payload.phase, timeout: options.timeoutMs });
-    time.advance(1200);
+    time.advance(1500);
     const marker = payload.phase !== 'observe' ? 'STOP_SIGNALLED' : phases.some(p => p.phase === 'KILL') ? 'STOP_ENDED' : 'STOP_LIVE';
     return { code: 0, stdout: `${marker} 42 123 ${identity.sessionId} ${identity.bootId}` };
   } });
@@ -401,4 +409,139 @@ test('adapter composes strict remote proof before closing the SSH attachment', a
   assert.equal(result.ok, true);
   assert.deepEqual(f.effects, ['TERM', 'observe', 'detach:target-0']);
   assert.equal(f.time.timers.size, 0);
+});
+for (const kind of ['job', 'remote']) for (const removal of ['attachment', 'binding', 'both']) {
+  test(kind + ' truthful reader accepts removed ' + removal + ' after death', async () => {
+    const f = fixture([kind]), b = f.bindings.get('target-0');
+    b.attachments = [{ sessionKey: b.sessionKey, session: b.session }];
+    const stop = kind === 'job' ? f.ports.bg.runStop : f.ports.remote.stop;
+    const finish = async (...args) => {
+      const proof = await stop(...args);
+      if (removal !== 'attachment') f.bindings.delete(b.id);
+      return proof;
+    };
+    if (kind === 'job') f.ports.bg.runStop = finish;
+    else f.ports.remote.stop = finish;
+    f.ports.detach = async attachment => {
+      f.effects.push('detach:' + attachment.sessionKey);
+      f.sessions.delete(attachment.sessionKey);
+      attachment.session.pty = null;
+      if (removal !== 'binding') b.attachments = [];
+      return true;
+    };
+    const { adapter, prepared, result } = await execute(f);
+    assert.equal(result.ok, true, 'normal attachment removal preserves proven stop');
+    assert.equal((await adapter.verify(prepared)).ok, true);
+    assert.equal(f.effects.filter(e => e.startsWith('detach:')).length, 1);
+  });
+}
+
+for (const code of ['STOP_IDENTITY', 'CONVERSATION_CHANGED', 'DETACH_FAILED', 'EXIT_DRAIN_UNKNOWN']) {
+  test('post-proof ' + code + ' retains proven-dead effect', async () => {
+    const f = fixture(code === 'DETACH_FAILED' ? ['job', 'pty'] : ['pty', 'pty']);
+    const b = f.bindings.get('target-0');
+    if (code === 'DETACH_FAILED') {
+      b.attachments = [{ sessionKey: b.sessionKey, session: b.session }];
+      f.ports.detach = async () => false;
+    } else {
+      const stop = f.ports.stopPtyWithEvidence;
+      f.ports.stopPtyWithEvidence = async (...args) => {
+        const proof = await stop(...args);
+        if (code === 'STOP_IDENTITY') b.identity.pid++;
+        if (code === 'CONVERSATION_CHANGED') f.owners[0].treeState = 'live';
+        if (code === 'EXIT_DRAIN_UNKNOWN') delete b.session.exitDrain;
+        return proof;
+      };
+    }
+    const { result } = await execute(f);
+    const failed = result.failed.find(e => e.kind);
+    assert.equal(failed.code, code);
+    assert.equal(failed.effect, 'proven-dead', 'positive stop proof must survive post-check failure');
+    assert.equal(failed.unknown, true, 'failure must not imply known absence of an effect');
+    assert.deepEqual(result.skipped.map(t => t.id), ['target-1']);
+  });
+}
+
+test('throw after invoking stop retains attempted effect', async () => {
+  const f = fixture();
+  f.ports.stopPtyWithEvidence = async () => { throw Object.assign(new Error('transport lost'), { code: 'TRANSPORT' }); };
+  const { result } = await execute(f);
+  assert.equal(result.failed[0].effect, 'attempted', 'invoked stop has an uncertain effect');
+  assert.equal(result.failed[0].unknown, true);
+});
+
+for (const projectPath of [undefined, '', '   ', 42]) test('invalid project path ' + JSON.stringify(projectPath) + ' refuses preflight', async () => {
+  const f = fixture(); f.request.project.projectPath = projectPath;
+  f.ports.getScheduleRunSnapshot = () => [{ sessionId: 'headless', cwd: 'C:/project', scheduleName: 'nightly' }];
+  const result = await f.adapter().preflight(f.request);
+  assert.equal(result.ok, false, 'invalid project path must refuse before effects');
+  assert.equal(result.failed[0].code, 'STOP_INPUT');
+  assert.deepEqual(f.effects, []);
+});
+
+function assertTargetAccounting(result, targets) {
+  const entries = [...result.stopped, ...result.failed, ...result.skipped].filter(e => e.kind);
+  assert.deepEqual(entries.map(e => e.id).sort(), targets.map(t => t.id).sort(), 'each target occurs exactly once');
+}
+
+for (const code of ['CONVERSATION_UNKNOWN', 'CONVERSATION_UNCONTROLLED', 'HEADLESS_SCHEDULE']) {
+  test('preflight ' + code + ' has its own refusal and skips every target', async () => {
+    const f = fixture(['pty', 'job']);
+    if (code === 'CONVERSATION_UNKNOWN') f.ports.readConversation = async () => ({ known: false });
+    if (code === 'CONVERSATION_UNCONTROLLED') f.owners.push({ id: 'outsider', identity: { pid: 900, procStart: '900' }, treeState: 'live' });
+    if (code === 'HEADLESS_SCHEDULE') f.ports.getScheduleRunSnapshot = () => [{ sessionId: 'headless', cwd: 'C:/project' }];
+    const result = await f.adapter().preflight(f.request);
+    assert.equal(result.failed[0].code, code);
+    assert.equal(result.failed[0].kind, undefined, 'batch refusal is not attributed to the last target');
+    assert.deepEqual(result.skipped.map(t => t.id), ['target-0', 'target-1']);
+    assertTargetAccounting(result, f.targets);
+  });
+}
+
+test('headless schedule appearing between stops accounts for every target', async () => {
+  const f = fixture(['pty', 'pty']);
+  f.ports.getScheduleRunSnapshot = () => f.owners[0].treeState === 'dead'
+    ? [{ sessionId: 'headless', cwd: 'C:/project' }] : [];
+  const { result } = await execute(f);
+  assertTargetAccounting(result, f.targets);
+  assert.equal(result.failed[0].code, 'HEADLESS_SCHEDULE');
+  assert.equal(result.failed[0].kind, undefined);
+  assert.deepEqual(result.skipped.map(t => t.id), ['target-1']);
+  assert.deepEqual(f.effects, ['stop:target-0']);
+});
+
+test('caller mutation during preflight cannot widen background consent', async () => {
+  const f = fixture(['pty', 'job']); f.request.stopBackgroundJobs = false;
+  const read = f.ports.readTarget;
+  f.ports.readTarget = async target => { f.request.stopBackgroundJobs = true; return read(target); };
+  const result = await f.adapter().preflight(f.request);
+  assert.equal(result.ok, false, 'captured consent cannot be widened by the caller');
+  assert.equal(result.failed[0].code, 'BACKGROUND_CONSENT');
+  assert.deepEqual(f.effects, []);
+});
+
+test('caller mutation after preflight cannot widen captured schedule consent', async () => {
+  const f = fixture(); f.request.stopBackgroundJobs = false;
+  const a = f.adapter(), p = await a.preflight(f.request);
+  f.request.stopBackgroundJobs = true;
+  f.ports.getScheduleRunSnapshot = () => [{ sessionId: 'headless', cwd: 'C:/project' }];
+  const result = await a.stop(p);
+  assert.equal(result.ok, false);
+  assert.deepEqual(f.effects, []);
+});
+
+for (const kind of ['job', 'remote']) test(kind + ' attachment removed during death is not detached twice', async () => {
+  const f = fixture([kind]), b = f.bindings.get('target-0');
+  b.attachments = [{ sessionKey: b.sessionKey, session: b.session }];
+  const stop = kind === 'job' ? f.ports.bg.runStop : f.ports.remote.stop;
+  const finish = async (...args) => {
+    const proof = await stop(...args);
+    f.sessions.delete(b.sessionKey); b.attachments = []; b.session.pty = null;
+    return proof;
+  };
+  if (kind === 'job') f.ports.bg.runStop = finish;
+  else f.ports.remote.stop = finish;
+  const { result } = await execute(f);
+  assert.equal(result.ok, true, 'already removed attachment does not invalidate death evidence');
+  assert.equal(f.effects.some(e => e.startsWith('detach:')), false, 'already detached attachment must not be closed again');
 });

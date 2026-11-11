@@ -26,7 +26,9 @@ headless schedules remain named blocking targets without safe tree control.
 
 `preflight({project, targets, conversations, stopBackgroundJobs})` captures a
 private batch and returns an opaque, instance-bound handle. `project.projectPath`
-is the canonical selected scope. Conversations name `{id, sessionIds}` including
+must be a non-empty string naming the canonical selected scope; missing, empty,
+whitespace-only or non-string paths refuse with STOP_INPUT before reads/effects.
+Conversations name `{id, sessionIds}` including
 every continuation part. Each target names `{id, kind, conversationId, sessionIds,
 identity, sessionKey?, jobId?, scheduleId?, claimId?}`. Kinds are `pty`, `job`,
 and `remote`. Identity requires positive PID and OS `procStart`; PTYs also
@@ -43,6 +45,11 @@ The composition ports are explicit, authoritative reads:
   Windows job or strict remote host capability; a cached descriptor alone must
   never set it. This reader must detect replacement workers, generations and
   job incarnations, including jobs without tabs. It returns absent when removed.
+  After positive proof, attachments still listed must belong to the pinned set;
+  detached attachments may disappear. Retained attachment pins still reject a
+  replacement session/PTY/PID/start/generation in the active map. A removed job
+  or remote binding may coexist with its still-pinned attachment until detach;
+  the absent-binding activeSessions check applies only to non-attachment keys.
 - `readConversation({id, sessionIds})` returns `{known:true, complete:true,
   owners:[{id, identity, treeState:'live'|'dead'}]}` from exhaustive independent
   process/tree evidence, including background, schedule and non-PTY continuation
@@ -61,6 +68,29 @@ The composition ports are explicit, authoritative reads:
   implementation. An expired asynchronous effect is unknown, never cancelled
   retroactively or replayed; adapter timers are cleared in finally.
 
+The 15 s per-target cap is shared by pre-stop reads, the seam, post-stop reads
+and drains. It is not a reserved 15 s remote transport budget. Strict remote
+TERM/KILL splitting activates only with more than 12 s left at seam entry;
+three seconds or more of preceding reads (or the 60 s batch boundary) can
+disable it and leave KILL unreachable. This composed behavior is retained:
+giving the seam a new 15 s window would exceed the agreed per-target cap, while
+reserving transport time would require a separate read-budget policy. The
+operation then refuses or reports an attempted/unknown effect; it never infers
+death. The 1,500 ms round-trip witness proves the split when entered with its
+full 15 s, not guaranteed KILL reachability after arbitrary adapter reads.
+
+Background incarnation protection has a seam limit: readTarget pins and checks
+the worker around awaits, but strict checkStop exposes only conversation IDs
+and worker liveness. conversationCheck does not return the observed worker
+PID/start stamp, and runVerb('stop', id) sends a job-ID-only CLI command. A
+respawn between the last adapter read and the verb can therefore target the
+replacement. Post-checks can refuse changed identity but cannot undo a signal.
+Adding optional PID/start fields solely to this adapter would not close that
+race; the daemon verb needs an atomic expected-incarnation contract. Until
+then, A4c3/A4c4 must treat this as an unresolved stop-seam limitation, not claim
+that the adapter alone guarantees no replacement worker is signalled. See
+[bg-agents.md](bg-agents.md), dormant guarded stop ports.
+
 Preflight checks every binding, capability, consent, guarded job ownership,
 conversation and schedule before the first stop. Unsupported local platforms
 refuse. Live schedule snapshots are blocking named targets; future #611 records
@@ -69,7 +99,27 @@ target. No daemon ID is invented from a current headless run. Schedule reads
 repeat before each effect and at final verification.
 
 Stops run sequentially. The first failure returns individual stopped/failed/
-skipped entries and prevents all subsequent stops. The adapter rechecks pinned
+skipped entries and prevents all subsequent stops. Each accepted target occurs
+exactly once across those lists, with scope:'target', id, kind and effect:
+- 'none': the stop port was not invoked (including preflight/skipped targets).
+- 'attempted': the port was invoked, but no identity-matching positive proof
+  was accepted; timeout or thrown transport errors retain this state.
+- 'proven-dead': an identity-matching ended:true proof was accepted. This is
+  the seam's death evidence (remote scope remains process); it does not imply
+  that independent conversation checks, detach or exit housekeeping succeeded.
+
+Successful stopped entries carry effect:'proven-dead'. A later STOP_IDENTITY,
+CONVERSATION_CHANGED, DETACH_FAILED or EXIT_DRAIN_UNKNOWN retains that effect
+on the failed target. Failed targets with either attempted or proven-dead have
+unknown:true, so legacy consumers cannot read failure as known absence of an
+effect. The explicit effect distinguishes proven death from uncertainty.
+Batch/conversation/schedule refusals get a separate scope:'batch' entry with
+no kind (id is the named headless session where available, otherwise 'batch').
+These entries do not stand in for a target: unattempted targets stay skipped;
+an affected attempted target also has its own failed entry. A batch entry's
+effect:'none' describes no direct stop call, not the effects of earlier targets.
+Consumers enumerate target entries by scope, rather than treating every failed
+entry as a stop target. The adapter rechecks pinned
 objects, PID/start/generation, membership and death around awaits. Missing active
 rows are tolerated only after a positive stop proof, with retained bindings and
 independent full conversation evidence. Background jobs stop before attachment

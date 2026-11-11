@@ -32,6 +32,7 @@ function createProjectDeleteStop(ports) {
   const attachmentCurrent = pin => pin.session?.pty === pin.pty && pin.pty?.pid === pin.pid
     && pin.session?.generation === pin.generation && pin.session?.statusPtyStart === pin.procStart
     && (!ports.activeSessions?.has(pin.sessionKey) || ports.activeSessions.get(pin.sessionKey) === pin.session);
+  const attachmentRemoved = pin => ports.activeSessions && !ports.activeSessions.has(pin.sessionKey);
   const pin = binding => ({ ...structuredClone({ id: binding.id, kind: binding.kind,
     conversationId: binding.conversationId, sessionIds: binding.sessionIds, identity: identity(binding.identity),
     jobId: binding.jobId, sessionKey: binding.sessionKey, scheduleId: binding.scheduleId, claimId: binding.claimId,
@@ -44,12 +45,20 @@ function createProjectDeleteStop(ports) {
     && target.scheduleId === binding.scheduleId && target.claimId === binding.claimId;
   const current = async (target, deadline, proven = false) => {
     const binding = await bounded(() => ports.readTarget(target), deadline);
-    if (!binding && proven && !ports.activeSessions?.has(target.sessionKey)
-      && (target.kind !== 'pty' || attachmentCurrent(target.local)) && target.attachments.every(attachmentCurrent)) return;
+    const attachmentKey = target.attachments.some(a => a.sessionKey === target.sessionKey);
+    if (!binding && proven && (attachmentKey || !ports.activeSessions?.has(target.sessionKey))
+      && (target.kind !== 'pty' || attachmentCurrent(target.local))
+      && target.attachments.every(a => attachmentRemoved(a) || attachmentCurrent(a))) return;
+    const attachments = binding?.attachments || [];
+    const attachmentsMatch = proven
+      ? attachments.every(a => target.attachments.some(p => p.sessionKey === a.sessionKey && p.session === a.session))
+        && new Set(attachments.map(a => a.sessionKey)).size === attachments.length
+      : same(attachments.map(a => a.sessionKey), target.attachments.map(a => a.sessionKey))
+        && target.attachments.every((a, i) => attachments[i].session === a.session);
     if (!matches(target, binding) || binding.session !== target.session
+      && !(proven && target.kind !== 'pty' && binding.session == null)
       || target.kind === 'pty' && !attachmentCurrent(target.local)
-      || !same((binding.attachments || []).map(a => a.sessionKey), target.attachments.map(a => a.sessionKey))
-      || target.attachments.some((a, i) => binding.attachments[i].session !== a.session || !attachmentCurrent(a))) {
+      || !attachmentsMatch || target.attachments.some(a => !(proven && attachmentRemoved(a)) && !attachmentCurrent(a))) {
       throw fail('STOP_IDENTITY', 'stop binding changed; fresh consent required');
     }
     if (target.kind === 'remote' && !same(identity(binding.descriptor), identity(target.descriptor))) throw fail('STOP_IDENTITY');
@@ -90,22 +99,26 @@ function createProjectDeleteStop(ports) {
       }
     }
   };
-  const entry = (target, error) => ({ id: error?.targetId || target?.id || 'batch', kind: target?.kind,
+  const batchFailure = error => error.targetId != null || error.code?.startsWith('CONVERSATION_')
+    || error.code === 'SCHEDULE_UNKNOWN';
+  const entry = (target, error, effect = 'none') => ({ id: target?.id || error?.targetId || 'batch', kind: target?.kind,
+    scope: target ? 'target' : 'batch', effect,
     ...(error ? { code: error.code || 'STOP_UNKNOWN', error: error.message,
-      unknown: error.code === 'STOP_TIMEOUT' || error.code === 'STOP_UNKNOWN' } : {}) });
+      unknown: effect !== 'none' || error.code === 'STOP_TIMEOUT' || error.code === 'STOP_UNKNOWN' } : {}) });
   async function preflight(request) {
     const state = { request: structuredClone(request), targets: [], owners: new Map(), deadline: now() + 60000, used: false };
     let target;
     try {
-      if (!Array.isArray(request.targets) || !Array.isArray(request.conversations)
-        || new Set(request.targets.map(t => t.id)).size !== request.targets.length
-        || new Set(request.conversations.map(c => c.id)).size !== request.conversations.length) throw fail('STOP_INPUT');
+      if (typeof state.request.project?.projectPath !== 'string' || !state.request.project.projectPath.trim()
+        || !Array.isArray(state.request.targets) || !Array.isArray(state.request.conversations)
+        || new Set(state.request.targets.map(t => t.id)).size !== state.request.targets.length
+        || new Set(state.request.conversations.map(c => c.id)).size !== state.request.conversations.length) throw fail('STOP_INPUT');
       for (target of state.request.targets) {
         if (!['pty', 'job', 'remote'].includes(target.kind) || !validIdentity(target.identity)
           || !Array.isArray(target.sessionIds) || !target.sessionIds.length
           || !state.request.conversations.some(c => c.id === target.conversationId
             && target.sessionIds.every(sid => c.sessionIds.includes(sid)))) throw fail('STOP_IDENTITY');
-        if (target.kind === 'job' && request.stopBackgroundJobs !== true) throw fail('BACKGROUND_CONSENT');
+        if (target.kind === 'job' && state.request.stopBackgroundJobs !== true) throw fail('BACKGROUND_CONSENT');
         const binding = await bounded(() => ports.readTarget(target), state.deadline);
         if (!matches(target, binding)) throw fail('STOP_IDENTITY');
         const captured = pin(binding);
@@ -131,6 +144,7 @@ function createProjectDeleteStop(ports) {
           || !same(identity(target.identity), identity(binding.descriptor)))) throw fail('STOP_UNSUPPORTED');
         state.targets.push(captured);
       }
+      target = undefined;
       for (const conversation of state.request.conversations) {
         const owners = await snapshot(conversation, state.deadline);
         if (owners.some(o => o.treeState === 'live' && !state.targets.some(t => t.id === o.id && t.conversationId === conversation.id))
@@ -144,7 +158,8 @@ function createProjectDeleteStop(ports) {
       return prepared;
     } catch (error) {
       const failed = entry(target, error);
-      return { ok: false, stopped: [], failed: [failed], skipped: (request.targets || []).filter(t => t.id !== failed.id).map(t => entry(t)) };
+      return { ok: false, stopped: [], failed: [failed], skipped: (state.request.targets || [])
+        .filter(t => !target || t.id !== target.id).map(t => entry(t)) };
     }
   }
   async function verify(prepared) {
@@ -164,6 +179,8 @@ function createProjectDeleteStop(ports) {
     const stopped = [], dead = new Set();
     for (let i = 0; i < state.targets.length; i++) {
       const target = state.targets[i], deadline = Math.min(state.deadline, now() + 15000);
+      let effect = 'none';
+      const invokeStop = read => bounded(() => { effect = 'attempted'; return read(); }, deadline);
       try {
         for (const binding of state.targets) await current(binding, deadline, dead.has(binding.id));
         await schedules(state, deadline);
@@ -171,8 +188,8 @@ function createProjectDeleteStop(ports) {
         await current(target, deadline);
         let proof;
         if (target.kind === 'pty') {
-          proof = await bounded(() => (ports.stopPtyWithEvidence || stopPtyWithEvidence)(target.session, target.sessionKey,
-            { generation: target.identity.generation, deadline, platform: ports.platform }), deadline);
+          proof = await invokeStop(() => (ports.stopPtyWithEvidence || stopPtyWithEvidence)(target.session, target.sessionKey,
+            { generation: target.identity.generation, deadline, platform: ports.platform }));
           if (proof?.ended !== true && target.session.pty === target.local.pty && target.local.pty.statusTreeExit) {
             const natural = await bounded(() => target.local.pty.statusTreeExit, deadline);
             if (natural?.ended === true && attachmentCurrent(target.local)) {
@@ -181,20 +198,23 @@ function createProjectDeleteStop(ports) {
           }
           if (proof?.generation !== target.identity.generation || proof?.pid !== target.identity.pid) throw fail('STOP_IDENTITY');
         } else if (target.kind === 'job') {
-          proof = await bounded(() => ports.bg.runStop(target.jobId, jobOptions(target, deadline)), deadline);
+          proof = await invokeStop(() => ports.bg.runStop(target.jobId, jobOptions(target, deadline)));
           if (proof?.ended === true && (proof.jobId !== target.jobId || !same(ids(proof.sessionIds || []), ids(target.sessionIds)))) throw fail('STOP_IDENTITY');
         } else {
-          proof = await bounded(() => ports.remote.stop(target.identity.alias, target.descriptor,
-            { strict: true, identity: target.identity, deadline }), deadline);
+          proof = await invokeStop(() => ports.remote.stop(target.identity.alias, target.descriptor,
+            { strict: true, identity: target.identity, deadline }));
           if (proof?.ended === true && !same(identity(proof.identity), target.identity)) throw fail('STOP_IDENTITY');
         }
         if (proof?.ended !== true) throw fail('STOP_UNKNOWN', proof?.error || proof?.code || 'tree death is not proven');
+        effect = 'proven-dead';
         await current(target, deadline, true);
         dead.add(target.id);
         await conversationCheck(state, deadline, dead);
         for (const attachment of target.attachments) {
-          if (!attachmentCurrent(attachment)) throw fail('STOP_IDENTITY');
-          if (await bounded(() => ports.detach(attachment), deadline) !== true) throw fail('DETACH_FAILED');
+          if (!attachmentRemoved(attachment)) {
+            if (!attachmentCurrent(attachment)) throw fail('STOP_IDENTITY');
+            if (await bounded(() => ports.detach(attachment), deadline) !== true) throw fail('DETACH_FAILED');
+          }
           if (attachment.session.exitDrain) await bounded(() => attachment.session.exitDrain, deadline);
         }
         if (target.kind === 'pty') {
@@ -203,9 +223,13 @@ function createProjectDeleteStop(ports) {
         }
         await current(target, deadline, true);
         await conversationCheck(state, deadline, dead);
-        stopped.push(entry(target));
+        stopped.push(entry(target, null, effect));
       } catch (error) {
-        return { ok: false, stopped, failed: [entry(target, error)], skipped: state.targets.slice(i + 1).map(t => entry(t)) };
+        const batch = batchFailure(error);
+        const failed = batch ? [entry(null, error)] : [];
+        if (!batch || effect !== 'none') failed.push(entry(target, error, effect));
+        return { ok: false, stopped, failed,
+          skipped: state.targets.slice(batch && effect === 'none' ? i : i + 1).map(t => entry(t)) };
       }
     }
     state.finished = true;
