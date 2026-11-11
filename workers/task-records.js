@@ -12,18 +12,32 @@ const turnReader = createTranscriptTurnReader();
 const turns = new Map();
 let turnRevision = 0;
 let queue = Promise.resolve();
+function observeHead(file, parentSessionId, store = true) {
+  const turn = turnReader.read(file), previous = turns.get(parentSessionId);
+  const identity = JSON.stringify([file, turn?.state, turn?.lastEntryAt, turn?.writtenOutput]);
+  const head = { sessionId: parentSessionId, state: turn?.state || 'unknown',
+    lastEntryAt: turn?.lastEntryAt ?? null, mtimeMs: turn?.mtimeMs ?? null,
+    observedAt: previous?.identity === identity ? previous.observedAt : turn?.lastEntryAt ?? null,
+    writtenOutput: turn?.writtenOutput ?? previous?.writtenOutput ?? '', revision: store ? ++turnRevision : turnRevision, identity };
+  if (store) {
+    turns.set(parentSessionId, head);
+    while (turns.size > 2048) turns.delete(turns.keys().next().value);
+  }
+  return head;
+}
 async function readHead(message) {
   const { file, parentSessionId, turnOnly } = message;
   if (!turnOnly) await reader.read(file, parentSessionId);
-  const turn = turnReader.read(file);
-  turns.set(parentSessionId, { sessionId: parentSessionId, state: turn?.state || 'unknown',
-    lastEntryAt: turn?.lastEntryAt ?? null, mtimeMs: turn?.mtimeMs ?? null,
-    writtenOutput: turn?.writtenOutput ?? turns.get(parentSessionId)?.writtenOutput ?? '', revision: ++turnRevision });
-  while (turns.size > 2048) turns.delete(turns.keys().next().value);
+  observeHead(file, parentSessionId);
 }
 parentPort.on('message', message => {
   queue = queue.then(async () => {
     const { type, parentSessionId } = message;
+    if (type === 'statusHead') {
+      const head = Date.now() < message.deadline ? observeHead(message.file, parentSessionId, false) : null;
+      parentPort.postMessage({ requestId: message.requestId, head });
+      return;
+    }
     if (type === 'read') {
       await readHead(message);
     }

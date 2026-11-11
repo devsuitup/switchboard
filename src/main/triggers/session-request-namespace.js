@@ -5,6 +5,7 @@ const { randomUUID } = require('node:crypto');
 const { hashSessionRequestCommand } = require('../../../session-index-commands');
 const { isVersioned, validateTrigger } = require('./trigger-actions');
 const { readRequestFile, hash } = require('./session-request-publication');
+const { parseSessionRequest, hasTypedPrefix, statusEnvelope, openRefusal } = require('./session-request-contract');
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const canonical = (value, key) => Array.isArray(value) ? '[' + value.map(part => canonical(part)).join(',')
   : value && typeof value === 'object' ? '{' + Object.keys(value).sort().map(k => JSON.stringify(k) + ':' + canonical(value[k], k)).join(',') + '}'
@@ -23,7 +24,7 @@ function createSessionRequestNamespace({ fs, journal, publisher, actions, proces
     let opened;
     try { opened = readRequestFile(fs, input); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
-    let trigger, family = 'legacy', suppliedHash = null;
+    let trigger, typed, family = 'legacy', suppliedHash = null;
     if (opened?.bytes) {
       try { trigger = JSON.parse(opened.bytes.toString('utf8')); }
       catch {
@@ -34,7 +35,14 @@ function createSessionRequestNamespace({ fs, journal, publisher, actions, proces
       if (isVersioned(trigger)) family = 'action';
       const valid = trigger && typeof trigger === 'object' && !Array.isArray(trigger)
         && (family === 'action' ? !validateTrigger(trigger, stem) : typeof trigger.sessionId === 'string' && !!trigger.sessionId);
-      if (valid) suppliedHash = hash(Buffer.from(family + ':' + canonical(trigger)));
+      if (valid && !Object.hasOwn(trigger, 'type')) suppliedHash = hash(Buffer.from(family + ':' + canonical(trigger)));
+    }
+    if (opened && (trigger && typeof trigger === 'object' && Object.hasOwn(trigger, 'type')
+      || hasTypedPrefix(opened.bytes || opened.prefix))) {
+      typed = parseSessionRequest(opened.bytes, stem);
+      family = typed.family;
+      suppliedHash = hash(Buffer.from(!typed.valid
+        ? 'invalid-typed:' + opened.rawHash : family + ':' + canonical(typed.request)));
     }
     const actualStem = family === 'action' ? stemKey : stem;
     const identity = { stemKey, actualStem, family, suppliedHash, rawHash: opened?.rawHash ?? null };
@@ -79,10 +87,19 @@ function createSessionRequestNamespace({ fs, journal, publisher, actions, proces
       return { done: true };
     }
     if (outcome.state !== 'absent') outcome = await journal.querySessionRequestOutcome({ stemKey, suppliedHash, rawHash: opened.rawHash });
+    if (outcome.state === 'completed') {
+      publisher.publish(resultFile(outcome.owner), Buffer.from(outcome.owner.resultBytes));
+      publisher.cleanup(input, opened.rawHash, outcome.owner.family === 'action' ? marker : null);
+      return { done: true };
+    }
     if (outcome.state === 'conflict' || (outcome.owner && outcome.owner.family !== family)) {
+      const refusal = typed ? typed.family === 'open-session'
+        ? { ...openRefusal(typed.request, 'requestId already used for a different request'), error: 'not admitted', phase: 'admission' }
+        : { ...statusEnvelope(typed.request), error: 'not admitted', reason: 'requestId already used for a different request' }
+        : { ok: false, error: 'request id conflict', reason: 'request id conflict', submitted: 'no' };
       const conflict = outcome.conflict || (await command('recordSessionRequestConflict', {
         stemKey, actualStem: stem, rawHash: opened.rawHash,
-        resultBytes: Buffer.from(JSON.stringify({ ok: false, error: 'request id conflict', reason: 'request id conflict', submitted: 'no' }) + '\n'),
+        resultBytes: Buffer.from(JSON.stringify(refusal) + '\n'),
       })).conflict;
       if (outcome.owner.resultBytes && !fs.existsSync(resultFile(outcome.owner))) {
         publisher.publish(resultFile(outcome.owner), Buffer.from(outcome.owner.resultBytes));
@@ -92,13 +109,8 @@ function createSessionRequestNamespace({ fs, journal, publisher, actions, proces
       publisher.archive(input, base + '.request', opened.rawHash);
       return { done: true };
     }
-    if (outcome.state === 'completed') {
-      publisher.publish(resultFile(outcome.owner), Buffer.from(outcome.owner.resultBytes));
-      publisher.cleanup(input, opened.rawHash, outcome.owner.family === 'action' ? marker : null);
-      return { done: true };
-    }
     const wasPending = outcome.state === 'pending';
-    if (outcome.state === 'absent') {
+    if (outcome.state === 'absent' && !typed) {
       outcome = await command('claimSessionResultNamespace', identity);
       if (outcome.state !== 'pending') throw new Error('request namespace claim changed');
     }
@@ -107,7 +119,7 @@ function createSessionRequestNamespace({ fs, journal, publisher, actions, proces
         await journal.querySessionRequestOutcome({ stemKey });
         result = finalize(result);
       }
-      const completed = await command('recordSessionResultPublication', { ...identity, resultBytes: Buffer.from(JSON.stringify(result) + '\n') });
+      const completed = await command(typed ? 'recordConsumedSessionStatusRequest' : 'recordSessionResultPublication', { ...identity, resultBytes: Buffer.from(JSON.stringify(result) + '\n') });
       if (completed.state !== 'completed') throw new Error('request publication ownership changed');
       publisher.publish(resultFile(completed.owner), Buffer.from(completed.owner.resultBytes));
       publisher.cleanup(input, opened.rawHash, family === 'action' ? marker : null);
@@ -120,7 +132,7 @@ function createSessionRequestNamespace({ fs, journal, publisher, actions, proces
         error: 'interrupted by restart', reason: 'an earlier attempt may have executed; no automatic retry was performed', uncertain: true });
       return { done: true };
     }
-    return { done: false, opened, trigger, family, publish };
+    return { done: false, opened, trigger, typed, family, publish };
   }
   return { begin };
 }

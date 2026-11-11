@@ -81,3 +81,13 @@ test('CommonJS and classic-script consumers share the same pure projection', () 
   assert.equal(JSON.stringify(classic.projectSessionStatus(snapshot)), JSON.stringify(projection.projectSessionStatus(snapshot)));
   assert.equal(projection.projectHeadActivity({ liveness: 'unknown' }, { state: 'open' }).headTurn, 'open');
 });
+
+test('null and undefined proof preserve both pure projection defaults', () => {
+  for (const proof of [null, undefined]) {
+    let head, state;
+    assert.doesNotThrow(() => { head = projection.projectHeadActivity({ liveness: 'alive' }, { state: 'closed' }, proof); });
+    assert.doesNotThrow(() => { state = projection.projectSessionStatus({ liveness: 'alive' }, { state: 'closed' }, proof); });
+    assert.deepEqual(head, projection.projectHeadActivity({ liveness: 'alive' }, { state: 'closed' }));
+    assert.deepEqual(state, { state: 'idle', detail: 'prompt' });
+  }
+});

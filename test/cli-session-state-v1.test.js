@@ -47,6 +47,18 @@ test('raw namespace writer is live without a host PID or local PTY', async t => 
   assert.equal(result.live?.pid, 300);
   assert.equal(result.live?.rawPid, 3);
 });
+
+test('status refuses two verified writers for one conversation while action retains its live refusal', async t => {
+  const f = fixture(t);
+  f.put(400, 100, '40', 'other', 4);
+  fs.writeFileSync(path.join(f.dir, '4.json'), JSON.stringify({ pid: 4, sessionId: ID,
+    kind: 'interactive', status: 'busy', statusUpdatedAt: 1001, procStart: '40' }));
+  assert.equal(typeof state.readStatusEvidence, 'function');
+  const result = await state.readStatusEvidence(ID, Date.now() + 2000);
+  assert.equal(result?.known, false, 'competing verified writer identities do not select the first descriptor');
+  assert.equal(result?.ambiguous, true);
+  assert.equal((await f.live(ID, () => false)).known, true, 'action still refuses any verified live writer');
+});
 for (const mode of ['zero', 'multiple', 'no-start', 'malformed', 'unreadable', 'deadline', 'replaced', 'zombie']) {
   test(`unresolved ${mode} evidence cannot establish absence`, async t => {
     const f = fixture(t);

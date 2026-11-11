@@ -9,6 +9,7 @@ const { scanContinuationIndex, resolveContinuationsSync, validId } = require('..
 const { classifyUserText } = require('../../../read-session-file');
 
 const { createTranscriptTurnReader } = require('../../../transcript-turn');
+const { createSessionStatus } = require('./session-status');
 
 const WRITER_CHANGED = 'session target changed';
 
@@ -93,6 +94,18 @@ function createTriggerContext(deps) {
   };
   if (deps.lifecycle) ctx.lifecycle = deps.lifecycle;
   ctx.sessionRequests = deps.sessionRequests;
+  ctx.sessionStatus = deps.sessionStatus || createSessionStatus({ activeSessions, ...deps.statusSources,
+    probe: (id, deadline) => source.readStatusEvidence(id, deadline),
+    observeOwned: (session, deadline) => {
+      if (session.sandbox) return source.observeTabWriterV1({ session, pty: session.pty, generation: session.generation,
+        ptyStart: session.hostPtyStart ?? source.deliveryPtyStart(session.pty.pid), deadline });
+      if (process.platform === 'win32' && !source.deliveryProcessTableFresh()) return null;
+      const observed = source.observeTabWriter(session.pty.pid);
+      if (observed?.writer && normalizeSessionId(observed.writer.sessionId) !== normalizeSessionId(session.realSessionId
+        || [...activeSessions].find(([, s]) => s === session)?.[0])) return null;
+      return observed;
+    },
+  });
   ctx.lookupDeliveryFallback = async (id, deadline, { v1 = false } = {}) => {
     const tabs = live().filter(eligible);
     if (v1) {

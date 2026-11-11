@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
+- Local callers can request a session's current state through a read-only typed trigger; opening a session through a typed request is still refused. (#380)
 - A schedule can now be created from the optional Schedules tab (Global Settings → Schedules tab). (#792)
 - File triggers can open an exact local conversation, create a named session in a known project and deliver a prompt, or stop an idle local session with an optional final note, without changing your selection or keyboard focus. (#1022)
 

@@ -10,7 +10,21 @@ The dormant #474 A4b1 deletion substrate below provides operation-specific recei
 Main passes the admitted writer facade as `sessionRequests` through
 `createTriggerContext` to the watcher. Existing legacy and action requests now
 claim their lowercase filename namespace before effects and journal terminal
-bytes before publication. No typed trigger endpoint is enabled by S1b2.
+bytes before publication. S1b3 adds typed session-status and permanent typed
+open-session refusal consumption through the same admitted facade. It does not
+claim a pending reservation before a read-only observation. Replay uses stored
+bytes, timestamps and revision before age/caller/current-state checks. Each
+candidate's command hash includes its exact bytes; a new candidate uses a new
+token and cannot replace the first consumed result. No FULL authority is added.
+
+Task head status reads use `task-records-client.readHeadForStatus(file,id,deadline)`
+and the separate transcript worker, not the SQLite writer or get-task-snapshots
+IPC. The request returns its head directly, expires/removes its pending waiter,
+and ignores late replies. The worker reads only that transcript head, without
+task ingestion, rekey, owner updates or task-snapshot broadcasts. Existing task
+reader methods retain their notification behavior.
+Status head computation also leaves the shared head cache and turn revision
+unchanged, so a later snapshot or continued rekey cannot inherit a status read.
 
 Writable reconciliation adds `session_requests` (one lowercase safe filename
 stem per data directory) and `session_request_commands` (stem/actionToken

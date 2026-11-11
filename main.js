@@ -2727,10 +2727,25 @@ let ptyGenerationCounter = 0;
 
 // see .ai/contexts/session-state.md ("A session main drops")
 function wireSessionPty(session, sessionId, ptyProcess) {
+  activeSessions.statusExits?.delete(sessionId.toLowerCase());
+  if (session.realSessionId) activeSessions.statusExits?.delete(session.realSessionId.toLowerCase());
+  session.pty = ptyProcess;
   let resolveExitDrain;
   session.exitDrain = new Promise(resolve => { resolveExitDrain = resolve; });
   session.generation = ++ptyGenerationCounter;
+  const statusGeneration = session.generation;
+  (activeSessions.statusGenerations ||= new Map()).set(sessionId.toLowerCase(), statusGeneration);
+  if (session.realSessionId) activeSessions.statusGenerations.set(session.realSessionId.toLowerCase(), statusGeneration);
+  const discardStatusGeneration = () => {
+    for (const [id, generation] of activeSessions.statusGenerations) {
+      if (generation === statusGeneration && activeSessions.statusExits?.get(id)?.generation !== generation) {
+        activeSessions.statusGenerations.delete(id);
+      }
+    }
+  };
+  session._statusOsc = { generation: statusGeneration };
   ptyProcess.onData(data => {
+    if (session.generation !== statusGeneration || session.pty && session.pty !== ptyProcess) return;
     const currentId = session.realSessionId || sessionId;
     if (session.backgroundCommandSource) {
       session.backgroundCommandOutput = ((session.backgroundCommandOutput || '') + data).slice(-1024);
@@ -2749,6 +2764,8 @@ function wireSessionPty(session, sessionId, ptyProcess) {
         // Detect Claude CLI busy state from the OSC 0 title — see .ai/contexts/ipc-bridge.md
         if (code === '0') {
           const { busy: isBusy, idle: isIdle, via } = classifyTitleActivity(payload, { allowFallback: !session.isPlainTerminal });
+          if (isBusy) session._statusOsc.busyAt = Date.now();
+          else if (isIdle) session._statusOsc.idleAt = Date.now();
           if (LOG_DEBUG_ON) log.debug(`[OSC 0] session=${currentId} cp=${codePoints(payload, 1)} rule=${via} busy=${isBusy} idle=${isIdle} wasBusy=${!!session._cliBusy}`);
           if (TRACE.on) trace('osc.title', currentId, { cp: codePoints(payload, 3), title: payload.slice(0, 60), busy: isBusy, idle: isIdle, rule: via, was: !!session._cliBusy, decision: busyDecision(isBusy, isIdle, !!session._cliBusy) });
           if (isBusy && !session._cliBusy) {
@@ -2778,6 +2795,7 @@ function wireSessionPty(session, sessionId, ptyProcess) {
         if (payload.startsWith('4;')) {
           const level = payload.split(';')[1];
           if (level === '0') continue; // 4;0 is also used for clearing, making it unreliable as an idle signal
+          if (level === '1' || level === '2' || level === '3') session._statusOsc.busyAt = Date.now();
           if (LOG_DEBUG_ON) log.debug(`[OSC 9;4] session=${currentId} level=${level} payload="${payload}" wasBusy=${!!session._cliBusy}`);
           if (TRACE.on) trace('osc.progress', currentId, { level, payload: payload.slice(0, 60), was: !!session._cliBusy, decision: progressDecision(level, !!session._cliBusy) });
           if ((level === '1' || level === '2' || level === '3') && !session._cliBusy) {
@@ -2829,6 +2847,7 @@ function wireSessionPty(session, sessionId, ptyProcess) {
 
   ptyProcess.onExit(async ({ exitCode, signal }) => {
     const exitSignal = ptyExitSignalName(signal);
+    if (session.generation !== statusGeneration || session.pty && session.pty !== ptyProcess) return;
     const stopped = !!session.stopRequested;
     session.exited = true;
     // Clean up MCP server
@@ -2841,6 +2860,23 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     const finish = async suppress => {
       try {
       const realId = session.realSessionId || sessionId;
+      if (ptyProcess.statusTreeExit) {
+        void Promise.resolve(ptyProcess.statusTreeExit).then(tree => {
+          if (tree?.ended && !suppress && (session.realSessionId || sessionId) === realId && session.generation === statusGeneration
+            && session.pty === ptyProcess && !session.isAttach && !session.isPlainTerminal && !session.host
+            && !session.backgrounding && !session.backgrounded && !session.detaching
+            && (activeSessions.get(realId) === session || !activeSessions.has(realId))) {
+            (activeSessions.statusExits ||= new Map()).set(realId.toLowerCase(), {
+              confirmed: true, generation: statusGeneration, at: tree.observedAt,
+            });
+            while (activeSessions.statusExits.size > 256) {
+              const [id, proof] = activeSessions.statusExits.entries().next().value;
+              activeSessions.statusExits.delete(id);
+              if (activeSessions.statusGenerations.get(id) === proof.generation) activeSessions.statusGenerations.delete(id);
+            }
+          }
+        }).catch(() => {}).finally(discardStatusGeneration);
+      }
       const releaseReal = !activeSessions.has(realId) || activeSessions.get(realId) === session;
       const releaseOriginal = !activeSessions.has(sessionId) || activeSessions.get(sessionId) === session;
       if (!suppress && releaseReal && !session.isAttach && !session.isPlainTerminal) taskRecords.ownerDied(realId);
@@ -2856,6 +2892,7 @@ function wireSessionPty(session, sessionId, ptyProcess) {
       }
       if (activeSessions.get(realId) === session) activeSessions.delete(realId);
       if (activeSessions.get(sessionId) === session) activeSessions.delete(sessionId);
+      if (!ptyProcess.statusTreeExit) discardStatusGeneration();
       if (releaseReal) activityReporter.sessionEnded(realId);
       if (releaseOriginal) activityReporter.sessionEnded(sessionId);
       try {
@@ -3323,6 +3360,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     pty: ptyProcess, rendererAttached: true, exited: false,
     launchMode, launchSourceId: resumeSourceId, launchStartedAt,
     ...(triggerPermit ? { hostPtyStart: cliSessionState.deliveryPtyStart(ptyProcess.pid) } : {}),
+    statusPtyStart: cliSessionState.deliveryPtyStart(ptyProcess.pid),
     outputBuffer: [], outputBufferSize: 0, altScreen: false,
     projectPath, firstResize: true,
     // see .ai/contexts/trigger-watcher.md, "Target guard"
@@ -4180,6 +4218,22 @@ if (!app.isPackaged) {
         activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR,
         lifecycle: triggerLifecycleDeps(),
         sessionRequests: writer,
+        statusSources: {
+          getKnown: id => {
+            const row = getCachedSession(id);
+            return row && !row.parentSessionId && !parseFolderKey(row.folder).alias ? row : null;
+          },
+          readHead: (id, row, session, deadline) => {
+            const folder = row?.folder || session?.projectFolder;
+            const dir = folder && !parseFolderKey(folder).alias && projectsDirForFolder(folder);
+            return dir ? taskRecords.readHeadForStatus(path.join(dir, id + '.jsonl'), id, deadline) : null;
+          },
+          hosted: id => {
+            const job = bgAgents.getSnapshot().roster.find(job => job.sessionId === id);
+            return job ? { id: job.id, live: false, verified: false } : null;
+          },
+          exits: activeSessions.statusExits ||= new Map(),
+        },
         getLiveDescriptor: (id) => cliSessionState.findLiveProcess(id),
         resolveSessionId: (id) => sessionTransitions.currentSessionId(id),
         get remote() {

@@ -1,0 +1,72 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { createTaskRecordsClient } = require('../task-records-client');
+test('m1: status reads leave the shared head revision and later broadcast unchanged', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-status-isolation-'));
+  const file = path.join(root, 'head.jsonl'), id = 'status-isolation';
+  const client = createTaskRecordsClient();
+  t.after(async () => { await client.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
+  fs.writeFileSync(file, JSON.stringify({ type: 'user', timestamp: '2026-11-10T00:00:00Z', message: { content: 'Continue' } }) + '\n');
+  await client.read(file, id, { turnOnly: true });
+  const before = structuredClone(client.snapshots());
+  fs.appendFileSync(file, JSON.stringify({ type: 'user', timestamp: '2026-11-10T00:01:00Z', message: { content: '[Request interrupted by user]' } }) + '\n');
+  const head = await client.readHeadForStatus(file, id, Date.now() + 2000);
+  assert.equal(head.state, 'closed');
+  assert.deepEqual(client.snapshots(), before, 'status must not publish');
+  await client.ownerAlive(id, 1);
+  assert.deepEqual(client.snapshots()[0].headTurn, before[0].headTurn, 'status must not change the next broadcast or revision');
+  await client.read(file, id, { turnOnly: true });
+  assert.equal(client.snapshots()[0].headTurn.revision, before[0].headTurn.revision + 1,
+    'status must not consume a shared turn revision');
+});
+test('head-only status reads an initially empty reader without publishing or mutating task snapshots', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-status-head-'));
+  const file = path.join(root, 'head.jsonl'), id = 'abcdef01-2345-6789-abcd-0123456789ab';
+  const client = createTaskRecordsClient({ onSnapshot() { assert.fail('status must never broadcast a task snapshot'); } });
+  t.after(async () => { await client.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
+  assert.equal(typeof client.readHeadForStatus, 'function', 'bounded reader response must be available');
+  const row = { type: 'user', timestamp: '2026-11-10T00:00:00Z', message: { content: '[Request interrupted by user]' } };
+  fs.writeFileSync(file, JSON.stringify(row) + '\n');
+  const first = await client.readHeadForStatus(file, id, Date.now() + 2000);
+  assert.equal(first.state, 'closed'); assert.ok(Number.isFinite(first.observedAt));
+  assert.equal(client.snapshots().length, 0);
+  const again = await client.readHeadForStatus(file, id, Date.now() + 2000);
+  assert.equal(again.observedAt, first.observedAt, 'unchanged head retains original evidence time');
+  fs.appendFileSync(file, JSON.stringify({ ...row, timestamp: '2026-11-10T00:01:00Z', message: { content: 'Continue' } }) + '\n');
+  const next = await client.readHeadForStatus(file, id, Date.now() + 2000);
+  assert.equal(next.state, 'open'); assert.ok(next.observedAt > first.observedAt);
+  assert.equal(client.snapshots().length, 0);
+});
+test('stalled head request expires and a late reply does not publish a snapshot', async t => {
+  const { EventEmitter } = require('node:events');
+  const worker = new EventEmitter(); let message;
+  worker.postMessage = m => { message = m; }; worker.terminate = async () => {};
+  const client = createTaskRecordsClient({ workerFactory: () => worker, onSnapshot() { assert.fail('unexpected snapshot'); } });
+  t.after(() => client.dispose());
+  assert.equal(typeof client.readHeadForStatus, 'function');
+  assert.equal(await client.readHeadForStatus('fixture.jsonl', 'id', Date.now() + 20), null);
+  worker.emit('message', { requestId: message.requestId, head: { state: 'open' } });
+  assert.equal(client.snapshots().length, 0);
+});
+test('old open head plus later OSC idle stays closed on unchanged production reread; a new open head wins', async t => {
+  const { createSessionStatus } = require('../src/main/triggers/session-status');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-status-order-')), id = 'abcdef01-2345-6789-abcd-0123456789ab';
+  const file = path.join(root, id + '.jsonl'), client = createTaskRecordsClient();
+  t.after(async () => { await client.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
+  const at = minute => Date.parse(`2026-11-10T00:0${minute}:00Z`);
+  const user = minute => JSON.stringify({ type: 'user', timestamp: new Date(at(minute)).toISOString(), message: { content: 'Continue ' + minute } }) + '\n';
+  fs.writeFileSync(file, user(0));
+  const session = { generation: 1, pty: { pid: 42 }, _statusOsc: { generation: 1, idleAt: at(1) } };
+  const service = createSessionStatus({ activeSessions: new Map([[id, session]]),
+    readHead: (_id, _row, _session, deadline) => client.readHeadForStatus(file, id, deadline) });
+  const first = await service.gather(id), second = await service.gather(id);
+  assert.equal(first.state, 'idle'); assert.equal(second.state, 'idle');
+  assert.equal(second.evidence_at, new Date(at(1)).toISOString());
+  fs.appendFileSync(file, user(2));
+  const next = await service.gather(id);
+  assert.equal(next.state, 'busy'); assert.equal(next.evidence_at, new Date(at(2)).toISOString());
+});

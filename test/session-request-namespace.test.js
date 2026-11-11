@@ -6,6 +6,7 @@ const path = require('node:path');
 const { rig, mutate, sha } = require('./fixtures/session-request-watcher.cjs');
 const { createJournal } = require('./fixtures/session-request-journal.cjs');
 const openStore = require('./fixtures/conversation-store.cjs');
+const { createRequestStore } = require('./fixtures/session-request-store.cjs');
 const original = Buffer.from('{"immutable":"owner"}\n');
 
 for (const upperFirst of [false, true]) test(`equal raw action case alias terminates without retries, upperFirst=${upperFirst}`, async t => {
@@ -125,13 +126,12 @@ test('a failed orphan-marker lookup retains the marker and publishes nothing', a
 test('writer-backed publication survives store reopen and processed deletion', {
   skip: !openStore.supported && 'native SQLite ABI differs; node:sqlite requires Node 22',
 }, async t => {
-  const db = openStore(), journal = createJournal(db);
-  t.after(() => db.closeDb());
+  const open = createRequestStore(t), db = open(), journal = createJournal(db);
   const r = await rig(t, { journal, payload: {} });
   const output = path.join(r.processed, r.stem + '.result.json');
   assert.ok(fs.existsSync(output), 'the real journal must acknowledge publication');
   const bytes = fs.readFileSync(output);
-  db.closeDb(); const reopened = openStore(); t.after(() => reopened.closeDb());
+  db.closeDb(); const reopened = open();
   const outcome = await createJournal(reopened).querySessionRequestOutcome({ stemKey: r.stem });
   assert.deepEqual(Buffer.from(outcome.owner.resultBytes), bytes);
   fs.unlinkSync(output);

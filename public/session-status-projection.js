@@ -1,7 +1,9 @@
 'use strict';
 
 const sessionStatusProjection = {
-  projectHeadActivity(snapshot, turn, { ptyHere = false, background = false } = {}) {
+  projectHeadActivity(snapshot, turn, proof) {
+    const { ptyHere = false, background: initialBackground = false } = proof ?? {};
+    let background = initialBackground;
     const s = snapshot || {};
     const alive = s.liveness === 'alive' || ptyHere;
     background ||= s.backgroundJob;
@@ -15,6 +17,7 @@ const sessionStatusProjection = {
   },
 
   projectSessionStatus(snapshot, turn, proof = {}) {
+    proof ??= {};
     const head = sessionStatusProjection.projectHeadActivity(snapshot, turn, proof);
     if (proof.ambiguous) return { state: 'unknown', detail: 'ambiguous' };
     if (proof.confirmedExit && head.liveness === 'dead') return { state: 'exited', detail: 'confirmed-exit' };

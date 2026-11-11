@@ -77,7 +77,7 @@ for (const mode of ['new', 'resume', 'fork', 'schedule']) {
       getHarness: require('../harnesses').getHarness,
       isProjectSettingsArchived: () => false,
       log: { info() {}, warn() {}, error() {} },
-      cliSessionState: { trackScheduleRun() {}, ensureWatching: () => true },
+      cliSessionState: { trackScheduleRun() {}, ensureWatching: () => true, deliveryPtyStart: () => null },
       activityReporter: { sessionStarted() {} }, trackWindowsPty() {},
       createComposerState: require('../src/main/terminals/composer-state').createComposerState,
       revealIfSdkSession() {}, wireSessionPty() {}, getMcpState: () => null,

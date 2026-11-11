@@ -100,7 +100,7 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
     return null;
   }
   function liveInfo(candidate, writer) {
-    return { ...candidate.descriptor, pid: writer.pid, rawPid: candidate.raw.pid,
+    return { ...candidate.descriptor, ...candidate.state, pid: writer.pid, rawPid: candidate.raw.pid,
       procStart: writer.start, namespace: writer.namespace };
   }
   async function probe(pids, deadline) {
@@ -114,13 +114,14 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
       })]);
     } finally { clearTimeout(timer); }
   }
-  async function liveElsewhereV1Checked(sessionId, _hasPty, ptyPids = () => [], { deadline = Infinity } = {}) {
+  async function liveElsewhereV1Checked(sessionId, _hasPty, ptyPids = () => [], { deadline = Infinity, requireUnique = false } = {}) {
     const key = String(sessionId).toLowerCase();
     const scheduled = scheduledRuns.get(key);
     if (scheduled) return { known: true, live: scheduled };
     if (expired(deadline)) return unknown('descriptor deadline');
     const scan = rawScan(deadline);
     const matches = scan.candidates.filter(c => c.descriptor.sessionId.toLowerCase() === key);
+    const lives = [];
     let unresolved = !scan.complete;
     const table = platform === 'linux' && matches.length ? procScan(deadline) : null;
     for (const candidate of matches) {
@@ -172,8 +173,13 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
         } catch {}
       }
       if (!writer || !sameFile(candidate, deadline)) { unresolved = true; continue; }
-      if (!owned || candidate.descriptor.kind === 'bg') return { known: true, live: liveInfo(candidate, writer) };
+      if (!owned || candidate.descriptor.kind === 'bg') {
+        if (!requireUnique) return { known: true, live: liveInfo(candidate, writer) };
+        lives.push(liveInfo(candidate, writer));
+      }
     }
+    if (requireUnique && lives.length > 1) return { ...unknown('ambiguous writers'), ambiguous: true };
+    if (requireUnique && lives.length === 1 && !unresolved && !expired(deadline)) return { known: true, live: lives[0] };
     return unresolved || expired(deadline) ? unknown('descriptor identity unavailable') : { known: true, live: null };
   }
   function observeTabWriterV1({ session, pty, generation, ptyStart, deadline = Infinity }) {

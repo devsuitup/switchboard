@@ -21,6 +21,44 @@ function fixture(t, options = {}) {
   return { helper, child, writes, invocations, warnings };
 }
 
+for (const op of ['release', 'terminate', 'assign']) {
+  test(`F1: observation interleaved with ${op} keeps requests and later PTY tracking alive`, async t => {
+    const { trackWindowsPty } = require('../src/main/terminals/pty-ops');
+    const f = fixture(t);
+    const assigned = f.helper.assign('one', 897, 100);
+    f.child.stdout.emit('data', 'ready\nassigned one\n');
+    assert.equal(await assigned, true);
+    const observed = f.helper.observe('one');
+    const done = op === 'assign' ? f.helper.assign('one', 898, 101) : f.helper[op]('one');
+    f.child.stdout.emit('data', 'observed one 0\n');
+    assert.deepEqual(f.warnings, [], 'interleaving must not disable the helper');
+    assert.equal((await observed)?.ended, true, 'observation must resolve its own reply');
+    assert.match(f.writes.at(-1), new RegExp(`^${op} one(?: |\\n)`));
+    f.child.stdout.emit('data', `${{ release: 'released', terminate: 'terminated', assign: 'assigned' }[op]} one\n`);
+    assert.equal(await done, true, 'the overlapping request must resolve its own reply');
+    const pty = { pid: 899, onExit() {} };
+    const later = trackWindowsPty(pty, { jobs: f.helper, platform: 'win32', spawnTime: 102 });
+    const laterId = f.writes.at(-1).split(' ')[1];
+    f.child.stdout.emit('data', `assigned ${laterId}\n`);
+    assert.equal(await later, true, 'later PTYs must still acquire a Windows job');
+    assert.deepEqual(f.warnings, []);
+  });
+}
+
+test('read-only job observation never starts a helper and distinguishes live, ended and unavailable', async t => {
+  const f = fixture(t);
+  assert.equal(typeof f.helper.observe, 'function', 'job death requires a read-only kernel observation');
+  assert.equal(await f.helper.observe('one'), null);
+  assert.equal(f.invocations.length, 0, 'status cannot start a helper');
+  const assign = f.helper.assign('one', 897, 100);
+  f.child.stdout.emit('data', 'ready\nassigned one\n'); await assign;
+  const live = f.helper.observe('one');
+  assert.equal(f.writes.at(-1), 'observe one\n'); f.child.stdout.emit('data', 'observed one 1\n');
+  assert.equal((await live).ended, false);
+  const ended = f.helper.observe('one'); f.child.stdout.emit('data', 'observed one 0\n');
+  assert.equal((await ended).ended, true);
+});
+
 test('one hidden helper reads the packaged script and queues assigns until ready', async t => {
   const f = fixture(t);
   let alive = true;
@@ -31,7 +69,7 @@ test('one hidden helper reads the packaged script and queues assigns until ready
   const { program, args, opts } = f.invocations[0];
   assert.equal(program, path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'));
   assert.deepEqual(args.slice(0, 3), ['-NoProfile', '-NonInteractive', '-EncodedCommand']);
-  const script = fs.readFileSync(path.join(__dirname, '../src/main/terminals/windows-job-helper.ps1'), 'utf8');
+  const script = fs.readFileSync(path.join(__dirname, '../src/main/terminals/windows-job-helper.ps1'), 'utf8').replace(/\r\n/g, '\n');
   assert.equal(Buffer.from(args[3], 'base64').toString('utf16le'), script);
   assert.ok([program, ...args].join(' ').length < 32700);
   assert.equal(opts.windowsHide, true);

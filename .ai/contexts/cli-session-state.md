@@ -1,5 +1,39 @@
 # Context: cli-session-state
 
+## Bounded status evidence (#380 S1b3)
+
+`readStatusEvidence(id, deadline)` is a read-only adapter over the v1 reader,
+not `findLiveProcess` or a PID-only handle. Windows first races the shared
+process-table refresh against the remaining deadline and verifies table age
+under 3000 ms before and after the identity read. The global probe timeout stays
+5000 ms and its table TTL stays 3000 ms. A late refresh can help a later request,
+but cannot change a consumed result. V1 live observations retain parsed state,
+host/raw PID, start and namespace. Linux namespace/ancestry validation remains
+in the v1 reader. Schedules without that identity do not supply descriptor proof.
+Status requests require a unique verified writer; competing identities project
+ambiguous. Existing action readers keep their refusal on any verified live writer.
+
+The status gatherer shares one absolute now+2000 deadline across head and
+descriptor awaits, pins PTY/generation/start/namespace and rechecks after awaits.
+Current owned PTYs need no fresh Windows probe for liveness. Missing or stalled
+head evidence preserves that independent liveness. Descriptor timeout preserves
+independent head facts but returns unknown liveness and null ownership metadata.
+Hosted job identity is rechecked independently of an attached PTY after awaits;
+an attach exit cannot invalidate a verified live job, and attach OSC is not job
+evidence. A verified ambiguous descriptor set still identifies a known target.
+An unverified possible hosted successor blocks an older exit proof; missing
+descriptor evidence cannot turn a possible successor into confirmed death.
+
+On Windows, the already-running job helper supports `observe`: a read-only
+QueryInformationJobObject membership read, never helper startup. PTY exit
+captures this observation before releasing the handle. Main retains only a
+proved empty job for the current non-attached, non-backgrounded generation,
+after handoff/continuation holds and before removal. Status rechecks successor
+absence. Terminate success is not death proof. Missing jobs, Linux raw exits,
+failed observations and restart without retained proof remain unknown. The
+PowerShell script is LF-normalized before UTF-16 command encoding to preserve
+the Windows command-line length bound across CRLF checkouts.
+
 ## V1 trigger reader (#1022)
 
 `liveElsewhereV1Checked` and `observeTabWriterV1` use the separate

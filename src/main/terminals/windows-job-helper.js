@@ -9,6 +9,7 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
   let child, started = false, ready = false, failed = false, buffer = '', startupTimer, earlyCloseWarned = false;
   const pending = new Map();
   const queued = new Map();
+  const waiting = new Map();
   let resolveReady;
   const readiness = new Promise(resolve => { resolveReady = resolve; });
 
@@ -18,15 +19,28 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
     clearTimeout(startupTimer);
     resolveReady(false);
     for (const entry of pending.values()) { clearTimeout(entry.timer); entry.resolve(false); }
-    pending.clear(); queued.clear();
+    for (const entries of waiting.values()) for (const entry of entries) entry.resolve(false);
+    pending.clear(); queued.clear(); waiting.clear();
     try { warn(`[pty] Windows job helper unavailable; using plain ConPTY close: ${reason}`); } catch {}
     try { child?.kill(); } catch {}
+  }
+
+  function settle(entry, value) {
+    pending.delete(entry.id); clearTimeout(entry.timer);
+    entry.resolve(value);
+    const entries = waiting.get(entry.id), next = entries?.shift();
+    if (!entries?.length) waiting.delete(entry.id);
+    if (next) {
+      pending.set(next.id, next);
+      if (ready) send(next);
+      else queued.set(next.id, next);
+    }
   }
 
   function send(entry) {
     if (failed) return;
     if (entry.current && !entry.current()) {
-      pending.delete(entry.id); entry.resolve(false); return;
+      settle(entry, false); return;
     }
     entry.timer = setTimeout(() => fail('request timed out'), requestMs);
     entry.timer.unref?.();
@@ -47,15 +61,14 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
         queued.clear();
         continue;
       }
-      const match = /^(assigned|terminated|released|error) ([\w-]+)(?: (\d+))?$/.exec(line);
+      const match = /^(assigned|terminated|released|observed|error) ([\w-]+)(?: (\d+))?$/.exec(line);
       if (!match) return fail('invalid protocol response');
       const entry = pending.get(match[2]);
       if (!entry || (match[1] !== 'error' && match[1] !== entry.response)) return fail('unexpected protocol response');
-      pending.delete(entry.id); clearTimeout(entry.timer);
       if (match[1] === 'error') {
         try { warn(`[pty] Windows job ${entry.id} ${entry.op} failed: ${match[3]}`); } catch {}
       }
-      entry.resolve(match[1] !== 'error');
+      settle(entry, match[1] === 'observed' ? { ended: match[3] === '0', observedAt: Date.now() } : match[1] !== 'error');
     }
   }
 
@@ -63,7 +76,7 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
     if (started) return readiness;
     started = true;
     try {
-      const script = fs.readFileSync(path.join(__dirname, 'windows-job-helper.ps1'), 'utf8');
+      const script = fs.readFileSync(path.join(__dirname, 'windows-job-helper.ps1'), 'utf8').replace(/\r\n/g, '\n');
       child = spawnChild(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
         ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
         { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -92,13 +105,19 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
     if (!/^[\w-]+$/.test(id)) return Promise.resolve(false);
     start();
     if (failed) return Promise.resolve(false);
-    return new Promise(resolve => {
-      const entry = { op, id, line: `${op} ${id}${args}`, current, resolve,
-        response: { assign: 'assigned', terminate: 'terminated', release: 'released' }[op] };
+    let resolveRequest;
+    const done = new Promise(resolve => { resolveRequest = resolve; });
+    const entry = { op, id, line: `${op} ${id}${args}`, current, resolve: resolveRequest, done,
+      response: { assign: 'assigned', terminate: 'terminated', release: 'released', observe: 'observed' }[op] };
+    if (pending.has(id)) {
+      if (!waiting.has(id)) waiting.set(id, []);
+      waiting.get(id).push(entry);
+    } else {
       pending.set(id, entry);
       if (ready) send(entry);
       else queued.set(id, entry);
-    });
+    }
+    return done;
   }
 
   function finish(op, id, args = '') {
@@ -109,7 +128,7 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
     const entry = pending.get(id);
     if (entry?.op === 'assign') {
       if (queued.delete(id)) {
-        pending.delete(id); entry.resolve(false);
+        settle(entry, false);
         return Promise.resolve(true);
       }
       return entry.done.then(() => request(op, id, args));
@@ -136,12 +155,13 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
 
   return {
     start,
+    observe(id) {
+      if (!ready || failed || pending.has(id)) return Promise.resolve(null);
+      return request('observe', id).then(value => value && typeof value === 'object' ? value : null);
+    },
     assign(id, pid, spawnTime, current = () => true) {
       if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid || !Number.isSafeInteger(spawnTime)) return Promise.resolve(false);
-      const done = request('assign', id, ` ${pid} ${spawnTime}`, current);
-      const entry = pending.get(id);
-      if (entry) entry.done = done;
-      return done;
+      return request('assign', id, ` ${pid} ${spawnTime}`, current);
     },
     terminate,
     release: id => finish('release', id),

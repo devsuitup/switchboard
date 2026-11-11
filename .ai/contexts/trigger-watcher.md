@@ -1,5 +1,78 @@
 # Context: trigger-watcher
 
+## Typed read-only requests (#380 S1b3)
+
+An own `type` property selects the strict typed contract before action dispatch.
+`session-request-contract.js` checks the opened bytes with fatal UTF-8 decoding,
+bounded JSON nesting, duplicate decoded keys, prototype keys, exact fields and
+case-insensitive UUID filename matching. Invalid typed identities use a tagged
+raw hash; valid identities use sorted supplied JSON and normalized UUIDs.
+Unknown/null types and mixed type/action requests cannot enter either old family.
+Existing legacy/action schemas and action lowercase publication remain separate.
+The stable read retains a bounded prefix while streaming oversized hashes. A
+root-key prefix classifier can recognize typed intent in truncated/oversized
+inputs; it grants no validation or canonical identity. Such requests receive
+the complete undetermined refusal envelope and tagged raw identity. Canonical
+typed hashing still follows fatal UTF-8 and full strict parsing only.
+
+Typed requests do not claim an observation reservation. The namespace queries
+the ordered writer first, replays completed bytes before age/author checks, and
+only absent requests gather evidence. `recordConsumedSessionStatusRequest`
+commits the first candidate and receipt atomically before publication. Lost ACK
+or publication failure retains the input and retries the ordered outcome query.
+New typed owners use the exact physical input stem, including uppercase UUIDs.
+Completed raw/supplied identity replay precedes family mismatch handling too:
+an earlier build's saved result and original publication spelling remain
+authoritative when the same bytes are now recognized as typed.
+Typed `open-session` is durably refused as invalid request / unsupported trigger
+type with the complete open envelope and no lifecycle effects. A future launch
+implementation must replay this refusal for the same supplied request.
+
+`createTriggerContext` builds a separate status service. Caller authority uses
+the direct current local session/PTY/generation and is rechecked after gathering.
+Status follows no in-memory continuation alias and invokes no delivery/input,
+renderer, lifecycle, capability, profile or admission operation. A new UUID is
+required for a new observation. See [automation](../../docs/automation.md).
+
+The owned status pin uses the actual PTY object, its generation, PID and a
+separate `statusPtyStart` captured at spawn. The v1 delivery `hostPtyStart`
+remains captured only for trigger launches. A missing or uncertain second
+descriptor observation drops descriptor evidence while preserving the current
+owned PTY; two present writers with different identities are ambiguous.
+
+`statusHead` computes the transcript head without storing it in the task head
+map or advancing its revision. Status reads cannot affect later snapshots or
+continued-rekey head selection. Evidence time comes from the transcript entry.
+
+Main's hosted roster adapter does not yet produce verified hosted jobs. Job
+evidence in production currently requires a live `kind: 'bg'` descriptor with a
+matching roster job ID; synthetic verified hosted rows only exercise the port.
+
+Exit cleanup never waits for Windows job assignment or observation. An
+unsettled assignment is released immediately, cancelling a queued assignment;
+no exit proof is manufactured. An already assigned job may be observed in the
+background. Its result is recorded only for the same session identity, PTY and
+generation. A rekey or replacement skips that proof, while normal owner death,
+renderer notification, session removal and live-row release run independently.
+
+The real-store namespace and typed replay tests use `session-request-store.cjs`
+to allocate one disposable database per test, reused only for that test's reopen.
+They must not use the ambient data directory: both tests use the same UUID, with
+a mixed-case legacy owner and a lowercase typed request. Sharing the database
+makes the typed input a conflict; preserving the original result spelling then
+fails a lowercase lookup on Linux, while Windows can accept the wrong legacy
+bytes. The typed regression seeds that ambient owner, checks the exact directory
+entry and status envelope, and leaves the ambient owner unchanged. The fixture
+restores the data-directory environment synchronously after each open.
+Runner-level per-process data directories can mask the original cross-file
+coupling; seeding the ambient owner inside the regression keeps it observable.
+
+The replay fixture waits for result publication and input cleanup within the
+existing bound. Its delayed ordered query only tests asynchronous completion;
+it does not reproduce the shared-database defect. Publication retry timers in
+`session-request-watcher.cjs` remain manual so error tests can inspect retained
+input before explicitly advancing a retry. Production uses real backoff timers.
+
 ## Shared result namespace (#380 S1b2)
 
 `session-request-namespace.js` holds the ownership decision for every legacy
@@ -52,7 +125,7 @@ Retries query the writer before effects, so publication loss cannot repeat
 delivery, launch or stop. Watcher close cancels all retry timers. There is no
 input unlink in the watcher's finally branch. Tests inject the writer commands
 through `test/fixtures/session-request-journal.cjs`; real-store tests retain the
-Node20 unsupported-SQLite skip guard. No new typed endpoint is introduced.
+Node20 unsupported-SQLite skip guard. S1b3 adds the typed endpoint described above.
 
 Versioned trigger new/open and closed-session resume reserve the shared
 [project operation gate](project-operation-gate.md) in `open-terminal`, before

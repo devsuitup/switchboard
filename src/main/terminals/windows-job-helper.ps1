@@ -190,6 +190,7 @@ public static class PtyJobs {
     string response = "error";
     try {
      if (a.Length == 4 && a[0] == "assign") { error = Assign(id, uint.Parse(a[2]), long.Parse(a[3])); response = "assigned"; }
+     if(a.Length==2&&a[0]=="observe"&&Jobs.ContainsKey(id)){Console.WriteLine("observed "+id+" "+Members(Jobs[id]).Count);Console.Out.Flush();continue;}
      if ((a.Length == 2 || a.Length == 3) && (a[0] == "terminate" || a[0] == "release")) {
       var roster = new Dictionary<uint, long>();
       if (a.Length == 3) foreach (string value in a[2].Split(',')) {

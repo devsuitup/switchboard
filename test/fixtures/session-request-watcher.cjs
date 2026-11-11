@@ -66,6 +66,14 @@ async function rig(t, options = {}) {
   t.after(() => { watcher.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   const settle = async () => { for (let i = 0; i < 35; i++) await new Promise(resolve => setImmediate(resolve)); };
   await settle();
+  if (options.until) {
+    const deadline = performance.now() + 2000;
+    while (!options.until({ processed, input })) {
+      require('node:assert/strict').ok(performance.now() < deadline, 'watcher must reach the requested publication fixed point');
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    await settle();
+  }
   if (options.raw && options.raw.length <= 65536) { await new Promise(resolve => setTimeout(resolve, 70)); await settle(); }
   return { dir, processed, stem, input, body, journal, errors, events, timers, control, watcher, effects: () => effects, settle,
     async retry() { const first = timers.entries().next().value; assertTimer(first); timers.delete(first[0]); first[1].fn(); await settle(); },

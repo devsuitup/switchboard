@@ -620,6 +620,16 @@ function publishRekey(sessionId, newId, session, currentFiles, kind, background)
   rekeyGeneration++;
   log.info(`[session-transition] ${sessionId} → ${newId} (${kind})`);
   session.knownJsonlFiles = new Set(currentFiles);
+  for (const oldId of new Set([sessionId, session.realSessionId].filter(Boolean).map(normalizeSessionId))) {
+    if (Number.isInteger(session.generation) && activeSessions.statusGenerations?.get(oldId) === session.generation) {
+      activeSessions.statusGenerations.delete(oldId);
+      activeSessions.statusExits?.delete(oldId);
+    }
+  }
+  if (Number.isInteger(session.generation)) {
+    (activeSessions.statusGenerations ||= new Map()).set(normalizeSessionId(newId), session.generation);
+    activeSessions.statusExits?.delete(normalizeSessionId(newId));
+  }
   session.realSessionId = newId;
   session.knownSubagents = null;
   session._prevDirMtime = undefined;
