@@ -499,10 +499,12 @@ for (const [kind, variant, outcome] of [['versioned', payload, 'refused'], ['leg
     if (overwritesOwner) {
       await until(() => !fs.existsSync(r.input), 'the modified input is archived, not left in place');
       const processed = path.dirname(r.output);
+      const conflict = request.toLowerCase() + '.conflict-';
       const archived = fs.readdirSync(processed)
-        .filter(name => name.startsWith(request.toUpperCase() + '.conflict-') && name.endsWith('.request'));
+        .filter(name => name.toLowerCase().startsWith(conflict) && name.endsWith('.request'));
       assert.equal(archived.length, 1);
       assert.equal(fs.readFileSync(path.join(processed, archived[0]), 'utf8'), JSON.stringify(variant), 'the modified bytes are preserved');
+      assert.ok(fs.existsSync(path.join(processed, archived[0].replace(/\.request$/, '.result.json'))), 'the archived variant has its conflict result');
     } else {
       await until(() => !fs.existsSync(r.input) && !fs.existsSync(r.marker), 'the owner removes its input and marker');
       await until(() => !fs.existsSync(upper), 'the queued variant is processed after the release');

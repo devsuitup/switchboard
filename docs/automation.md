@@ -321,7 +321,9 @@ actual cwd, including a worktree.
 If startup, saving the name or delivery fails after spawn, the session remains
 open and the refusal retains its ID and true `created`/`resumed` evidence.
 `uncertain:true` means an interrupted action may have taken effect: do not retry
-automatically. A repeated UUID reuses its first terminal result; a persisted
+automatically. A `Switchboard is closing.` or `session target changed` refusal can
+also follow completed effects: read `created`, `resumed`, `stop_requested` and
+`submitted` before retrying. A repeated UUID reuses its first terminal result; a persisted
 action marker interrupted by restart is refused without replay.
 
 Stop an already-open local session, optionally after one final note:

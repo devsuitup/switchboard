@@ -351,7 +351,7 @@ Their helper is named `runTrigger`: the default-runner canary reserves the
 test runs on Linux (`mkfifo`) and skips Windows with an explicit reason.
 
 Startup recovery scans `processed/<uuid>.action.json` through the same filename
-queue and eight-file backpressure, including orphan markers. An input present
+queue and eight-stem backpressure (case aliases share their lowercased stem's slot), including orphan markers. An input present
 in the startup scan owns its dispatch; the marker scan does not dispatch it
 again, including a case alias on Windows. Orphan recovery is unchanged. Recovery precedes
 age checks and produces `refused`, `interrupted by restart`, `uncertain:true`;
@@ -1034,7 +1034,7 @@ queued ones take their place).
 
 ### Session serialization
 
-`MAX_INFLIGHT` bounds how many trigger *files* run concurrently; it is silent
+`MAX_INFLIGHT` bounds how many lowercased trigger stems run concurrently (a case alias of an active stem takes no slot and waits on its namespace lock); it is silent
 on which `sessionId` they target — nothing before this fix stopped two
 trigger files naming the same session from running their `waitForComposerFree`
 / `submitWithVerify` sequences interleaved, each unaware of the other's
