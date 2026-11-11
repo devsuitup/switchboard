@@ -120,13 +120,17 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
       }
       if (row.projectKey !== project.key) throw fail('DELETION_ID', 'Receipt belongs to another project');
       const units = store.units(input.operationId).map(unit => ({ ordinal: unit.ordinal, category: unit.category, target: JSON.parse(unit.targetJson), status: unit.status, result: JSON.parse(unit.resultJson) }));
+      const ids = new Set([...observed.metadata.map(row => row.sessionId), ...units.filter(unit => unit.category === 'session').map(unit => unit.target.id)]);
+      observed.metadata = [...db.getAllMeta(true).values()].filter(row => ids.has(row.sessionId));
+      const final = row.state === 'committed' && units.find(unit => unit.category === 'finalize')?.target;
       return { operationId: row.operationId, state: row.sealed ? row.state : 'inProgress', phase: row.phase,
         terminal: !!row.sealed, noLateCommit: !!row.sealed, receiptAvailable: true, projectEpoch: fence.epoch,
-        startRevision: row.startRevision, lastRevision: row.lastRevision, nextUnit: row.nextUnit, totalUnits: row.totalUnits,
+        startRevision: row.startRevision, lastRevision: row.lastRevision, committedRevision: row.lastRevision, nextUnit: row.nextUnit, totalUnits: row.totalUnits,
         stagedUnits: units.length, unstagedUnits: row.totalUnits - units.length,
         completed: units.filter(unit => unit.status === 'completed'), remaining: units.filter(unit => unit.status === 'pending'),
         kept: units.filter(unit => unit.status === 'kept'), failed: units.filter(unit => unit.status === 'failed'),
-        error: JSON.parse(row.errorJson), ...observed };
+        error: JSON.parse(row.errorJson), ...(final ? { invalidation: { sessionIds: units.filter(unit => unit.category === 'session').map(unit => unit.target.id).sort(),
+          folderKeys: final.folderKeys || [], restoreTargets: final.restoreTargets } } : {}), ...observed };
     })();
   }
   function manifest(input) {
@@ -139,7 +143,8 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
       || typeof input.membershipDigest !== 'string' || !input.membershipDigest
       || typeof input.writerMembershipDigest !== 'string') throw fail('DELETION_MANIFEST', 'Invalid substrate manifest');
     const copy = JSON.parse(JSON.stringify(input));
-    return { project, copy, manifestHash: hash(copy) };
+    const { units: _units, ...request } = copy;
+    return { project, copy, manifestHash: `${hash(request)}:${hash(copy)}` };
   }
   function progressHook(row, beforeCommit) {
     return nextRevision => {
@@ -155,7 +160,7 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
     if (row.manifestHash !== manifest(input).manifestHash) throw fail('DELETION_HASH', 'Operation manifest changed');
     return row;
   }
-  function admit(input, firstEffect) {
+  function admit(input, firstEffect, { all = false, preflight } = {}) {
     const { project, copy, manifestHash } = manifest(input);
     let row;
     commitTransaction(db, () => {
@@ -165,6 +170,7 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
         if (existing.projectKey !== project.key || existing.manifestHash !== manifestHash) throw fail('DELETION_HASH', 'Operation ID reused with different manifest');
         return;
       }
+      preflight?.();
       if (otherOwner(project)) throw fail('DELETION_BUSY', 'Project is owned by another unsealed operation');
       const snapshot = readScope(input);
       if (snapshot.projectEpoch !== project.expectedEpoch) throw fail('DELETION_TERMINAL', 'Operation epoch has advanced');
@@ -183,16 +189,17 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
       if (firstEffect) {
         copy.units.forEach((unit, ordinal) => store.addUnit(input.operationId, ordinal, unit));
         row.phase = 'applying';
-        applyUnit(row, { ...copy.units[0], ordinal: 0 }, firstEffect);
+        for (let ordinal = 0; ordinal < (all ? copy.units.length : 1); ordinal++) applyUnit(row, { ...copy.units[ordinal], ordinal }, firstEffect);
       }
     }, next => { if (row) progressHook(row)(next); });
     trimReceipts();
     return read(input);
   }
-  function stage(input, batch) {
+  function stage(input, batch, { beforeChunk } = {}) {
     let row;
     commitTransaction(db, () => {
       row = owned(input);
+      beforeChunk?.();
       const units = store.units(input.operationId), expected = input.units.slice(units.length, units.length + batch.length);
       if (!Array.isArray(batch) || batch.length > 16 || !batch.length || hash(batch) !== hash(expected)) throw fail('DELETION_HASH', 'Staged units differ from frozen manifest');
       for (let i = 0; i < batch.length; i++) {
@@ -222,10 +229,11 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
     if (status === 'failed') seal(row, 'partial', { reason: 'unit-failed', ordinal: unit.ordinal });
     else if (row.nextUnit === row.totalUnits) seal(row, 'committed');
   }
-  function apply(input, effect, { beforeCommit } = {}) {
+  function apply(input, effect, { beforeCommit, beforeChunk } = {}) {
     let row;
     commitTransaction(db, () => {
       row = owned(input);
+      beforeChunk?.();
       if (row.phase !== 'applying' && row.totalUnits !== 0) throw fail('DELETION_STAGING', 'Manifest staging is incomplete');
       const unit = store.units(input.operationId)[row.nextUnit];
       if (unit) {
@@ -259,6 +267,20 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
     trimReceipts();
     return read(input);
   }
+  function failOperation(input, error) {
+    const project = bind(input);
+    let row;
+    commitTransaction(db, () => {
+      row = store.operation(input.operationId);
+      if (!row || row.sealed || fenceRow(project.key).operationId !== row.operationId) { row = null; return; }
+      if (error.code !== 'WRITER_STALE' && error.code !== 'DELETION_TERMINAL') {
+        const unit = store.units(row.operationId)[row.nextUnit];
+        if (unit) store.unitResult(row.operationId, unit.ordinal, 'failed', { code: error.code, error: error.message });
+      }
+      seal(row, 'partial', { code: error.code, reason: error.message });
+    }, next => { if (row) progressHook(row)(next); });
+    return read(input);
+  }
   function recover() {
     if (!store) throw fail('DELETION_STORE', 'Deletion store capability is required');
     const unfinished = store.active()[0];
@@ -287,7 +309,7 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
   function trimReceipts() {
     if (store.terminal().length > 128) purge();
   }
-  return { readScope, admit, stage, apply, read, fence, recover, purge };
+  return { readScope, admit, stage, apply, read, fence, recover, purge, failOperation };
 }
 
 module.exports = { createProjectDeleteProgress, operationId, commitTransaction, projectIdentity, bind };

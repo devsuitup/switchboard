@@ -81,6 +81,20 @@ function scenario(name, body) {
   });
 }
 
+scenario('deletion reservation keeps rendered archive and record while unrelated list stays available', `
+  await writer.setSetting('archivedProjects', { [entry]: { knownSessionIds: [] } });
+  const hold = writer.reserveProjectDeletion([{ alias: null, projectPath: project }]);
+  await hold.ready;
+  try {
+    const listed = await writer.applyAndPersistArchived(projects, false);
+    assert.equal(listed.length, 0, 'held retirement stays archived in rendering');
+    assert.ok(require('./db').getSetting('archivedProjects')[entry]);
+    assert.equal(messages.filter(message => message.command === 'retireArchivedEntries').length, 0);
+  } finally { hold.release(); }
+  assert.equal((await writer.applyAndPersistArchived(projects, false)).length, 1);
+  assert.equal(require('./db').getSetting('archivedProjects')[entry], undefined);
+`);
+
 scenario('unchanged archives in paired and single get-projects post no writer messages', `
   await writer.setSetting('archivedProjects', { [entry]: { knownSessionIds: ['known'] } });
   messages.length = 0;

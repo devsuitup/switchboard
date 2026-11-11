@@ -513,6 +513,39 @@ Tests use temporary isolated data dirs. No live application process or packaged
 build is used by these tests. The report in .work-files/codex-report-6166c.md records
 the final executed file census and packaged qualification checklist.
 
+## Project deletion completion (A4b4)
+
+A4b4 adds dedicated completeProjectDeletion dispatch beside deletion scope/status
+and terminal fence controls; see [project-delete.md](project-delete.md),
+"Complete command and recovery integration (A4b4)". Each deletion iterator turn
+owns its progress transaction rather than passing through generic effects.
+Tiny completions may commit once; staged/effect prefixes remain observable and
+revision/epoch/ownership fenced. Final logical removal and receipt sealing are
+atomic, subject to the documented indivisible oversized-setting exception.
+Producer epoch bindings are captured on message receipt and rechecked across
+all selected cache/FTS/metadata units, including search-staging publication.
+Receipt of either completion or fence synchronously registers that message in
+a pending-history set, before binding or starting its first transaction. While
+any such message remains, incoming producers force an epoch binding even when
+durable deletion history is still absent. This covers producers received during
+the first transaction's SQLITE_BUSY backoff, including tiny one-transaction
+completions. Each message leaves the set after a successful turn makes history
+visible, or on completion, error or workflow cancellation. Multiple queued
+deletions therefore cannot clear one another's protection. The existing forced
+binding of already queued producers at deletion start still covers earlier
+receipts. With neither pending deletion nor durable history, producers retain
+their constant-time early exit without ownership queries or path resolution.
+The facade holds archive exclusion through unknown outcomes and only releases
+after terminal/no-late-commit proof. No main/IPC/UI caller is connected yet.
+
+Archive retirement exhausting three snapshot conflicts returns the computed
+project list without persisting the stale decision, as before A4b4. Reserved
+identities remain excluded by the workflow lease. At exhaustion, the reader's
+current durable fences additionally exclude blocked identities; a failed fence
+read conservatively keeps that entry archived. This read changes rendering only
+and never authorizes a write. A later clean refresh can retire eligible entries.
+Successful retirement still filters rendering by the writer's returned keys.
+
 ## Projects ACK baseline (#719)
 
 Effects replies carry committedRevision captured inside the last owned SQLite

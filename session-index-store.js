@@ -100,6 +100,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS project_delete_fences (
     projectKey TEXT PRIMARY KEY, epoch INTEGER NOT NULL, operationId TEXT, blocked INTEGER NOT NULL
   );
+  CREATE INDEX IF NOT EXISTS idx_project_delete_blocked ON project_delete_fences(blocked);
   CREATE TABLE IF NOT EXISTS project_delete_operations (
     operationId TEXT PRIMARY KEY, projectKey TEXT NOT NULL, expectedEpoch INTEGER NOT NULL,
     ownedEpoch INTEGER, manifestHash TEXT NOT NULL, membershipDigest TEXT NOT NULL,
@@ -115,6 +116,7 @@ db.exec(`
     ordinal INTEGER NOT NULL, category TEXT NOT NULL, targetJson TEXT NOT NULL,
     status TEXT NOT NULL, resultJson TEXT, PRIMARY KEY(operationId, ordinal)
   );
+  CREATE INDEX IF NOT EXISTS idx_project_delete_target ON project_delete_units(category, json_extract(targetJson, '$.id'));
   CREATE TRIGGER IF NOT EXISTS project_delete_units_cascade AFTER DELETE ON project_delete_operations
     BEGIN DELETE FROM project_delete_units WHERE operationId = OLD.operationId; END;
 `);
@@ -948,10 +950,50 @@ if (!readonly) try {
   console.warn('Bridge UUID repair failed; will retry on next database open:', err.message);
 }
 
+let producerOwnersReady = false, producerOwnersRevision, producerHistorySeen = false;
+function prepareProducerOwners() {
+  const history = projectDeletion.hasHistory(), revision = getProjectsRevision();
+  if (producerOwnersReady && !producerHistorySeen && revision !== producerOwnersRevision) {
+    db.exec('DROP TRIGGER session_owner_insert; DROP TRIGGER session_owner_update; DROP TRIGGER session_owner_delete; DROP TABLE session_owner_links');
+    producerOwnersReady = false;
+  }
+  if (!producerOwnersReady) {
+    db.transaction(() => {
+      db.exec(`CREATE TEMP TABLE session_owner_links (sourceId TEXT NOT NULL, targetId TEXT NOT NULL, PRIMARY KEY(sourceId, targetId));
+        CREATE INDEX idx_session_owner_target ON session_owner_links(targetId);
+        INSERT OR IGNORE INTO session_owner_links SELECT sessionId, sessionId FROM session_cache;
+        INSERT OR IGNORE INTO session_owner_links SELECT sessionId, parentSessionId FROM session_cache WHERE parentSessionId IS NOT NULL;
+        INSERT OR IGNORE INTO session_owner_links SELECT sessionId, mergedIntoSessionId FROM session_cache WHERE mergedIntoSessionId IS NOT NULL;
+        INSERT OR IGNORE INTO session_owner_links SELECT sessionId, bridgeSessionId FROM session_cache WHERE bridgeSessionId IS NOT NULL;
+        INSERT OR IGNORE INTO session_owner_links SELECT s.sessionId, j.value FROM session_cache s,
+          json_each(CASE WHEN json_valid(s.continuationIndex) THEN s.continuationIndex ELSE '{}' END, '$.ids') j WHERE j.type='text';`);
+      const populate = `INSERT OR IGNORE INTO session_owner_links VALUES (NEW.sessionId, NEW.sessionId);
+        INSERT OR IGNORE INTO session_owner_links SELECT NEW.sessionId, NEW.parentSessionId WHERE NEW.parentSessionId IS NOT NULL;
+        INSERT OR IGNORE INTO session_owner_links SELECT NEW.sessionId, NEW.mergedIntoSessionId WHERE NEW.mergedIntoSessionId IS NOT NULL;
+        INSERT OR IGNORE INTO session_owner_links SELECT NEW.sessionId, NEW.bridgeSessionId WHERE NEW.bridgeSessionId IS NOT NULL;
+        INSERT OR IGNORE INTO session_owner_links SELECT NEW.sessionId, value FROM
+          json_each(CASE WHEN json_valid(NEW.continuationIndex) THEN NEW.continuationIndex ELSE '{}' END, '$.ids') WHERE type='text';`;
+      db.exec(`CREATE TEMP TRIGGER session_owner_insert AFTER INSERT ON session_cache WHEN EXISTS (SELECT 1 FROM project_delete_operations UNION ALL SELECT 1 FROM project_delete_fences WHERE blocked=1 LIMIT 1) BEGIN ${populate} END;
+        CREATE TEMP TRIGGER session_owner_update AFTER UPDATE OF sessionId, parentSessionId, mergedIntoSessionId, bridgeSessionId, continuationIndex ON session_cache
+          WHEN EXISTS (SELECT 1 FROM project_delete_operations UNION ALL SELECT 1 FROM project_delete_fences WHERE blocked=1 LIMIT 1) BEGIN DELETE FROM session_owner_links WHERE sourceId=OLD.sessionId; ${populate} END;
+        CREATE TEMP TRIGGER session_owner_delete AFTER DELETE ON session_cache WHEN EXISTS (SELECT 1 FROM project_delete_operations UNION ALL SELECT 1 FROM project_delete_fences WHERE blocked=1 LIMIT 1) BEGIN DELETE FROM session_owner_links WHERE sourceId=OLD.sessionId; END;`);
+    })();
+    producerOwnersReady = true;
+  }
+  producerHistorySeen ||= history;
+  producerOwnersRevision = getProjectsRevision();
+}
+
 let preparedDeletionStatements;
 function deletionStatements() {
 return preparedDeletionStatements ??= {
+  ownerRows: null,
   hasFences: db.prepare('SELECT 1 FROM project_delete_fences LIMIT 1'),
+  hasHistory: db.prepare('SELECT 1 FROM project_delete_operations UNION ALL SELECT 1 FROM project_delete_fences WHERE blocked=1 LIMIT 1'),
+  sessionHistory: db.prepare("SELECT DISTINCT o.projectKey FROM project_delete_units u JOIN project_delete_operations o USING(operationId) WHERE u.category='session' AND json_extract(u.targetJson, '$.id')=?"),
+  folderHistory: db.prepare("SELECT DISTINCT o.projectKey FROM project_delete_units u JOIN project_delete_operations o USING(operationId), json_each(u.targetJson, '$.folderKeys') f WHERE u.category='finalize' AND f.value=?"),
+  projectHistory: db.prepare('SELECT 1 FROM project_delete_operations WHERE projectKey=? LIMIT 1'),
+  partial: db.prepare("SELECT 1 FROM project_delete_operations WHERE projectKey=? AND state='partial' AND sealed=1 AND ownedEpoch=? LIMIT 1"),
   fence: db.prepare('SELECT * FROM project_delete_fences WHERE projectKey = ?'),
   setFence: !readonly && db.prepare(`INSERT INTO project_delete_fences(projectKey, epoch, operationId, blocked) VALUES (?, ?, ?, ?)
     ON CONFLICT(projectKey) DO UPDATE SET epoch=excluded.epoch, operationId=excluded.operationId, blocked=excluded.blocked`),
@@ -975,6 +1017,17 @@ const projectDeletion = {
   clearSearchStaging: id => db.prepare("DELETE FROM search_staging WHERE id=? AND type='session'").run(id),
   deleteFolderMeta: folder => stmts.metaDelete.run(folder),
   hasFences: () => !!deletionStatements().hasFences.get(),
+  hasHistory: () => {
+    const history = !!deletionStatements().hasHistory.get();
+    if (!history) producerHistorySeen = false;
+    return history;
+  },
+  prepareProducerOwners,
+  ownerRows: id => (deletionStatements().ownerRows ??= db.prepare('SELECT s.* FROM session_owner_links l JOIN session_cache s ON s.sessionId=l.sourceId WHERE l.targetId=?')).all(id),
+  sessionHistory: id => deletionStatements().sessionHistory.all(id),
+  folderHistory: folder => deletionStatements().folderHistory.all(folder),
+  projectHistory: key => !!deletionStatements().projectHistory.get(key),
+  sealedPartial: (key, epoch) => !!deletionStatements().partial.get(key, epoch - 1),
   fence: key => deletionStatements().fence.get(key) || null,
   setFence: (key, epoch, id, blocked) => deletionStatements().setFence.run(key, epoch, id, blocked),
   operation: id => deletionStatements().operation.get(id) || null,

@@ -1,6 +1,6 @@
 'use strict';
 const path = require('node:path');
-const { identity, canonicalPath, membershipDigest, durableRowLinks: links, stable, OPTION_KEYS, isRecord, text, fail } = require('./project-delete-identity');
+const { identity, canonicalPath, membershipDigest, durableRowLinks: links, stable, digest, OPTION_KEYS, isRecord, text, fail } = require('./project-delete-identity');
 const { parseFolderKey } = require('../remote/remote-hosts');
 const { createProjectDeleteProgress, bind } = require('./project-delete-progress');
 const { archivedEntry } = require('../../../archived-projects');
@@ -45,7 +45,7 @@ function validateDeletionManifest(db, input) {
     }
   }
   const fence = db.projectDeletion.fence(project.key);
-  if (fence?.blocked) throw fail('PROJECT_EPOCH_STALE', 'Project is blocked');
+  if (fence?.blocked && !sealedPartial(db, project.key, fence)) throw fail('PROJECT_EPOCH_STALE', 'Project is blocked');
   const { rows, ownership, folders } = snapshot.scope;
   const ownershipById = new Map(), ownershipByFolder = new Map(), folderMeta = new Map(folders), groupsByFolder = new Map();
   for (const row of ownership) {
@@ -111,7 +111,7 @@ function buildDeletionUnits(validated) {
 }
 function buildFinalizationUnits(validated) {
   return [{ category: 'finalize', target: { project: validated.project, entry: validated.entry,
-    restoreTargets: validated.invalidation.restoreTargets } }];
+    folderKeys: validated.invalidation.folderKeys, restoreTargets: validated.invalidation.restoreTargets } }];
 }
 function applyDeletionUnit(db, { category, target }) {
   if (category === 'session') {
@@ -158,4 +158,151 @@ function applyDeletionUnit(db, { category, target }) {
   } else throw fail('DELETION_UNIT', 'Unknown deletion effect');
   return { status: 'completed', category, target };
 }
-module.exports = { validateDeletionManifest, readDurableScope, buildDeletionUnits, applyDeletionUnit, buildFinalizationUnits };
+function* completeProjectDeletion(db, input) {
+  bind(input);
+  const progress = createProjectDeleteProgress(db), existing = db.projectDeletion.operation(input.operationId);
+  if (existing) {
+    yield () => {
+      if (!existing.manifestHash) throw fail('DELETION_TERMINAL', 'Operation evidence is unavailable or fenced');
+      if (existing.manifestHash.split(':')[0] !== digest(input)) throw fail('DELETION_HASH', 'Operation ID reused with different manifest');
+      return progress.read(input);
+    };
+    return;
+  }
+  const validated = validateDeletionManifest(db, input);
+  const units = [...buildDeletionUnits(validated), ...buildFinalizationUnits(validated)];
+  const manifest = { ...input, units };
+  const apply = unit => applyDeletionUnit(db, unit);
+  const beforeChunk = () => {
+    const memo = new Map(), members = new Map(input.members.map(row => [row.id, row]));
+    for (const row of db.getAllCached()) {
+      let owner;
+      try { owner = identity({ alias: parseFolderKey(row.folder).alias, projectPath: row.projectPath }, memo).key; } catch {}
+      if (owner === validated.project.key) {
+        const member = members.get(row.sessionId);
+        if (!member || member.folderKey !== row.folder) throw fail('DELETION_OWNERSHIP', 'Current selected membership changed');
+      } else if (members.has(row.sessionId) || links(row).some(id => members.has(id))) throw fail('DELETION_OWNERSHIP', 'Current member ownership became ambiguous');
+    }
+    for (const folder of validated.exclusiveFolders) {
+      const stored = db.getAllFolderMeta().get(folder);
+      if (stored && identity({ alias: parseFolderKey(folder).alias, projectPath: stored.projectPath }, memo).key !== validated.project.key) throw fail('DELETION_OWNERSHIP', 'Current folder ownership changed');
+    }
+  };
+  let state;
+  const result = value => value.state === 'committed' ? { ...value, invalidation: validated.invalidation } : value;
+  yield () => {
+    const tiny = units.length <= 2 && Buffer.byteLength(JSON.stringify(manifest)) <= 16000;
+    state = progress.admit(manifest, tiny ? apply : undefined, { all: tiny, preflight: () => validateDeletionManifest(db, input) });
+    return result(state);
+  };
+  while (!state.terminal) {
+    yield () => {
+      try {
+        if (state.stagedUnits < units.length) state = progress.stage(manifest, units.slice(state.stagedUnits, state.stagedUnits + 16), { beforeChunk });
+        else state = progress.apply(manifest, apply, { beforeChunk });
+      } catch (error) {
+        if (/^SQLITE_BUSY/.test(error.code || '')) throw error;
+        state = progress.failOperation(manifest, error);
+      }
+      return result(state);
+    };
+  }
+}
+function producerTargets(command, args) {
+  const sessions = [], folders = [], projects = [], memo = new Map();
+  const inspect = (name, values) => {
+    if (name === 'effects') { for (const effect of values[0]) inspect(effect.name, effect.args); }
+    else if (['setSetting', 'deleteSetting'].includes(name) && values[0].startsWith('continuationChoice:')) sessions.push({ id: values[0].slice('continuationChoice:'.length) });
+    else if (name === 'upsertCachedSessions') for (const row of values[0]) sessions.push({ id: row.sessionId, folder: row.folder, projectPath: row.projectPath });
+    else if (name === 'upsertSearchEntries') for (const row of values[0]) { if (row.type === 'session') sessions.push({ id: row.id, folder: row.folder }); }
+    else if (name === 'applySearchFileBatch' && values[0] === 'session') {
+      for (const id of values[1]) sessions.push({ id });
+      inspect('upsertSearchEntries', [values[2]]);
+    } else if (['setCachedEntrypoints', 'setCachedCustomTitles'].includes(name)) for (const row of values[0]) sessions.push({ id: row.sessionId });
+    else if (['setName', 'renameSession', 'toggleStar', 'setStarred', 'setArchived', 'replaceSessionMetrics', 'deleteCachedSession', 'deleteSearchSession', 'touchCachedModified', 'setCachedContinuationIndex', 'setCachedFileSize', 'rekeySessionMeta'].includes(name)) {
+      sessions.push({ id: values[0] });
+      if (name === 'rekeySessionMeta') sessions.push({ id: values[1] });
+    } else if (['setFolderMeta', 'deleteCachedFolder', 'deleteSearchFolder', 'dropRemoteFolder', 'completeRepairFolders'].includes(name)) {
+      for (const folder of name === 'completeRepairFolders' ? values[0] : [values[0]]) folders.push(folder);
+      if (name === 'setFolderMeta' && values[1]) projects.push({ alias: parseFolderKey(values[0]).alias, projectPath: values[1], folder: values[0] });
+    }
+  };
+  inspect(command, args);
+  return { sessions, folders, projects, memo };
+}
+function bindDeletionProducer(db, command, args, force = false) {
+  if (!force && !db.projectDeletion.hasHistory()) return [];
+  const { sessions, folders, projects, memo } = producerTargets(command, args);
+  if (!sessions.length && !folders.length && !projects.length) return [];
+  db.projectDeletion.prepareProducerOwners();
+  const owners = new Map(), folderOwners = new Map();
+  const add = (map, key, project) => {
+    if (!key) return;
+    let value;
+    try { value = identity(project, memo); } catch { return; }
+    if (!map.has(key)) map.set(key, new Map());
+    map.get(key).set(value.key, value);
+  };
+  for (const row of sessions.flatMap(target => db.projectDeletion.ownerRows(target.id))) {
+    try {
+      const project = { alias: parseFolderKey(row.folder).alias, projectPath: row.projectPath };
+      for (const id of [row.sessionId, ...links(row)]) add(owners, id, project);
+      add(folderOwners, row.folder, project);
+    } catch {}
+  }
+  const fallbackFolders = new Set([...folders, ...sessions.filter(target => !owners.get(target.id)?.size && !target.projectPath).map(target => target.folder)]);
+  for (const folder of new Set([...folders, ...sessions.map(row => row.folder), ...projects.map(row => row.folder)].filter(Boolean))) {
+    for (const row of [...(fallbackFolders.has(folder) ? db.getCachedByFolder(folder) : []), db.getFolderMeta(folder)].filter(Boolean)) {
+      add(folderOwners, folder, { alias: parseFolderKey(folder).alias, projectPath: row.projectPath });
+    }
+    for (const row of db.projectDeletion.folderHistory(folder)) {
+      const [alias, projectPath] = JSON.parse(row.projectKey);
+      add(folderOwners, folder, { alias, projectPath });
+    }
+  }
+  for (const target of sessions) for (const row of db.projectDeletion.sessionHistory(target.id)) {
+    const [alias, projectPath] = JSON.parse(row.projectKey);
+    add(owners, target.id, { alias, projectPath });
+  }
+  for (const target of sessions) if (target.projectPath) {
+    const project = { alias: parseFolderKey(target.folder).alias, projectPath: target.projectPath };
+    add(owners, target.id, project);
+    add(folderOwners, target.folder, project);
+  }
+  for (const project of projects) add(folderOwners, project.folder, project);
+  const bindings = [];
+  const include = (target, candidates) => {
+    const known = [...(candidates?.values() || [])];
+    const ambiguous = known.length > 1 && known.some(owner => db.projectDeletion.projectHistory(owner.key) || db.projectDeletion.fence(owner.key)?.blocked);
+    if (ambiguous) bindings.push({ target, error: 'DELETION_OWNERSHIP' });
+    else if (!known.length) bindings.push({ target, key: null, epoch: 0 });
+    else for (const project of known) bindings.push({ target, key: project.key, epoch: db.projectDeletion.fence(project.key)?.epoch || 0 });
+  };
+  for (const target of sessions) {
+    const known = owners.get(target.id);
+    include('session:' + target.id, known?.size ? known : target.projectPath ? undefined : folderOwners.get(target.folder));
+  }
+  for (const folder of folders) include('folder:' + folder, folderOwners.get(folder));
+  return bindings;
+}
+
+function assertDeletionProducer(db, binding, command, args) {
+  if (!binding.length) return;
+  const targets = command && producerTargets(command, args);
+  const selected = targets && new Set([...targets.sessions.map(row => 'session:' + row.id), ...targets.folders.map(folder => 'folder:' + folder)]);
+  for (const expected of binding) {
+    if (selected && !selected.has(expected.target)) continue;
+    if (expected.error) throw fail(expected.error, 'Ambiguous producer session identity');
+    if (expected.key === null) {
+      if (db.projectDeletion.hasHistory()) throw fail('PROJECT_EPOCH_STALE', 'Unowned producer predates a deletion epoch');
+      continue;
+    }
+    const current = db.projectDeletion.fence(expected.key) || { epoch: 0, blocked: 0 };
+    const partial = sealedPartial(db, expected.key, current);
+    if (current.epoch !== expected.epoch || current.blocked && !partial) throw fail('PROJECT_EPOCH_STALE', 'Producer project epoch changed or is blocked');
+  }
+}
+function sealedPartial(db, key, fence) {
+  return fence.blocked && !fence.operationId && db.projectDeletion.sealedPartial(key, fence.epoch);
+}
+module.exports = { validateDeletionManifest, readDurableScope, buildDeletionUnits, applyDeletionUnit, buildFinalizationUnits, completeProjectDeletion, bindDeletionProducer, assertDeletionProducer };

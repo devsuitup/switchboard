@@ -247,6 +247,7 @@ function createWriterCommands(db) {
         throw Object.assign(new Error('archive snapshot changed before writer admission'), { code: 'WRITER_STALE' });
       }
       archive.retireArchivedEntries(db.getSetting, db.setSetting, current, entries);
+      return entries;
     },
     dismissReenableOffer(projectPath, folderKey, proof) {
       if (typeof projectPath !== 'string' || projectPath === '') return { error: 'invalid project path' };

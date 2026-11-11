@@ -5,6 +5,7 @@ const { setTimeout: delay, setImmediate: yieldTurn } = require('node:timers/prom
 const { openSessionIndexStore } = require('../session-index-store');
 const { createWriterCommands } = require('../session-index-commands');
 const { createProjectDeleteProgress, commitTransaction } = require('../src/main/projects/project-delete-progress');
+const { completeProjectDeletion, bindDeletionProducer, assertDeletionProducer } = require('../src/main/projects/project-delete-writer');
 
 // see .ai/contexts/session-index-writer.md
 const db = openSessionIndexStore({ readonly: false });
@@ -17,6 +18,7 @@ const rawCommands = new Set(['setSetting', 'deleteSetting', 'toggleStar', 'setSt
   'setCachedContinuationIndex', 'setCachedFileSize', 'setInitialScanComplete']);
 const settings = () => db.listSettingKeys('').map(key => [key, db.getSetting(key)]);
 const queue = [];
+const pendingDeletionHistory = new Set();
 const sealedWorkflows = new Set();
 const assertWorkflow = message => {
   if (message.workflowId && sealedWorkflows.has(message.workflowId)) throw Object.assign(new Error('project workflow is sealed'), { code: 'WORKFLOW_SEALED' });
@@ -50,6 +52,14 @@ async function transaction(name, fn, commitHook, execute = () => commitTransacti
 }
 
 function* units(name, args) {
+  for (const unit of targetUnits(name, args)) {
+    unit.producerCommand ||= name;
+    unit.producerArgs ||= args;
+    if (name === 'deleteCachedFolder') unit.producerFolder = args[0];
+    yield unit;
+  }
+}
+function* targetUnits(name, args) {
   if (name === 'cleanupWorktree') {
     const ids = db.getAllCached().filter(row => row.projectPath === args[0]).map(row => row.sessionId);
     for (const id of ids) { yield* units('deleteCachedSession', [id]); yield* units('deleteSearchSession', [id]); }
@@ -58,7 +68,7 @@ function* units(name, args) {
     yield* units('deleteSearchFolder', [folder]);
     yield () => { commands.cleanupWorktree(args[0]); return ids.length; };
   } else if (['upsertCachedSessions', 'setCachedEntrypoints', 'setCachedCustomTitles'].includes(name)) {
-    for (const row of args[0]) yield () => db[name]([row]);
+    for (const row of args[0]) yield Object.assign(() => db[name]([row]), { producerCommand: name, producerArgs: [[row]] });
   } else if (name === 'replaceSessionMetrics') {
     yield () => db.replaceSessionMetrics(...args);
   } else if (name === 'deleteCachedSession') {
@@ -66,14 +76,15 @@ function* units(name, args) {
   } else if (name === 'upsertSearchEntries') {
     for (const entry of args[0]) {
       const token = require('node:crypto').randomUUID();
-      yield () => db.beginSearchEntry(token, entry);
+      const tag = fn => Object.assign(fn, { producerCommand: name, producerArgs: [[entry]] });
+      yield tag(() => db.beginSearchEntry(token, entry));
       const body = (entry.body || '').slice(0, 32768);
-      for (let offset = 0; offset < body.length; offset += 8192) yield () => db.appendSearchBody(token, body.slice(offset, offset + 8192));
-      yield () => db.publishSearchEntry(token);
+      for (let offset = 0; offset < body.length; offset += 8192) yield tag(() => db.appendSearchBody(token, body.slice(offset, offset + 8192)));
+      yield tag(() => db.publishSearchEntry(token));
     }
   } else if (name === 'applySearchFileBatch') {
     const [type, deletes, entries] = args;
-    for (const id of deletes) yield () => db.applySearchFileBatch(type, [id], []);
+    for (const id of deletes) yield Object.assign(() => db.applySearchFileBatch(type, [id], []), { producerCommand: name, producerArgs: [type, [id], []] });
     for (const entry of entries) yield* units('upsertSearchEntries', [[entry]]);
   } else if (name === 'deleteCachedFolder') {
     for (const row of db.getCachedByFolder(args[0])) yield* units('deleteCachedSession', [row.sessionId]);
@@ -97,12 +108,20 @@ function* units(name, args) {
 }
 
 function* commandUnits(message) {
+  if (['completeProjectDeletion', 'fenceProjectDeletion'].includes(message.command)) {
+    for (const pending of queue) if (!pending.producerBinding?.length && !pending.bindingError) {
+      try { pending.producerBinding = bindDeletionProducer(db, pending.command, pending.args, true); }
+      catch (error) { pending.bindingError = error; }
+    }
+  }
+  if (message.command === 'completeProjectDeletion') { yield* completeProjectDeletion(db, message.args[0]); return; }
   if (message.command === 'fenceWorkflow') {
     yield () => {
       const workflowId = message.args[0];
       sealedWorkflows.add(workflowId);
       for (let i = queue.length - 1; i >= 0; i--) if (queue[i].workflowId === workflowId) {
         const cancelled = queue.splice(i, 1)[0];
+        pendingDeletionHistory.delete(cancelled);
         parentPort.postMessage({ id: cancelled.id, error: { message: 'project workflow is sealed', code: 'WORKFLOW_SEALED' },
           ...(cancelled.mutated ? { settings: settings() } : {}) });
       }
@@ -132,7 +151,7 @@ async function drain() {
   while (queue.length) {
     const interactive = queue.findIndex(job => !backgroundCommands.has(job.command) && !['close', 'drain'].includes(job.command));
     const background = queue.findIndex(job => backgroundCommands.has(job.command));
-    const control = queue.findIndex(job => job.command === 'fenceWorkflow');
+    const control = queue.findIndex(job => ['fenceWorkflow', 'fenceProjectDeletion'].includes(job.command));
     const index = control >= 0 ? control : interactive >= 0 && (interactiveBurst < 4 || background < 0) ? interactive : background >= 0 ? background : 0;
     const message = queue.splice(index, 1)[0];
     if (backgroundCommands.has(message.command)) interactiveBurst = 0;
@@ -144,14 +163,18 @@ async function drain() {
       const unit = message.deferred || message.iterator.next();
       message.deferred = null;
       if (unit.done) {
-        parentPort.postMessage({ id: message.id, result: message.command === 'effects' ? { committedRevision: message.committedRevision } : message.result,
+        pendingDeletionHistory.delete(message);
+        parentPort.postMessage({ id: message.id, ...(message.producerError ? { error: { message: message.producerError.message, code: message.producerError.code } }
+          : { result: message.command === 'effects' ? { committedRevision: message.committedRevision } : message.result }),
           ...(message.mutated ? { settings: settings() } : {}) });
       } else {
+        if (message.bindingError) throw message.bindingError;
         if (['close', 'drain', 'measurements', 'getProjectDeletionState', 'readProjectDeletionScope', 'querySessionRequestOutcome', 'readProjectArchiveEpochs', 'fenceWorkflow', 'retireWorkflow'].includes(message.command)) message.result = unit.value();
-        else if (message.command === 'fenceProjectDeletion') {
+        else if (['fenceProjectDeletion', 'completeProjectDeletion'].includes(message.command)) {
           const before = db.getSetting('_writer_revision') || 0;
           message.result = await transaction(message.command, null, undefined, unit.value);
-          message.mutated = (db.getSetting('_writer_revision') || 0) !== before;
+          if (db.projectDeletion.hasHistory()) pendingDeletionHistory.delete(message);
+          message.mutated ||= (db.getSetting('_writer_revision') || 0) !== before;
         }
         else if (message.command === 'beginOffer') {
           message.result = unit.value();
@@ -167,7 +190,15 @@ async function drain() {
             deferred = null;
             let next = unit, result, count = 0;
             while (!next.done) {
-              const applied = db.chunkUnit(next.value, count);
+              const execute = () => {
+                try {
+                  assertDeletionProducer(db, message.producerBinding || [], next.value.producerCommand, next.value.producerArgs);
+                  if (next.value.producerFolder !== undefined) assertDeletionProducer(db, message.producerBinding || [], 'deleteCachedFolder', [next.value.producerFolder]);
+                }
+                catch (error) { message.producerError ||= error; return; }
+                return next.value();
+              };
+              const applied = db.chunkUnit(execute, count);
               if (applied.deferred) { deferred = next; break; }
               result = applied.result;
               count++;
@@ -185,6 +216,7 @@ async function drain() {
         else queue.push(message);
       }
     } catch (error) {
+      pendingDeletionHistory.delete(message);
       parentPort.postMessage({ id: message.id, error: { message: error.message, code: error.code }, settings: settings() });
     }
     await yieldTurn();
@@ -194,7 +226,12 @@ async function drain() {
 
 const heartbeat = setInterval(() => parentPort.postMessage({ heartbeat: true }), 1000);
 heartbeat.unref();
-parentPort.on('message', message => { queue.push(message); void drain(); });
+parentPort.on('message', message => {
+  if (['completeProjectDeletion', 'fenceProjectDeletion'].includes(message.command)) pendingDeletionHistory.add(message);
+  try { message.producerBinding = bindDeletionProducer(db, message.command, message.args, pendingDeletionHistory.size > 0); }
+  catch (error) { message.bindingError = error; }
+  queue.push(message); void drain();
+});
 const recoveredProjectDeletions = [];
 for (let recovered; (recovered = deletionProgress.recover());) recoveredProjectDeletions.push(recovered);
 parentPort.postMessage({ ready: true, settings: settings(), searchFtsRecreated: db.searchFtsRecreated, recoveredProjectDeletions });

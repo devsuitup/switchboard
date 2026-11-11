@@ -311,6 +311,7 @@ test('list containing a fenced project succeeds while retirement still guards af
     .then(value => ({ value }), error => ({ error: error.code }));
   assert.equal(listed.error, undefined, 'blocked retirement must not fail the list');
   assert.ok(h.db.getSetting('archivedProjects')[h.entry], 'blocked retirement preserves record');
+  assert.equal(listed.value.length, 0, 'blocked record keeps project archived in rendering');
 });
 
 test('list skips reserved retirement while unrelated project retires', supported, async t => {
@@ -323,7 +324,49 @@ test('list skips reserved retirement while unrelated project retires', supported
       .then(value => ({ value }), error => ({ error: error.code }));
     assert.equal(listed.error, undefined, 'reservation must not fail a list');
     assert.ok(h.db.getSetting('archivedProjects')[h.entry], 'held entry stays archived');
+    assert.equal(listed.value.length, 1, 'held record keeps project archived in rendering');
     assert.equal(h.db.getSetting('archivedProjects')[otherEntry], undefined, 'unheld entry retires');
+  } finally { hold.release(); }
+});
+
+test('backend fence waits for reservation readiness through fetched offer completion', supported, async t => {
+  const h = setup(t); h.offer(); await h.writer.ready;
+  const fetched = deferred(), proceed = deferred();
+  const request = h.client.request.bind(h.client);
+  let fences = 0;
+  h.client.request = async (name, ...args) => {
+    if (name === 'fenceProjectDeletion') { fences++; return createProjectDeleteProgress(h.db).fence(args[0]); }
+    const result = await request(name, ...args);
+    if (name === 'beginOffer') { fetched.resolve(); await proceed.promise; }
+    return result;
+  };
+  const enabling = h.writer.reenableOfferedSchedules(h.root, null, { notify() {}, reenable: h.reenable });
+  await fetched.promise;
+  const hold = reserve(h.writer, [h.project]);
+  const fencing = h.writer.fenceProjectDeletion({ project: h.project, operationId: operationId(h.project, 0), expectedProjectEpoch: 0 });
+  await turn();
+  const beforeReady = fences;
+  proceed.resolve(); await enabling.catch(() => {}); await hold.ready; await fencing;
+  hold.release();
+  assert.equal(beforeReady, 0, 'fence must not cross an unready deletion hold');
+});
+
+test('held rendering stays archived when unrelated retirement exhausts stale retries', supported, async t => {
+  const h = setup(t); await h.writer.ready;
+  const other = path.join(h.root, 'other'), otherEntry = archive.archivedEntry(null, other);
+  h.db.setSetting('archivedProjects', { [h.entry]: { knownSessionIds: [] }, [otherEntry]: { knownSessionIds: [] } });
+  const hold = reserve(h.writer, [h.project]); await hold.ready;
+  const request = h.client.request.bind(h.client);
+  let retries = 0;
+  h.client.request = (name, ...args) => {
+    if (name === 'retireArchivedEntries') { retries++; throw Object.assign(new Error('stale fixture'), { code: 'WRITER_STALE' }); }
+    return request(name, ...args);
+  };
+  try {
+    const listed = await h.writer.applyAndPersistArchived([h.root, other].map(projectPath => ({ projectPath, sessions: [{ sessionId: 'new' }] })), false);
+    assert.equal(retries, 3, 'existing retry budget is retained');
+    assert.equal(listed.some(project => project.projectPath === h.root), false, 'held rendering remains archived after unrelated stale retirement exhausts retries');
+    assert.ok(h.db.getSetting('archivedProjects')[h.entry]);
   } finally { hold.release(); }
 });
 
