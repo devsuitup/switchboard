@@ -102,7 +102,11 @@ function createSessionRequestNamespace({ fs, journal, publisher, actions, proces
       outcome = await command('claimSessionResultNamespace', identity);
       if (outcome.state !== 'pending') throw new Error('request namespace claim changed');
     }
-    async function publish(result) {
+    async function publish(result, finalize) {
+      if (finalize) {
+        await journal.querySessionRequestOutcome({ stemKey });
+        result = finalize(result);
+      }
       const completed = await command('recordSessionResultPublication', { ...identity, resultBytes: Buffer.from(JSON.stringify(result) + '\n') });
       if (completed.state !== 'completed') throw new Error('request publication ownership changed');
       publisher.publish(resultFile(completed.owner), Buffer.from(completed.owner.resultBytes));

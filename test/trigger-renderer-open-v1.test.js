@@ -246,3 +246,180 @@ test('a failed new trigger retains a created project row that gained another ses
     assert.deepEqual(Array.from(projects[0].sessions), [other]);
   }
 });
+
+function sidebarHarness(t, { grid }) {
+  const h = fixture(t); const doc = h.w.document;
+  const button = doc.createElement('button'); const second = doc.createElement('button'); const input = doc.createElement('textarea');
+  button.id = 'user-control'; second.id = 'second-control'; input.id = 'terminal-input'; doc.body.append(button, second, input);
+  Object.assign(h.w, { activeSessionId: OTHER, gridViewActive: grid, showArchived: false, searchMatchIds: null,
+    pruneRemoteActivityTimers() {}, pruneLocalTranscriptTimers() {} });
+  h.w.openSessions.set(OTHER, { session: { sessionId: OTHER, projectPath: '/project' }, terminal: { focus: () => input.focus() } });
+  const real = loadAppFunctions(h.context, { functions: ['refreshSidebar'] });
+  h.w.refreshSidebar = real.refreshSidebar;
+  let release;
+  h.w.api.openTerminal = () => new Promise(resolve => { release = resolve; });
+  const waitForBackend = async () => { for (let i = 0; i < 60 && !release; i++) await Promise.resolve(); assert.ok(release, 'reaches the ordinary open boundary'); };
+  return { h, doc, button, second, input, waitForBackend, settle: result => release(result) };
+}
+for (const grid of [false, true]) {
+  for (const outcome of ['success', 'failure']) {
+    test(`nonactivating new keeps the focused control before, during and after ${outcome} (grid=${grid})`, async t => {
+      const s = sidebarHarness(t, { grid });
+      s.button.focus();
+      assert.equal(s.doc.activeElement.id, 'user-control');
+      const pending = s.h.f.handleTriggerSessionAction(request({ mode: 'new', requestedSessionId: null, name: 'New' }));
+      await s.waitForBackend();
+      assert.equal(s.doc.activeElement.id, 'user-control', 'during the backend wait');
+      s.settle(outcome === 'success' ? { ok: true, generation: 7 } : { ok: false, reason: 'refused' });
+      await pending;
+      assert.equal(s.doc.activeElement.id, 'user-control', 'after settlement');
+      assert.equal(s.h.calls.some(c => c[0] === 'focus'), false);
+      assert.equal(s.h.w.activeSessionId, OTHER);
+    });
+  }
+  test(`a focus move made while the launch is pending is not undone by its completion (grid=${grid})`, async t => {
+    const s = sidebarHarness(t, { grid });
+    s.button.focus();
+    const pending = s.h.f.handleTriggerSessionAction(request({ mode: 'new', requestedSessionId: null, name: 'New' }));
+    await s.waitForBackend();
+    s.second.focus();
+    s.settle({ ok: true, generation: 7 });
+    await pending;
+    assert.equal(s.doc.activeElement.id, 'second-control');
+  });
+}
+test('an ordinary user-initiated sidebar refresh still returns focus to the active terminal', t => {
+  const s = sidebarHarness(t, { grid: false });
+  s.button.focus();
+  s.h.w.refreshSidebar();
+  assert.equal(s.doc.activeElement.id, 'terminal-input');
+});
+
+const vm = require('node:vm');
+const PUBLIC = path.join(__dirname, '..', 'public');
+function loadRealDefaults(h) {
+  vm.runInContext(fs.readFileSync(path.join(PUBLIC, 'setting-defaults.js'), 'utf8'), h.context);
+  const dialogs = fs.readFileSync(path.join(PUBLIC, 'dialogs.js'), 'utf8');
+  vm.runInContext(dialogs.slice(0, dialogs.indexOf('async function forkSession')), h.context);
+}
+const REQUESTED = '/project';
+const FOREIGN = '/wrong-project';
+const savedSettings = {
+  [REQUESTED]: { permissionMode: 'plan', sandbox: true, worktree: true, worktreeName: 'requested-tree', browserMode: 'off' },
+  [FOREIGN]: { dangerouslySkipPermissions: true, sandbox: false, worktree: false, browserMode: 'off' },
+};
+test('a new trigger launches with the requested project defaults, exactly as the ordinary new-session path does', async t => {
+  const h = fixture(t); loadRealDefaults(h);
+  const lookups = []; const writes = [];
+  const before = JSON.stringify(savedSettings);
+  Object.assign(h.w.api, { platform: 'linux',
+    getEffectiveSettings: async projectPath => { lookups.push(projectPath); return structuredClone(savedSettings[projectPath]); },
+    setSetting: (...args) => writes.push(args), saveProjectSettings: (...args) => writes.push(args) });
+  const opens = () => h.calls.filter(c => c[0] === 'open').map(c => c[1]);
+  await h.f.handleTriggerSessionAction(request({ mode: 'new', requestedSessionId: null, name: 'Task', project: REQUESTED }));
+  assert.deepEqual(lookups, [REQUESTED], 'settings are read for the requested project only');
+  const triggerOptions = opens()[0][3];
+  assert.equal(triggerOptions.permissionMode, 'plan');
+  assert.equal(triggerOptions.dangerouslySkipPermissions, undefined);
+  assert.equal(triggerOptions.sandbox, true);
+  assert.equal(triggerOptions.worktree, true);
+  assert.equal(triggerOptions.worktreeName, 'requested-tree');
+
+  const project = { projectPath: REQUESTED };
+  await h.f.launchNewSession(project, await h.w.resolveDefaultSessionOptions(project));
+  assert.deepEqual(triggerOptions, opens()[1][3], 'identical options from the trigger and the ordinary route');
+  assert.deepEqual(lookups, [REQUESTED, REQUESTED]);
+  assert.deepEqual(writes, [], 'resolving defaults changes no archive or project setting');
+  assert.equal(JSON.stringify(savedSettings), before);
+});
+test('a new trigger for the foreign project gets that project defaults, never the requested ones', async t => {
+  const h = fixture(t); loadRealDefaults(h);
+  Object.assign(h.w.api, { platform: 'linux', getEffectiveSettings: async projectPath => structuredClone(savedSettings[projectPath]) });
+  await h.f.handleTriggerSessionAction(request({ mode: 'new', requestedSessionId: null, name: 'Task', project: FOREIGN }));
+  const options = h.calls.find(c => c[0] === 'open')[1][3];
+  assert.equal(options.dangerouslySkipPermissions, true);
+  assert.equal(options.permissionMode, undefined);
+  assert.equal(options.sandbox, undefined);
+  assert.equal(options.worktree, undefined);
+});
+
+function gridHarness(t, mode) {
+  const h = fixture(t); const doc = h.w.document;
+  const button = doc.createElement('button'); button.id = 'user-control';
+  const modal = doc.createElement('div'); modal.className = 'modal-overlay'; modal.id = 'open-modal';
+  doc.body.append(button, modal);
+  Object.assign(h.w, { gridViewActive: true, gridFocusedSessionId: OTHER, activeSessionId: OTHER,
+    wrapInGridCard: id => { h.calls.push(['card', id]); h.w.gridCards.set(id, {}); },
+    gridViewerCount: { textContent: '' } });
+  h.w.gridCards.set(OTHER, {});
+  const state = () => ({ focusedCard: h.w.gridFocusedSessionId, active: h.w.activeSessionId, grid: h.w.gridViewActive,
+    modal: doc.getElementById('open-modal')?.isConnected === true, dom: doc.activeElement?.id, focusCalls: h.calls.filter(c => c[0] === 'focus').length });
+  const baseline = state();
+  let release;
+  h.w.api.openTerminal = () => new Promise(resolve => { release = resolve; });
+  const atAck = [];
+  h.w.api.triggerSessionActionResult = ack => {
+    atAck.push({ state: state(), persisted: h.calls.filter(c => c[0] === 'persist').length,
+      registered: h.w.openSessions.has(ack.tabKey), ack });
+    h.calls.push(['ack', ack]);
+  };
+  button.focus();
+  baseline.dom = 'user-control';
+  const req = request(mode === 'new' ? { mode, requestedSessionId: null, name: 'Task' } : {});
+  return { h, state, baseline, atAck, button,
+    run: async () => {
+      const pending = h.f.handleTriggerSessionAction(req);
+      for (let i = 0; i < 60 && !release; i++) await Promise.resolve();
+      assert.ok(release, 'reaches the ordinary open boundary');
+      return { pending, settle: () => release({ ok: true, generation: 7 }) };
+    },
+    tabKey: req.tabKey };
+}
+for (const mode of ['new', 'resume']) {
+  test(`a nonactivating ${mode} keeps the focused grid card, selection, view, modal and DOM focus throughout`, async t => {
+    const g = gridHarness(t, mode);
+    assert.deepEqual(g.state(), g.baseline);
+    const { pending, settle } = await g.run();
+    assert.deepEqual(g.state(), g.baseline, 'during the backend wait');
+    settle();
+    await pending;
+    assert.equal(g.atAck.length, 1);
+    assert.deepEqual(g.atAck[0].state, g.baseline, 'in the ACK callback');
+    assert.deepEqual(g.state(), g.baseline, 'after completion');
+    assert.equal(g.h.w.gridCards.has(g.tabKey), true, 'the requested card exists');
+    assert.notEqual(g.h.w.gridFocusedSessionId, g.tabKey);
+    assert.equal(g.atAck[0].ack.ok, true);
+  });
+}
+
+function ackPersistence(t, request_) {
+  const h = fixture(t);
+  const seen = [];
+  h.w.api.triggerSessionActionResult = ack => {
+    seen.push({ persisted: h.calls.filter(c => c[0] === 'persist').length, registered: h.w.openSessions.has(ack.tabKey), ack });
+    h.calls.push(['ack', ack]);
+  };
+  return { h, seen, run: () => h.f.handleTriggerSessionAction(request_) };
+}
+for (const [name, build, prepare] of [
+  ['closed-session resume', () => ({}), () => {}],
+  ['main-owned session missing its renderer entry (reattach)', () => ({ mode: 'reattach', tabKey: OTHER, generation: 7 }), () => {}],
+  ['new-session creation', () => ({ mode: 'new', requestedSessionId: null, name: 'Task' }), () => {}],
+]) {
+  test(`${name}: persistence is already scheduled for the registered target when the ACK is sent`, async t => {
+    const p = ackPersistence(t, request(build())); prepare(p.h);
+    await p.run();
+    assert.equal(p.seen.length, 1);
+    assert.equal(p.seen[0].ack.ok, true);
+    assert.equal(p.seen[0].registered, true, 'the ordinary registered entry exists at ACK time');
+    assert.ok(p.seen[0].persisted >= 1, 'persistence is scheduled before the ACK');
+  });
+}
+test('a refused new action schedules no persistence for its discarded placeholder', async t => {
+  const p = ackPersistence(t, request({ mode: 'new', requestedSessionId: null, name: 'Task' }));
+  p.h.w.api.openTerminal = async () => ({ ok: false, reason: 'refused' });
+  await p.run();
+  assert.equal(p.seen[0].ack.ok, false);
+  assert.equal(p.seen[0].persisted, 0);
+  assert.equal(p.seen[0].registered, false);
+});

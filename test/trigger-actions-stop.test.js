@@ -512,3 +512,26 @@ test('a fresh installation without a transcript directory still reports unknown 
   f.start(); const r = await f.finish();
   assert.equal(r.outcome, 'not-found'); assert.equal(r.reason, 'session not found'); assert.equal(f.kills(), 0);
 });
+
+test('a replacement writer appearing at any observation before the kill never receives a stop', async t => {
+  let readsBeforeKill;
+  await t.test('unchanged writer: one backend kill', async control => {
+    const f = fixture(control, { onKill: session => { session.exited = true; } });
+    f.session.sandbox = true; f.start(); await f.flush();
+    assert.equal(f.kills(), 1);
+    readsBeforeKill = f.observed();
+    assert.ok(readsBeforeKill > 1);
+    await f.finish();
+  });
+  for (let at = 2; at <= readsBeforeKill; at++) {
+    await t.test(`writer replaced at observation ${at}`, async sub => {
+      let swap;
+      const f = fixture(sub, { onObserve: count => { if (count === at) swap(); } });
+      swap = () => f.writer('writer-2');
+      f.session.sandbox = true; f.start();
+      const result = await f.finish();
+      assert.equal(f.kills(), 0);
+      assert.equal(result.reason, 'session target changed');
+    });
+  }
+});

@@ -35,7 +35,8 @@ function fixture(t, options = {}) {
       return stopLocalSession(target, key, () => { events.push(['kill']); options.onKill?.(session); return true; });
     },
   };
-  const observe = () => ({ writer: proven && status ? { ...status, sessionId: ID } : null, uncertain: !proven, identity });
+  let observed = 0;
+  const observe = () => (observed++, options.onObserve?.(observed), { writer: proven && status ? { ...status, sessionId: ID } : null, uncertain: !proven, identity });
   const ctx = createTriggerContext({ activeSessions: map, lifecycle, isPtyAlive: () => !session.exited,
     log: { info() {}, warn() {}, error() {} }, getCliStatus: () => status,
     cliSessionState: { deliveryPtyStart: () => 'pty-start', observeTabWriter: observe, observeTabWriterV1: observe,
@@ -67,7 +68,7 @@ function fixture(t, options = {}) {
   return { session, map, ctx, lifecycle, execution, writes, events, markers, start, flush, tick, finish, setStatus,
     result: () => result, done: () => done, kills: () => events.filter(e => e[0] === 'kill').length,
     input: text => noteUserInput(session.composerState, text, Date.now()),
-    close: () => { allowed = false; }, writer: value => { identity = value; }, proof: value => { proven = value; } };
+    observed: () => observed, close: () => { allowed = false; }, writer: value => { identity = value; }, proof: value => { proven = value; } };
 }
 
 module.exports = { fixture, ID, STEM };

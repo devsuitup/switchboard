@@ -351,7 +351,7 @@ Their helper is named `runTrigger`: the default-runner canary reserves the
 test runs on Linux (`mkfifo`) and skips Windows with an explicit reason.
 
 Startup recovery scans `processed/<uuid>.action.json` through the same filename
-queue and eight-file backpressure, including orphan markers. An input present
+queue and eight-stem backpressure (case aliases share their lowercased stem's slot), including orphan markers. An input present
 in the startup scan owns its dispatch; the marker scan does not dispatch it
 again, including a case alias on Windows. Orphan recovery is unchanged. Recovery precedes
 age checks and produces `refused`, `interrupted by restart`, `uncertain:true`;
@@ -420,6 +420,69 @@ path must reserve after schema/project validation and before dispatch, return
 `new session rate limit exceeded` on exhaustion, and retain uncertain effects.
 Resume, stop and manual + never consume a token. This refusal-only build consumes
 none. Tests use injected clocks for burst/refill/refund and parallel reservation.
+
+### Sandbox writer identity
+
+A pinned v1 binding keeps the first complete, unexpired, conversation-authorized
+writer identity (generation, host PTY, writer namespace, host writer PID/start,
+namespace-local PID). A missing or uncertain observation neither pins nor
+clears it. Any later usable observation with another identity revokes the
+binding for good: status reads return `undefined`, writes and stop refuse with
+`session target changed`, and the original identity returning does not restore
+authority. Conversation-ID continuity alone never authorizes another process.
+Stop reads the revocation after each of its status observations, including the
+last one before the backend call. The reader returns no usable writer or
+identity when its final revalidation ends at or after the absolute deadline.
+The `/proc` scan tolerates entries it cannot use: a process that exited during
+the scan (`ENOENT`/`ESRCH`) and a process whose PID namespace link is denied
+(`EACCES`/`EPERM`) do not make it incomplete, because the former no longer
+exists and the latter is read for its status and start only. A denied entry
+whose NSpid and start match a live descriptor candidate (checked for every
+candidate, so a competing writer cannot disappear from the uniqueness check), or
+a denied anchor, still makes the observation uncertain. The absolute deadline is
+rechecked between the descriptor `lstat` and content reads, and between the
+`status`, `stat` and namespace reads of each process; an expired scan starts no
+further read or `/proc` enumeration. `test/trigger-actions-readiness.test.js` drives the
+shipped `scripts/claude-sandbox.sh` and node-pty against the real `/proc`.
+
+### Open target after waits
+
+`executeOpen` retains the session object, PTY and generation once the target is
+accepted and checks them again, with the map binding and eligibility, after the
+tab lock, the name save and the prompt delivery, immediately before a success is
+published. For an existing tab (reattach) the object, PTY and generation are
+snapshotted when the entry is pinned, before the tab lock; a change by the time
+the lock is held is refused before any renderer dispatch, and the ACK-time and
+final checks compare against the same snapshot. Any other object bound under
+the requested ID refuses the action; a same-object re-key keeps it valid. The watcher-supplied
+staleness check runs right after the session FIFO is acquired, before any target
+work; a refusal refunds an unretained rate token.
+
+### Action cancellation
+
+`createExitAttempts` hands each action a capture (`captureAuthority`) taken
+before its asynchronous work; the capture is invalid for good once any close
+commitment happened after it, even after a rolled-back update makes
+`launchAllowed()` true again. An invalid capture refuses with
+`Switchboard is closing.` at every check, including the guarded prompt/Enter
+writes, keeping the confirmed `created`/`resumed` and partial-delivery evidence.
+Right before publication, open and stop normalize the result against the same
+capture: a result of an action that was cancelled, successful or not, becomes
+the `Switchboard is closing.` refusal, so a late name-save, liveness or lookup
+failure, or a close committed after a successful stop, cannot publish another
+outcome. Established effects (`created`, `resumed`, `stop_requested`, delivery
+evidence) and `uncertain` stay on the result. The normalization runs twice:
+before the result is handed to the publisher, and again by the request
+namespace right after it has awaited the journal and immediately before it sends
+the terminal journal command (`namespace.publish(result, finalize)`), so a
+cancellation that lands while the journal is slow is stored as the refusal. An
+open also rechecks its accepted target (object, map binding, PTY, generation,
+eligibility) at that point: a successful result whose target changed during the
+journal wait is stored as `session target changed`, with the launch and delivery
+evidence kept; cancellation keeps precedence. The action returns the finalized
+result. Once the journal command has been sent the
+result is committed: a later cancellation does not rewrite it, and a result
+already published is never rewritten.
 
 ### Sandbox control directory
 
@@ -971,7 +1034,7 @@ queued ones take their place).
 
 ### Session serialization
 
-`MAX_INFLIGHT` bounds how many trigger *files* run concurrently; it is silent
+`MAX_INFLIGHT` bounds how many lowercased trigger stems run concurrently (a case alias of an active stem takes no slot and waits on its namespace lock); it is silent
 on which `sessionId` they target — nothing before this fix stopped two
 trigger files naming the same session from running their `waitForComposerFree`
 / `submitWithVerify` sequences interleaved, each unaware of the other's

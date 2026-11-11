@@ -85,7 +85,7 @@ async function rig(t, options = {}) {
   }
   async function settle() { for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve)); }
   await settle();
-  return { input, output, marker, body, events, errors, publications: () => publications, recoveryReads: () => recoveryReads, notify: () => notify('rename', request + '.json'), settle };
+  return { dir, input, output, marker, body, events, errors, notifyFile: file => notify('rename', file), publications: () => publications, recoveryReads: () => recoveryReads, notify: () => notify('rename', request + '.json'), settle };
 }
 
 for (const state of ['result', 'marker']) {
@@ -381,3 +381,240 @@ test('v1 input deletion failure retains immutable result and suppresses extra pu
   await r.settle();
   assert.equal(r.publications(), 1);
 });
+
+const other = '11234567-89ab-cdef-0123-456789abcdef';
+const committed = { version: 1, action: 'open', ok: true, outcome: 'opened', sessionId: id, resumed: true,
+  submitted: 'no', wrote: false, steps_total: 0 };
+const committedBytes = JSON.stringify(committed) + '\n';
+
+function deferred() {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+}
+async function until(predicate, label) {
+  const end = performance.now() + 3000;
+  while (!predicate() && performance.now() < end) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(predicate(), label);
+}
+function spies() {
+  const s = { lookups: [], writes: [], effects: 0, dispatches: 0, gate: null, onDispatch: null, opens: false, sessions: new Map(), authorityValid: true };
+  const session = { pty: { pid: 1 }, generation: 7, cwd: '/p', projectPath: '/p' };
+  const lifecycle = {
+    launchAllowed: () => true, activeSessions: s.sessions, captureAuthority: () => ({ valid: () => s.authorityValid }),
+    remoteTarget: async () => { s.effects++; return false; },
+    liveElsewhere: async () => { s.effects++; return { known: true, live: null }; },
+    resolveTarget: async () => { s.effects++; return { ok: true, cwd: '/p', project: '/p', transcript: 't', transcriptIdentity: 'i' }; },
+    saveName: async () => { s.effects++; return { name: 'n' }; },
+    broker: { request: async (operation, beforeSpawn) => {
+      await beforeSpawn();
+      s.dispatches++;
+      s.onDispatch?.();
+      await s.gate;
+      if (!s.opens) return { ok: false, reason: 'renderer refused' };
+      s.sessions.set(operation.tabKey, session);
+      operation.onOpened?.(session);
+      return { ok: true, generation: 7, resumed: true };
+    } },
+  };
+  s.ctx = { getPtyForSession: sessionId => { s.lookups.push(sessionId); return s.sessions.size ? { session, ptyProcess: session.pty, cwd: '/p' } : null; },
+    pinDelivery: (_id, entry) => ({ binding: { tab: entry.session }, ctx: {}, handle: {} }),
+    getComposerState: () => ({ pending: 0, lastInputAt: 0 }), isSessionBusy: () => false, lifecycle };
+  return s;
+}
+function assertNoDuplicateEffects(s) {
+  assert.deepEqual(s.writes, []);
+  assert.equal(s.dispatches, 0);
+  assert.equal(s.effects, 0);
+  assert.deepEqual(s.lookups, [], 'no target lookup is attributable to a duplicate');
+}
+
+const duplicates = {
+  'legacy input for the same target': { body: { sessionId: id, command: 'replay', wait: 'none', timeout_ms: 500 } },
+  'legacy input for another target': { body: { sessionId: other, command: 'replay to B', wait: 'none' } },
+  'valid versioned input': { body: { version: 1, action: 'open', sessionId: other } },
+  'different action': { body: { ...payload, action: 'stop' } },
+  'invalid versioned input': { body: { version: 1, action: 'open', sessionId: 'not-a-uuid' } },
+  'stale legacy input': { body: { sessionId: id, command: 'replay' }, stale: true },
+  'stale versioned input': { body: { version: 1, action: 'open', sessionId: other }, stale: true },
+  'oversized input': { body: { version: 1, action: 'open', sessionId: id, prompt: 'x'.repeat(70000) } },
+  'malformed JSON': { raw: '{not json' },
+  'null JSON': { body: null },
+};
+for (const [kind, extra] of Object.entries(duplicates)) {
+  for (const name of [request, request.toUpperCase()]) {
+    test(`a later ${kind} under a committed UUID has no effect and leaves the first result unchanged (${name === request ? 'lowercase' : 'uppercase'} name)`, async t => {
+      const s = spies();
+      const r = await rig(t, { live: true, ctx: s.ctx, payload: { version: 1, action: 'open' } });
+      const first = fs.readFileSync(r.output);
+      assert.equal(JSON.parse(first).outcome, 'refused');
+      const duplicate = path.join(r.dir, name + '.json');
+      if (name !== request || !fs.existsSync(duplicate)) {
+        fs.writeFileSync(duplicate, extra.raw ?? JSON.stringify(extra.body));
+        if (extra.stale) fs.utimesSync(duplicate, new Date(0), new Date(0));
+        r.notifyFile(name + '.json');
+      }
+      await until(() => !fs.existsSync(duplicate), 'the duplicate is consumed');
+      await r.settle();
+      assert.deepEqual(fs.readFileSync(r.output), first);
+      assertNoDuplicateEffects(s);
+      assert.ok(fs.readdirSync(path.dirname(r.output)).some(file => file.includes('.conflict-')), 'the reused id is archived as a conflict');
+      r.notifyFile(name + '.json');
+      await r.settle();
+      assert.deepEqual(fs.readFileSync(r.output), first);
+      assertNoDuplicateEffects(s);
+    });
+  }
+}
+
+for (const [kind, variant, outcome] of [['versioned', payload, 'refused'], ['legacy for another target', { sessionId: other, command: 'replay to B' }, 'refused'],
+  ['versioned', payload, 'opened'], ['legacy for another target', { sessionId: other, command: 'replay to B' }, 'opened']]) {
+  test(`an uppercase ${kind} duplicate is serialized behind the active owner and cannot touch its ${outcome} result`, async t => {
+    const s = spies();
+    s.opens = outcome === 'opened';
+    const gate = deferred();
+    const reached = deferred();
+    s.gate = gate.promise;
+    s.onDispatch = reached.resolve;
+    const r = await rig(t, { live: true, ctx: s.ctx });
+    await reached.promise;
+    const upper = path.join(r.dir, request.toUpperCase() + '.json');
+    const sameFile = fs.existsSync(upper);
+    const overwritesOwner = sameFile && JSON.stringify(variant) !== r.body;
+    fs.writeFileSync(upper, JSON.stringify(variant));
+    r.notifyFile(request.toUpperCase() + '.json');
+    r.notifyFile(request.toUpperCase() + '.json');
+    await r.settle();
+    assert.equal(s.dispatches, 1, 'the variant is not a second owner');
+    assert.equal(fs.existsSync(upper), true, 'the variant waits');
+    assert.equal(fs.existsSync(r.output), false, 'the variant publishes nothing while the owner is active');
+    assert.equal(fs.existsSync(r.marker), true, "the active owner's marker is untouched");
+    assert.equal(s.lookups.includes(other), false);
+
+    gate.resolve();
+    await until(() => fs.existsSync(r.output), 'the owner commits its result');
+    const first = fs.readFileSync(r.output);
+    if (outcome === 'refused') assert.equal(JSON.parse(first).reason, 'renderer refused');
+    else assert.equal(JSON.parse(first).outcome, 'opened');
+    if (overwritesOwner) {
+      await until(() => !fs.existsSync(r.input), 'the modified input is archived, not left in place');
+      const processed = path.dirname(r.output);
+      const conflict = request.toLowerCase() + '.conflict-';
+      const archived = fs.readdirSync(processed)
+        .filter(name => name.toLowerCase().startsWith(conflict) && name.endsWith('.request'));
+      assert.equal(archived.length, 1);
+      assert.equal(fs.readFileSync(path.join(processed, archived[0]), 'utf8'), JSON.stringify(variant), 'the modified bytes are preserved');
+      assert.ok(fs.existsSync(path.join(processed, archived[0].replace(/\.request$/, '.result.json'))), 'the archived variant has its conflict result');
+    } else {
+      await until(() => !fs.existsSync(r.input) && !fs.existsSync(r.marker), 'the owner removes its input and marker');
+      await until(() => !fs.existsSync(upper), 'the queued variant is processed after the release');
+    }
+    await r.settle();
+    assert.deepEqual(fs.readFileSync(r.output), first);
+    assert.equal(s.dispatches, 1);
+    assert.deepEqual(s.writes, []);
+    assert.equal(s.lookups.includes(other), false);
+  });
+}
+
+for (const value of [[], null, 7, 'legacy', true]) {
+  for (const name of [request, request.toUpperCase()]) {
+    test(`non-object ${JSON.stringify(value)} under ${name === request ? 'a lowercase' : 'an uppercase'} UUID is legacy transport input with no lifecycle effect`, async t => {
+      const s = spies();
+      const r = await rig(t, { payload: value, name, ctx: s.ctx });
+      const legacy = await rig(t, { payload: value, name: 'legacy-non-object' });
+      const published = path.join(path.dirname(r.output), name + '.result.json');
+      const result = JSON.parse(fs.readFileSync(name === request ? r.output : published, 'utf8'));
+      assert.deepEqual(result, JSON.parse(fs.readFileSync(legacy.output, 'utf8')), 'UUID and non-UUID filenames give the same legacy result');
+      assert.equal(Object.hasOwn(result, 'outcome'), false);
+      assert.equal(Object.hasOwn(result, 'reason'), false);
+      assert.equal(Object.hasOwn(result, 'version'), false);
+      if (value === null) {
+        assert.equal(result.internal, true);
+        assert.match(result.error, /^internal error: /);
+      } else assert.equal(result.error, 'missing required field: sessionId');
+      assert.equal(fs.existsSync(r.input), false, 'input is cleaned');
+      assertNoDuplicateEffects(s);
+    });
+  }
+}
+
+function caseVariants(stem) {
+  const positions = [...stem].map((ch, index) => /[a-f]/.test(ch) ? index : -1).filter(index => index >= 0);
+  return [...Array(2 ** positions.length).keys()].map(mask => [...stem].map((ch, index) => {
+    const bit = positions.indexOf(index);
+    return bit >= 0 && (mask >> bit) & 1 ? ch.toUpperCase() : ch;
+  }).join('')).filter(name => name !== request);
+}
+for (const aliases of [1, 7]) {
+  test(`${aliases} case alias${aliases > 1 ? 'es' : ''} waiting on one UUID do not block an unrelated UUID`, async t => {
+    const s = spies();
+    const gate = deferred(); const reached = deferred();
+    s.gate = gate.promise; s.onDispatch = reached.resolve;
+    const r = await rig(t, { live: true, ctx: s.ctx });
+    await reached.promise;
+    for (const name of caseVariants(request).slice(0, aliases)) {
+      fs.writeFileSync(path.join(r.dir, name + '.json'), JSON.stringify(payload));
+      r.notifyFile(name + '.json');
+    }
+    await r.settle();
+    const unrelated = '99999999-9999-4999-8999-999999999999';
+    fs.writeFileSync(path.join(r.dir, unrelated + '.json'), JSON.stringify({ version: 1, action: 'open' }));
+    r.notifyFile(unrelated + '.json');
+    await until(() => fs.existsSync(path.join(r.dir, 'processed', unrelated + '.result.json')), 'the unrelated UUID progresses while the owner is held');
+    assert.equal(fs.existsSync(r.output), false);
+    gate.resolve();
+    await until(() => fs.existsSync(r.output), 'the owner commits');
+  });
+}
+
+test('a result committed in the journal while the owner publishes wins over the owner\'s pending outcome', async t => {
+  const { randomUUID } = require('node:crypto');
+  const { hashSessionRequestCommand } = require('../session-index-commands');
+  const base = createJournal();
+  const foreign = Buffer.from(JSON.stringify({ version: 1, action: 'open', ok: true, outcome: 'opened', reason: null, sessionId: id }) + '\n');
+  let raced = false;
+  const journal = { ...base, recordSessionResultPublication: async input => {
+    if (!raced) {
+      raced = true;
+      const rival = { ...input, actionToken: randomUUID(), resultBytes: foreign };
+      delete rival.argsHash;
+      await base.recordSessionResultPublication({ ...rival, argsHash: hashSessionRequestCommand('recordSessionResultPublication', rival) });
+    }
+    return base.recordSessionResultPublication(input);
+  } };
+  const s = spies();
+  const r = await rig(t, { payload: { version: 1, action: 'open' }, ctx: { ...s.ctx, sessionRequests: journal } });
+  assert.equal(raced, true);
+  assert.deepEqual(fs.readFileSync(r.output), foreign, 'the journal\'s first committed bytes are published');
+  assert.equal(fs.existsSync(r.input), false);
+  assertNoDuplicateEffects(s);
+});
+
+for (const cancel of [false, true]) {
+  test(`through the watcher, an opened result ${cancel ? 'cancelled while the journal query is pending is stored as the closing refusal' : 'with no cancellation is stored as opened'}`, async t => {
+    const s = spies(); s.opens = true;
+    const base = createJournal();
+    let armed = false; let fired = false;
+    const journal = Object.fromEntries(Object.entries(base).map(([name, fn]) => [name, async (...args) => {
+      if (name === 'querySessionRequestOutcome' && s.dispatches >= 1 && !fired) {
+        fired = true; armed = true;
+        await Promise.resolve();
+        if (cancel) s.authorityValid = false;
+      }
+      return fn(...args);
+    }]));
+    const r = await rig(t, { live: true, ctx: { ...s.ctx, sessionRequests: journal } });
+    await until(() => fs.existsSync(r.output), 'the request reaches a result');
+    assert.equal(armed, true);
+    const stored = JSON.parse(fs.readFileSync(r.output, 'utf8'));
+    if (cancel) {
+      assert.equal(stored.ok, false); assert.equal(stored.outcome, 'refused'); assert.equal(stored.reason, 'Switchboard is closing.');
+      assert.equal(stored.resumed, true);
+    } else {
+      assert.equal(stored.ok, true); assert.equal(stored.outcome, 'opened');
+    }
+    assert.equal(r.publications(), 1);
+    await until(() => !fs.existsSync(r.input), 'the input is cleaned');
+  });
+}

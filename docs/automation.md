@@ -270,8 +270,11 @@ not free its filename for a different request.
 
 Publish a UTF-8 JSON file named with a fresh lowercase UUID in the triggers
 directory, preferably by renaming a completed temporary file in that directory.
-Never reuse the request UUID. The running app opens an ordinary selectable
-terminal without changing your selection, view or keyboard focus.
+Use a fresh UUID for every request; a reused UUID is handled as described
+under Triggers above. A request that waited in the queue past the staleness
+limit is refused with `not sent` before anything happens. The running app opens
+an ordinary selectable terminal without changing your selection, view or
+keyboard focus, including while the session is still starting.
 
 Resume an exact local session ID, optionally delivering one prompt:
 
@@ -318,7 +321,9 @@ actual cwd, including a worktree.
 If startup, saving the name or delivery fails after spawn, the session remains
 open and the refusal retains its ID and true `created`/`resumed` evidence.
 `uncertain:true` means an interrupted action may have taken effect: do not retry
-automatically. A repeated UUID reuses its first terminal result; a persisted
+automatically. A `Switchboard is closing.` or `session target changed` refusal can
+also follow completed effects: read `created`, `resumed`, `stop_requested` and
+`submitted` before retrying. A repeated UUID reuses its first terminal result; a persisted
 action marker interrupted by restart is refused without replay.
 
 Stop an already-open local session, optionally after one final note:
@@ -343,7 +348,13 @@ means the pinned PTY exited; timeout after requesting termination returns
 `session stop not confirmed`, `uncertain:true`. A recovered `stop-requested`
 marker likewise reports uncertainty without issuing another stop. Do not retry
 automatically. Closing Switchboard cancels pending work with
-`Switchboard is closing.`.
+`Switchboard is closing.`. A cancelled action stays cancelled when the close is
+abandoned, for example when an update is cancelled: the window keeps serving new
+triggers, and the cancelled one is not replayed.
+
+A file that parses to an object with a `version` or `action` property is a
+versioned request; any other JSON, including `null`, arrays and scalars, is
+handled as a legacy trigger whatever its filename.
 
 ### Send to an already-open session (legacy)
 

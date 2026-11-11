@@ -24,9 +24,10 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
       ...(interrupted && !result.ok && record.mode !== 'reattach' && record.phase === 'opening' ? { uncertain: true } : {}) });
   }
 
-  function revoke(win, reason = 'renderer unavailable') {
+  function revoke(win, reason = 'renderer unavailable', { resumable = false } = {}) {
     const state = document;
     if (!state || state.win !== win) return;
+    state.resumable = resumable ? state.frame ?? state.resumable : null;
     state.ready = false;
     state.frame = null;
     state.epoch = randomUUID();
@@ -46,7 +47,7 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
     if (disposed || document?.win === win) return;
     detach();
     const wc = win.webContents;
-    const state = { win, wc, epoch: randomUUID(), ready: false, frame: null, listeners: [] };
+    const state = { win, wc, epoch: randomUUID(), ready: false, frame: null, resumable: null, listeners: [] };
     document = state;
     const listen = (emitter, name, listener) => {
       emitter.on(name, listener);
@@ -264,7 +265,17 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
 
   ipcMain.handle('trigger-actions-ready', ready);
   ipcMain.on('trigger-session-action-result', reply);
-  return { attach, request, waitForReady, consumePermit, checkPermit, markOpened, ensureJoined, revoke, dispose };
+  const suspend = win => revoke(win, 'Switchboard is closing.', { resumable: true });
+  function restore(win) {
+    const state = document;
+    if (!state || state.win !== win || !state.resumable || !launchAllowed() || !available(state)
+      || state.resumable !== state.wc.mainFrame) return false;
+    state.ready = true;
+    state.frame = state.resumable;
+    state.resumable = null;
+    return true;
+  }
+  return { attach, request, waitForReady, consumePermit, checkPermit, markOpened, ensureJoined, revoke, suspend, restore, dispose };
 }
 
 module.exports = { createTriggerRendererBridge };

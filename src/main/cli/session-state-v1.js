@@ -21,6 +21,7 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
       try {
         const stat = descriptorFs.lstatSync(file);
         if (!stat.isFile() || stat.size > 65536) { complete = false; continue; }
+        if (expired(deadline)) { complete = false; break; }
         const text = descriptorFs.readFileSync(file, 'utf8');
         const descriptor = parseDescriptor(text);
         if (!descriptor) { complete = false; continue; }
@@ -33,18 +34,22 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
   function sameFile(candidate, deadline) {
     try {
       return !expired(deadline) && stamp(descriptorFs.lstatSync(candidate.file)) === candidate.stamp
-        && descriptorFs.readFileSync(candidate.file, 'utf8') === candidate.text;
+        && !expired(deadline) && descriptorFs.readFileSync(candidate.file, 'utf8') === candidate.text;
     } catch { return false; }
   }
   function proc(pid, deadline) {
     if (expired(deadline)) throw new Error('deadline');
     const status = procFs.readFileSync(`/proc/${pid}/status`, 'utf8');
+    if (expired(deadline)) throw new Error('deadline');
     const stat = procFs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const namespace = procFs.readlinkSync(`/proc/${pid}/ns/pid`);
+    if (expired(deadline)) throw new Error('deadline');
+    let namespace;
+    try { namespace = procFs.readlinkSync(`/proc/${pid}/ns/pid`); }
+    catch (error) { if (error?.code !== 'EACCES' && error?.code !== 'EPERM') throw error; namespace = null; }
     const match = /^NSpid:\s*(\d+(?:\s+\d+)*)\s*$/m.exec(status);
     const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
     const pids = match?.[1].trim().split(/\s+/).map(Number);
-    if (!namespace || !pids?.length || pids[0] !== pid || !/^\d+$/.test(fields[19])
+    if (namespace === '' || !pids?.length || pids[0] !== pid || !/^\d+$/.test(fields[19])
       || !Number.isInteger(Number(fields[1]))) throw new Error('incomplete proc identity');
     return { pid, parent: Number(fields[1]), start: fields[19], namespace, inner: pids.at(-1), live: !['Z', 'X', 'x'].includes(fields[0]) };
   }
@@ -52,20 +57,25 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
     const table = new Map();
     let complete = true;
     let names;
+    if (expired(deadline)) return { table, complete: false };
     try { names = procFs.readdirSync('/proc').filter(name => /^\d+$/.test(name)); }
     catch { return { table, complete: false }; }
     if (names.length > 32768) complete = false;
     for (const name of names.slice(0, 32768)) {
       if (expired(deadline)) { complete = false; break; }
       try { table.set(Number(name), proc(Number(name), deadline)); }
-      catch { complete = false; }
+      catch (error) { if (error?.code !== 'ENOENT' && error?.code !== 'ESRCH') complete = false; }
     }
     return { table, complete: complete && !expired(deadline) };
   }
   function mapped(candidate, scan) {
     if (!scan.complete || !/^\d+$/.test(String(candidate.raw.procStart))) return null;
     const matches = [...scan.table.values()].filter(p => p.live && p.inner === candidate.raw.pid && p.start === String(candidate.raw.procStart));
-    return matches.length === 1 ? matches[0] : null;
+    return matches.length === 1 && matches[0].namespace !== null ? matches[0] : null;
+  }
+  function unreadableMatch(candidate, scan) {
+    return [...scan.table.values()].some(p => p.live && p.namespace === null && p.inner === candidate.raw.pid
+      && p.start === String(candidate.raw.procStart));
   }
   function unchangedProc(identity, deadline) {
     try { return JSON.stringify(proc(identity.pid, deadline)) === JSON.stringify(identity); }
@@ -173,9 +183,10 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
     const scan = rawScan(deadline);
     const table = procScan(deadline);
     const anchor = table.table.get(pty.pid);
-    if (!scan.complete || !table.complete || !anchor || !anchor.live || anchor.start !== String(ptyStart)) return unavailable;
+    if (!scan.complete || !table.complete || !anchor || !anchor.live || anchor.namespace === null || anchor.start !== String(ptyStart)) return unavailable;
     const eligible = [];
     for (const candidate of scan.candidates) {
+      if (unreadableMatch(candidate, table)) return unavailable;
       const writer = mapped(candidate, table);
       if (!writer || writer.namespace === anchor.namespace) continue;
       let chain;
@@ -189,7 +200,8 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
     if (candidate.descriptor.kind !== 'interactive' || !candidate.state) return unavailable;
     const again = mapped(candidate, procScan(deadline));
     if (!again || JSON.stringify(again) !== JSON.stringify(writer) || !sameFile(candidate, deadline)
-      || !chain.every(p => unchangedProc(p, deadline)) || session.pty !== pty || session.generation !== generation) return unavailable;
+      || !chain.every(p => unchangedProc(p, deadline)) || session.pty !== pty || session.generation !== generation
+      || expired(deadline)) return unavailable;
     const normalized = { ...candidate.raw, ...candidate.state, pid: writer.pid, rawPid: candidate.raw.pid,
       procStart: writer.start, namespace: writer.namespace };
     return { supported: true, uncertain: false, writer: normalized,

@@ -46,7 +46,17 @@ accepts an optional private permit in its sixth argument. Five-argument callers
 retain their argument shape. Main consumes it once, checks v1 raw liveness and
 the exact transcript/cwd, then rechecks after awaited preparation and immediately
 before spawn. Main serializes all opens by normalized ID, including ordinary
-clicks. Close commitment revokes pending permits through the existing exit guard.
+clicks. Close commitment revokes pending permits and every readiness object
+through the existing exit guard and suspends the document: the bridge keeps the
+main frame that completed its handshake. Rolling a committed update back
+(`onRolledBack`) restores readiness for that same window, WebContents and main
+frame only, with a new epoch, so readiness objects and permits issued before the
+commitment stay invalid; navigation, renderer death, frame replacement and
+destruction require the normal handshake. In-flight actions are cancelled by
+their own capture of the exit guard (see trigger-watcher.md, "Action
+cancellation"), not by the broker request, whose permit ends at the ACK. A
+successful ACK is sent only after the entry is registered and working-set
+persistence is scheduled.
 The renderer uses the ordinary new/resume/reattach lifecycle with activation
 disabled and returns a structured correlated ACK after registration/persistence.
 See [trigger-watcher.md](trigger-watcher.md), “Renderer broker and open lifecycle”.
