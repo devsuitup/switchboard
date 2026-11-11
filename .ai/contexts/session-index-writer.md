@@ -538,6 +538,14 @@ their constant-time early exit without ownership queries or path resolution.
 The facade holds archive exclusion through unknown outcomes and only releases
 after terminal/no-late-commit proof. No main/IPC/UI caller is connected yet.
 
+Archive retirement exhausting three snapshot conflicts returns the computed
+project list without persisting the stale decision, as before A4b4. Reserved
+identities remain excluded by the workflow lease. At exhaustion, the reader's
+current durable fences additionally exclude blocked identities; a failed fence
+read conservatively keeps that entry archived. This read changes rendering only
+and never authorizes a write. A later clean refresh can retire eligible entries.
+Successful retirement still filters rendering by the writer's returned keys.
+
 ## Projects ACK baseline (#719)
 
 Effects replies carry committedRevision captured inside the last owned SQLite

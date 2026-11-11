@@ -293,7 +293,13 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
           break;
         } catch (error) {
           if (error.code !== 'WRITER_STALE') throw error;
-          if (attempt === 2) { keepArchived([]); break; }
+          if (attempt === 2) {
+            keepArchived(entries.filter(entry => {
+              try { return !backend.projectDeletion?.fence(archiveProjectIdentity(entryProject(entry)).key)?.blocked; }
+              catch { return false; }
+            }));
+            break;
+          }
         }
       }
       const offers = backend.getSetting('scheduleReenableOffers') || {};
