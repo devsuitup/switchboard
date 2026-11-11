@@ -31,6 +31,15 @@ A failed or cancelled macOS tag build blocks automatic publication; no partial-p
 `continue-on-error` path exists. Recovery and manifest consistency requirements
 are in [releasing.md](../../docs/releasing.md).
 
+`scripts/publish-release.sh` requires non-empty `GITHUB_REPOSITORY` and
+`GITHUB_REF_NAME` before any gh call. The release lookup names the repository
+in its API path; draft creation and every upload attempt pass
+`--repo "${GITHUB_REPOSITORY}"`, so a clone's gh default cannot redirect writes.
+The script tests execute Bash with a fake gh boundary and cover repository
+selection, missing configuration, draft guards and upload retries. Manual
+recovery downloads the tag run's artifacts, keeps the x64 copy of the colliding
+pacman filename, then uses this script; see the release guide for commands.
+
 Windows stays pinned to `windows-2022`: the Server 2025 image behind
 `windows-latest` lacks the Visual Studio C++ toolchain needed by node-gyp for
 node-pty. Linux stays split by architecture because electron-builder's native

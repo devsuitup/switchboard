@@ -3,6 +3,9 @@
 A release is a version tag on `main`. The version bump lands through a pull
 request first, because `main` is protected.
 
+Every `gh` command run by hand in this clone needs `--repo devsuitup/switchboard`:
+gh's default here is the upstream repository, `doctly/switchboard`.
+
 ## Steps
 
 1. **Bump the version and date the changelog** on a branch, and open the PR.
@@ -31,7 +34,7 @@ request first, because `main` is protected.
    branch protection on `main` (`required_status_checks.contexts`). Both must
    be updated together whenever the test matrix changes; workflow changes do
    not change repository settings. The documented ruleset requires
-   no approving review, so `gh pr merge --auto --squash` can be armed once the
+   no approving review, so `gh pr merge --repo devsuitup/switchboard --auto --squash` can be armed once the
    required checks run. CI-only PRs use the `no-changelog` label.
 
 2. **Run the app before tagging.** The tag is what publishes, and nothing
@@ -68,11 +71,41 @@ request first, because `main` is protected.
    To recover, re-run the failed macOS job in the tag's Actions run (or re-run
    failed jobs) and let the dependent publish job run once every build succeeds.
    Alternatively, create the release draft by hand using only artifacts from
-   that tag's successful builds and the tag's changelog section. If macOS
+   that tag's successful builds. In Bash, replace `<run>` with the tag's Actions
+   run ID and `<x.y.z>` with its version:
+
+   ```bash
+   gh run download <run> --repo devsuitup/switchboard --dir .work-files/release-artifacts
+   ```
+
+   Use a fresh download directory, then merge its `dist-*` artifact directories
+   into one fresh directory containing only the assets to upload. Both Linux
+   jobs produce `switchboard-doctly-<v>.pacman` with the same filename: keep the
+   copy from `dist-linux-x64`, which is the architecture always published for
+   that asset, and discard the arm64 copy before merging. If macOS
    artifacts are absent, omit `latest-mac.yml`. Never copy a previous release's
    mac manifest: upload it only when its version, filenames, sizes and hashes
-   match the macOS files actually attached to this release. Check the draft's
-   assets before publishing it as described below.
+   match the macOS files actually attached to this release.
+
+   Create or complete the draft from the merged directory (`<dir>`):
+
+   ```bash
+   GITHUB_REPOSITORY=devsuitup/switchboard GITHUB_REF_NAME=v<x.y.z> DIST_DIR=<dir> bash scripts/publish-release.sh
+   ```
+
+   Both GitHub variables must be set and non-empty; the script refuses before
+   calling gh otherwise. It reads and writes the explicitly named repository.
+   From a checkout containing the tag's `CHANGELOG.md`, extract and attach its
+   notes, then inspect the draft's asset names and sizes:
+
+   ```bash
+   node scripts/changelog-section.js v<x.y.z> > .work-files/release-notes.md
+   gh release edit v<x.y.z> --repo devsuitup/switchboard --notes-file .work-files/release-notes.md
+   gh release view v<x.y.z> --repo devsuitup/switchboard --json assets --jq '.assets[] | {name, size}'
+   ```
+
+   Check those assets against the merged directory and verify the update
+   manifests before publishing the draft as described below.
 
    After all builds succeed, the publish job:
    - creates a **draft** release named after the version;
@@ -85,12 +118,12 @@ request first, because `main` is protected.
      changelog** link comparing the previous tag with this one. It fails
      rather than publish an empty body when the section is missing or empty.
      The fix is then in `CHANGELOG.md`, through a PR; `gh release edit
-     --notes-file` can fill in the draft by hand meanwhile.
+     --repo devsuitup/switchboard --notes-file` can fill in the draft by hand meanwhile.
 
    Re-running CI while the release is a draft is fine: it completes or replaces
    the draft's assets. CI refuses to publish if it cannot read the releases,
    and never writes to a published release. Once published, add or replace an
-   asset by hand with `gh release upload --clobber` (see below), or tag a new
+   asset by hand with `gh release upload --repo devsuitup/switchboard --clobber` (see below), or tag a new
    version. Delete the draft or move the tag only while the release is still a
    draft. The workflow token has `contents: read`; only the publish job has
    `contents: write`, and no checkout persists credentials.
@@ -151,7 +184,7 @@ can still receive a withdrawn pre-release.
 - **Tag the merged commit, never the local bump commit.** A squash merge makes
   a new commit; a tag on the pre-merge commit is not an ancestor of `main`, so
   `git describe --tags` and the release-notes range skip it. If a build already
-  started from such a tag, cancel it (`gh run cancel`), delete the tag locally
+  started from such a tag, cancel it (`gh run cancel --repo devsuitup/switchboard`), delete the tag locally
   and on `origin`, and tag the merged commit.
 - **Unsigned macOS builds need `"mac": {"identity": null}` and
   `"notarize": false` in `package.json`.** electron-builder reads a `CSC_LINK`
