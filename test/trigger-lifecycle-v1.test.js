@@ -15,7 +15,7 @@ const { resolveLocalTarget, resolveProject } = require('../src/main/triggers/tri
 const { validateTriggerOpen } = require('../src/main/triggers/trigger-launch');
 const { encodeProjectPath } = require('../encode-project-path');
 
-async function fixture(t) {
+async function fixture(t, { windowsStartup = false, delayedPid = false, startupChange } = {}) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sw-lifecycle-')));
   const dirs = Object.fromEntries(['sessions', 'projects', 'project', 'triggers'].map(name => [name, path.join(root, name)]));
   Object.values(dirs).forEach(dir => fs.mkdirSync(dir));
@@ -47,6 +47,20 @@ async function fixture(t) {
     v1ProcFs: { readdirSync: () => [String(process.pid)], readlinkSync: () => 'host',
       readFileSync: file => file.endsWith('/status') ? `NSpid:\t${process.pid}\n`
         : `0 (claude) ${['S', '1', ...Array(17).fill('0'), '30'].join(' ')}` } });
+  const shellStart = '134373885010000000';
+  const writerStart = '134373885020000000';
+  const writerPid = process.pid + 100000;
+  let tableReads = 0;
+  if (windowsStartup) {
+    cli.init({ dir: dirs.sessions, activeSessions: main.map, platform: 'win32', log, onIdle() {},
+      isProcessAlive: () => true, readProcStart: pid => pid === writerPid ? writerStart : shellStart,
+      readProcessTable: async () => {
+        tableReads++;
+        if (tableReads === 1) throw new Error('process table unreadable once');
+        return new Map([[process.pid, { ppid: 1, created: shellStart, commandLine: 'bash.exe' }],
+          [writerPid, { ppid: process.pid, created: writerStart, commandLine: 'claude.exe' }]]);
+      } });
+  }
   const folder = encodeProjectPath(dirs.project);
   fs.mkdirSync(path.join(dirs.projects, folder));
   const transcript = path.join(dirs.projects, folder, ID + '.jsonl');
@@ -66,15 +80,27 @@ async function fixture(t) {
     spawnPty: (_shell, args, options) => {
       events.push(['spawn', args, options]);
       const id = /--(?:resume|session-id)\s+([a-f0-9-]+)/.exec(args.join(' '))[1];
-      const descriptor = status => fs.writeFileSync(path.join(dirs.sessions, process.pid + '.json'), JSON.stringify({
-        pid: process.pid, procStart: '30', sessionId: id, kind: 'interactive', status,
+      const descriptor = status => fs.writeFileSync(path.join(dirs.sessions, (windowsStartup ? writerPid : process.pid) + '.json'), JSON.stringify({
+        pid: windowsStartup ? writerPid : process.pid, procStart: windowsStartup ? writerStart : '30',
+        ...(windowsStartup ? { pidDomain: 'win32:anchor' } : {}), sessionId: id, kind: 'interactive', status,
         statusUpdatedAt: Date.now() + (status === 'busy' ? 1 : 0), cwd: dirs.project,
       }));
-      descriptor('idle');
-      return { pid: process.pid, write(data) {
+      if (!windowsStartup) descriptor('idle');
+      const pty = { pid: delayedPid ? 0 : process.pid, write(data) {
         writes.push(data); events.push(['write', data]);
         if (data === '\r') { main.map.get(id)._cliBusy = true; descriptor('busy'); }
       } };
+      if (windowsStartup) {
+        const timer = setTimeout(async () => {
+          pty.pid = process.pid;
+          startupChange?.(main.map.get(id));
+          await cli.refreshProcessTable({ force: true });
+          descriptor('idle');
+          cli.ensureWatching();
+        }, 100);
+        t.after(() => clearTimeout(timer));
+      }
+      return pty;
     },
   });
   Object.assign(renderer.w.api, { openTerminal: (...args) => main.invoke(event(), ...args),
@@ -96,6 +122,34 @@ async function fixture(t) {
     return JSON.parse(fs.readFileSync(result, 'utf8'));
   };
   return { dirs, events, writes, main, renderer, publish, sent };
+}
+
+for (const mode of ['new', 'resume']) {
+  for (const delayedPid of [false, true]) {
+    test(`Windows ${mode}: ${delayedPid ? 'ConPTY publishes its first PID later' : 'known PID with initially unreadable start'} stays alive until CLI idle`, async t => {
+      const f = await fixture(t, { windowsStartup: true, delayedPid });
+      const payload = mode === 'new' ? { new: { project: f.dirs.project, name: 'Windows startup' } } : { sessionId: ID };
+      const result = await f.publish({ version: 1, action: 'open', ...payload, prompt: 'hello', timeout_ms: 4000 });
+      assert.equal([...f.main.map.values()][0].exited, false, 'the starting PTY is still alive');
+      assert.equal([...f.main.map.values()][0].hostPtyStart, null, 'spawn-time start identity was unavailable');
+      assert.equal(result.outcome, 'opened', JSON.stringify(result));
+      assert.deepEqual(f.writes, ['hello', '\r']);
+      assert.equal(result[mode === 'new' ? 'created' : 'resumed'], true);
+    });
+  }
+}
+
+for (const [change, startupChange] of [
+  ['exit', session => { session.exited = true; }],
+  ['generation replacement', session => { session.generation++; }],
+  ['PTY replacement', session => { session.pty = { ...session.pty }; }],
+]) {
+  test(`Windows startup still refuses ${change} before the first PID is bound`, async t => {
+    const f = await fixture(t, { windowsStartup: true, delayedPid: true, startupChange });
+    const result = await f.publish({ version: 1, action: 'open', sessionId: ID, prompt: 'hello', timeout_ms: 4000 });
+    assert.equal(result.outcome, 'refused');
+    assert.deepEqual(f.writes, []);
+  });
 }
 
 test('file -> watcher -> broker -> renderer -> main -> verified resume prompt -> result', async t => {

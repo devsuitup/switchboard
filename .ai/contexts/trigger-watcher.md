@@ -1,5 +1,24 @@
 # Context: trigger-watcher
 
+## Windows startup PID publication (#1083)
+
+ConPTY returns the same PTY object with PID zero before its output worker
+connects; node-pty publishes the shell PID on `ready_datapipe`. A v1 delivery
+pins the session object, PTY object and generation immediately, but treats this
+zero as an unpublished PID. Admission waits within the action's existing
+deadline and captures the first positive PID exactly once. A later positive
+PID change, PTY replacement, generation change or exit still invalidates the
+binding. No prompt is admitted while the PID remains unpublished.
+
+Spawn-time process start identity can also be unavailable while the Windows
+process table refreshes. The existing start comparison keeps rereading it and
+captures the first observed value; absence alone is not exit evidence. Once
+known, a different start still refuses. First-writer revocation and independent
+status pins are unchanged. Tests exercise the real file watcher, action/broker,
+renderer and extracted main open handler with delayed shell PID publication,
+a failed process-table read, and a later descendant CLI descriptor. No live
+ConPTY or Electron is launched by those tests.
+
 ## Typed read-only requests (#380 S1b3)
 
 An own `type` property selects the strict typed contract before action dispatch.

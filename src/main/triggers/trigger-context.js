@@ -138,7 +138,7 @@ function createTriggerContext(deps) {
     const session = entry.session;
     const pty = entry.ptyProcess;
     const generation = session.generation;
-    const pid = pty?.pid;
+    let pid = v1 && pty?.pid === 0 ? null : pty?.pid;
     const own = eligible(session);
     let start = own ? (v1 && session.hostPtyStart != null ? session.hostPtyStart : source.deliveryPtyStart(pid)) : null;
     const binding = { tab: session, entry, requestedId, effectiveId: normalizeSessionId(requestedId), reset: null,
@@ -155,7 +155,9 @@ function createTriggerContext(deps) {
       throw error;
     }
     function valid() {
-      if (!live().includes(session) || session.exited || session.generation !== generation || session.pty !== pty || pty?.pid !== pid) return false;
+      if (!live().includes(session) || session.exited || session.generation !== generation || session.pty !== pty) return false;
+      if (pid === null && Number.isInteger(pty?.pid) && pty.pid > 0) pid = pty.pid;
+      if (pid !== null && pty?.pid !== pid) return false;
       if (session.host != null && session.handle !== entry.handle) return false;
       const currentStart = own ? source.deliveryPtyStart(pid) : null;
       if (start != null && currentStart != null && start !== currentStart) return false;
@@ -321,6 +323,10 @@ function createTriggerContext(deps) {
       while (true) {
         if (Date.now() >= deadline) fail('the ownership wait exhausted the delivery deadline; nothing more was written', null, true);
         if (!valid()) fail('the pinned tab/PTY generation binding changed; nothing more was written');
+        if (pid === null) {
+          await bounded(new Promise(resolve => setTimeout(resolve, 10)), deadline);
+          continue;
+        }
         const observation = inspect();
         if (Date.now() >= deadline) fail('the ownership inspection exhausted the delivery deadline; nothing more was written', null, true);
         if (observation.outcome === 'other') fail(observation.reason);

@@ -140,6 +140,7 @@ function classifyTranscriptTail(text) {
   let turnDurationAfter = false;
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];
+    if (entry.type === 'system' && entry.subtype === 'informational') continue;
     const at = stampOf(entry);
     if (at !== null && (lastEntryAt === null || at > lastEntryAt)) lastEntryAt = at;
     if (entry.type === 'queue-operation') {

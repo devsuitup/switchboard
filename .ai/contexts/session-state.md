@@ -345,6 +345,15 @@ pending notice clears, including after the final project reload.
 
 ## Conversation head turn and the single spinner (#625)
 
+`system/informational` transcript records (including the CLI's auto-mode
+notice) do not advance the head's `lastEntryAt` (#1083). Otherwise a resumed
+transcript whose last prompt still classifies as open acquires a timestamp
+newer than OSC idle, and both status and sidebar revive that old turn. The
+shared transcript reader ignores only this informational subtype for turn
+classification; actual prompts, assistant records, queue events and closure
+evidence retain their existing ordering. Tests use the real task reader and
+status gatherer, and the renderer's sidebar projection after OSC idle.
+
 The row's animation is selected from its `headSessionId || sessionId`, with
 three transcript states: `open`, `closed`, and `unknown`. `transcript-turn.js`
 retains its existing `closed` API for trigger delivery and adds `state`.

@@ -155,6 +155,22 @@ test('an mtime-only snapshot after OSC idle preserves waiting and all adapter hi
   }
 });
 
+test('1083: timestamped auto-mode information after OSC idle does not reopen the sidebar head', async t => {
+  const { ctx, append, appendRecord, advance, icon } = await attached(t);
+  await append('Work');
+  advance();
+  ctx.setActivity('root', false, 'onCliBusyState');
+  const before = ctx.read('headTurns.get("root")');
+  advance();
+  await appendRecord({ type: 'system', subtype: 'informational', content: 'auto mode',
+    timestamp: new Date(before.lastEntryAt + 3000).toISOString() });
+  assert.match(icon().title, /^Waiting for input/, 'informational output is not a new turn');
+  assert.equal(ctx.read('headTurns.get("root").lastEntryAt'), before.lastEntryAt);
+  advance();
+  await append('Next prompt');
+  assert.match(icon().title, /^Working/, 'a real prompt still opens the next turn');
+});
+
 for (const type of ['last-prompt', 'ai-title', 'mode', 'pr-link']) {
   test(`${type}: an untimestamped bookkeeping append after OSC idle cannot animate an open head`, async t => {
     const { ctx, append, appendRecord, advance, icon } = await attached(t);

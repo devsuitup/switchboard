@@ -43,6 +43,20 @@ test('same-number PTY PID reuse invalidates the bound start identity', () => {
   assert.throws(() => f.pinned.handle.write('hello'), /generation binding changed/);
   assert.deepEqual(f.writes, []);
 });
+
+test('a positive pinned PID cannot be replaced by another positive PID', () => {
+  const f = fixture(); f.session.pty.pid++;
+  assert.throws(() => f.pinned.handle.write('hello'), /generation binding changed/);
+  assert.deepEqual(f.writes, []);
+});
+
+test('an unpublished ConPTY PID stays bounded by admission deadline and receives no text', async () => {
+  const f = fixture(); f.session.pty.pid = 0;
+  const pinned = f.ctx.pinDelivery(ID, f.ctx.getPtyForSession(ID), false, { v1: true });
+  const end = Date.now() + 50;
+  await assert.rejects(pinned.binding.admit(end), /deadline/);
+  assert.deepEqual(f.writes, []);
+});
 test('expected cwd is checked again at the actual write boundary', () => {
   const f = fixture(); f.pinned.binding.expectedCwd = '/first'; f.session.cwd = '/second';
   assert.throws(() => f.pinned.handle.write('hello'), /expectedCwd does not match/);

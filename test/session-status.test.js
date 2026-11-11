@@ -29,6 +29,26 @@ test('owned descriptorless PTY with closed head is idle with original proof time
   assert.equal(result.evidence, 'owned-pty'); assert.equal(result.pid, 42);
   assert.equal(result.evidence_at, new Date(30).toISOString());
 });
+
+test('1083: auto-mode information after OSC idle preserves idle status through the real head reader', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'status-info-1083-'));
+  const transcript = path.join(root, id + '.jsonl');
+  const { createTaskRecordsClient } = require('../task-records-client');
+  const client = createTaskRecordsClient();
+  t.after(async () => { await client.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
+  const append = entry => fs.appendFileSync(transcript, JSON.stringify(entry) + '\n');
+  append({ type: 'user', timestamp: new Date(100).toISOString(), message: { content: 'Work' } });
+  const h = gather({ session: { _statusOsc: { generation: 1, idleAt: 200 } },
+    observeOwned: () => ({ writer: { pid: 42, procStart: '100', status: 'idle', statusUpdatedAt: 200 } }),
+    readHead: (_id, _row, _session, deadline) => client.readHeadForStatus(transcript, id, deadline), now: Date.now });
+  assert.equal((await h.service.gather(id)).state, 'idle');
+  append({ type: 'system', subtype: 'informational', content: 'auto mode', timestamp: new Date(3200).toISOString() });
+  const result = await h.service.gather(id);
+  assert.equal(result.state, 'idle', JSON.stringify(result));
+  assert.equal(result.evidence_at, new Date(200).toISOString());
+  append({ type: 'user', timestamp: new Date(4000).toISOString(), message: { content: 'Next prompt' } });
+  assert.equal((await h.service.gather(id)).state, 'busy');
+});
 test('open head wins shell and preserves the head evidence timestamp', async () => {
   const h = gather({ observeOwned: () => ({ writer: { status: 'shell', statusUpdatedAt: 50 } }),
     readHead: async () => ({ state: 'open', observedAt: 30, lastEntryAt: 20 }) });
