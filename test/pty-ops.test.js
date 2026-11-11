@@ -9,6 +9,43 @@ const { setPtyOpLogger, withPty, resizePty, killPty, writePty } = require('../sr
 const { handleTerminalInput } = require('../src/main/terminals/terminal-input');
 const { createComposerState } = require('../src/main/terminals/composer-state');
 
+for (const assignment of ['failed', 'pending', 'assigned']) {
+  test(`A4c2afix2 natural exit during assignment wait releases a refused stop once (${assignment})`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+    const { trackWindowsPty, stopPtyWithEvidence, releaseWindowsPty } = require('../src/main/terminals/pty-ops');
+    let exit, acknowledge;
+    const calls = [], proof = { ended: true };
+    const jobs = {
+      assign: () => new Promise(resolve => { acknowledge = resolve; }),
+      observe: async () => { calls.push('observe'); return proof; },
+      release: async () => { calls.push('release'); return true; },
+      terminateWithEvidence: async () => { calls.push('terminate'); return proof; },
+    };
+    const pty = { pid: 4242, onExit(fn) { exit = fn; }, kill() { calls.push('kill'); } };
+    const session = { pty, kind: 'local-pty', generation: 1 };
+    const assigned = trackWindowsPty(pty, { platform: 'win32', jobs });
+    const stopping = stopPtyWithEvidence(session, 'one', { platform: 'win32', deadline: 2000 });
+    exit();
+    assert.deepEqual(calls, [], 'the stop owns cleanup while assignment is pending');
+    if (assignment === 'pending') t.mock.timers.tick(1000);
+    else {
+      if (assignment === 'assigned') session.generation++;
+      acknowledge(assignment === 'assigned');
+      await assigned;
+    }
+    assert.equal((await stopping).code, 'IDENTITY');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls.filter(call => call === 'release').length, 1, 'natural exit during refused stop must release the job exactly once');
+    if (assignment === 'assigned') {
+      assert.deepEqual(await pty.statusTreeExit, proof, 'restore the natural-exit observation suppressed while closing');
+      assert.deepEqual(calls, ['observe', 'release']);
+    } else assert.deepEqual(calls, ['release']);
+    if (assignment === 'pending') { acknowledge(false); await assigned; }
+    await releaseWindowsPty(pty);
+    assert.equal(calls.filter(call => call === 'release').length, 1);
+  });
+}
+
 /** A pty whose every method throws the real node-pty message. */
 function makeDeadPty(message = 'Cannot resize a pty that has already exited') {
   const thrower = () => { throw new Error(message); };

@@ -24,7 +24,7 @@ headless schedules remain named blocking targets without safe tree control.
 
 An unknown transcript folder with an inaccessible cwd only refuses the selected
 project when that cwd is lexically under the project path (including equality).
-After EACCES the comparison resolves the nearest readable ancestor, walking
+After EACCES or EPERM the comparison resolves the nearest readable ancestor, walking
 past denied or missing parents within the discovery budget. An 8.3, junction or
 symlink spelling then identifies the same subtree as the canonical project
 even when the final cwd realpath is denied. Foreign cwd exclusion is preserved.

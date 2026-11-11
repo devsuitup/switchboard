@@ -10,6 +10,7 @@ const {
 } = require('./remote-attach');
 
 const DEFAULT_STOP_TIMEOUT_MS = 15000;
+const SSH_CONNECT_ALLOWANCE_MS = 5000;
 const NOT_CLAUDE_EXIT_CODE = 7;
 const NOT_CLAUDE_MARKER = 'NOT_CLAUDE';
 const TMUX_PANE_KILLED_MARKER = 'TMUX_PANE_KILLED';
@@ -119,10 +120,11 @@ function createRemoteStopAdapter(opts = {}) {
     const suffix = `${identity.pid} ${identity.procStart} ${identity.sessionId} ${identity.bootId}`;
     const read = async phase => {
       const remaining = deadline - Date.now();
-      if (remaining <= 0) throw new Error('stop deadline expired');
+      const remoteRemaining = remaining - SSH_CONNECT_ALLOWANCE_MS;
+      if (remoteRemaining <= 0) throw new Error('stop deadline expired');
       let timer;
       try {
-        const result = await Promise.race([runRemoteCommand(alias, buildStrictStopCommand(identity, phase, remaining), { timeoutMs: remaining }),
+        const result = await Promise.race([runRemoteCommand(alias, buildStrictStopCommand(identity, phase, remoteRemaining), { timeoutMs: remaining }),
           new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('stop deadline expired')), remaining); })]);
         if (Date.now() >= deadline || result?.code !== 0) throw new Error('remote observation unavailable');
         const text = String(result.stdout || '').trim();

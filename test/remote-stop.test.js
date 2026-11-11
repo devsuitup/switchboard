@@ -22,6 +22,7 @@ const assert = require('node:assert/strict');
 const {
   createRemoteStopAdapter,
   buildStopCommand,
+  buildRemoteCommandArgs,
   NOT_CLAUDE_EXIT_CODE,
   NOT_CLAUDE_MARKER,
   TMUX_PANE_KILLED_MARKER,
@@ -34,8 +35,23 @@ const silentLog = { info() {}, warn() {}, error() {} };
 
 const strictIdentity = { alias: 'vps', sessionId: '11111111-1111-4111-8111-111111111111', pid: 4242,
   procStart: '123456', bootId: '22222222-2222-4222-8222-222222222222' };
-const strictOptions = () => ({ strict: true, identity: { ...strictIdentity }, deadline: Date.now() + 1000 });
+const strictOptions = () => ({ strict: true, identity: { ...strictIdentity }, deadline: Date.now() + 6000 });
 const strictMarker = kind => `${kind} ${strictIdentity.pid} ${strictIdentity.procStart} ${strictIdentity.sessionId} ${strictIdentity.bootId}\n`;
+
+for (const remainingMs of [4999, 5000, 5001]) {
+  test(`A4c2afix2 strict remote connection allowance boundary ${remainingMs}`, async t => {
+    t.mock.timers.enable({ apis: ['Date'], now: 1000 });
+    const payloads = [];
+    const result = await makeAdapter(async (_alias, command) => {
+      payloads.push(JSON.parse(Buffer.from(command.match(/'([^']+)'$/)[1], 'base64').toString()));
+      return { code: 0, stdout: strictMarker(payloads.length === 1 ? 'STOP_SIGNALLED' : 'STOP_ENDED') };
+    }).stop('vps', strictIdentity, { ...strictOptions(), deadline: 1000 + remainingMs });
+    assert.equal(payloads.length, remainingMs > 5000 ? 2 : 0, 'no SSH command when the connection allowance exhausts the budget');
+    assert.equal(result.ended, remainingMs > 5000);
+    if (remainingMs > 5000) assert.deepEqual(payloads.map(payload => payload.remainingMs), [1, 1]);
+    else assert.match(result.error, /deadline/);
+  });
+}
 
 test('A4c2afix strict remote sends a duration and guards using remote monotonic time', async () => {
   const calls = [];
@@ -45,7 +61,8 @@ test('A4c2afix strict remote sends a duration and guards using remote monotonic 
   }).stop('vps', strictIdentity, strictOptions());
   assert.equal(result.ended, true);
   for (const { command, options, payload } of calls) {
-    assert.equal(payload.remainingMs, options.timeoutMs, 'send the remaining duration, independent of remote wall-clock skew');
+    const connectSeconds = Number(buildRemoteCommandArgs('vps', '').find(arg => arg.startsWith('ConnectTimeout=')).split('=')[1]);
+    assert.equal(payload.remainingMs, options.timeoutMs - connectSeconds * 1000, 'remote duration must reserve the SSH connection allowance');
     assert.equal(Object.hasOwn(payload, 'deadline'), false);
     assert.match(command, /deadline=time\.monotonic\(\)\+x\[/);
     assert.match(command, /if time\.monotonic\(\)>=deadline/);
@@ -77,7 +94,7 @@ test('A4c2a strict remote stop requires a separate host-bound death read', async
   assert.match(calls[0].command, /pidfd_send_signal/);
   assert.ok(calls[0].command.indexOf("start()") < calls[0].command.indexOf('pidfd_send_signal'));
   assert.doesNotMatch(calls[1].command, /kill -/);
-  assert.ok(calls.every(c => c.options.timeoutMs <= 1000));
+  assert.ok(calls.every(c => c.options.timeoutMs <= 6000));
 });
 
 for (const outcome of ['STOP_REUSED', 'STOP_UNKNOWN', 'STOP_LIVE', 'unreachable']) {

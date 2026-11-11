@@ -171,6 +171,12 @@ function stopPtyWithEvidence(session, sessionId, { platform = process.platform, 
         delete record.stopEvidence;
         delete record.stopGeneration;
         delete pty.stopEvidence;
+        if (record.exited) {
+          if (record.assigned && !record.released && typeof record.jobs.observe === 'function') {
+            pty.statusTreeExit = Promise.resolve().then(() => record.jobs.observe(record.id))
+              .catch(() => null).then(proof => { void releaseWindowsPty(pty); return proof; });
+          } else void releaseWindowsPty(pty);
+        }
       } else {
         if (helperOwnsRelease) record.released = true;
         const releasing = releaseWindowsPty(pty).catch(() => false);

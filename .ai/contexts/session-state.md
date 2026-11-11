@@ -21,7 +21,10 @@ signatures, synchronous booleans and natural `statusTreeExit` behavior remain.
 If assignment has not acknowledged by the stop deadline, or the pinned identity
 changes before closing, the refusal leaves the job assigned and clears the
 cached stop attempt. A later stop can retry. Release starts only after a kill
-attempt or transfer to the evidence helper. Evidence expiry queues serialized
+attempt or transfer to the evidence helper, or after a natural exit suppressed
+while the refused stop awaited assignment. That last case restores the natural
+`statusTreeExit` observation when assigned, then releases the job once; an
+unassigned job releases directly. Evidence expiry queues serialized
 release without disabling other jobs; the helper's request limit still bounds
 outstanding cleanup. Positive proof requires observation and release ACKs.
 
@@ -39,8 +42,10 @@ The alias selects the declared SSH route and the boot UUID binds its current
 host incarnation. Strict remote execution requires Python 3, Linux pidfd APIs,
 readable procfs, and exact `--session-id`/`--resume` argv ownership. Unavailable
 capabilities or an auto-assigned session without that argv evidence refuse.
-Each remote command receives the remaining millisecond budget and creates its
-deadline from the remote monotonic clock. The local deadline still bounds SSH
+Each remote command receives the remaining millisecond budget minus the five
+seconds reserved for SSH's `ConnectTimeout=5`, and creates its deadline from
+the remote monotonic clock. Each phase refuses locally before SSH if that
+allowance leaves no remote budget. The local deadline still bounds SSH
 and rejects late replies; wall-clock alignment between hosts is unnecessary.
 
 Each TERM/KILL phase opens a pidfd before reading start/argv/boot identity,

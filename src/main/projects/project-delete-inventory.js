@@ -71,7 +71,7 @@ function createProjectDeleteInventory(deps) {
     for (;;) {
       if (c.spellings.has(lexical(current))) return;
       try { c.spellings.set(lexical(current), lexical(await real(c, current))); return; }
-      catch (error) { propagate(error); if (!['ENOENT', 'ENOTDIR'].includes(error.code) && !(deniedAncestor && error.code === 'EACCES')) throw error; }
+      catch (error) { propagate(error); if (!['ENOENT', 'ENOTDIR'].includes(error.code) && !(deniedAncestor && ['EACCES', 'EPERM'].includes(error.code))) throw error; }
       const parent = path.dirname(current);
       if (parent === current) return;
       current = parent;
@@ -346,7 +346,7 @@ function createProjectDeleteInventory(deps) {
           if (folderBelongs(folder) || await belongs(cwd)) candidate(file, 'Unindexed or unmappable transcript candidate.');
         } catch (error) {
           propagate(error);
-          if (error.code === 'EACCES' && typeof cwd === 'string' && path.isAbsolute(cwd)) {
+          if (['EACCES', 'EPERM'].includes(error.code) && typeof cwd === 'string' && path.isAbsolute(cwd)) {
             await registerPath(c, path.dirname(cwd), true);
           }
           const selected = normalize(c, project.projectPath), value = typeof cwd === 'string' && path.isAbsolute(cwd) ? normalize(c, cwd) : null;
