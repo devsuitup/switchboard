@@ -28,6 +28,16 @@ exempted only during preflight, never during post-stop verification. `runStop`
 rechecks immediately before issuing the verb, then polls the strict checks
 every 25 ms after its ACK until death or the caller's deadline. A live worker
 or own live process is retried; changed/unknown ownership refuses immediately.
+Strict checks do not pin a worker incarnation atomically with the stop verb.
+conversationCheck returns liveness and conversation IDs, not worker PID/start;
+runVerb('stop', id) ultimately sends only the job ID to the daemon CLI. A respawn
+after a successful check can therefore replace the worker before that command.
+The project deletion adapter's pinned readTarget and post-checks detect changes
+around the call but cannot prevent or undo that race inside the seam. Passing
+a stamp only through checkStop would leave the check-to-command gap intact;
+closing it requires daemon-side expected-incarnation validation at stop time.
+This remains an explicit limitation for the future deletion service/composition.
+
 Strict timers use the injectable `now`, `schedule`, and `cancel` init ports.
 Only `workerLiveness: 'dead'` with no remaining live process
 produces `{ ok: true, ended: true }`; state `done`, a successful CLI stop and a
