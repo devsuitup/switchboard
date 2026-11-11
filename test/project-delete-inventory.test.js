@@ -396,7 +396,8 @@ for (const shape of ['real main head', '40 KiB subagent record']) test('A4c1FIX2
   const subagent = shape.startsWith('40'), id = subagent ? `subagent:${parent}:worker` : parent;
   const folder = require('../encode-project-path').encodeProjectPath(h.project.projectPath);
   const file = path.join(h.projectsDir, folder, subagent ? `${parent}/subagents/agent-worker.jsonl` : id + '.jsonl');
-  const prefix = subagent ? JSON.stringify({ type: 'user', sessionId: parent, message: { content: 'x'.repeat(40 << 10) }, cwd: h.project.projectPath }) + '\n'
+  const prefix = subagent ? JSON.stringify({ parentUuid: null, isSidechain: true, promptId: 'p', agentId: 'worker', type: 'user',
+    message: { content: 'x'.repeat(40 << 10) }, uuid: 'u', userType: 'external', cwd: h.project.projectPath, sessionId: parent }) + '\n'
     : ['custom-title', 'agent-name', 'mode', 'permission-mode', 'atis-latch'].map(type => JSON.stringify({ type, value: 'recorded metadata' }) + '\n').join('')
       + JSON.stringify({ type: 'progress', data: 'x'.repeat(1100000) }) + '\n' + JSON.stringify({ sessionId: id, cwd: h.project.projectPath }) + '\n';
   h.write(file, prefix); fs.truncateSync(file, 24 << 20);
@@ -467,4 +468,56 @@ test('A4c1FIX2 unindexed foreign cwd in an owned folder refuses', supported, asy
   h.write(file, JSON.stringify({ sessionId: 'contradiction', cwd: path.join(h.root, 'foreign') }) + '\n');
   const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
   assert.ok(result.plan.refusals.some(row => row.target === file && row.code === 'DISCOVERY_CANDIDATE'), 'owned-folder foreign cwd must remain a refusal candidate');
+});
+
+for (const suffix of ['.work-files/live', '.work-files/worktrees', '../foreign']) test('A4c1FIX3 subagent follows parent ownership for ' + suffix, supported, async t => {
+  const h = await setup(t), file = path.join(h.projectsDir, 'local', 'head/subagents/agent-worker.jsonl');
+  const cwd = path.resolve(h.project.projectPath, suffix);
+  h.write(file, JSON.stringify({ agentId: 'worker', type: 'user', cwd, sessionId: 'head' }) + '\n');
+  const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.plan.refusals, [], 'subagent ownership follows the indexed parent and folder');
+  assert.ok(result.plan.members.some(row => row.id === 'subagent:head:worker' && row.present));
+  h.write(path.join(h.projectsDir, 'local', 'head.jsonl'), JSON.stringify({ sessionId: 'head', cwd }) + '\n');
+  const main = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
+  assert.ok(main.plan.refusals.some(row => row.target?.endsWith('head.jsonl')), 'main transcripts retain strict cwd ownership');
+});
+
+test('A4c1FIX3 per-file realpath denial cannot hide later unindexed transcripts', supported, async t => {
+  const io = Object.create(fs.promises);
+  io.opendir = async directory => {
+    const handle = await fs.promises.opendir(directory);
+    if (path.basename(directory) !== 'unknown') return handle;
+    const entries = [];
+    let entry;
+    while ((entry = await handle.read())) entries.push(entry);
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    return { read: async () => entries.shift() || null, close: () => handle.close() };
+  };
+  io.realpath = async file => {
+    if (String(file).includes('denied')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    return fs.promises.realpath(file);
+  };
+  const h = await setup(t, { fs: io }), directory = path.join(h.projectsDir, 'unknown');
+  const first = path.join(directory, 'a.jsonl'), later = path.join(directory, 'b.jsonl');
+  h.write(first, JSON.stringify({ sessionId: 'a', cwd: path.join(h.root, 'denied', 'x') }) + '\n');
+  h.write(later, JSON.stringify({ sessionId: 'b', cwd: h.project.projectPath }) + '\n');
+  const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
+  assert.equal(result.ok, true);
+  assert.ok(result.plan.refusals.some(row => row.target === later), 'realpath denial must not hide the later owned transcript');
+  assert.ok(result.plan.refusals.some(row => row.target === first), 'unresolved ownership remains a candidate');
+});
+
+test('A4c1FIX3 raw cwd defeats a colliding encoded folder with an incomplete first record', supported, async t => {
+  const h = await setup(t), projectPath = h.project.projectPath + '-nested', foreign = path.join(h.project.projectPath, 'nested');
+  const { encodeProjectPath } = require('../encode-project-path');
+  const folder = encodeProjectPath(projectPath), id = '33333333-3333-4333-8333-333333333333';
+  assert.equal(encodeProjectPath(foreign), folder);
+  const file = path.join(h.projectsDir, folder, id + '.jsonl');
+  h.write(file, JSON.stringify({ cwd: foreign, sessionId: id, message: { content: 'x'.repeat(40 << 10) } }) + '\n');
+  h.db.setFolderMeta(folder, projectPath, 1);
+  h.db.upsertCachedSessions([{ sessionId: id, folder, projectPath, runtime: 'claude' }]);
+  const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath, options });
+  assert.equal(result.ok, true);
+  assert.ok(result.plan.refusals.some(row => row.target === file && /ownership/i.test(row.error)), 'bounded raw cwd must override a colliding folder fallback');
 });

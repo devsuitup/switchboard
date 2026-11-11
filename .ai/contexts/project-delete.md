@@ -55,11 +55,19 @@ remain A4c2–A4d/CI obligations, not A4c1 claims.
 ### Review corrections (A4c1fix)
 
 Transcript discovery reads at most the first 16 KiB and parses only complete
-records for cwd. Claude main transcripts also use their UUID filename identity;
-a raw sessionId UUID scan identifies subagents even when their first record is
-longer than the window. A missing cwd may use the indexed projectPath only when
-its resolved encodeProjectPath exactly matches the transcript folder. A recorded
-foreign cwd or contradictory identity still refuses that indexed member.
+records. For a Claude main transcript, UUID filename identity means a file exists
+at the mapped path and the bounded prefix does not contradict it. A raw sessionId
+UUID scan can also establish identity. Subagents whose sessionId follows a large
+message use the matching parent directory and agent filename plus a bounded raw
+agentId string scan; contradictory identities still refuse.
+When complete records supply no cwd, a bounded raw cwd string scan takes priority
+over the indexed projectPath. Only absence of a cwd key in that prefix allows the
+row fallback, and its resolved encodeProjectPath must exactly match the folder.
+Encoding is not injective, so it cannot override a recorded cwd. An incomplete or
+non-string cwd value does not permit the fallback. Main transcripts retain strict
+cwd ownership. A subagent in its indexed parent's folder follows that parent's
+project ownership regardless of its own cwd; a cwd under the selected project is
+also acceptable for a matching subagent layout.
 It charges bytes actually read, while preserving full stat size and mtime for
 the member manifest.
 Recognized child worktree cwds (including .work-files/worktrees) resolve to their
@@ -78,6 +86,8 @@ rows refuse only with selected-folder evidence. Unindexed files are attributed
 by their bounded first cwd or the selected folder mapping/exact encodeProjectPath
 encoding. A foreign cwd in a selected folder remains a refusal candidate. Known
 foreign folders are skipped; foreign heads outside selected folders are excluded.
+Per-file cwd realpath failures remain candidates and scanning continues through
+the folder; deadline and budget errors still propagate immediately.
 Settings ownership is required only when settings deletion is selected.
 
 Snapshot reads restart from the first section/page on SNAPSHOT_STALE, at most
