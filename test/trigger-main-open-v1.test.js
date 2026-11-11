@@ -64,3 +64,96 @@ test('an uppercase ordinary tab appearing during preparation prevents a second n
   const result = await f.open();
   assert.equal(result.ok, false); assert.equal(result.reason, 'session target changed'); assert.equal(f.spawns.length, 0);
 });
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { validateTriggerOpen } = require('../src/main/triggers/trigger-launch');
+const { resolveLocalTarget } = require('../src/main/triggers/trigger-actions');
+const { encodeProjectPath } = require('../encode-project-path');
+
+function realValidation(f, deps) {
+  f.context.validateTriggerOpen = permit => validateTriggerOpen(permit, deps);
+}
+function liveDeps(f, live) {
+  const target = { ...f.permit.target, project: f.permit.project };
+  f.permit.target = target;
+  const scans = []; let count = 0;
+  const deps = { launchAllowed: () => true, broker: f.context.triggerRendererBridge, remoteTarget: async () => false,
+    liveElsewhere: async (_id, deadline) => { scans.push(deadline); return count++ === 0 ? { known: true, live: null } : live; },
+    resolveTarget: async () => ({ ok: true, ...target }) };
+  return { deps, scans };
+}
+const lateLiveness = [
+  ['scheduled writer', { known: true, live: { kind: 'schedule' } }, 'scheduled session is not supported'],
+  ['background writer', { known: true, live: { kind: 'bg' } }, 'background session is not supported'],
+  ['other interactive writer', { known: true, live: { kind: 'interactive' } }, 'session live elsewhere'],
+  ['unknown liveness', { known: false }, 'session liveness unavailable'],
+];
+for (const [name, live, reason] of lateLiveness) {
+  test(`the final main-process validation refuses a late ${name} without spawning`, async () => {
+    const f = fixture(); f.authorize();
+    const { deps, scans } = liveDeps(f, live);
+    realValidation(f, deps);
+    const result = await f.open();
+    assert.equal(result.ok, false); assert.equal(result.reason, reason);
+    assert.equal(scans.length, 2, 'initial and final liveness observations');
+    assert.ok(scans.every(deadline => deadline === f.permit.deadline && Number.isFinite(deadline)), 'both observations receive the permit deadline');
+    assert.equal(f.spawns.length, 0); assert.equal(f.marks.length, 0); assert.equal(f.map.size, 0);
+  });
+}
+test('the same real validation without a late change spawns exactly once', async () => {
+  const f = fixture(); f.authorize();
+  const { deps, scans } = liveDeps(f, { known: true, live: null });
+  realValidation(f, deps);
+  const result = await f.open();
+  assert.equal(result.ok, true); assert.equal(scans.length, 2);
+  assert.equal(f.spawns.length, 1); assert.equal(f.marks.length, 1);
+});
+
+function transcriptWorld(t) {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-main-final-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const project = path.join(root, 'project'); const projectsDir = path.join(root, 'transcripts');
+  fs.mkdirSync(project);
+  const folder = encodeProjectPath(project);
+  fs.mkdirSync(path.join(projectsDir, folder), { recursive: true });
+  const transcript = path.join(projectsDir, folder, ID + '.jsonl');
+  fs.writeFileSync(transcript, JSON.stringify({ type: 'user', sessionId: ID, cwd: project }) + '\n');
+  const snapshot = { allProjects: [{ projectPath: project }], hiddenProjects: [], hiddenProjectKinds: {} };
+  return { project, projectsDir, folder, transcript,
+    deps: { fs, projectsDir, getCachedSession: () => ({ folder }), getCachedFolder: () => null, getProjectSnapshot: async () => snapshot, now: Date.now } };
+}
+const lateTranscript = {
+  missing: world => fs.unlinkSync(world.transcript),
+  empty: world => fs.writeFileSync(world.transcript, ''),
+  'whitespace only': world => fs.writeFileSync(world.transcript, '  \n'),
+  malformed: world => fs.writeFileSync(world.transcript, 'not json\n'),
+  directory: world => { fs.unlinkSync(world.transcript); fs.mkdirSync(world.transcript); },
+  symlink: world => { fs.renameSync(world.transcript, world.transcript + '.target'); fs.symlinkSync(world.transcript + '.target', world.transcript); },
+};
+for (const [name, change] of Object.entries(lateTranscript)) {
+  test(`the final main-process validation refuses a transcript that became ${name} during preparation`, async t => {
+    const f = fixture(); f.authorize();
+    const world = transcriptWorld(t);
+    const target = await resolveLocalTarget(ID, { ...world.deps, deadline: Date.now() + 2000 });
+    assert.equal(target.ok, true);
+    Object.assign(f.permit, { project: target.project, target });
+    realValidation(f, { ...world.deps, launchAllowed: () => true, broker: f.context.triggerRendererBridge,
+      remoteTarget: async () => false, liveElsewhere: async () => ({ known: true, live: null }), resolveTarget: resolveLocalTarget });
+    f.context.scheduleProjects = () => ({ add: async () => { change(world); } });
+    const result = await f.open();
+    assert.equal(result.ok, false); assert.equal(result.reason, 'no readable transcript');
+    assert.equal(f.spawns.length, 0); assert.equal(f.marks.length, 0); assert.equal(f.map.size, 0);
+  });
+}
+test('the real validation with an unchanged transcript spawns exactly once', async t => {
+  const f = fixture(); f.authorize();
+  const world = transcriptWorld(t);
+  const target = await resolveLocalTarget(ID, { ...world.deps, deadline: Date.now() + 2000 });
+  Object.assign(f.permit, { project: target.project, target });
+  realValidation(f, { ...world.deps, launchAllowed: () => true, broker: f.context.triggerRendererBridge,
+    remoteTarget: async () => false, liveElsewhere: async () => ({ known: true, live: null }), resolveTarget: resolveLocalTarget });
+  const result = await f.open();
+  assert.equal(result.ok, true); assert.equal(f.spawns.length, 1);
+});

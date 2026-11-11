@@ -5,20 +5,26 @@ const { createHash, randomUUID } = require('node:crypto');
 const { normalizeProjectPath } = require('../shared/normalize-project-path');
 const { parseFolderKey, isValidAlias } = require('../remote/remote-hosts');
 const { isProjectHidden } = require('../../../public/worktree-nesting');
+const { durableRowLinks } = require('./project-delete-identity');
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const stable = value => Array.isArray(value) ? `[${value.map(stable).join(',')}]`
   : value && typeof value === 'object' ? `{${Object.keys(value).sort().filter(key => value[key] !== undefined).map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}` : JSON.stringify(value);
 const hash = value => createHash('sha256').update(stable(value)).digest('hex');
 const WEEK = 7 * 86400000;
 
-function projectIdentity(project) {
+function projectIdentity(project, memo = new Map()) {
   if (!project || !Object.hasOwn(project, 'alias') || typeof project.projectPath !== 'string' || !project.projectPath || project.projectPath.includes('\0')) throw fail('DELETION_ID', 'Explicit project host and absolute path required');
   const { alias } = project;
   let projectPath;
   if (alias === null) {
     if (!path.isAbsolute(project.projectPath)) throw fail('DELETION_ID', 'Local project path must be absolute');
-    projectPath = normalizeProjectPath(path.resolve(project.projectPath));
-    if (process.platform === 'win32') projectPath = projectPath.toLowerCase();
+    const absolute = path.resolve(project.projectPath);
+    if (!memo.has(absolute)) {
+      let normalized = normalizeProjectPath(absolute);
+      if (process.platform === 'win32') normalized = normalized.toLowerCase();
+      memo.set(absolute, normalized);
+    }
+    projectPath = memo.get(absolute);
   } else {
     if (!isValidAlias(alias) || !path.posix.isAbsolute(project.projectPath)) throw fail('DELETION_ID', 'Invalid remote project');
     projectPath = path.posix.normalize(project.projectPath).replace(/\/$/, '') || '/';
@@ -26,15 +32,15 @@ function projectIdentity(project) {
   return { alias, projectPath, key: JSON.stringify([alias, projectPath]) };
 }
 
-function operationId(project, epoch, uuid = randomUUID()) {
+function operationId(project, epoch, uuid = randomUUID(), memo) {
   if (!Number.isSafeInteger(epoch) || epoch < 0 || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(uuid)) throw fail('DELETION_ID', 'Invalid operation epoch or UUID');
-  return `pd1:${hash(projectIdentity(project).key)}:${epoch}:${uuid}`;
+  return `pd1:${hash(projectIdentity(project, memo).key)}:${epoch}:${uuid}`;
 }
 
-function bind(input) {
-  const project = projectIdentity(input.project);
+function bind(input, memo) {
+  const project = projectIdentity(input.project, memo);
   const parts = typeof input.operationId === 'string' && /^pd1:([0-9a-f]{64}):(0|[1-9][0-9]*):([0-9a-f-]{36})$/i.exec(input.operationId);
-  if (!parts || !Number.isSafeInteger(Number(parts[2])) || operationId(input.project, Number(parts[2]), parts[3]) !== input.operationId
+  if (!parts || !Number.isSafeInteger(Number(parts[2])) || operationId(input.project, Number(parts[2]), parts[3], memo) !== input.operationId
     || (input.expectedProjectEpoch !== undefined && input.expectedProjectEpoch !== Number(parts[2]))) throw fail('DELETION_ID', 'Operation identity or epoch mismatch');
   return { ...project, expectedEpoch: Number(parts[2]), operationId: input.operationId };
 }
@@ -62,16 +68,22 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
     return owner && !owner.sealed ? owner : null;
   };
   const expired = row => !!row.sealed && row.finishedAt < now() - WEEK;
-  function readScope({ project }) {
-    const identity = projectIdentity(project);
+  function readScope({ project }, memo = new Map()) {
+    const identity = projectIdentity(project, memo);
     return db.connection.transaction(() => {
+      const identities = new Map([[JSON.stringify([project.alias, project.projectPath]), identity.key]]);
       const ownership = db.getAllCached().map(row => ({ ...row })).sort((a, b) => a.sessionId.localeCompare(b.sessionId));
       const rows = ownership.filter(row => {
         if (!row.projectPath || parseFolderKey(row.folder).alias !== identity.alias) return false;
-        try { return projectIdentity({ alias: identity.alias, projectPath: row.projectPath }).key === identity.key; }
-        catch { return false; }
+        const key = JSON.stringify([identity.alias, row.projectPath]);
+        if (!identities.has(key)) {
+          let owner = null;
+          try { owner = projectIdentity({ alias: identity.alias, projectPath: row.projectPath }, memo).key; } catch {}
+          identities.set(key, owner);
+        }
+        return identities.get(key) === identity.key;
       });
-      const ids = new Set(rows.map(row => row.sessionId));
+      const ids = new Set(rows.flatMap(row => [row.sessionId, ...durableRowLinks(row)]));
       const metadata = [...db.getAllMeta(true).values()].filter(row => ids.has(row.sessionId));
       const fields = store.metadataFields().filter(row => ids.has(row.sessionId));
       const folders = [...db.getAllFolderMeta()].sort((a, b) => String(a[0]).localeCompare(String(b[0])));
@@ -108,13 +120,17 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
       }
       if (row.projectKey !== project.key) throw fail('DELETION_ID', 'Receipt belongs to another project');
       const units = store.units(input.operationId).map(unit => ({ ordinal: unit.ordinal, category: unit.category, target: JSON.parse(unit.targetJson), status: unit.status, result: JSON.parse(unit.resultJson) }));
+      const ids = new Set([...observed.metadata.map(row => row.sessionId), ...units.filter(unit => unit.category === 'session').map(unit => unit.target.id)]);
+      observed.metadata = [...db.getAllMeta(true).values()].filter(row => ids.has(row.sessionId));
+      const final = row.state === 'committed' && units.find(unit => unit.category === 'finalize')?.target;
       return { operationId: row.operationId, state: row.sealed ? row.state : 'inProgress', phase: row.phase,
         terminal: !!row.sealed, noLateCommit: !!row.sealed, receiptAvailable: true, projectEpoch: fence.epoch,
-        startRevision: row.startRevision, lastRevision: row.lastRevision, nextUnit: row.nextUnit, totalUnits: row.totalUnits,
+        startRevision: row.startRevision, lastRevision: row.lastRevision, committedRevision: row.lastRevision, nextUnit: row.nextUnit, totalUnits: row.totalUnits,
         stagedUnits: units.length, unstagedUnits: row.totalUnits - units.length,
         completed: units.filter(unit => unit.status === 'completed'), remaining: units.filter(unit => unit.status === 'pending'),
         kept: units.filter(unit => unit.status === 'kept'), failed: units.filter(unit => unit.status === 'failed'),
-        error: JSON.parse(row.errorJson), ...observed };
+        error: JSON.parse(row.errorJson), ...(final ? { invalidation: { sessionIds: units.filter(unit => unit.category === 'session').map(unit => unit.target.id).sort(),
+          folderKeys: final.folderKeys || [], restoreTargets: final.restoreTargets } } : {}), ...observed };
     })();
   }
   function manifest(input) {
@@ -127,7 +143,8 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
       || typeof input.membershipDigest !== 'string' || !input.membershipDigest
       || typeof input.writerMembershipDigest !== 'string') throw fail('DELETION_MANIFEST', 'Invalid substrate manifest');
     const copy = JSON.parse(JSON.stringify(input));
-    return { project, copy, manifestHash: hash(copy) };
+    const { units: _units, ...request } = copy;
+    return { project, copy, manifestHash: `${hash(request)}:${hash(copy)}` };
   }
   function progressHook(row, beforeCommit) {
     return nextRevision => {
@@ -143,7 +160,7 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
     if (row.manifestHash !== manifest(input).manifestHash) throw fail('DELETION_HASH', 'Operation manifest changed');
     return row;
   }
-  function admit(input, firstEffect) {
+  function admit(input, firstEffect, { all = false, preflight } = {}) {
     const { project, copy, manifestHash } = manifest(input);
     let row;
     commitTransaction(db, () => {
@@ -153,6 +170,7 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
         if (existing.projectKey !== project.key || existing.manifestHash !== manifestHash) throw fail('DELETION_HASH', 'Operation ID reused with different manifest');
         return;
       }
+      preflight?.();
       if (otherOwner(project)) throw fail('DELETION_BUSY', 'Project is owned by another unsealed operation');
       const snapshot = readScope(input);
       if (snapshot.projectEpoch !== project.expectedEpoch) throw fail('DELETION_TERMINAL', 'Operation epoch has advanced');
@@ -171,16 +189,17 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
       if (firstEffect) {
         copy.units.forEach((unit, ordinal) => store.addUnit(input.operationId, ordinal, unit));
         row.phase = 'applying';
-        applyUnit(row, { ...copy.units[0], ordinal: 0 }, firstEffect);
+        for (let ordinal = 0; ordinal < (all ? copy.units.length : 1); ordinal++) applyUnit(row, { ...copy.units[ordinal], ordinal }, firstEffect);
       }
     }, next => { if (row) progressHook(row)(next); });
     trimReceipts();
     return read(input);
   }
-  function stage(input, batch) {
+  function stage(input, batch, { beforeChunk } = {}) {
     let row;
     commitTransaction(db, () => {
       row = owned(input);
+      beforeChunk?.();
       const units = store.units(input.operationId), expected = input.units.slice(units.length, units.length + batch.length);
       if (!Array.isArray(batch) || batch.length > 16 || !batch.length || hash(batch) !== hash(expected)) throw fail('DELETION_HASH', 'Staged units differ from frozen manifest');
       for (let i = 0; i < batch.length; i++) {
@@ -210,10 +229,11 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
     if (status === 'failed') seal(row, 'partial', { reason: 'unit-failed', ordinal: unit.ordinal });
     else if (row.nextUnit === row.totalUnits) seal(row, 'committed');
   }
-  function apply(input, effect, { beforeCommit } = {}) {
+  function apply(input, effect, { beforeCommit, beforeChunk } = {}) {
     let row;
     commitTransaction(db, () => {
       row = owned(input);
+      beforeChunk?.();
       if (row.phase !== 'applying' && row.totalUnits !== 0) throw fail('DELETION_STAGING', 'Manifest staging is incomplete');
       const unit = store.units(input.operationId)[row.nextUnit];
       if (unit) {
@@ -247,6 +267,20 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
     trimReceipts();
     return read(input);
   }
+  function failOperation(input, error) {
+    const project = bind(input);
+    let row;
+    commitTransaction(db, () => {
+      row = store.operation(input.operationId);
+      if (!row || row.sealed || fenceRow(project.key).operationId !== row.operationId) { row = null; return; }
+      if (error.code !== 'WRITER_STALE' && error.code !== 'DELETION_TERMINAL') {
+        const unit = store.units(row.operationId)[row.nextUnit];
+        if (unit) store.unitResult(row.operationId, unit.ordinal, 'failed', { code: error.code, error: error.message });
+      }
+      seal(row, 'partial', { code: error.code, reason: error.message });
+    }, next => { if (row) progressHook(row)(next); });
+    return read(input);
+  }
   function recover() {
     if (!store) throw fail('DELETION_STORE', 'Deletion store capability is required');
     const unfinished = store.active()[0];
@@ -275,7 +309,7 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
   function trimReceipts() {
     if (store.terminal().length > 128) purge();
   }
-  return { readScope, admit, stage, apply, read, fence, recover, purge };
+  return { readScope, admit, stage, apply, read, fence, recover, purge, failOperation };
 }
 
-module.exports = { createProjectDeleteProgress, operationId, commitTransaction, projectIdentity };
+module.exports = { createProjectDeleteProgress, operationId, commitTransaction, projectIdentity, bind };

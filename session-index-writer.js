@@ -11,12 +11,14 @@ const { createWhatsNew } = require('./src/main/app/changelog');
 const { remapProjectTranscripts } = require('./project-remap');
 const { createWriterWorkerClient } = require('./session-index-writer-client');
 const { createCacheEffects } = require('./cache-effects');
-const { projectArchiveWorkflows } = require('./src/main/projects/project-archive-workflow');
+const { projectArchiveWorkflows, archiveProjectIdentity } = require('./src/main/projects/project-archive-workflow');
 const { worktreeParentPath } = require('./public/worktree-nesting');
+const { stable } = require('./src/main/projects/project-delete-identity');
 
 // see .ai/contexts/session-index-writer.md
 function createSessionIndexWriter(options = {}, cache = require('./session-cache')) {
   const mirror = new Map();
+  let recoveryBootstrap = null;
   const notify = (ids, change) => {
     try { options.onSessionsChanged?.(ids, change); }
     catch (error) { (options.log || console).warn('[session-index-writer] sessions observer failed: ' + (error?.message ?? String(error))); }
@@ -45,6 +47,10 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     workerFactory: options.workerFactory || (() => new Worker(path.join(__dirname, 'workers', 'session-index-writer.js'))),
     onSettings: entries => { mirror.clear(); for (const [key, value] of entries) mirror.set(key, value); if (backend) backend.applySettingsAcknowledgment(entries); },
     ...options.clientOptions,
+    onBootstrap: message => {
+      recoveryBootstrap = structuredClone({ recoveredProjectDeletions: message.recoveredProjectDeletions || [] });
+      options.onBootstrap?.(structuredClone(recoveryBootstrap));
+    },
   });
   const workflows = projectArchiveWorkflows(client);
   const workflowProof = () => workflows.current()?.proof;
@@ -130,8 +136,17 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     if (!admitted()) return Promise.reject(new Error('writer is closing'));
     return track(commandScope.run(owner, () => Promise.resolve().then(fn)));
   };
+  const deletionResult = (input, state) => {
+    if (state.state === 'committed' && state.invalidation) notify(state.invalidation.sessionIds);
+    workflows.settleDeletion(input, state);
+    return state;
+  };
   const writer = {
     ready,
+    getRecoveryBootstrap: () => structuredClone(recoveryBootstrap),
+    readProjectDeletionSnapshot: input => request('readProjectDeletionSnapshot', input),
+    readProjectDeletionRevision: () => request('readProjectDeletionRevision'),
+    listProjectDeletionOperations: input => request('listProjectDeletionOperations', input),
     initializeCache(ctx) {
       if (!backend) throw new Error('await writer.ready before initializeCache');
       recorder.begin();
@@ -145,9 +160,28 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     async recordSessionRequestConflict(input) { return request('recordSessionRequestConflict', input); },
     async claimSessionResultNamespace(input) { return request('claimSessionResultNamespace', input); },
     async recordSessionResultPublication(input) { return request('recordSessionResultPublication', input); },
-    async getProjectDeletionState(input) { return request('getProjectDeletionState', input); },
+    async getProjectDeletionState(input) { return deletionResult(input, await request('getProjectDeletionState', input)); },
     async readProjectDeletionScope(input) { return request('readProjectDeletionScope', input); },
-    async fenceProjectDeletion(input) { return request('fenceProjectDeletion', input); },
+    async fenceProjectDeletion(input) { await workflows.waitForHold(input.project); return deletionResult(input, await request('fenceProjectDeletion', input)); },
+    completeProjectDeletion(input) {
+      if (!admitted()) return Promise.reject(new Error('writer is closing'));
+      let lease;
+      try { lease = workflows.deletionLease(input); }
+      catch (error) { return Promise.reject(error); }
+      const hash = stable(input);
+      if (lease.hash && lease.hash !== hash) return Promise.reject(Object.assign(new Error('Operation manifest changed'), { code: 'DELETION_HASH' }));
+      if (lease.completion) return lease.completion;
+      lease.hash = hash;
+      lease.completion = admit(async () => {
+        await lease.hold.ready;
+        try { return deletionResult(input, await request('completeProjectDeletion', input)); }
+        catch (error) {
+          if (['DELETION_ID', 'DELETION_MANIFEST', 'DELETION_OWNERSHIP', 'WRITER_STALE', 'DELETION_SCOPE', 'SHARED_SETTINGS', 'SETTINGS_OWNERSHIP_UNKNOWN', 'PROJECT_EPOCH_STALE', 'DELETION_LIMIT', 'DELETION_HASH', 'DELETION_TERMINAL', 'DELETION_BUSY'].includes(error.code)) workflows.settleDeletion(input, { terminal: true });
+          throw error;
+        }
+      });
+      return lease.completion;
+    },
     async patchGlobal(fields) { return request('patchGlobal', fields); },
     async renameSession(id, name) { return request('renameSession', id, name); },
     async rekeySessionMeta(from, to) { return request('rekeySessionMeta', from, to); },
@@ -250,14 +284,31 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
           scheduleName: () => null,
         });
         if (!updates.has('archivedProjects')) break;
-        const entries = Object.keys(archived).filter(entry => !Object.hasOwn(updates.get('archivedProjects'), entry));
+        const lease = workflows.current();
+        const cleared = Object.keys(archived).filter(entry => !Object.hasOwn(updates.get('archivedProjects'), entry));
+        const entries = cleared.filter(entry =>
+          !lease || lease.projects.some(project => project.key === archiveProjectIdentity(entryProject(entry)).key));
+        const keepArchived = retired => {
+          if (showArchived) return;
+          const skipped = new Set(cleared.filter(entry => !retired.includes(entry)));
+          kept = kept.filter(project => !skipped.has(archive.archivedEntry(project.remoteAlias || null, project.projectPath)));
+        };
+        keepArchived(entries);
+        if (!entries.length) break;
         try {
           const proof = workflowProof();
-          await request('retireArchivedEntries', entries, snapshot, ...(proof === undefined ? [] : [proof]));
+          const retired = await request('retireArchivedEntries', entries, snapshot, ...(proof === undefined ? [] : [proof]));
+          keepArchived(retired || entries);
           break;
         } catch (error) {
           if (error.code !== 'WRITER_STALE') throw error;
-          if (attempt === 2) break;
+          if (attempt === 2) {
+            keepArchived(entries.filter(entry => {
+              try { return !backend.projectDeletion?.fence(archiveProjectIdentity(entryProject(entry)).key)?.blocked; }
+              catch { return false; }
+            }));
+            break;
+          }
         }
       }
       const offers = backend.getSetting('scheduleReenableOffers') || {};
@@ -371,7 +422,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     }),
   };
   for (const [name, fn] of Object.entries(writer)) {
-    if (typeof fn !== 'function' || ['initializeCache', 'withCache', 'reserveProjectDeletion', 'scheduleRegistry', 'createWhatsNew', 'closeDb', 'drain', 'beginShutdown', 'terminate', 'releaseLiveSession'].includes(name)) continue;
+    if (typeof fn !== 'function' || ['getRecoveryBootstrap', 'initializeCache', 'withCache', 'reserveProjectDeletion', 'completeProjectDeletion', 'scheduleRegistry', 'createWhatsNew', 'closeDb', 'drain', 'beginShutdown', 'terminate', 'releaseLiveSession'].includes(name)) continue;
     if (workflowTargets[name]) {
       writer[name] = (...args) => {
         if (!admitted()) return Promise.reject(new Error('writer is closing'));
@@ -379,7 +430,11 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         if (['reenableOfferedSchedules', 'dismissReenableOffer'].includes(name) && (typeof args[0] !== 'string' || !args[0])) return admit(() => fn(...args));
         return track(commandScope.run(owner, () => workflows.run(workflowTargets[name](...args), async lease => {
           await ready;
-          if (name !== 'applyAndPersistArchived' || backend.projectDeletion?.hasFences?.() !== false) {
+          let needsProof = true;
+          if (name === 'applyAndPersistArchived') {
+            try { needsProof = backend.projectDeletion?.hasFences?.() !== false; } catch { /* see .ai/contexts/project-delete.md */ }
+          }
+          if (needsProof) {
             lease.proof = await request('readProjectArchiveEpochs', lease.projects.map(({ alias, projectPath }) => ({ alias, projectPath })), ['applyAndPersistArchived', 'unhideProject', 'revealAddedProject'].includes(name));
           }
           return fn(...args);

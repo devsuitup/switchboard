@@ -233,7 +233,12 @@ function createWriterCommands(db) {
     },
     retireArchivedEntries(entries, snapshot, proof) {
       const current = db.getSetting('archivedProjects') || {};
-      entries = entries.filter(entry => Object.hasOwn(current, entry));
+      entries = entries.filter(entry => {
+        if (!Object.hasOwn(current, entry)) return false;
+        const project = entryProject(entry), state = fence(project);
+        const expected = proof?.find(item => projectIdentity(item.project).key === projectIdentity(project).key)?.epoch;
+        return !state.blocked || (proof && expected !== state.epoch);
+      });
       guard(entries.map(entryProject), proof);
       const state = { archivedProjects: current, hiddenProjects: (db.getSetting('global') || {}).hiddenProjects || [],
         hiddenProjectScopes: (db.getSetting('global') || {}).hiddenProjectScopes || {},
@@ -242,6 +247,7 @@ function createWriterCommands(db) {
         throw Object.assign(new Error('archive snapshot changed before writer admission'), { code: 'WRITER_STALE' });
       }
       archive.retireArchivedEntries(db.getSetting, db.setSetting, current, entries);
+      return entries;
     },
     dismissReenableOffer(projectPath, folderKey, proof) {
       if (typeof projectPath !== 'string' || projectPath === '') return { error: 'invalid project path' };

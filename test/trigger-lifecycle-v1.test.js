@@ -157,3 +157,44 @@ test('file request joins an ordinary pending exact resume with one spawn and res
   assert.deepEqual(f.writes, []);
   assert.equal(f.renderer.calls.filter(c => c[0] === 'focus').length, 1, 'only the original manual click activates');
 });
+
+test('an open request that ages out while queued behind another is refused as stale without a second dispatch', async t => {
+  const f = await fixture(t);
+  const previousAge = process.env.SWITCHBOARD_TRIGGER_MAX_AGE_MS;
+  t.after(() => { if (previousAge === undefined) delete process.env.SWITCHBOARD_TRIGGER_MAX_AGE_MS; else process.env.SWITCHBOARD_TRIGGER_MAX_AGE_MS = previousAge; });
+  const until = async (predicate, label) => {
+    const end = performance.now() + 4000;
+    while (!predicate() && performance.now() < end) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.ok(predicate(), label);
+  };
+  let held;
+  const reply = f.renderer.w.api.triggerSessionActionResult;
+  f.renderer.w.api.triggerSessionActionResult = ack => { if (!held) held = () => reply(ack); else reply(ack); };
+  const first = f.publish({ version: 1, action: 'open', sessionId: ID, timeout_ms: 5000 });
+  await until(() => held, 'the first ACK is held');
+  process.env.SWITCHBOARD_TRIGGER_MAX_AGE_MS = '60';
+  const secondId = '31234567-89ab-cdef-0123-456789abcdef';
+  let parsed = false;
+  const open = fs.openSync;
+  fs.openSync = function (file, ...args) {
+    const descriptor = open.call(this, file, ...args);
+    if (String(file) === path.join(f.dirs.triggers, secondId + '.json')) parsed = true;
+    return descriptor;
+  };
+  t.after(() => { fs.openSync = open; });
+  const dispatchesBefore = f.sent.filter(([channel]) => channel === 'trigger-session-action').length;
+  const second = f.publish({ version: 1, action: 'open', sessionId: ID, prompt: 'expired queued prompt', timeout_ms: 5000 }, secondId);
+  await until(() => parsed, 'the second request was parsed while fresh');
+  for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve));
+  const secondInput = path.join(f.dirs.triggers, secondId + '.json');
+  const aged = () => Date.now() - fs.statSync(secondInput).mtimeMs > 80;
+  await until(aged, 'the queued request is older than the limit while its action deadline is live');
+  held();
+  await first;
+  const result = await second;
+  assert.equal(result.outcome, 'refused'); assert.equal(result.error, 'not sent');
+  assert.match(result.reason, /staleness limit/);
+  assert.equal(result.submitted, 'no'); assert.equal(result.wrote, false);
+  assert.deepEqual(f.writes, []);
+  assert.equal(f.sent.filter(([channel]) => channel === 'trigger-session-action').length, dispatchesBefore, 'no renderer dispatch for the aged request');
+});

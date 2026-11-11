@@ -1,11 +1,111 @@
-# Project deletion: read-only planning (#474 A4a)
+# Project deletion: dormant backend (#474 A4a–A4c1)
 
-## Persisted progress substrate (#474 A4b1)
+## Current state: bounded inventory and recovery reads (A4c1)
+
+A4b4 already supplies `completeProjectDeletion`, integer writer revision and
+project epoch fences, exact groups/members plus jobs/tabs/schedules inventory,
+terminal/noLateCommit outcomes and committed invalidation targets. Main, IPC
+and the two user entry points still have no new deletion caller. The earlier
+substrate sections below describe their historical landing boundary.
+
+`createProjectDeleteInventory` supplies the six planner ports, with an explicit
+writer, projects directory, data directory, active-session Map, scheduler
+snapshot and authoritative job/liveness readers. It does not populate caches,
+seed schedule registration, claim minutes or refresh projects. Missing liveness
+or job authority refuses; headless schedule runs remain external uncontrolled
+processes. Saved working-set identities are unioned with active tabs; durable
+cache ownership preserves remote hosts and uncertain fresh restores refuse.
+
+The ordered worker snapshot pages sessions (including archived cache rows and
+continuation links), folders, metadata/provenance, settings and project fences.
+All pages and the final revision read must agree. Each SQL page bounds row count
+and projected byte size before fetching payloads. Receipt pages also include
+retained committed headers, so bootstrap's interrupted-only list is insufficient
+by itself. Neither read route increments revision or enters mutation routing.
+
+Discovery bounds aggregate entries/records (20,000 default, 50,000 hard), bytes
+(32 MiB default, 64 MiB hard), transcript heads (16 KiB), other files
+(8 MiB default, 16 MiB hard), each port
+(3 s default) and the whole observation (10 s default, 15 s hard). The clock and
+timer ports are injectable. Directory iteration and file reads are asynchronous;
+realpaths are memoized within an observation. Attributable unindexed/unmapped
+transcripts, missing parts, linked files/directories, mixed ownership and
+unreadable schedules remain refusal candidates. Unrelated orphan metadata does
+not refuse another project. Empty registered projects without durable settings
+ownership refuse only when settings erasure is selected. Remote
+ownership and schedules need authoritative bounded readers; unavailable remote
+discovery refuses and cached absence never proves completeness. These ports retain
+declared host and POSIX identity; they never apply local path normalization.
+
+Disabled and malformed schedule filenames remain visible. Existing matching
+schedule-state claims and schedule-runs results are read without pruning or
+claiming. `inspectRetainedFiles` returns a bounded size/mtime/path manifest;
+it grants no unlink authority. All source, transcript and schedule files remain.
+Live PTY objects are projected to cloneable identity/generation/PID fields.
+Transcript IDs must agree with the indexed identity or its parent/bridge binding.
+Expired open/opendir calls dispose their handles even when the IO resolves late.
+
+After a committed completion/fence unit, failure of the auxiliary `hasHistory`
+read keeps the pending-history guard conservatively armed. The written result,
+settings ACK and producer fencing survive. Transaction failures still reject.
+Plain-Node real-store tests exercise this worker path, restart sealing and lost
+committed replies. Actual handler, stop/death, native crash and renderer acceptance
+remain A4c2–A4d/CI obligations, not A4c1 claims.
+
+### Review corrections (A4c1fix)
+
+Transcript discovery reads at most the first 16 KiB and parses only complete
+records. For a Claude main transcript, UUID filename identity means a file exists
+at the mapped path and the bounded prefix does not contradict it. A raw sessionId
+UUID scan can also establish identity. Subagents whose sessionId follows a large
+message use the matching parent directory and agent filename plus a bounded raw
+agentId string scan; contradictory identities still refuse.
+When complete records supply no cwd, a bounded raw cwd string scan takes priority
+over the indexed projectPath. Only absence of a cwd key in that prefix allows the
+row fallback, and its resolved encodeProjectPath must exactly match the folder.
+Encoding is not injective, so it cannot override a recorded cwd. An incomplete or
+non-string cwd value does not permit the fallback. Main transcripts retain strict
+cwd ownership. A subagent in its indexed parent's folder follows that parent's
+project ownership regardless of its own cwd; a cwd under the selected project is
+also acceptable for a matching subagent layout.
+It charges bytes actually read, while preserving full stat size and mtime for
+the member manifest.
+Recognized child worktree cwds (including .work-files/worktrees) resolve to their
+parent for transcript attribution; child cache groups remain separately retained.
+Worktree attribution is lexical after bounded, memoized realpath registration;
+it does not call the synchronous filesystem worktree resolver.
+Schedules and retained evidence still require bounded complete reads.
+
+Orphan session_meta and session_meta_fields IDs are matched to transcript paths
+during the bounded owned-folder walk, including subagent layouts. Attributable
+orphans refuse because they lack durable ownership; unrelated orphans stay
+outside the manifest. This does not grant metadata deletion authority from a
+filesystem observation alone. Durable links to absent indexed parts still refuse
+the owning project. Unmapped cache
+rows refuse only with selected-folder evidence. Unindexed files are attributed
+by their bounded first cwd or the selected folder mapping/exact encodeProjectPath
+encoding. A foreign cwd in a selected folder remains a refusal candidate. Known
+foreign folders are skipped; foreign heads outside selected folders are excluded.
+Per-file cwd realpath failures remain candidates and scanning continues through
+the folder; deadline and budget errors still propagate immediately.
+Settings ownership is required only when settings deletion is selected.
+
+Snapshot reads restart from the first section/page on SNAPSHOT_STALE, at most
+three attempts by default (snapshotAttempts injection, hard cap five). The
+injected now clock, original deadline, item and byte budgets cover all attempts;
+discarded pages still consume budget. A settings page whose first row exceeds
+the 1 MiB page bound retries that same cursor with limit=1 and a doubled bound,
+up to the lesser of the remaining aggregate budget and the store's 8 MiB hard
+cap. The store's conservative JSON byte bound still applies (six times raw
+string bytes plus overhead); failed sizing probes fetch no payload. Other errors
+never retry. Raw settings use the same JSON-parse-or-string fallback as getSetting.
+
+## Historical landing: persisted progress substrate (#474 A4b1)
 
 `project-delete-progress.js` is a dormant backend library. Its store schema,
 transaction hooks, budgets and worker routing are documented in
 [session-index-writer.md](session-index-writer.md#dormant-project-deletion-substrate-474-a4b1).
-There is no `completeProjectDeletion` command or production deletion caller.
+At the A4b1 landing there was no `completeProjectDeletion` command or production deletion caller.
 The existing planner and its fingerprint semantics are unchanged.
 
 `operationId(project, expectedEpoch, uuid?)` binds a canonical `[alias,path]`
@@ -337,6 +437,177 @@ in a VM with a real conversation-store fixture and Node 20 skip guard. It
 asserts disposable schedule/claim bytes, sibling sharing, async callbacks,
 epoch ABA refusal and queue cancellation. A4b4 still owes the real completion
 integration witness for AC10; no metadata-deletion completion is claimed here.
+
+## A4b3 dormant metadata engine
+
+`project-delete-identity.js` supplies the planner's unchanged canonical path,
+stable serialization, identity projection and membership hash. The planner now
+returns jobs, which were already included in its digests. Nullable paths,
+sorting and per-preview normalization memoization retain their previous meaning.
+
+`project-delete-writer.js` exports `readDurableScope`,
+`validateDeletionManifest`, `buildDeletionUnits`, `applyDeletionUnit` and
+`buildFinalizationUnits`. No completion command, deletion IPC or UI calls them.
+The validator binds the operation ID, integer revision, epoch, durable digest,
+five explicit boolean options and identical inventory/member/group copies.
+It recomputes membership, checks persisted row/folder ownership and refuses
+foreign, duplicate, missing or unproven targets. Session IDs have no host column;
+conflicting durable links refuse rather than granting ID-wide authority.
+Validation indexes durable ownership once by session ID and folder, and indexes
+folder metadata and manifest groups before checking members. Each durable row's
+owner key is cached; group, member, runtime and owner path checks share one
+normalization memo for the validator, including operation binding, scope reading
+and membership hashing. Each scope read also memoizes owner identities by raw
+host/path, including failed identities as nonmatches; standalone reads start
+fresh, and no memo survives a validation call or spans transactions. Validation therefore avoids
+per-member and per-linked-ID scans of the complete ownership inventory.
+Metadata-only history requires a parent, merged-part, continuation or bridge link
+from an owned persisted row and no foreign reference. Unowned orphan metadata
+stays outside the manifest. Linked historical
+metadata and provenance participate in the durable scope digest as well.
+
+Settings erasure independently requires durable row/folder ownership evidence.
+A path-only key alone cannot establish that evidence. Shared host/path owners,
+missing ownership and ambiguous key spellings refuse before all effects.
+Remote POSIX settings keys retain case even when the writer runs on Windows;
+local Windows normalization cannot authorize erasing another remote spelling.
+This proves only the available persisted inventory: A4c must independently
+validate runtime-only ownership under its admission hold.
+
+Each session unit archives the exact retained ID or erases both metadata tables,
+then invalidates only that ID's cache, metrics, session FTS/map/content, temporary
+search staging and continuation choice. Archive retains name/star provenance.
+Only exclusively owned folder markers are removed; no folder-wide cache/search
+delete is used. Memory and work-file search entries remain. Unit effects execute
+synchronously inside A4b1 progress transactions: effect, ledger and the single
+writer revision commit or roll back together. No #380 request journal is purged.
+
+Finalization is prepared separately, outside normal deletion units, for A4b4's
+atomic final group. It merges current global visibility and working-set fields,
+preserves unscoped legacy marks, directly subtracts archive/offer keys matching
+the selected canonical identity, and subtracts only the selected local stored
+schedule registration.
+Remote finalization never removes local registration; absent registries are
+never seeded. Restore pruning requires a manifest-proven selected member/tab ID
+and a string project path matching the admitted identity's path, including
+transcriptless dormant tabs. The working-set producer persists no host field;
+the admitted restore targets supply the owner rather than saved-tab host hints.
+Restore pruning assumes session IDs are globally unique across local and remote hosts, since the working-set producer writes no remoteAlias.
+The returned invalidation targets do not touch mainTouchedCache or renderer
+maps/pending saves. A4d must also serialize the whole-global working-set producer.
+The finalization helper itself supplies neither cancellation nor admission;
+A4b4 owns revision/epoch/ownership revalidation before every chunk and the final
+atomic group. Raw producers starting after deletion are also A4b4's boundary.
+
+Step-0 corrections: project lists omit reserved identities from leases/proofs
+and retirement, while unrelated identities continue. Writer retirement drops
+currently blocked entries before guarding the remainder, but supplied stale
+epochs still refuse. A readonly hasFences failure falls back to the writer
+epoch request. New archive/Undo/offer mutations still refuse reservations.
+
+Real-store tests cover the settings/session matrix, exact parts/subagents,
+historical/orphan sentinels, shared-key refusal, rollback, temporary publication,
+and retained disposable transcripts reindexed by the production cache/effects
+facade after reopen. These are AC2/AC3 engine witnesses; the A4b4 integration
+below exercises the complete command. A4c/d own stop/IPC/renderer behavior. Node 20 skips real
+stores when the native ABI and node:sqlite fallback are unavailable.
+
+## Complete command and recovery integration (A4b4)
+
+`writer.completeProjectDeletion(manifest)` is an internal backend command. Main,
+IPC and both user entry points still use their previous contracts. The facade
+reserves archive exclusion synchronously, shares it across `withCache` facades,
+awaits existing workflows and forwards once. Backend fencing also waits for an
+existing reservation's readiness. An unresolved operation pins even an externally
+reserved hold: release refuses until positive terminal or no-late-commit evidence.
+Different operation IDs cannot share that hold; the second command refuses before
+submission, preventing either ACK from stranding the other's exclusion.
+Timeouts, failed sealing and unavailable transport retain exclusion. Reads of
+absent/inProgress state do not release it. Fresh committed readback supplies exact
+session/restore/folder invalidations; exceptions and late transport ACKs alone do
+not publish them. No filesystem callback belongs to this command.
+
+The dedicated worker iterator validates the manifest, admits its epoch/header,
+stages frozen units in batches of at most sixteen, applies exact session/folder
+and optional settings units, then applies one final logical group. Hide, direct
+archive/offer subtraction, local registration subtraction, saved working-set
+pruning and the sealed receipt commit together. Tiny manifests (at most two units
+and 16,000 manifest bytes) can admit and complete in one transaction. Larger
+operations expose committed prefixes and never claim atomicity across chunks.
+Each chunk verifies its exact previous revision, owned unsealed epoch and current
+row/link/folder ownership inside its transaction. Conflict or effect failure seals
+fresh partial state; failure to seal remains unresolved for fence/bootstrap.
+The failed unit and pending units stay distinguishable. Bootstrap seals unfinished
+operations before ready and returns their identities; it never resumes them.
+
+The receipt's manifestHash contains a request hash and a full ordered-unit hash.
+This permits identical duplicate commands to return recorded status even when
+staging was interrupted, without reconstructing targets from changed ownership.
+Changed input under the same ID refuses. Expired receipts remain unknown and
+epoch-bearing IDs cannot re-enter after receipt eviction. Readback reports both
+the exact committed revision and fresh observation revision; selected metadata is
+read by receipt IDs after its cache rows disappear.
+
+The producer fence is a no-op without a deletion operation or a blocked fence.
+One existence query, using the blocked-fence index, returns an empty binding;
+an unblocked Add project/reopen row alone never enables it. Normal messages do
+not scan cached rows, folder metadata or deletion operations, resolve paths,
+or maintain the deletion-only ownership index. Before a completion or explicit
+fence starts, queued messages receive epoch bindings so already staged search
+cannot publish through the new deletion epoch.
+
+With deletion history, worker messages bind cache, session FTS and metadata
+targets when received. A connection-local, indexed reverse-link table is built
+lazily at the first deletion-related binding; its initial SQL population reads
+cached ownership. Temporary triggers then maintain exact row/link changes
+while deletion history exists. If a forced pre-admission binding never starts a
+deletion, a changed store revision rebuilds that index before its next use.
+The same reset applies if receipt purge and reopen remove all deletion history
+and protection subsequently returns. Nested session units of a folder deletion
+retain their enclosing folder binding as well as any session binding.
+Each producer looks up only its target IDs, folders and matching deletion units;
+it never materializes all cached rows, folder metadata or operation headers.
+The owner-row statement is cached with the deletion statements, prepared lazily
+after the temporary reverse-link table exists. A known session owner or supplied
+project path does not load sibling cache rows from its folder. Folder commands
+and sessions lacking both proofs retain the complete folder fallback, including
+mixed-folder ambiguity checks. Folder metadata and deletion history still
+participate in the same identity resolution.
+The binding survives every requeued unit and is rechecked before each effect,
+including staged FTS publication. Ownership comes from supplied row paths,
+durable rows/links/folder mappings and deletion-unit history. Multiple owners
+bind together unless a candidate has a deletion operation or blocked fence.
+That ambiguity refuses only its target. An unresolvable supplied path proves no
+owner for that target. Other targets in the batch still run; the final error ACK
+publishes committed settings. A target unowned when bound retains that uncertainty
+and cannot adopt later evidence to bypass a deletion epoch.
+Old producers cannot publish after admission; new selected producers stay
+blocked through committed deletion until explicit fresh re-add. A sealed partial
+allows newly bound reindexing and a newly validated cleanup operation, while old
+deletion IDs remain sealed. After detailed history is purged, an unowned session
+producer is conservatively refused while a blocked fence or operation remains; proven unrelated owners
+remain usable. Whole-global renderer saves remain A4d's producer boundary.
+
+Stage/apply errors whose code starts with `SQLITE_BUSY` propagate to the worker's
+existing 20/50/100 ms transaction retry loop. They never seal a partial receipt
+merely because a retryable lock was encountered; other errors retain sealing.
+
+Budgets retain the shipped indivisible-unit exception. Ledger/revision space is
+reserved by progress staging/apply, but an oversized final global/archive/registry
+setting and its atomic logical group can exceed row/byte/time targets. Real-store
+tests record SQL measurements, including a 180,000-character retained global
+payload; this is not proof of a strict bounded transaction. No wall-clock deadline
+assertions are used for deletion execution.
+
+Held/blocked archive retirements are excluded from both persistence and the
+rendered unarchived result, including when unrelated retirement exhausts its stale
+retry budget, while unrelated successful retirements continue. Native worker
+integration additions stay in the existing Electron-spawning suites and must be
+run in CI. Local witnesses load the full shipped worker with a VM filename and a
+real SQLite shim store; a second readonly connection inspects intermediate commits.
+Node 20 uses the fixture's supported guard. #380 journal tables and their revision
+contract are unchanged. Main sender/admission/stop and renderer recovery acceptance
+remain A4c/d.
 
 ## Evidence boundary
 

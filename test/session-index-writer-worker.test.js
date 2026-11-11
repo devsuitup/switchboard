@@ -28,6 +28,30 @@ function scenario(name, code) {
   });
 }
 
+scenario('complete deletion status and fence use native dedicated dispatch without replay', `
+  const writer = createSessionIndexWriter();
+  try {
+    await writer.ready;
+    const { operationId } = require('./src/main/projects/project-delete-progress');
+    const { membershipDigest } = require('./src/main/projects/project-delete-identity');
+    const project = { alias: null, projectPath: process.env.SWITCHBOARD_DATA_DIR };
+    const snapshot = await writer.readProjectDeletionScope({ project });
+    const inventory = { groups: [], members: [], tabs: [], jobs: [], schedules: [] };
+    const manifest = { project, operationId: operationId(project, snapshot.projectEpoch), expectedProjectEpoch: snapshot.projectEpoch,
+      expectedRevision: snapshot.writerRevision, writerMembershipDigest: snapshot.writerMembershipDigest,
+      membershipDigest: membershipDigest(project, inventory), inventory, groups: [], members: [],
+      options: { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false } };
+    const hold = writer.reserveProjectDeletion([project]);
+    await hold.ready;
+    const fenced = await writer.fenceProjectDeletion(manifest);
+    assert.equal(fenced.state, 'notStarted');
+    assert.equal(fenced.noLateCommit, true);
+    await assert.rejects(writer.completeProjectDeletion(manifest), { code: 'DELETION_TERMINAL' });
+    hold.release();
+    assert.equal((await writer.getProjectDeletionState(manifest)).projectHidden, false);
+  } finally { await writer.closeDb(); }
+`);
+
 scenario('main connection rejects writes after writer bootstrap', `
   const writer = createSessionIndexWriter();
   try {

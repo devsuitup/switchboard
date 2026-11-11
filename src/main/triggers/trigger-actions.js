@@ -276,10 +276,10 @@ function createTriggerActions({ fs = nativeFs, log, now = Date.now } = {}) {
       throw err;
     }
   }
-  async function publish({ result, namespace, retained }) {
+  async function publish({ result, namespace, retained, finalize }) {
     try {
       if (!namespace?.publish) throw new Error('request namespace decision is required');
-      await namespace.publish(result);
+      await namespace.publish(result, finalize);
     } catch (err) {
       retained?.();
       error('[trigger-watcher] v1 result publication failed:', err.message);
@@ -307,15 +307,17 @@ async function executeStop(trigger, execution) {
   const deps = ctx.lifecycle;
   const id = trigger.sessionId.toLowerCase();
   const before = own(trigger, 'before');
-  let effects = { ...evidence }, pinned, entry, session, pty, generation, tabKey, ready, writerIdentity;
+  let effects = { ...evidence }, pinned, entry, session, pty, generation, tabKey, ready;
   let releaseSession, releaseTab, stopRequested = false, noteFinished = false;
   const noteEntry = {};
   const fail = (reason, extra = {}) => refusal(trigger, reason, { ...effects, ...extra });
   const bound = read => boundedRead(read, { now, deadline });
   const pause = ms => new Promise(resolve => setTimeout(resolve, Math.max(0, Math.min(ms, deadline - now()))));
   const reject = (reason, extra) => { throw Object.assign(new Error(reason), { stopRefusal: true, extra }); };
+  const authority = deps.captureAuthority?.();
+  const allowed = () => deps.launchAllowed() && authority?.valid() !== false;
   const check = (timeout = 'session action timed out') => {
-    if (!deps.launchAllowed()) reject('Switchboard is closing.');
+    if (!allowed()) reject('Switchboard is closing.');
     if (now() >= deadline) reject(timeout, stopRequested ? { uncertain: true } : undefined);
     const state = ready?.validate();
     if (state && !state.ok) reject(state.reason);
@@ -339,12 +341,12 @@ async function executeStop(trigger, execution) {
   }
   function sample(completion) {
     target();
-    if (session.sandbox && !pinned.ctx.getCliStatus?.(id)) reject('session state unavailable');
+    const available = !session.sandbox || pinned.ctx.getCliStatus?.(id);
+    if (pinned.binding.revoked) reject('session target changed');
+    if (!available) reject('session state unavailable');
     pinned.binding.checkStop();
-    const identity = pinned.binding.observation?.identity;
-    if (writerIdentity != null && identity !== writerIdentity) reject('session target changed');
-    writerIdentity ??= identity;
     const status = pinned.ctx.getCliStatus?.(id);
+    if (pinned.binding.revoked) reject('session target changed');
     if (status?.kind === 'schedule') reject('scheduled session is not supported');
     if (status?.kind === 'bg') reject('background session is not supported');
     let staleBusy = completion?.source === 'transcript' && status
@@ -439,7 +441,7 @@ async function executeStop(trigger, execution) {
     ready = await deps.broker.waitForReady(deadline);
     if (!ready?.ok) reject(before && now() >= deadline ? 'note step not finished' : ready?.reason || 'renderer not ready');
     pinned.binding.validateAction = () => {
-      const state = ready.validate();
+      const state = allowed() ? ready.validate() : { ok: false, reason: 'Switchboard is closing.' };
       if (!state.ok) throw Object.assign(new Error(state.reason), { deliveryRefusal: true });
     };
     check(); target();
@@ -454,7 +456,6 @@ async function executeStop(trigger, execution) {
       let delivered;
       try {
         pinned.binding.checkStop();
-        writerIdentity = pinned.binding.observation?.identity;
         marker('prompt-attempted');
         delivered = await execution.deliver({ sessionId: id, command: trigger.before, wait: 'idle', expectedCwd: trigger.expectedCwd,
           entry, pinned, deadline, waitForFinalTurn: true });
@@ -467,7 +468,7 @@ async function executeStop(trigger, execution) {
       effects = { ...effects, ...delivered, delivery: delivered };
       delete effects.ok; delete effects.reason; delete effects.error;
       marker('note-delivered');
-      if (!deps.launchAllowed()) reject('Switchboard is closing.');
+      if (!allowed()) reject('Switchboard is closing.');
       if (!delivered.ok || delivered.timedOut || now() >= deadline || !delivered.final_turn
         || delivered.final_turn.timedOut || delivered.final_turn.sessionExited
         || !['descriptor', 'transcript', 'busy_flag'].includes(delivered.final_turn.source)) {
@@ -511,7 +512,12 @@ async function executeStop(trigger, execution) {
       { ...(!error.stopRefusal ? { error: error.message } : {}),
         ...(stopRequested || before && effects.enter_written && !noteFinished ? { uncertain: true } : {}), ...error.extra });
     }
-    await execution.publish(result);
+    const finalize = pending => {
+      result = !allowed() && pending.reason !== 'Switchboard is closing.'
+        ? { ...pending, ok: false, outcome: 'refused', reason: 'Switchboard is closing.', error: 'Switchboard is closing.' } : pending;
+      return result;
+    };
+    await execution.publish(finalize(result), finalize);
     return result;
   } finally {
     try { pinned?.ctx.forgetTranscriptTurn?.(id); } catch {}
@@ -526,11 +532,14 @@ async function executeOpen(trigger, execution) {
   let id = isNew ? null : trigger.sessionId.toLowerCase();
   let effects = { ...evidence };
   let releaseSession, releaseTab, reservation, pinned;
+  let acceptedCheck = null;
   const fail = (reason, extra = {}) => refusal(trigger, reason, { ...effects, sessionId: id, ok: false, outcome: 'refused', reason, ...extra });
+  const authority = deps.captureAuthority?.();
+  const allowed = () => deps.launchAllowed() && authority?.valid() !== false;
   const expired = () => now() >= deadline;
-  const admitted = () => !expired() && deps.launchAllowed();
+  const admitted = () => !expired() && allowed();
   const check = () => {
-    if (!deps.launchAllowed()) throw Object.assign(new Error('Switchboard is closing.'), { refusal: true });
+    if (!allowed()) throw Object.assign(new Error('Switchboard is closing.'), { refusal: true });
     if (expired()) throw Object.assign(new Error('session action timed out'), { refusal: true });
   };
   const bound = read => boundedRead(read, { now, deadline });
@@ -554,6 +563,13 @@ async function executeOpen(trigger, execution) {
       : session.isPlainTerminal ? 'plain terminal sessions are not supported'
         : session.isAttach || session.backgrounding || session.backgrounded ? 'background session is not supported' : null;
   }
+  function sessionChanged(session, pty, generation) {
+    const keys = [...deps.activeSessions];
+    if (!keys.some(([, value]) => value === session) || session.exited || session.pty !== pty || session.generation !== generation
+      || keys.some(([key, value]) => String(key).toLowerCase() === id && value !== session)) return fail('session target changed');
+    const reason = eligibility(session);
+    return reason ? fail(reason) : null;
+  }
   function cwdFailure(cwd) {
     if (!own(trigger, 'expectedCwd')) return null;
     const normalize = require('./trigger-watcher').normalizeCwd;
@@ -567,6 +583,9 @@ async function executeOpen(trigger, execution) {
     if (!releaseTab) return fail('session action timed out');
     pinned.binding.deadline = deadline;
     pinned.binding.expectedCwd = trigger.expectedCwd;
+    pinned.binding.validateAction = () => {
+      if (!allowed()) throw Object.assign(new Error('Switchboard is closing.'), { deliveryRefusal: true });
+    };
     return null;
   }
   async function run() {
@@ -583,6 +602,8 @@ async function executeOpen(trigger, execution) {
     releaseSession = await lock(execution.acquireSessionLock, id);
     if (!releaseSession) return fail('session action timed out');
     check();
+    const stale = execution.checkStale?.();
+    if (stale) return fail(stale.reason, { error: stale.error });
     let entry = isNew ? null : ctx.getPtyForSession(id);
     if (entry?.ambiguous) return fail('ambiguous normalized local tab id; nothing was written');
     if (!isNew && !entry && ctx.lookupDeliveryFallback) {
@@ -591,6 +612,7 @@ async function executeOpen(trigger, execution) {
       if (found.ambiguous) return fail('ambiguous descriptor-to-tab ownership; nothing was written');
       entry = found.entry;
     }
+    const firstTarget = entry ? { pty: entry.session.pty, generation: entry.session.generation } : null;
     let tabKey = id;
     let mode = isNew ? 'new' : 'resume';
     if (entry) {
@@ -601,6 +623,7 @@ async function executeOpen(trigger, execution) {
       tabKey = matches[0][0]; mode = 'reattach';
       const cwd = cwdFailure(entry.cwd); if (cwd) return cwd;
       const failure = await pin(entry); if (failure) return failure;
+      const moved = sessionChanged(entry.session, firstTarget.pty, firstTarget.generation); if (moved) return moved;
     } else if (!isNew) {
       if (await bound(() => deps.remoteTarget(id))) return fail('remote sessions are not supported');
       const live = await liveness(); if (live) return live;
@@ -611,7 +634,7 @@ async function executeOpen(trigger, execution) {
     }
     check();
     const operation = { mode, requestedSessionId: isNew ? null : id, tabKey,
-      generation: entry?.session.generation ?? null, entry: entry?.session,
+      generation: firstTarget?.generation ?? null, entry: entry?.session,
       project: mode === 'reattach' ? entry.session.projectPath : target.project,
       session: { sessionId: tabKey, headSessionId: tabKey, mergedMemberIds: [], projectPath: mode === 'reattach' ? entry.session.projectPath : target.project },
       target, name: isNew ? trigger.new.name.trim() : undefined, deadline };
@@ -659,6 +682,10 @@ async function executeOpen(trigger, execution) {
     if (!session || session.exited || session.generation !== ack.generation || (entry && session !== entry.session)) return fail('session target changed');
     if (eligibility(session)) return fail(eligibility(session));
     marker();
+    const acceptedPty = firstTarget?.pty ?? session.pty;
+    const acceptedGeneration = firstTarget?.generation ?? session.generation;
+    const targetChanged = () => sessionChanged(session, acceptedPty, acceptedGeneration);
+    acceptedCheck = targetChanged;
     if (!pinned) {
       entry = ctx.getPtyForSession(id);
       if (entry?.session !== session) return fail('session target changed');
@@ -672,6 +699,7 @@ async function executeOpen(trigger, execution) {
       } catch (error) { return fail(error.code === 'TRIGGER_DEADLINE' ? 'session action timed out' : 'session name could not be saved', { error: error.message }); }
     }
     check();
+    const moved = targetChanged(); if (moved) return moved;
     const cwd = cwdFailure(session.cwd); if (cwd) return cwd;
     if (own(trigger, 'prompt')) {
       const result = await execution.deliver({ sessionId: id, command: trigger.prompt, wait: 'idle', expectedCwd: trigger.expectedCwd,
@@ -683,6 +711,7 @@ async function executeOpen(trigger, execution) {
       check();
     }
     if (!admitted()) { check(); }
+    const final = targetChanged(); if (final) return final;
     return { ...fail(null), ok: true, outcome: 'opened', reason: null };
   }
   let result;
@@ -695,7 +724,13 @@ async function executeOpen(trigger, execution) {
         ...(step?.text_written ? { wrote: true, text_written: true, enter_written: !!step.enter_written,
           submitted: step.enter_written ? 'assumed' : 'no', ...(expired() && step.enter_written ? { uncertain: true } : {}) } : {}) });
     }
-    await execution.publish(result);
+    const finalize = pending => {
+      const next = pending.ok && acceptedCheck ? acceptedCheck() || pending : pending;
+      result = !allowed() && next.reason !== 'Switchboard is closing.'
+        ? { ...next, ok: false, outcome: 'refused', reason: 'Switchboard is closing.', error: 'Switchboard is closing.' } : next;
+      return result;
+    };
+    await execution.publish(finalize(result), finalize);
     return result;
   } finally {
     reservation?.refund();

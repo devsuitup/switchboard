@@ -2779,6 +2779,25 @@ including the automatic remembered open on a renderer reload. Entries still
 ambiguous after indexing retain the sidebar-choice notice. Entries still unindexed
 after the retry name that state and offer a manual sidebar retry.
 
+## Exact project metadata effects (#474 A4b3)
+
+The dormant backend in `src/main/projects/project-delete-writer.js` validates
+exact host/path ownership before building effects. It archives all verified
+retained parts/subagents while preserving app names, stars and name provenance,
+or erases both `session_meta` and `session_meta_fields` for the selected IDs.
+Historical metadata requires independent persisted linking evidence and never
+creates cache rows. Retained transcripts can later reindex through the normal
+cache/effects path with their archive/name/star metadata intact.
+
+Both choices invalidate only selected cache/metrics/session-search rows and
+continuation choices. Selected temporary search staging is cleared so an older
+unfinished publication cannot recreate those IDs; other staged IDs and memory/
+work-file FTS remain. Folder markers are removed only with exclusive ownership,
+never by a broad folder cascade. Request-journal tables are outside this engine.
+Computed effects retain the existing writer-revision guard; fencing new raw
+producers belongs to A4b4. See [project-delete.md](project-delete.md) for the
+settings refusal, separately prepared finalization and evidence boundaries.
+
 ## Accepted projection provenance (#719)
 
 Build IDs and facts belong to the worker reply envelope, rather than its
@@ -2844,3 +2863,19 @@ failure. Cleanup releases the child, terminates only that child by PID if
 necessary, and uses disposable files. Linux/macOS skip the Windows test;
 platform/error-policy tests cover their immediate-rethrow behaviour with VM
 platform injection. This validates a lock scenario, not its frequency in use.
+
+## Project deletion writer boundary (A4b4)
+
+The internal completeProjectDeletion backend invalidates only manifest-owned
+session rows, metrics, session search/staging and continuation choices. Retained
+conversation metadata is archived with names/pins preserved; selected discard
+erases both metadata and provenance. Memory/work-file search and physical files
+remain. Final hide/offer/archive/registration/restore changes occur only with the
+last sealed committed receipt. Interleaved writes seal a visible partial prefix.
+Raw cache/search/metadata producer messages now carry worker-received project
+epoch bindings through every chunk and the final staged-search publication.
+Fresh reindexing is allowed after sealed partial, or after explicit re-add for a
+committed deletion. Existing computed effects retain WRITER_STALE precedence.
+ACK or positively reconciled committed status supplies exact invalidations to
+the facade observer; main touched state and renderer pending saves remain A4c/d.
+See [project-delete.md](project-delete.md) for ownership, recovery and budget limits.

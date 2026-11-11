@@ -98,6 +98,31 @@ test('readonly opening an unmigrated database needs no deletion tables', support
   } finally { reader?.closeDb(); }
 });
 
+test('scope memoizes repeated identities and failures only for one read', supported, t => {
+  const h = setup(t), broken = path.join(h.project.projectPath, 'broken'), calls = new Map();
+  h.db.upsertCachedSessions([
+    ...['one', 'two'].map(sessionId => ({ sessionId, folder: '-local', projectPath: h.project.projectPath })),
+    ...['bad-one', 'bad-two'].map(sessionId => ({ sessionId, folder: '-local', projectPath: broken })),
+    { sessionId: 'foreign', folder: 'remote::-local', projectPath: h.project.projectPath },
+  ]);
+  const filename = require.resolve('../src/main/projects/project-delete-progress'), nativeRequire = createRequire(filename);
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module, exports: module.exports, process,
+    require: id => id === '../shared/normalize-project-path' ? { normalizeProjectPath(value) {
+      calls.set(value, (calls.get(value) || 0) + 1);
+      if (value === broken) throw new Error('path resolution failed');
+      return nativeRequire(id).normalizeProjectPath(value);
+    } } : nativeRequire(id) }, { filename });
+  const p = module.exports.createProjectDeleteProgress(h.db);
+  for (let read = 1; read <= 2; read++) {
+    const scope = p.readScope({ project: h.project }).scope;
+    assert.deepEqual(Array.from(scope.rows, row => row.sessionId), ['one', 'two']);
+    assert.equal(scope.ownership.length, 5, 'failed and foreign ownership remains in the digest');
+    assert.equal(calls.get(broken), read, 'a throwing identity is attempted once per read');
+    assert.equal(calls.get(h.project.projectPath), read, 'selected identity is resolved afresh once per read');
+  }
+});
+
 for (const alias of [null, 'remote']) {
   test(`scope ignores malformed ${alias === null ? 'local' : 'remote'} rows but digests their ownership`, supported, t => {
     const h = setup(t), p = h.progress();

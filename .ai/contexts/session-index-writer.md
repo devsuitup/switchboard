@@ -527,6 +527,39 @@ Tests use temporary isolated data dirs. No live application process or packaged
 build is used by these tests. The report in .work-files/codex-report-6166c.md records
 the final executed file census and packaged qualification checklist.
 
+## Project deletion completion (A4b4)
+
+A4b4 adds dedicated completeProjectDeletion dispatch beside deletion scope/status
+and terminal fence controls; see [project-delete.md](project-delete.md),
+"Complete command and recovery integration (A4b4)". Each deletion iterator turn
+owns its progress transaction rather than passing through generic effects.
+Tiny completions may commit once; staged/effect prefixes remain observable and
+revision/epoch/ownership fenced. Final logical removal and receipt sealing are
+atomic, subject to the documented indivisible oversized-setting exception.
+Producer epoch bindings are captured on message receipt and rechecked across
+all selected cache/FTS/metadata units, including search-staging publication.
+Receipt of either completion or fence synchronously registers that message in
+a pending-history set, before binding or starting its first transaction. While
+any such message remains, incoming producers force an epoch binding even when
+durable deletion history is still absent. This covers producers received during
+the first transaction's SQLITE_BUSY backoff, including tiny one-transaction
+completions. Each message leaves the set after a successful turn makes history
+visible, or on completion, error or workflow cancellation. Multiple queued
+deletions therefore cannot clear one another's protection. The existing forced
+binding of already queued producers at deletion start still covers earlier
+receipts. With neither pending deletion nor durable history, producers retain
+their constant-time early exit without ownership queries or path resolution.
+The facade holds archive exclusion through unknown outcomes and only releases
+after terminal/no-late-commit proof. No main/IPC/UI caller is connected yet.
+
+Archive retirement exhausting three snapshot conflicts returns the computed
+project list without persisting the stale decision, as before A4b4. Reserved
+identities remain excluded by the workflow lease. At exhaustion, the reader's
+current durable fences additionally exclude blocked identities; a failed fence
+read conservatively keeps that entry archived. This read changes rendering only
+and never authorizes a write. A later clean refresh can retire eligible entries.
+Successful retirement still filters rendering by the writer's returned keys.
+
 ## Projects ACK baseline (#719)
 
 Effects replies carry committedRevision captured inside the last owned SQLite
@@ -539,3 +572,40 @@ settings reads retain the acknowledged mirror. No-op applies retain the pre-awai
 Only post-ACK accepted final results advance projectsReconciledAt, including
 accepted callerless reconciliation. Archive retirement and shutdown keep their
 independent budgets and admission rules.
+
+## Bounded deletion reads and generation observation (#474 A4c1)
+
+`readProjectDeletionSnapshot({section,cursor,limit,maxBytes,expectedRevision})`
+and `listProjectDeletionOperations` are worker-ordered keyset reads. Sections are
+sessions, folders, metadata, fields, settings, fences and operations. Pages have
+`{revision,rows,bytes,nextCursor}`; the default limit is 256 (hard 1000), default
+page byte cap 1 MiB (hard 8 MiB). Invalid requests or a single oversized row refuse DISCOVERY_LIMIT;
+a page stops before the first row that would exceed its conservative byte bound
+and returns the last included key as nextCursor;
+a changed expected revision refuses SNAPSHOT_STALE. The store checks a conservative
+JSON-escaping byte bound before constructing/fetching JSON payloads. Provenance
+pages seek rowid under the unchanged revision, avoiding a whole-table sort.
+SQL stays inside session-index-store; the snapshot module validates the page
+contract and revision. `readProjectDeletionRevision()`
+returns the numeric fence without writes. Read routes bypass transaction/mutation
+routing and never advance the revision. Successful reads omit a settings ACK;
+the existing drain error path attaches current settings to refused reads. No schema change
+or access to the #380 request journal tables is involved.
+
+The client invokes `onBootstrap` once per ready worker generation, after settings
+delivery and before dispatch. Observer exceptions cannot break transport. The
+client logs the first bootstrap observer exception through its existing log port
+once per client lifetime, including facade observer failures; a throwing logger
+also cannot interrupt transport. A
+replacement generation updates the facade's detached `getRecoveryBootstrap()`
+snapshot and optional observer even though `ready` remains a one-shot promise.
+Old-worker messages cannot replace current recovery evidence. Bootstrap contains
+the interrupted operations sealed by startup; bounded receipt enumeration also
+finds retained committed operations whose original reply was lost. Observation
+does not replay work or release unresolved archive reservations.
+
+The post-commit history probe is auxiliary: a failed probe retains the pending
+history guard and preserves the committed ACK/settings bookkeeping. The original
+transaction error path is unchanged. The full worker is tested with a real guarded
+SQLite fixture and the real client/facade; generation replacement uses a fake
+worker in `test/session-index-writer-recovery.test.js`, without Electron.

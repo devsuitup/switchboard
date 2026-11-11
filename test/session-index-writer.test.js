@@ -53,6 +53,21 @@ test('facade preserves real SQLite scan, title/body, metrics, file FTS and clean
         assert.equal(db.getTotalCounts().totalMessages, 0);
         assert.equal(db.searchByType('session', 'fixture body words').length, 0);
         assert.deepEqual(db.getSetting('global'), { hiddenProjects: ['/other'], openWorkingSet: ['kept'] });
+        const { operationId } = require('./src/main/projects/project-delete-progress');
+        const { membershipDigest } = require('./src/main/projects/project-delete-identity');
+        const project = { alias: null, projectPath: path.join(root, 'empty-deletion') };
+        const snapshot = await writer.readProjectDeletionScope({ project });
+        const inventory = { groups: [], members: [], tabs: [], jobs: [], schedules: [] };
+        const manifest = { project, operationId: operationId(project, snapshot.projectEpoch),
+          expectedRevision: snapshot.writerRevision, expectedProjectEpoch: snapshot.projectEpoch,
+          writerMembershipDigest: snapshot.writerMembershipDigest, membershipDigest: membershipDigest(project, inventory),
+          inventory, groups: [], members: [], options: { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false } };
+        const deleted = await writer.completeProjectDeletion(manifest);
+        assert.equal(deleted.state, 'committed');
+        assert.equal(deleted.projectHidden, true);
+        assert.equal(deleted.committedRevision, snapshot.writerRevision + 1);
+        assert.equal((await writer.completeProjectDeletion(manifest)).committedRevision, deleted.committedRevision);
+        assert.equal((await writer.getProjectDeletionState(manifest)).state, 'committed');
         await writer.closeDb();
         console.log('facade SQLite verified');
       })().catch(error => { console.error(error); process.exitCode = 1; });

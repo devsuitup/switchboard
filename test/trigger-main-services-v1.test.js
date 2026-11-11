@@ -13,17 +13,20 @@ test('the outer exit guard reaches the broker instantiated inside startApplicati
   const ast = espree.parse(source, { ecmaVersion: 2024, sourceType: 'commonjs', range: true });
   const variable = (nodes, name) => nodes.find(node => node.type === 'VariableDeclaration' && node.declarations.some(d => d.id.name === name));
   const startup = ast.body.find(node => node.type === 'FunctionDeclaration' && node.id.name === 'startApplication').body.body;
-  const revocations = [];
+  const calls = [];
   const context = vm.createContext({ ipcMain: {}, createUnsavedGuard: options => options,
-    require: () => ({ createTriggerRendererBridge: () => ({ revoke: (...args) => revocations.push(args) }) }) });
-  for (const node of [variable(ast.body, 'revokeTriggerActions'), variable(ast.body, 'unsavedGuard'), variable(startup, 'triggerRendererBridge'),
-    startup.find(node => node.type === 'ExpressionStatement' && node.expression.left?.name === 'revokeTriggerActions')]) {
+    require: () => ({ createTriggerRendererBridge: () => ({ suspend: (...args) => calls.push(['suspend', ...args]),
+      restore: (...args) => calls.push(['restore', ...args]) }) }) });
+  const assignment = name => startup.find(node => node.type === 'ExpressionStatement' && node.expression.left?.name === name);
+  for (const node of [variable(ast.body, 'suspendTriggerActions'), variable(ast.body, 'restoreTriggerActions'), variable(ast.body, 'unsavedGuard'),
+    variable(startup, 'triggerRendererBridge'), assignment('suspendTriggerActions'), assignment('restoreTriggerActions')]) {
     assert.ok(node, 'the shipped bootstrap must retain the exit-to-broker wiring');
     vm.runInContext(source.slice(...node.range), context, { filename });
   }
   const guard = vm.runInContext('unsavedGuard', context); const win = {};
   guard.onCommitted(win);
-  assert.deepEqual(revocations, [[win, 'Switchboard is closing.']]);
+  guard.onRolledBack(win);
+  assert.deepEqual(calls, [['suspend', win], ['restore', win]]);
 });
 
 test('trigger project snapshot retains hidden provenance and rejects changes while querying', async () => {

@@ -32,15 +32,23 @@ type OfferRuntime = {
 
 export type DeletionProject = { alias: string | null; projectPath: string };
 export type DeletionReference = { operationId: string; project: DeletionProject };
+export type ProjectDeletionManifest = DeletionReference & {
+  expectedRevision: number; expectedProjectEpoch: number; writerMembershipDigest: string; membershipDigest: string;
+  groups: Array<Record<string, unknown>>; members: Array<Record<string, unknown>>;
+  inventory: { groups: Array<Record<string, unknown>>; members: Array<Record<string, unknown>>;
+    tabs: Array<Record<string, unknown>>; jobs: Array<Record<string, unknown>>; schedules: Array<Record<string, unknown>> };
+  options: { sessions: boolean; settings: boolean; schedules: false; transcripts: false; stopBackgroundJobs: boolean };
+};
 export type DeletionUnit = { ordinal: number; category: string; target: unknown; status: 'pending' | 'completed' | 'kept' | 'failed'; result: unknown };
 export type ProjectDeletionState = {
   state: 'absent' | 'unknown' | 'inProgress' | 'committed' | 'partial' | 'notStarted';
   terminal: boolean; noLateCommit: boolean; receiptAvailable: boolean; projectEpoch: number;
   revision: number; readRevision: number; projectHidden: boolean; settingsPresent: boolean; metadata: unknown[];
   operationId?: string; phase?: 'preparing' | 'applying' | 'finalizing' | 'terminal'; reason?: string;
-  startRevision?: number; lastRevision?: number; nextUnit?: number; totalUnits?: number;
+  startRevision?: number; lastRevision?: number; committedRevision?: number; nextUnit?: number; totalUnits?: number;
   stagedUnits?: number; unstagedUnits?: number; completed?: DeletionUnit[]; remaining?: DeletionUnit[];
   kept?: DeletionUnit[]; failed?: DeletionUnit[]; error?: unknown;
+  invalidation?: { sessionIds: string[]; folderKeys: string[]; restoreTargets: Array<{ sessionId: string; alias: string | null; projectPath: string }> };
 };
 export type ProjectDeletionScope = {
   writerRevision: number; projectEpoch: number; writerMembershipDigest: string;
@@ -78,6 +86,10 @@ export type SessionResultNamespace = SessionRequestCommand & {
 
 export interface SessionIndexWriter {
   readonly ready: Promise<void>;
+  getRecoveryBootstrap(): { recoveredProjectDeletions: DeletionReference[] } | null;
+  readProjectDeletionRevision(): Promise<number>;
+  readProjectDeletionSnapshot(input: ProjectDeletionPageRequest): Promise<ProjectDeletionPage>;
+  listProjectDeletionOperations(input?: Omit<ProjectDeletionPageRequest, 'section'>): Promise<ProjectDeletionPage>;
   querySessionRequestOutcome(input: { stemKey: string; suppliedHash?: string; rawHash?: string }): Promise<SessionRequestOutcome>;
   recordConsumedSessionStatusRequest(input: ConsumedSessionStatusRequest): Promise<SessionRequestOutcome>;
   recordSessionRequestConflict(input: SessionRequestCommand & { rawHash: string; resultBytes: Uint8Array }): Promise<SessionRequestOutcome>;
@@ -86,6 +98,7 @@ export interface SessionIndexWriter {
   getProjectDeletionState(input: DeletionReference): Promise<ProjectDeletionState>;
   readProjectDeletionScope(input: { project: DeletionProject }): Promise<ProjectDeletionScope>;
   reserveProjectDeletion(projects: DeletionProject[]): { ready: Promise<void>; release(): void };
+  completeProjectDeletion(input: ProjectDeletionManifest): Promise<ProjectDeletionState>;
   fenceProjectDeletion(input: DeletionReference & { expectedProjectEpoch: number }): Promise<ProjectDeletionState>;
   rekeySessionMeta(fromId: string, toId: string): Promise<void>;
   completeRepairFolders(folders: string[]): Promise<void>;
@@ -136,6 +149,14 @@ export interface SessionIndexWriter {
   closeDb(): Promise<void>;
 }
 
+export type ProjectDeletionPageRequest = {
+  section?: 'sessions' | 'folders' | 'metadata' | 'fields' | 'settings' | 'fences' | 'operations';
+  cursor?: string | null; limit?: number; maxBytes?: number; expectedRevision?: number;
+};
+export type ProjectDeletionPage = {
+  revision: number; rows: Array<Record<string, unknown>>; bytes: number; nextCursor: string | null;
+};
+
 export function createSessionIndexWriter(options?: {
   workerFactory?: () => import('node:worker_threads').Worker;
   client?: unknown;
@@ -143,5 +164,6 @@ export function createSessionIndexWriter(options?: {
   clientOptions?: { timeoutMs?: number; maxRestarts?: number };
   log?: Logger;
   onBusyCounts?: (counts: Record<string, { retries: number; exhaustions: number }>) => void;
+  onBootstrap?: (bootstrap: { recoveredProjectDeletions: DeletionReference[] }) => void;
   onSessionsChanged?: (ids: string[] | null, change?: { upsertOnly?: boolean }) => void;
 }, cache?: Cache): SessionIndexWriter;

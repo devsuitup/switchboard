@@ -91,8 +91,9 @@ async function runExitHandoffs(ids, { send, status, waitForChange, now = Date.no
   finally { signal?.removeEventListener('abort', abort); }
 }
 
-function createExitAttempts({ snapshot, check, cancelCheck, invalidateRenderer, onCommitted = () => {} }) {
+function createExitAttempts({ snapshot, check, cancelCheck, invalidateRenderer, onCommitted = () => {}, onRolledBack = () => {} }) {
   let current = null;
+  let commits = 0;
   let nextId = 1;
   const rank = { close: 0, quit: 1, update: 2 };
   const read = () => {
@@ -107,6 +108,7 @@ function createExitAttempts({ snapshot, check, cancelCheck, invalidateRenderer, 
     previous.phase = 'cancelled';
     cancelCheck(previous.window);
     invalidateRenderer(previous.window, previous.id, wasCommitted, outcome);
+    if (wasCommitted) onRolledBack(previous.window);
     return true;
   }
   function request(win, action, external = false) {
@@ -150,6 +152,7 @@ function createExitAttempts({ snapshot, check, cancelCheck, invalidateRenderer, 
         continue;
       }
       attempt.phase = 'committed';
+      commits++;
       onCommitted(attempt.window);
       return { ...result, token: attempt.id, action: attempt.action };
     }
@@ -158,6 +161,7 @@ function createExitAttempts({ snapshot, check, cancelCheck, invalidateRenderer, 
   return { request, invalidate, token: win => current?.window === win && current.phase === 'committed' ? current.id : null,
     committed: token => token != null && current?.phase === 'committed' && current.id === token,
     launchAllowed: () => current?.phase !== 'committed', current: () => current,
+    capture: () => { const at = commits; return { valid: () => commits === at && current?.phase !== 'committed' }; },
     refresh: (win, detail) => {
       if (current?.window !== win || current.id !== detail?.attempt || current.version !== detail?.version || current.phase === 'committed') return null;
       current.snapshot = read();

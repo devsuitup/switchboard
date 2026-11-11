@@ -3,44 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createTriggerActions } = require('../src/main/triggers/trigger-actions');
-const ID = '01234567-89ab-cdef-0123-456789abcdef';
-const NEW = '11234567-89ab-cdef-0123-456789abcdef';
-const STEM = '21234567-89ab-cdef-0123-456789abcdef';
-const project = process.cwd();
-function fixture() {
-  const events = [];
-  const session = { pty: { pid: 1 }, generation: 7, cwd: project, projectPath: project };
-  const entry = { session, ptyProcess: session.pty, cwd: project };
-  const map = new Map([[ID, session]]);
-  const ctx = {
-    getPtyForSession: () => entry,
-    pinDelivery: (_id, e) => ({ binding: { tab: e.session, deadline: Infinity, admit: async () => {}, readId: () => ID }, ctx: {}, handle: {} }),
-    lifecycle: {
-      activeSessions: map, launchAllowed: () => true,
-      getProjectSnapshot: async () => ({ allProjects: [{ projectPath: project }], hiddenProjects: [], hiddenProjectKinds: {} }),
-      liveElsewhere: async () => ({ known: true, live: null }), remoteTarget: async () => false,
-      resolveTarget: async () => ({ ok: true, sessionId: ID, project, cwd: project, folder: 'folder', transcript: 'file' }),
-      randomUUID: () => NEW,
-      broker: { request: async (op, save) => {
-        events.push(['renderer', op]); await save();
-        if (op.mode !== 'reattach') { map.set(op.tabKey, session); ctx.getPtyForSession = () => entry; }
-        return { ok: true, generation: 7, ...(op.mode === 'new' ? { created: true } : op.mode === 'resume' ? { resumed: true } : {}) };
-      } },
-      saveName: async (id, name) => { events.push(['name', id, name]); return { name }; },
-    },
-  };
-  const execution = { ctx, deadline: Date.now() + 5000,
-    acquireSessionLock: async id => { events.push(['fifo', id]); return () => events.push(['release-fifo']); },
-    acquireTabLock: async tab => { events.push(['mutex', tab]); return () => events.push(['release-mutex']); },
-    saveMarker: marker => events.push(['marker', marker]),
-    publish: result => events.push(['result', result]),
-    deliver: async () => { events.push(['deliver']); return { ok: true, submitted: 'assumed', wrote: true, text_written: true, enter_written: true }; },
-  };
-  const actions = createTriggerActions();
-  return { events, ctx, execution, session, map,
-    open: extra => actions.execute({ version: 1, action: 'open', sessionId: ID, ...extra }, STEM, execution),
-    new: extra => actions.execute({ version: 1, action: 'open', new: { project, name: '  Task  ' }, prompt: 'hello', ...extra }, STEM, execution) };
-}
+const { fixture, ID, NEW, STEM, project } = require('./fixtures/trigger-open.cjs');
+
 test('open here gets an explicit reattach ACK and publishes under both locks', async () => {
   const f = fixture(); const r = await f.open();
   assert.equal(r.outcome, 'opened'); assert.equal(r.resumed, false);
@@ -155,4 +119,132 @@ test('joined resume revalidates actual mode, transcript/cwd and liveness without
     return { ok: true, generation: 7, resumed: false };
   };
   const result = await f.open(); assert.equal(result.outcome, 'opened'); assert.equal(result.resumed, false);
+});
+
+const resultCount = f => f.events.filter(e => e[0] === 'result').length;
+const lockEvents = f => f.events.map(e => e[0]).filter(name => name.startsWith('release-'));
+function assertReleasedOnce(f) {
+  assert.equal(resultCount(f), 1, 'one terminal publication');
+  assert.deepEqual(lockEvents(f).sort(), ['release-fifo', 'release-mutex']);
+  assert.equal(f.events.at(-1)[0].startsWith('release-'), true, 'locks are released after publication');
+}
+const targetChanges = {
+  'generation change': (f) => { f.session.generation++; },
+  'map entry deletion': (f) => { f.map.clear(); },
+  'map entry replacement': (f) => { for (const key of f.map.keys()) f.map.set(key, { ...f.session }); },
+  'PTY replacement': (f) => { f.session.pty = { pid: 2 }; },
+  'exit': (f) => { f.session.exited = true; },
+  'background eligibility': (f) => { f.session.backgrounded = true; },
+};
+for (const [change, apply] of Object.entries(targetChanges)) {
+  const reason = change === 'background eligibility' ? 'background session is not supported' : 'session target changed';
+  test(`no-prompt resume refuses ${change} while its tab lock was pending`, async () => {
+    const f = fixture(); f.ctx.getPtyForSession = () => null;
+    f.execution.acquireTabLock = async () => { apply(f); return () => f.events.push(['release-mutex']); };
+    const r = await f.open();
+    assert.equal(r.ok, false); assert.equal(r.outcome, 'refused'); assert.equal(r.reason, reason);
+    assert.equal(r.resumed, true, 'confirmed resume evidence is kept');
+    assert.equal(f.events.some(e => e[0] === 'deliver'), false);
+    assertReleasedOnce(f);
+  });
+  test(`resume with a prompt refuses ${change} while its tab lock was pending and sends no prompt`, async () => {
+    const f = fixture(); f.ctx.getPtyForSession = () => null;
+    f.execution.acquireTabLock = async () => { apply(f); return () => f.events.push(['release-mutex']); };
+    const r = await f.open({ prompt: 'hello' });
+    assert.equal(r.reason, reason); assert.equal(r.resumed, true); assert.equal(r.wrote, false);
+    assert.equal(f.events.some(e => e[0] === 'deliver'), false);
+  });
+  test(`new action refuses ${change} while its name save was pending and sends no prompt`, async () => {
+    const f = fixture();
+    f.ctx.lifecycle.saveName = async (id, name) => { apply(f); return { name }; };
+    const r = await f.new();
+    assert.equal(r.ok, false); assert.equal(r.reason, reason);
+    assert.equal(r.created, true, 'confirmed creation evidence is kept');
+    assert.equal(f.events.some(e => e[0] === 'deliver'), false);
+    assertReleasedOnce(f);
+  });
+  test(`prompt delivery that outlives its target refuses on ${change} and keeps the partial-delivery evidence`, async () => {
+    const f = fixture(); f.ctx.getPtyForSession = () => null;
+    f.execution.deliver = async () => { apply(f); return { ok: true, submitted: 'assumed', wrote: true, text_written: true, enter_written: true }; };
+    const r = await f.open({ prompt: 'hello' });
+    assert.equal(r.ok, false); assert.equal(r.reason, reason);
+    assert.equal(r.resumed, true); assert.equal(r.wrote, true); assert.equal(r.enter_written, true);
+    assertReleasedOnce(f);
+  });
+}
+test('no-prompt resume succeeds when its target is unchanged after the tab lock', async () => {
+  const f = fixture(); f.ctx.getPtyForSession = () => null;
+  const r = await f.open();
+  assert.equal(r.outcome, 'opened'); assert.equal(r.resumed, true);
+  assertReleasedOnce(f);
+});
+test('the authorized same-object re-key survives the tab lock and the name save', async () => {
+  const f = fixture(); f.ctx.getPtyForSession = () => null;
+  f.execution.acquireTabLock = async () => { f.map.delete(ID); f.map.set('re-keyed', f.session); return () => f.events.push(['release-mutex']); };
+  assert.equal((await f.open()).outcome, 'opened');
+  const created = fixture();
+  created.ctx.lifecycle.saveName = async (id, name) => { created.map.delete(id); created.map.set('re-keyed', created.session); return { name }; };
+  const r = await created.new();
+  assert.equal(r.outcome, 'opened', JSON.stringify(r));
+  assert.equal(created.events.some(e => e[0] === 'deliver'), true);
+});
+
+test('a queued open request checks staleness right after its FIFO and before any target work', async () => {
+  const f = fixture(); f.ctx.getPtyForSession = () => null;
+  const reason = 'trigger is 61ms old, older than the 60ms staleness limit; refused rather than act';
+  f.execution.checkStale = () => { f.events.push(['stale-check']); return { error: 'not sent', reason }; };
+  const r = await f.open({ prompt: 'hello' });
+  assert.equal(r.ok, false); assert.equal(r.outcome, 'refused'); assert.equal(r.error, 'not sent'); assert.equal(r.reason, reason);
+  assert.equal(r.submitted, 'no'); assert.equal(r.wrote, false); assert.equal(r.steps_total, 1);
+  assert.equal(r.resumed, false);
+  const names = f.events.map(e => e[0]);
+  assert.deepEqual(names.slice(0, 2), ['fifo', 'stale-check']);
+  assert.equal(names.includes('renderer'), false); assert.equal(names.includes('deliver'), false);
+  assert.equal(names.includes('mutex'), false);
+  assert.equal(resultCount(f), 1); assert.deepEqual(lockEvents(f), ['release-fifo']);
+});
+test('a fresh queued request passes the staleness check and proceeds', async () => {
+  const f = fixture(); f.ctx.getPtyForSession = () => null;
+  f.execution.checkStale = () => { f.events.push(['stale-check']); return null; };
+  const r = await f.open();
+  assert.equal(r.outcome, 'opened');
+  assert.ok(f.events.findIndex(e => e[0] === 'stale-check') < f.events.findIndex(e => e[0] === 'renderer'));
+});
+test('a stale new action refunds its unretained rate token and launches nothing', async () => {
+  const f = fixture(); let stale = 3;
+  f.execution.checkStale = () => (stale-- > 0 ? { error: 'not sent', reason: 'stale' } : null);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const r = await f.new();
+    assert.equal(r.reason, 'stale'); assert.equal(r.created, false);
+  }
+  assert.equal(f.events.some(e => e[0] === 'renderer' || e[0] === 'name' || e[0] === 'deliver'), false);
+  assert.equal((await f.new()).outcome, 'opened', 'three stale refusals left every token available');
+});
+
+for (const [change, apply] of Object.entries(targetChanges)) {
+  const reason = change === 'background eligibility' ? 'background session is not supported' : 'session target changed';
+  test(`reattach refuses ${change} while its tab lock was pending, before any renderer dispatch`, async () => {
+    const f = fixture();
+    f.execution.acquireTabLock = async () => { apply(f); return () => f.events.push(['release-mutex']); };
+    const r = await f.open();
+    assert.equal(r.ok, false); assert.equal(r.outcome, 'refused'); assert.equal(r.reason, reason);
+    assert.equal(f.events.some(e => e[0] === 'renderer'), false);
+    assertReleasedOnce(f);
+  });
+}
+test('reattach refuses a PTY replacement that arrives between dispatch and the ACK', async () => {
+  const f = fixture();
+  const request = f.ctx.lifecycle.broker.request;
+  f.ctx.lifecycle.broker.request = async (...args) => { const ack = await request(...args); f.session.pty = { pid: 2 }; return ack; };
+  assert.equal((await f.open()).reason, 'session target changed');
+});
+test('a surviving alias does not authorize replacement of the requested map binding', async () => {
+  const f = fixture(); f.ctx.getPtyForSession = () => null;
+  f.execution.acquireTabLock = async () => { f.map.set('alias', f.session); f.map.set(ID, { ...f.session }); return () => f.events.push(['release-mutex']); };
+  const r = await f.open();
+  assert.equal(r.reason, 'session target changed'); assert.equal(r.resumed, true);
+  const created = fixture();
+  created.ctx.lifecycle.saveName = async (id, name) => { created.map.set('alias', created.session); created.map.set(id, { ...created.session }); return { name }; };
+  const n = await created.new();
+  assert.equal(n.reason, 'session target changed'); assert.equal(created.events.some(e => e[0] === 'deliver'), false);
 });

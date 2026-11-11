@@ -11,6 +11,8 @@ const { classifyUserText } = require('../../../read-session-file');
 const { createTranscriptTurnReader } = require('../../../transcript-turn');
 const { createSessionStatus } = require('./session-status');
 
+const WRITER_CHANGED = 'session target changed';
+
 // Local session handle — see .ai/contexts/trigger-watcher.md, "Session handle".
 function createLocalSessionHandle(ptyProcess) {
   return {
@@ -140,7 +142,8 @@ function createTriggerContext(deps) {
     const own = eligible(session);
     let start = own ? (v1 && session.hostPtyStart != null ? session.hostPtyStart : source.deliveryPtyStart(pid)) : null;
     const binding = { tab: session, entry, requestedId, effectiveId: normalizeSessionId(requestedId), reset: null,
-      resetAuthorized: false, step: null, observation: null, lastDialog: null, ...(v1 ? { deadline } : {}) };
+      resetAuthorized: false, step: null, observation: null, lastDialog: null, writerIdentity: null, revoked: false,
+      ...(v1 ? { deadline } : {}) };
     const sandboxV1 = v1 && session.sandbox;
     const observationForTab = () => sandboxV1
       ? source.observeTabWriterV1({ session, pty, generation, ptyStart: start, deadline: binding.deadline }) : observe(pid);
@@ -234,8 +237,28 @@ function createTriggerContext(deps) {
         }
       } catch {} finally { if (fd !== undefined) { try { fs.closeSync(fd); } catch {} } }
     }
+    function authorizeWriter(id) {
+      if (binding.reset || id === binding.effectiveId) return { ok: true };
+      const continuation = graph(binding.effectiveId);
+      if (continuation.unresolved || continuation.waitingForIndex) return { outcome: 'unknown' };
+      if (continuation.reachable?.includes(id)) return { ok: true };
+      if (continuation.incomplete) return { outcome: 'unknown' };
+      return { outcome: 'other', reason: `ownership writer names ${id}, outside conversation ${binding.effectiveId}` };
+    }
     function inspect() {
       if (!own) return { outcome: 'mine' };
+      if (binding.revoked) return { outcome: 'other', reason: WRITER_CHANGED };
+      const outcome = inspectOwnership();
+      const observed = binding.observation;
+      if (!v1 || !observed || observed.uncertain || !observed.identity) return outcome;
+      if (binding.writerIdentity !== null && observed.identity !== binding.writerIdentity) {
+        binding.revoked = true;
+        return { outcome: 'other', reason: WRITER_CHANGED };
+      }
+      if (outcome.outcome === 'mine' && observed.writer) binding.writerIdentity = observed.identity;
+      return outcome;
+    }
+    function inspectOwnership() {
       resetBookkeeping();
       let observation;
       try { observation = observationForTab(); } catch { return { outcome: 'unknown' }; }
@@ -243,14 +266,8 @@ function createTriggerContext(deps) {
       const writer = observation?.writer;
       if (!writer) return { outcome: 'unknown' };
       const id = normalizeSessionId(writer.sessionId);
-      if (!binding.reset && id !== binding.effectiveId) {
-        const continuation = graph(binding.effectiveId);
-        if (continuation.unresolved || continuation.waitingForIndex) return { outcome: 'unknown' };
-        if (!continuation.reachable?.includes(id)) {
-          if (continuation.incomplete) return { outcome: 'unknown' };
-          return { outcome: 'other', reason: `ownership writer names ${id}, outside conversation ${binding.effectiveId}` };
-        }
-      }
+      const authorization = authorizeWriter(id);
+      if (!authorization.ok) return authorization;
       if (binding.reset?.identity && observation.identity !== binding.reset.identity) {
         return { outcome: 'other', reason: 'ownership writer process generation changed after reset' };
       }
@@ -318,6 +335,8 @@ function createTriggerContext(deps) {
         let observation;
         try { observation = observationForTab(); } catch {}
         const writer = observation?.writer;
+        if (v1 && writer && !observation.uncertain && observation.identity
+          && authorizeWriter(normalizeSessionId(writer.sessionId)).ok) binding.writerIdentity ??= observation.identity;
         if (!writer || normalizeSessionId(writer.sessionId) !== normalizeSessionId(requestedId) || observation.hasBackground) {
           const continuation = graph(normalizeSessionId(requestedId));
           for (const candidate of continuation.candidates || []) {
