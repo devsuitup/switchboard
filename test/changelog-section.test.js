@@ -45,5 +45,5 @@ test('the build workflow writes the release body from the tag\'s changelog secti
   const workflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'build.yml'), 'utf8');
   const step = workflow.slice(workflow.indexOf('- name: Fill in release notes'));
   assert.match(step, /node scripts\/changelog-section\.js "\$TAG" > release-notes\.md/);
-  assert.match(step, /gh release edit "\$TAG" --notes-file release-notes\.md/);
+  assert.match(step, /gh release edit "\$TAG" --repo "\$\{GITHUB_REPOSITORY\}" --notes-file release-notes\.md/);
 });

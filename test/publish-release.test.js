@@ -45,7 +45,7 @@ echo 'unexpected gh invocation' >&2
 exit 2
 `;
 
-function runRelease(t, mode, failOnce = false, draftValue = 'false') {
+function runRelease(t, mode, failOnce = false, draftValue = 'false', envOverrides = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'publish-release-'));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
   const bin = path.join(temp, 'bin');
@@ -75,6 +75,10 @@ function runRelease(t, mode, failOnce = false, draftValue = 'false') {
     GH_STUB_FAIL_ONCE: failOnce ? '1' : '0',
     GH_STUB_RETRY_FILE: shellPath(path.join(temp, 'retried')),
   });
+  for (const [key, value] of Object.entries(envOverrides)) {
+    if (value === undefined) delete env[key];
+    else env[key] = value;
+  }
   const result = spawnSync(bash, [shellPath(script)], {
     cwd: temp, env, encoding: 'utf8', timeout: 10000,
   });
@@ -94,7 +98,7 @@ function requireBash(t) {
 
 function assertUploads(result, names) {
   assert.deepEqual(result.calls.filter((args) => args[1] === 'upload'), names.map((name) => [
-    'release', 'upload', TAG, `${result.dist}/${name}`, '--clobber',
+    'release', 'upload', TAG, `${result.dist}/${name}`, '--clobber', '--repo', REPOSITORY,
   ]));
 }
 
@@ -109,7 +113,7 @@ test('given a missing release, publishing creates a draft and uploads both asset
     'api', '--paginate', `repos/${REPOSITORY}/releases?per_page=100`, '--jq',
     `.[] | select(.tag_name == "${TAG}") | .draft`,
   ]);
-  assert.deepEqual(result.calls[1], ['release', 'create', TAG, '--draft', '--title', '0.1.0', '--notes', '']);
+  assert.deepEqual(result.calls[1], ['release', 'create', TAG, '--draft', '--title', '0.1.0', '--notes', '', '--repo', REPOSITORY]);
   assertUploads(result, ['one.zip', 'two.exe']);
 });
 
@@ -157,4 +161,27 @@ test('given a draft and one failed upload, publishing retries and exits 0', (t) 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /attempt 1 failed; retrying in 0s/);
   assertUploads(result, ['one.zip', 'one.zip', 'two.exe']);
+});
+
+for (const variable of ['GITHUB_REPOSITORY', 'GITHUB_REF_NAME']) {
+  for (const value of [undefined, '']) {
+    test(`given ${variable} is ${value === undefined ? 'unset' : 'empty'}, publishing refuses before calling gh`, (t) => {
+      if (!requireBash(t)) return;
+      const result = runRelease(t, 'missing', false, 'false', { [variable]: value });
+      assert.equal(result.status, 1, `${variable} must be required`);
+      assert.match(result.stdout + result.stderr, new RegExp(`::error::.*${variable}`));
+      assert.deepEqual(result.calls, [], 'invalid configuration must not call gh');
+    });
+  }
+}
+
+test('given another repository, publishing reads and writes that repository', (t) => {
+  if (!requireBash(t)) return;
+  const repository = 'another-owner/release-target';
+  const result = runRelease(t, 'missing', false, 'false', { GITHUB_REPOSITORY: repository });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.calls[0][2], `repos/${repository}/releases?per_page=100`);
+  for (const call of result.calls.slice(1)) {
+    assert.deepEqual(call.slice(-2), ['--repo', repository]);
+  }
 });
