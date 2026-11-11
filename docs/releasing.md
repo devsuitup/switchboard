@@ -83,7 +83,7 @@ gh's default here is the upstream repository, `doctly/switchboard`.
    Both Linux jobs produce `switchboard-doctly-<v>.pacman` with the same
    filename: keep the copy from `dist-linux-x64` and discard the arm64 copy.
    (CI merges the artifacts with `merge-multiple`, so which copy CI publishes
-   depends on download order; v0.0.104's matches x64.) If macOS
+   depends on download order: v0.0.104 shipped the aarch64 copy.) If macOS
    artifacts are absent, omit `latest-mac.yml`. Never copy a previous release's
    mac manifest: upload it only when its version, filenames, sizes and hashes
    match the macOS files actually attached to this release.
