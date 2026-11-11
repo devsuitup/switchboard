@@ -823,7 +823,7 @@ does not register attach or remote PTYs. Normal root exit releases the job,
 including when native exit is known before JS exit delivery. The exit listener
 keeps a job whose explicit close has already started.
 
-Tab close/Stop marks the PTY killed, suppresses duplicate closes/writes/resizes,
+The legacy Tab close/Stop path marks the PTY killed, suppresses duplicate closes/writes/resizes,
 calls pty.kill synchronously, then polls native _agent.exitCode every 25 ms until
 exit (including zero) or 2000 ms. This cap is below Windows' five-second
 CTRL_CLOSE allowance. No claim is made that non-root Claude/MCP processes receive
@@ -836,6 +836,35 @@ An exception inspecting or terminating one member skips that member and lets the
 other members finish cleanup. Inspection failures exclude that PID from the
 termination pass. The helper reports one member-failure warning per lifetime,
 returns an error for the affected job, and always removes/closes its job handle.
+
+The dormant A4c2a `terminateWithEvidence(id, { deadline })` JS port uses a
+separate `terminate-retained` verb. The native helper keeps that assigned job
+handle, skips unreadable members in strict mode, and returns failure when any
+member is protected, unreadable, or cannot be terminated. The JS port awaits
+the termination reply, then polls serialized `observe` requests every 25 ms.
+Only a verified zero count produces `ended: true`; a nonempty job or a missing
+assignment/termination/observation reply remains unknown. A `finally` requests
+release after observation. The overall deadline (five seconds by default,
+15 seconds maximum) also covers roster input and cleanup. Evidence expiry
+returns unknown and queues release even after the observation budget expires;
+it does not disable the shared helper or other PTYs. An in-flight request keeps
+its own request timeout; only a genuine request timeout or protocol/process
+failure disables the helper. Late replies remain serialized before release.
+There is no new kill fallback. Legacy `terminate` still releases immediately.
+Per-id protocol serialization is retained. Script encoding strips leading
+indentation to stay below the Windows command-line length limit.
+
+`closeWindowsPty(..., { evidence: true, deadline })` returns the termination
+evidence promise after its existing native-exit grace; the default invocation
+still returns undefined. `stopPtyWithEvidence` owns this optional path and
+suppresses natural-exit release until the evidence/cleanup path completes.
+An identity/assignment refusal before any kill retains the job and clears the
+cached stop attempt so a later legacy close or evidence retry can use it.
+The evidence grace poll timer is unreferenced, like the legacy timer.
+Plain-Node tests drive shipped JS against a fake helper process with retained
+membership; they detect release-before-observe. Native `evidence` and
+`evidence-protected` cases in `windows-job-native` are CI gates, not local
+evidence from the constrained A4c2a implementation run.
 
 For each member it reads command line with NtQueryInformationProcess class 60
 (Windows 8.1+), parent PID with ProcessBasicInformation and creation FILETIME

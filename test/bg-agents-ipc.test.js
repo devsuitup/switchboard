@@ -9,6 +9,89 @@ function fakeIpc() {
   return { handlers, ipcMain: { handle: (name, fn) => handlers.set(name, fn) } };
 }
 
+function strictStopFixture({ after = 'live', changed = false, known = true, liveElsewhereChecked = async () => ({ known: true, live: null }), ...timing } = {}) {
+  const { ipcMain, handlers } = fakeIpc(), bg = fakeBgAgents(), reads = [];
+  let stopped = false;
+  bg.conversationCheck = async (id, options) => {
+    reads.push({ id, options });
+    return { known, state: 'done', hosted: false, workerLiveness: stopped ? after : 'live',
+      sessionIds: stopped && changed ? ['other'] : ['s1'] };
+  };
+  bg.runVerb = async (...args) => { stopped = true; bg.calls.push(args); return { ok: true }; };
+  const ports = init({ ipcMain, bgAgents: bg, activeSessions: new Map(), getMainWindow: () => null,
+    log: { warn() {} }, cliSessionState: { liveElsewhereChecked }, ...timing });
+  const options = { strict: true, jobId: 'aaaaaaaa', sessionIds: ['s1'], deadline: Date.now() + 1000 };
+  return { ports, options, bg, reads, handlers };
+}
+
+test('A4c2afix post-stop verification retains the jobs own live process evidence', async () => {
+  const h = strictStopFixture({ after: 'dead', liveElsewhereChecked: async () => ({ known: true,
+    live: { kind: 'bg', jobId: 'aaaaaaaa', pid: 4242 } }) });
+  h.options.deadline = Date.now() + 60;
+  const result = await h.ports.runStop('aaaaaaaa', h.options);
+  assert.equal(h.bg.calls.filter(call => call[0] === 'stop').length, 1, 'preflight permits stopping the jobs own worker');
+  assert.equal(result.ended, false, 'post-stop own live process is not death');
+});
+
+for (const dies of [true, false]) test(`A4c2afix bounded background polling dies=${dies}`, async () => {
+  let time = Date.now(), polls = 0;
+  const timers = new Map();
+  const h = strictStopFixture({ now: () => time,
+    schedule(fn, ms) { const token = {}; timers.set(token, { fn, ms }); return token; },
+    cancel(token) { timers.delete(token); },
+  });
+  h.options.deadline = time + 100;
+  h.bg.conversationCheck = async () => ({ known: true, sessionIds: ['s1'], state: 'done',
+    workerLiveness: dies && ++polls >= 4 ? 'dead' : 'live' });
+  let result;
+  const pending = h.ports.runStop('aaaaaaaa', h.options).then(value => { result = value; });
+  for (let step = 0; step < 10 && !result; step++) {
+    await new Promise(resolve => setImmediate(resolve));
+    if (result) break;
+    const entry = timers.entries().next().value;
+    assert.ok(entry, 'strict stop must schedule bounded verification');
+    const [token, timer] = entry; timers.delete(token); time += timer.ms; timer.fn();
+  }
+  await pending;
+  assert.equal(h.bg.calls.filter(call => call[0] === 'stop').length, 1, 'bounded polling issues exactly one stop');
+  assert.equal(result.ended, dies, 'live samples must be retried until death or the deadline');
+  assert.equal(timers.size, 0);
+  if (!dies) assert.equal(time, h.options.deadline, 'fail closed at the caller deadline');
+});
+
+test('A4c2a background ports keep callable unsubscribe and never treat job-done as death', async () => {
+  const h = strictStopFixture();
+  assert.equal(typeof h.ports, 'function');
+  assert.equal(typeof h.ports.checkStop, 'function', 'init must expose guarded checkStop');
+  assert.equal(typeof h.ports.runStop, 'function', 'init must expose guarded runStop');
+  assert.equal((await h.ports.checkStop('aaaaaaaa', h.options)).ok, true);
+  const result = await h.ports.runStop('aaaaaaaa', h.options);
+  assert.equal(result.ended, false, 'job-done with a live worker is not death');
+  assert.equal(result.ok, false);
+  assert.ok(h.reads.every(read => read.options.workerLiveness === 'all'));
+  h.ports();
+});
+
+for (const [name, settings, ended] of [['dead', { after: 'dead' }, true], ['unknown', { after: 'unknown' }, false],
+  ['changed conversation', { after: 'dead', changed: true }, false], ['unreadable', { known: false }, false]]) {
+  test(`A4c2a guarded background stop ${name}`, async () => {
+    const h = strictStopFixture(settings);
+    assert.equal(typeof h.ports.runStop, 'function', 'init must expose guarded runStop');
+    assert.equal((await h.ports.runStop('aaaaaaaa', h.options)).ended, ended);
+    if (settings.known === false) assert.deepEqual(h.bg.calls, []);
+  });
+}
+
+test('A4c2a background ownership, continuation and expired deadline refuse before a verb', async () => {
+  const h = strictStopFixture({ after: 'dead' });
+  assert.equal(typeof h.ports.runStop, 'function', 'init must expose guarded runStop');
+  for (const options of [{ ...h.options, jobId: 'bbbbbbbb' }, { ...h.options, sessionIds: ['foreign'] },
+    { ...h.options, deadline: 0 }]) assert.equal((await h.ports.runStop('aaaaaaaa', options)).ok, false);
+  h.bg.continuationJobCheck = async () => ({ known: true, job: { id: 'bbbbbbbb' } });
+  assert.equal((await h.ports.runStop('aaaaaaaa', h.options)).ok, false);
+  assert.deepEqual(h.bg.calls, []);
+});
+
 function fakeBgAgents() {
   const calls = [];
   let listener = null;

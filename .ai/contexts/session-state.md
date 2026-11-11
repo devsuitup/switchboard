@@ -4,6 +4,61 @@
 local PTY, local transcript and remote adapters. Shared projections select one
 activity icon for each conversation head across sidebar, grid and terminal.
 
+## Dormant intentional-stop evidence (#474 A4c2a)
+
+`pty-ops.stopPtyWithEvidence(session, sessionId, { platform, generation,
+deadline })` returns a promise and publishes the same promise as
+`pty.stopEvidence`. Defaults are the current platform/generation and a five
+second absolute deadline. It pins the object/PID/generation, refuses attaches,
+handoffs and foreign hosts, and keeps its proof tied to that generation even
+after ordinary exit housekeeping removes the active row. Replacement of the
+session's PTY or generation during observation prevents positive proof.
+The caller must also check the active-map incarnation before accepting it.
+Repeated calls for the same pending generation share the promise. A prior
+legacy kill cannot be upgraded to evidence. Existing `killPty`/Stop/Detach
+signatures, synchronous booleans and natural `statusTreeExit` behavior remain.
+
+If assignment has not acknowledged by the stop deadline, or the pinned identity
+changes before closing, the refusal leaves the job assigned and clears the
+cached stop attempt. A later stop can retry. Release starts only after a kill
+attempt or transfer to the evidence helper, or after a natural exit suppressed
+while the refused stop awaited assignment. That last case restores the natural
+`statusTreeExit` observation when assigned, then releases the job once; an
+unassigned job releases directly. Evidence expiry queues serialized
+release without disabling other jobs; the helper's request limit still bounds
+outstanding cleanup. Positive proof requires observation and release ACKs.
+
+Windows waits for successful assignment, closes ConPTY, then terminates with the
+job retained until a bounded empty-membership observation. Failure/unknown is
+`ended: false`; it is never inferred from exitDrain or kill success. There is
+no available whole-controlled-tree observation port on Linux/macOS at this
+base, so this seam returns `code: 'UNSUPPORTED'` before mutation there. Headless
+schedule snapshots likewise provide named blockers, not safe stop handles.
+
+`remoteStopAdapter.stop(alias, descriptor, { strict: true, identity, deadline })`
+is opt-in. Identity requires matching alias, UUID sessionId, PID, decimal Linux
+`procStart` ticks and UUID `bootId`; the descriptor must carry the same values.
+The alias selects the declared SSH route and the boot UUID binds its current
+host incarnation. Strict remote execution requires Python 3, Linux pidfd APIs,
+readable procfs, and exact `--session-id`/`--resume` argv ownership. Unavailable
+capabilities or an auto-assigned session without that argv evidence refuse.
+Each remote command receives the remaining millisecond budget minus the five
+seconds reserved for SSH's `ConnectTimeout=5`, and creates its deadline from
+the remote monotonic clock. Each phase refuses locally before SSH if that
+allowance leaves no remote budget. The local deadline still bounds SSH
+and rejects late replies; wall-clock alignment between hosts is unnecessary.
+
+Each TERM/KILL phase opens a pidfd before reading start/argv/boot identity,
+checks the pinned process has not exited, and signals that fd. The code never
+falls back to numeric PID or tmux signalling in strict mode. A second remote
+command independently reads death on the same boot. Exit zero without the
+exact identity-bound marker, signal ACK alone, unreachable host, changed start
+or a surviving PID refuses. Six bounded live polls precede escalation; the
+whole operation is capped at 15 seconds. Positive evidence explicitly has
+`scope: 'process'`: it proves that process only. A4c2b must still check other
+conversation members/descendants and must not turn this into whole-tree proof.
+Legacy two-argument remote stop keeps its existing behavior and result shape.
+
 ## Shared status projection (#380 S1a)
 
 Classic scripts load `session-state.js` → `session-status-projection.js` →

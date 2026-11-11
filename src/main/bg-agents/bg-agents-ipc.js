@@ -6,7 +6,8 @@ const { JOB_ID_RE } = require('./bg-agents-roster');
 const { liveWorkerDescriptor } = require('./bg-worker-liveness');
 const DESCRIPTOR_WAIT_MS = 15000;
 
-function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessionState, sessionHasPty, ptyPids, getSetting }) {
+function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessionState, sessionHasPty, ptyPids, getSetting,
+  now = Date.now, schedule = setTimeout, cancel = clearTimeout }) {
   const push = (snapshot) => {
     const win = getMainWindow();
     if (!win || win.isDestroyed()) return;
@@ -133,7 +134,72 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     respawning.set(key, { pending, restoring, extraIds, job });
     return pending;
   };
+  const stopRead = async (read, deadline) => {
+    if (!Number.isFinite(deadline) || now() >= deadline) throw new Error('stop deadline expired');
+    let timer;
+    try {
+      const result = await Promise.race([Promise.resolve().then(read), new Promise((_, reject) => {
+        timer = schedule(() => reject(new Error('stop deadline expired')), Math.min(15000, deadline - now()));
+      })]);
+      if (now() >= deadline) throw new Error('stop deadline expired');
+      return result;
+    } finally { cancel(timer); }
+  };
+  const checkStop = async (id, options = {}, verifying = false) => {
+    if (!options.strict) return checkVerb('stop', id);
+    const refuse = error => ({ ok: false, ended: false, error });
+    const { sessionIds, jobId, deadline } = options;
+    if (typeof id !== 'string' || !JOB_ID_RE.test(id) || jobId !== id || !Array.isArray(sessionIds)
+      || !sessionIds.length || sessionIds.some(sid => typeof sid !== 'string' || !sid)) return refuse('stop ownership is unavailable');
+    const ids = values => [...new Set(values.map(sid => sid.toLowerCase()))].sort().join('\n');
+    try {
+      const check = await stopRead(() => bgAgents.conversationCheck(id, { workerLiveness: 'all' }), deadline);
+      if (!check?.known || !Array.isArray(check.sessionIds) || ids(check.sessionIds) !== ids(sessionIds)) return refuse('conversation ownership changed or is unknown');
+      if (!['live', 'dead'].includes(check.workerLiveness)) return refuse('worker liveness is unknown');
+      for (const sid of new Set([...sessionIds, ...check.continuationSessionIds || []])) {
+        const continuation = await stopRead(() => bgAgents.continuationJobCheck(sid, {
+          excludeJobId: id, workerLiveness: new Map([[id, check.workerLiveness]]),
+        }), deadline);
+        if (!continuation?.known || continuation.job) return refuse('conversation has another or unknown continuation job');
+        let ownLiveProcess = false;
+        const refusal = await stopRead(() => deleteSessionRefusal(sid, {
+          activeSessions: new Map([...activeSessions || []].filter(([, session]) => !(session?.isAttach && session.attachJobId === id))),
+          liveJobCheck: value => bgAgents.liveJobCheck(value, { excludeJobId: id, workerLiveness: new Map([[id, check.workerLiveness]]) }),
+          liveElsewhereChecked: async value => {
+            const other = await cliSessionState.liveElsewhereChecked(value, sessionHasPty, ptyPids, { includeOwnProcesses: true });
+            ownLiveProcess = other?.known && other.live?.kind === 'bg' && other.live.jobId === id;
+            return !verifying && ownLiveProcess ? { known: true, live: null } : other;
+          },
+        }), deadline);
+        if (refusal) return { ...refuse(refusal), retryable: verifying && ownLiveProcess };
+      }
+      return { ok: true, ended: check.workerLiveness === 'dead', workerLiveness: check.workerLiveness };
+    } catch (error) { return refuse(error.message || String(error)); }
+  };
+  const runStop = async (id, options = {}) => {
+    const check = await checkStop(id, options);
+    if (!check.ok) return check;
+    if (!options.strict) {
+      const result = await bgAgents.runVerb('stop', id);
+      if (result?.ok) justRespawned.get(String(id).toLowerCase())?.clear();
+      return result;
+    }
+    try {
+      const result = await stopRead(() => bgAgents.runVerb('stop', id), options.deadline);
+      if (!result?.ok) return { ok: false, ended: false, error: result?.error || 'stop was not acknowledged' };
+      justRespawned.get(id)?.clear();
+      for (;;) {
+        const after = await checkStop(id, options, true);
+        if (after.ok && after.ended) return { ok: true, ended: true, jobId: id, sessionIds: [...options.sessionIds], observedAt: now() };
+        if ((!after.ok && !after.retryable) || now() >= options.deadline) {
+          return { ok: false, ended: false, error: after.error || 'worker death is not proven' };
+        }
+        await new Promise(resolve => schedule(resolve, Math.min(25, options.deadline - now())));
+      }
+    } catch (error) { return { ok: false, ended: false, error: error.message || String(error) }; }
+  };
   ipcMain.handle('bg-agent-verb', async (_event, verb, id) => {
+    if (verb === 'stop') return runStop(id);
     if (verb === 'respawn') {
       const global = await getSetting?.('global');
       const item = global?.openWorkingSet?.find(item => item.bg === true && (item.attachJobId
@@ -233,6 +299,8 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     return pending;
   });
   unsubscribeView.respawnForHandoff = respawnForHandoff;
+  unsubscribeView.checkStop = checkStop;
+  unsubscribeView.runStop = runStop;
   return unsubscribeView;
 }
 
