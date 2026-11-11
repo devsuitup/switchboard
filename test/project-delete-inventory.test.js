@@ -16,6 +16,23 @@ const supported = { skip: !openStore.supported && 'real SQLite requires Node 22 
 const options = { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: true };
 const budget = () => ({ signal: new AbortController().signal, deadline: 10000, limit: 20000 });
 
+test('A4c2afix denied cwd resolves its readable alternate-spelling ancestor', supported, async t => {
+  const io = Object.create(fs.promises);
+  const h = await setup(t, { fs: io });
+  const alias = path.join(path.parse(h.root).root, 'Users', 'JEAN-B~1', 'junction-repo');
+  io.realpath = async file => {
+    if (String(file).includes('denied')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    if (file === alias) return fs.promises.realpath(h.project.projectPath);
+    return fs.promises.realpath(file);
+  };
+  h.write(path.join(h.projectsDir, 'unknown', 'alias.jsonl'), JSON.stringify({ cwd: path.join(alias, 'denied-parent', 'denied-leaf') }) + '\n');
+  h.write(path.join(h.projectsDir, 'unknown', 'foreign.jsonl'), JSON.stringify({ cwd: path.join(h.root, 'foreign', 'denied') }) + '\n');
+  const b = budget(); await h.inventory.readSnapshot(b);
+  const result = await h.inventory.discoverOwnership(h.project, b);
+  assert.equal(result.candidates.some(row => row.path?.endsWith('alias.jsonl')), true, 'denied alternate-spelling project cwd must block deletion');
+  assert.equal(result.candidates.some(row => row.path?.endsWith('foreign.jsonl')), false, 'foreign denied cwd stays excluded');
+});
+
 test('A4c2a unknown folder with inaccessible foreign cwd does not block this project', supported, async t => {
   const io = Object.create(fs.promises);
   io.realpath = async file => {

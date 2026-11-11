@@ -23,9 +23,13 @@ deadline is an absolute `Date.now()` millisecond deadline. Reads and the verb
 are bounded (maximum 15 seconds per await). `checkStop` requires a readable
 matching conversation with `workerLiveness: 'all'`, known live/dead worker
 evidence, no conflicting continuation job, no ordinary local PTY and no foreign
-live process. Only the job's own attach PTY/descriptor is exempted from those
-foreign-owner checks. `runStop` rechecks immediately before issuing the verb,
-then repeats the strict checks after its ACK. Only `workerLiveness: 'dead'`
+live process. The job's own attach PTY is exempted; its own live process is
+exempted only during preflight, never during post-stop verification. `runStop`
+rechecks immediately before issuing the verb, then polls the strict checks
+every 25 ms after its ACK until death or the caller's deadline. A live worker
+or own live process is retried; changed/unknown ownership refuses immediately.
+Strict timers use the injectable `now`, `schedule`, and `cancel` init ports.
+Only `workerLiveness: 'dead'` with no remaining live process
 produces `{ ok: true, ended: true }`; state `done`, a successful CLI stop and a
 detached tab are not death. Unknown/changed ownership, live worker, timeout or
 failure returns `ok: false, ended: false`. An uncertain verb result is never

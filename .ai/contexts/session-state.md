@@ -18,11 +18,12 @@ Repeated calls for the same pending generation share the promise. A prior
 legacy kill cannot be upgraded to evidence. Existing `killPty`/Stop/Detach
 signatures, synchronous booleans and natural `statusTreeExit` behavior remain.
 
-If assignment has not acknowledged by the stop deadline, the result is unknown
-without closing the PTY. Finally queues release through the existing per-id
-serialization but does not wait past the caller's deadline for its ACK; the
-helper's own startup/request limits still bound that outstanding cleanup. A
-positive proof always waits for the evidence helper's observation and release.
+If assignment has not acknowledged by the stop deadline, or the pinned identity
+changes before closing, the refusal leaves the job assigned and clears the
+cached stop attempt. A later stop can retry. Release starts only after a kill
+attempt or transfer to the evidence helper. Evidence expiry queues serialized
+release without disabling other jobs; the helper's request limit still bounds
+outstanding cleanup. Positive proof requires observation and release ACKs.
 
 Windows waits for successful assignment, closes ConPTY, then terminates with the
 job retained until a bounded empty-membership observation. Failure/unknown is
@@ -38,7 +39,9 @@ The alias selects the declared SSH route and the boot UUID binds its current
 host incarnation. Strict remote execution requires Python 3, Linux pidfd APIs,
 readable procfs, and exact `--session-id`/`--resume` argv ownership. Unavailable
 capabilities or an auto-assigned session without that argv evidence refuse.
-The remote host checks the absolute deadline too, so clocks must be aligned.
+Each remote command receives the remaining millisecond budget and creates its
+deadline from the remote monotonic clock. The local deadline still bounds SSH
+and rejects late replies; wall-clock alignment between hosts is unnecessary.
 
 Each TERM/KILL phase opens a pidfd before reading start/argv/boot identity,
 checks the pinned process has not exited, and signals that fd. The code never

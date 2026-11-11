@@ -37,6 +37,22 @@ const strictIdentity = { alias: 'vps', sessionId: '11111111-1111-4111-8111-11111
 const strictOptions = () => ({ strict: true, identity: { ...strictIdentity }, deadline: Date.now() + 1000 });
 const strictMarker = kind => `${kind} ${strictIdentity.pid} ${strictIdentity.procStart} ${strictIdentity.sessionId} ${strictIdentity.bootId}\n`;
 
+test('A4c2afix strict remote sends a duration and guards using remote monotonic time', async () => {
+  const calls = [];
+  const result = await makeAdapter(async (_alias, command, options) => {
+    calls.push({ command, options, payload: JSON.parse(Buffer.from(command.match(/'([^']+)'$/)[1], 'base64').toString()) });
+    return { code: 0, stdout: strictMarker(calls.length === 1 ? 'STOP_SIGNALLED' : 'STOP_ENDED') };
+  }).stop('vps', strictIdentity, strictOptions());
+  assert.equal(result.ended, true);
+  for (const { command, options, payload } of calls) {
+    assert.equal(payload.remainingMs, options.timeoutMs, 'send the remaining duration, independent of remote wall-clock skew');
+    assert.equal(Object.hasOwn(payload, 'deadline'), false);
+    assert.match(command, /deadline=time\.monotonic\(\)\+x\[/);
+    assert.match(command, /if time\.monotonic\(\)>=deadline/);
+    assert.doesNotMatch(command, /time\.time\(/);
+  }
+});
+
 for (const stdout of [PID_TERM_MARKER, PID_FORCE_MARKER, '', strictMarker('STOP_SIGNALLED')]) {
   test(`A4c2a strict remote ACK alone never proves death: ${stdout.trim() || 'empty'}`, async () => {
     const result = await makeAdapter(async () => ({ code: 0, stdout })).stop('vps', strictIdentity, strictOptions());

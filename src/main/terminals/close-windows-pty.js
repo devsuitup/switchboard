@@ -15,7 +15,8 @@ function closeWindowsPty(pty, close, terminate, { schedule = setTimeout, evidenc
             : { ended: false, code: 'UNKNOWN' }), () => resolve({ ended: false, code: 'UNKNOWN' }));
           return;
         }
-        schedule(check, Math.min(25, remaining));
+        const timer = schedule(check, Math.min(25, remaining));
+        timer?.unref?.();
       }
       check();
     });

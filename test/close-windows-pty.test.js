@@ -6,6 +6,50 @@ const { createWindowsJobHelper } = require('../src/main/terminals/windows-job-he
 const ops = require('../src/main/terminals/pty-ops');
 const { closeWindowsPty } = require('../src/main/terminals/close-windows-pty');
 
+for (const followup of ['legacy', 'retry']) test(`A4c2afix late assignment refusal preserves ${followup}`, async t => {
+  const child = new EventEmitter(), writes = [];
+  child.stdin = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.kill = () => {};
+  let acknowledge;
+  child.stdin.write = line => {
+    const [op, id] = line.trim().split(' '); writes.push(op);
+    const reply = () => child.stdout.emit('data', op === 'observe' ? `observed ${id} 0\n`
+      : `${{ assign: 'assigned', terminate: 'terminated', 'terminate-retained': 'terminated', release: 'released' }[op]} ${id}\n`);
+    if (op === 'assign') acknowledge = reply;
+    else queueMicrotask(reply);
+  };
+  const helper = createWindowsJobHelper({ spawn: () => { queueMicrotask(() => child.stdout.emit('data', 'ready\n')); return child; } });
+  t.after(() => child.emit('exit'));
+  let exit;
+  const pty = { pid: 4242, _agent: {}, onExit(fn) { exit = fn; }, kill() { this._agent.exitCode = 0; exit(); } };
+  const assigned = ops.trackWindowsPty(pty, { jobs: helper, platform: 'win32' });
+  const session = { pty, generation: 1, kind: 'local-pty' };
+  const refused = await ops.stopPtyWithEvidence(session, 'one', { platform: 'win32', deadline: Date.now() + 30 });
+  assert.equal(refused.code, 'IDENTITY');
+  acknowledge(); await assigned;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(writes.includes('release'), false, 'refusal before kill must retain the assigned job');
+  if (followup === 'legacy') {
+    assert.equal(ops.killPty(session, 'one', { platform: 'win32' }), true);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(writes.includes('terminate'), 'later legacy kill still terminates the assigned job');
+  } else {
+    const retried = await ops.stopPtyWithEvidence(session, 'one', { platform: 'win32' });
+    assert.equal(retried.ended, true, 'retry must not return the cached refusal');
+    assert.ok(writes.includes('terminate-retained'));
+  }
+});
+
+test('A4c2afix evidence poll timer does not keep the process alive', async () => {
+  let unrefs = 0, check;
+  const pty = { _agent: {} };
+  const pending = closeWindowsPty(pty, () => true, async () => ({ ended: true }), {
+    evidence: true, schedule(fn) { check = fn; return { unref() { unrefs++; } }; },
+  });
+  assert.equal(unrefs, 1, 'evidence poll timer must be unreferenced');
+  pty._agent.exitCode = 0; check();
+  assert.equal((await pending).ended, true);
+});
+
 function fakeHelper(t, { members = [0], assignment = true, termination = true, silence = false, pendingAssignment = false } = {}) {
   const child = new EventEmitter(), writes = [];
   let held = false;

@@ -845,8 +845,11 @@ the termination reply, then polls serialized `observe` requests every 25 ms.
 Only a verified zero count produces `ended: true`; a nonempty job or a missing
 assignment/termination/observation reply remains unknown. A `finally` requests
 release after observation. The overall deadline (five seconds by default,
-15 seconds maximum) also covers roster input and cleanup; timeout fails and
-ends the helper, whose native finally/process teardown closes its handles.
+15 seconds maximum) also covers roster input and cleanup. Evidence expiry
+returns unknown and queues release even after the observation budget expires;
+it does not disable the shared helper or other PTYs. An in-flight request keeps
+its own request timeout; only a genuine request timeout or protocol/process
+failure disables the helper. Late replies remain serialized before release.
 There is no new kill fallback. Legacy `terminate` still releases immediately.
 Per-id protocol serialization is retained. Script encoding strips leading
 indentation to stay below the Windows command-line length limit.
@@ -855,6 +858,9 @@ indentation to stay below the Windows command-line length limit.
 evidence promise after its existing native-exit grace; the default invocation
 still returns undefined. `stopPtyWithEvidence` owns this optional path and
 suppresses natural-exit release until the evidence/cleanup path completes.
+An identity/assignment refusal before any kill retains the job and clears the
+cached stop attempt so a later legacy close or evidence retry can use it.
+The evidence grace poll timer is unreferenced, like the legacy timer.
 Plain-Node tests drive shipped JS against a fake helper process with retained
 membership; they detect release-before-observe. Native `evidence` and
 `evidence-protected` cases in `windows-job-native` are CI gates, not local

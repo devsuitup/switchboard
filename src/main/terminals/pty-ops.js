@@ -152,7 +152,7 @@ function stopPtyWithEvidence(session, sessionId, { platform = process.platform, 
   record.closing = true;
   record.stopGeneration = generation;
   record.stopEvidence = (async () => {
-    let timer, helperOwnsRelease = false;
+    let timer, helperOwnsRelease = false, killIssued = false;
     try {
       const assigned = await Promise.race([record.assignment, new Promise(resolve => {
         timer = setTimeout(() => resolve(false), Math.max(0, Math.min(15000, deadline - Date.now())));
@@ -161,18 +161,24 @@ function stopPtyWithEvidence(session, sessionId, { platform = process.platform, 
       if (!assigned || !current() || deadline <= Date.now()) return { ended: false, code: 'IDENTITY', generation, pid };
       killedPtys.add(pty);
       const proof = await closeWindowsPty(pty,
-        () => withPty({ pty }, 'kill', target => target.kill(), sessionId),
+        () => { killIssued = true; return withPty({ pty }, 'kill', target => target.kill(), sessionId); },
         () => { helperOwnsRelease = true; return record.jobs.terminateWithEvidence(record.id, { deadline }); }, { evidence: true, deadline });
       return { ...proof, ended: proof.ended === true && current(), generation, pid };
     } finally {
       clearTimeout(timer);
       record.closing = false;
-      if (helperOwnsRelease) record.released = true;
-      const releasing = releaseWindowsPty(pty).catch(() => false);
-      if (Date.now() < deadline) {
-        try {
-          await Promise.race([releasing, new Promise(resolve => { timer = setTimeout(resolve, deadline - Date.now()); })]);
-        } finally { clearTimeout(timer); }
+      if (!helperOwnsRelease && !killIssued) {
+        delete record.stopEvidence;
+        delete record.stopGeneration;
+        delete pty.stopEvidence;
+      } else {
+        if (helperOwnsRelease) record.released = true;
+        const releasing = releaseWindowsPty(pty).catch(() => false);
+        if (Date.now() < deadline) {
+          try {
+            await Promise.race([releasing, new Promise(resolve => { timer = setTimeout(resolve, deadline - Date.now()); })]);
+          } finally { clearTimeout(timer); }
+        }
       }
     }
   })();

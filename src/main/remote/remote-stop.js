@@ -23,11 +23,12 @@ const TERM_WAIT_STEP_S = '0.5';
 const STRICT_STOP_SCRIPT = `import base64,json,os,signal,sys,time,select
 x=json.loads(base64.b64decode(sys.argv[1]))
 p=x['pid']; fd=None
+deadline=time.monotonic()+x['remainingMs']/1000
 identity=str(p)+' '+x['procStart']+' '+x['sessionId']+' '+x['bootId']
 def emit(kind):
  print(kind+' '+identity,flush=True)
 def guard():
- if time.time()*1000>=x['deadline']: raise RuntimeError('deadline')
+ if time.monotonic()>=deadline: raise RuntimeError('deadline')
  if open('/proc/sys/kernel/random/boot_id').read().strip()!=x['bootId']: raise RuntimeError('host identity')
 def start():
  return open('/proc/'+str(p)+'/stat').read().rsplit(') ',1)[1].split()[19]
@@ -53,8 +54,8 @@ finally:
  if fd is not None: os.close(fd)
 `;
 
-function buildStrictStopCommand(identity, phase, deadline) {
-  const payload = Buffer.from(JSON.stringify({ ...identity, phase, deadline })).toString('base64');
+function buildStrictStopCommand(identity, phase, remainingMs) {
+  const payload = Buffer.from(JSON.stringify({ ...identity, phase, remainingMs })).toString('base64');
   return `python3 -c '${STRICT_STOP_SCRIPT.replaceAll("'", "'\"'\"'")}' '${payload}'`;
 }
 
@@ -121,7 +122,7 @@ function createRemoteStopAdapter(opts = {}) {
       if (remaining <= 0) throw new Error('stop deadline expired');
       let timer;
       try {
-        const result = await Promise.race([runRemoteCommand(alias, buildStrictStopCommand(identity, phase, deadline), { timeoutMs: remaining }),
+        const result = await Promise.race([runRemoteCommand(alias, buildStrictStopCommand(identity, phase, remaining), { timeoutMs: remaining }),
           new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('stop deadline expired')), remaining); })]);
         if (Date.now() >= deadline || result?.code !== 0) throw new Error('remote observation unavailable');
         const text = String(result.stdout || '').trim();

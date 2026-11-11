@@ -6,6 +6,25 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 
+for (const mode of ['nonempty', 'roster never settles', 'already expired']) {
+  test(`A4c2afix evidence ${mode} preserves other jobs and releases its handle`, async t => {
+    const f = fixture(t, { protectedPids: () => mode === 'roster never settles' ? new Promise(() => {}) : [] });
+    f.child.stdin.write = line => {
+      f.writes.push(line);
+      const [op, id] = line.trim().split(' ');
+      queueMicrotask(() => f.child.stdout.emit('data', op === 'observe' ? `observed ${id} 1\n`
+        : `${{ assign: 'assigned', 'terminate-retained': 'terminated', terminate: 'terminated', release: 'released' }[op]} ${id}\n`));
+    };
+    f.helper.start(); f.child.stdout.emit('data', 'ready\n');
+    await f.helper.assign('one', 897, 100); await f.helper.assign('two', 898, 100);
+    const proof = await f.helper.terminateWithEvidence('one', { deadline: Date.now() + (mode === 'already expired' ? -1 : 50) });
+    assert.equal(proof.ended, false);
+    assert.equal(await f.helper.terminate('two', []), true, 'an evidence deadline must preserve legacy termination of another job');
+    assert.ok(f.writes.includes('release one\n'), 'deadline expiry still releases its own job');
+    assert.notEqual(f.child.killed, true);
+  });
+}
+
 test('A4c2a retained termination serializes before observation and release', async t => {
   const f = fixture(t);
   assert.equal(typeof f.helper.terminateWithEvidence, 'function', 'helper must expose bounded retained termination');

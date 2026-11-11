@@ -159,11 +159,11 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
     if (!Number.isFinite(deadline)) return unknown;
     deadline = Math.min(deadline, Date.now() + 15000);
     const timeout = new Promise(resolve => {
-      timer = setTimeout(() => { expired = true; fail('stop evidence timed out'); resolve(null); }, Math.max(0, deadline - Date.now()));
+      timer = setTimeout(() => { expired = true; resolve(null); }, Math.max(0, deadline - Date.now()));
     });
     const bounded = work => Promise.race([Promise.resolve().then(() => {
       if (!expired && Date.now() < deadline) return work();
-      expired = true; fail('stop evidence timed out'); return null;
+      expired = true; return null;
     }), timeout]);
     let proof = unknown;
     try {
@@ -175,14 +175,17 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
         () => !expired && Date.now() < deadline));
       if (!terminated) return unknown;
       while (!expired && Date.now() < deadline) {
-        const observed = await bounded(() => request('observe', id));
+        const observed = await bounded(() => request('observe', id, '', () => !expired && Date.now() < deadline));
         if (!observed || typeof observed !== 'object') break;
         if (observed.ended === true) { proof = observed; break; }
         await bounded(() => new Promise(resolve => setTimeout(resolve, Math.min(25, Math.max(0, deadline - Date.now())))));
       }
     } catch { proof = unknown; }
     finally {
-      try { if (!await bounded(() => finish('release', id))) proof = unknown; }
+      try {
+        const releasing = finish('release', id).catch(() => false);
+        if (!await bounded(() => releasing)) proof = unknown;
+      }
       finally { clearTimeout(timer); }
     }
     return expired ? unknown : proof;

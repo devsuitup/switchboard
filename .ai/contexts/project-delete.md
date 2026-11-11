@@ -24,9 +24,10 @@ headless schedules remain named blocking targets without safe tree control.
 
 An unknown transcript folder with an inaccessible cwd only refuses the selected
 project when that cwd is lexically under the project path (including equality).
-The comparison reuses already resolved ancestor spellings, so an 8.3 cwd and
-the planner's canonical long project path still identify the same subtree even
-when the final cwd realpath is denied. It performs no new lookup after denial.
+After EACCES the comparison resolves the nearest readable ancestor, walking
+past denied or missing parents within the discovery budget. An 8.3, junction or
+symlink spelling then identifies the same subtree as the canonical project
+even when the final cwd realpath is denied. Foreign cwd exclusion is preserved.
 Budget errors still propagate, and a failed ownership lookup does not stop the
 scan before later attributable transcripts.
 
