@@ -16,6 +16,21 @@ const supported = { skip: !openStore.supported && 'real SQLite requires Node 22 
 const options = { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: true };
 const budget = () => ({ signal: new AbortController().signal, deadline: 10000, limit: 20000 });
 
+test('A4c2a unknown folder with inaccessible foreign cwd does not block this project', supported, async t => {
+  const io = Object.create(fs.promises);
+  io.realpath = async file => {
+    if (String(file).endsWith('denied')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    return fs.promises.realpath(file);
+  };
+  const h = await setup(t, { fs: io });
+  h.write(path.join(h.projectsDir, 'unknown', 'foreign.jsonl'), JSON.stringify({ cwd: path.join(h.root, 'denied') }) + '\n');
+  h.write(path.join(h.projectsDir, 'unknown', 'owned.jsonl'), JSON.stringify({ cwd: path.join(h.project.projectPath, 'denied') }) + '\n');
+  const b = budget(); await h.inventory.readSnapshot(b);
+  const result = await h.inventory.discoverOwnership(h.project, b);
+  assert.equal(result.candidates.some(row => row.path?.endsWith('foreign.jsonl')), false, 'inaccessible foreign cwd must not refuse this project');
+  assert.equal(result.candidates.some(row => row.path?.endsWith('owned.jsonl')), true, 'lexically owned unreadable cwd must still refuse');
+});
+
 async function setup(t, overrides = {}) {
   assert.equal(typeof inventoryModule?.createProjectDeleteInventory, 'function', 'production inventory must export the six bounded planner ports');
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'inventory-'))), previous = process.env.SWITCHBOARD_DATA_DIR;
@@ -500,7 +515,7 @@ test('A4c1FIX3 per-file realpath denial cannot hide later unindexed transcripts'
   };
   const h = await setup(t, { fs: io }), directory = path.join(h.projectsDir, 'unknown');
   const first = path.join(directory, 'a.jsonl'), later = path.join(directory, 'b.jsonl');
-  h.write(first, JSON.stringify({ sessionId: 'a', cwd: path.join(h.root, 'denied', 'x') }) + '\n');
+  h.write(first, JSON.stringify({ sessionId: 'a', cwd: path.join(h.project.projectPath, 'denied', 'x') }) + '\n');
   h.write(later, JSON.stringify({ sessionId: 'b', cwd: h.project.projectPath }) + '\n');
   const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
   assert.equal(result.ok, true);

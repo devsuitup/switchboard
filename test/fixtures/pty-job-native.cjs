@@ -11,7 +11,7 @@ const vm = require('node:vm');
 const { PassThrough } = require('node:stream');
 const { extractFunction } = require('../app-source');
 const { createWindowsJobHelper } = require('../../src/main/terminals/windows-job-helper');
-const { trackWindowsPty, releaseWindowsPty, guardPtyInputErrors, killPty } = require('../../src/main/terminals/pty-ops');
+const { trackWindowsPty, releaseWindowsPty, guardPtyInputErrors, killPty, stopPtyWithEvidence } = require('../../src/main/terminals/pty-ops');
 const keepAlive = setInterval(() => {}, 1000);
 
 function observer(pid) {
@@ -66,10 +66,10 @@ async function run(mode) {
       nodeRoot ? [path.join(__dirname, 'pty-job-parent.cjs'), 'root'] : ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', path.join(__dirname, 'pty-hidden-root.ps1')],
       { cols: 80, rows: 24, useConptyDll: true, env: { ...process.env, FIXTURE_GATE: gate,
         FIXTURE_NODE: process.execPath, FIXTURE_CHILD: path.join(__dirname, detached ? 'pty-detached-parent.cjs' : 'pty-hidden-grandchild.cjs'),
-        FIXTURE_PIDS: pidFile, FIXTURE_MODE: mode, FIXTURE_LIFETIME: '60000', FIXTURE_CLI_ENTRY: cliEntry,
+        FIXTURE_PIDS: pidFile, FIXTURE_MODE: mode === 'evidence-protected' ? 'daemon' : mode, FIXTURE_LIFETIME: '60000', FIXTURE_CLI_ENTRY: cliEntry,
         FIXTURE_FILES: __dirname, FIXTURE_EXPIRY_GATE: expiryGate } }));
     let drain;
-    const session = { pty, kind: 'local-pty', exited: false, exitDrain: new Promise(resolve => { drain = resolve; }) };
+    const session = { pty, generation: index + 1, kind: 'local-pty', exited: false, exitDrain: new Promise(resolve => { drain = resolve; }) };
     terms.push(session);
     pty.onData(() => {}); pty.onExit(() => { session.exited = true; drain(); });
     assert.equal(await trackWindowsPty(pty, { jobs: h.helper, spawnTime }), true, 'native root assignment must succeed');
@@ -155,7 +155,7 @@ async function run(mode) {
     const count = ['simultaneous', 'shutdown'].includes(mode) ? 3 : mode === 'helper-death' ? 2 : 1;
     const cases = [];
     for (let i = 0; i < count; i++) cases.push(await term(h, i,
-      ['detached', 'daemon', 'worker', 'roster', 'stale-roster', 'daemon-eof', 'helper-death', 'helper-timeout', 'pipe-eof', 'lookalike', 'malformed'].includes(mode)));
+      ['detached', 'daemon', 'worker', 'roster', 'stale-roster', 'daemon-eof', 'helper-death', 'helper-timeout', 'pipe-eof', 'lookalike', 'malformed', 'evidence-protected'].includes(mode)));
     assert.equal(await startup, true, 'helper must compile and report ready');
     for (const c of cases) assert.equal(c.alive(), true, 'every owned child must still be alive immediately before close');
     const started = Date.now();
@@ -182,6 +182,12 @@ async function run(mode) {
       assert.ok(events.includes('projects') && events.includes('db'), 'quit must reach persistence flushes and closeDb');
       assert.equal(events.filter(e => e === 'row').length, 3);
       assert.ok(shutdownMs < 1500, `native quit drain took ${shutdownMs}ms`);
+    }
+    else if (mode === 'evidence' || mode === 'evidence-protected') {
+      const proof = await stopPtyWithEvidence(cases[0].session, mode, { deadline: Date.now() + 5000 });
+      assert.equal(proof.ended, mode === 'evidence', 'only the observed empty job proves intentional tree death');
+      assert.equal(proof.generation, cases[0].session.generation);
+      if (proof.ended) assert.equal(cases[0].alive(), false, 'positive proof requires the hidden child to be dead');
     }
     else if (mode === 'helper-death') h.child().kill();
     else if (mode === 'helper-timeout') {

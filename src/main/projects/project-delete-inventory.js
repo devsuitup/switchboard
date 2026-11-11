@@ -344,7 +344,11 @@ function createProjectDeleteInventory(deps) {
         } catch (error) { propagate(error); if (folderBelongs(folder)) candidate(file, error.message); return; }
         try {
           if (folderBelongs(folder) || await belongs(cwd)) candidate(file, 'Unindexed or unmappable transcript candidate.');
-        } catch (error) { propagate(error); candidate(file, error.message); }
+        } catch (error) {
+          propagate(error);
+          const selected = normalize(c, project.projectPath), value = typeof cwd === 'string' && path.isAbsolute(cwd) ? normalize(c, cwd) : null;
+          if (value && (value === selected || value.startsWith(selected + '/'))) candidate(file, error.message);
+        }
       });
     }
     try {

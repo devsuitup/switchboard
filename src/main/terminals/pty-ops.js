@@ -138,6 +138,48 @@ function writePty(session, data, sessionId) {
   return withPty(session, 'write', (pty) => pty.write(data), sessionId);
 }
 
+function stopPtyWithEvidence(session, sessionId, { platform = process.platform, generation = session?.generation,
+  deadline = Date.now() + 5000 } = {}) {
+  const pty = session?.pty, record = pty && jobsByPty.get(pty);
+  const unknown = code => Promise.resolve({ ended: false, code, generation });
+  if (!pty || generation == null || session.generation !== generation || !Number.isFinite(deadline) || deadline <= Date.now()) return unknown('IDENTITY');
+  if (session.kind !== 'local-pty' || session.isAttach || session.detaching || session.backgrounding || session.backgrounded || session.host) return unknown('UNSUPPORTED');
+  if (platform !== 'win32' || !record || record.released || typeof record.jobs.terminateWithEvidence !== 'function') return unknown('UNSUPPORTED');
+  if (record.stopEvidence) return record.stopGeneration === generation ? record.stopEvidence : unknown('IDENTITY');
+  if (record.closing || killedPtys.has(pty)) return unknown('UNKNOWN');
+  const pid = pty.pid;
+  const current = () => session.pty === pty && session.generation === generation && pty.pid === pid;
+  record.closing = true;
+  record.stopGeneration = generation;
+  record.stopEvidence = (async () => {
+    let timer, helperOwnsRelease = false;
+    try {
+      const assigned = await Promise.race([record.assignment, new Promise(resolve => {
+        timer = setTimeout(() => resolve(false), Math.max(0, Math.min(15000, deadline - Date.now())));
+      })]);
+      clearTimeout(timer);
+      if (!assigned || !current() || deadline <= Date.now()) return { ended: false, code: 'IDENTITY', generation, pid };
+      killedPtys.add(pty);
+      const proof = await closeWindowsPty(pty,
+        () => withPty({ pty }, 'kill', target => target.kill(), sessionId),
+        () => { helperOwnsRelease = true; return record.jobs.terminateWithEvidence(record.id, { deadline }); }, { evidence: true, deadline });
+      return { ...proof, ended: proof.ended === true && current(), generation, pid };
+    } finally {
+      clearTimeout(timer);
+      record.closing = false;
+      if (helperOwnsRelease) record.released = true;
+      const releasing = releaseWindowsPty(pty).catch(() => false);
+      if (Date.now() < deadline) {
+        try {
+          await Promise.race([releasing, new Promise(resolve => { timer = setTimeout(resolve, deadline - Date.now()); })]);
+        } finally { clearTimeout(timer); }
+      }
+    }
+  })();
+  pty.stopEvidence = record.stopEvidence;
+  return record.stopEvidence;
+}
+
 // see .ai/contexts/bg-agents.md
 function detachPty(session, sessionId, { graceMs = 2000, schedule = setTimeout } = {}) {
   if (session.detaching) return true;
@@ -158,4 +200,4 @@ function ptyExitSignalName(signal, signals = os.constants.signals) {
   return Object.keys(signals).find((name) => signals[name] === signal) || `signal ${signal}`;
 }
 
-module.exports = { setPtyOpLogger, guardPtyInputErrors, trackWindowsPty, releaseWindowsPty, withPty, isKilled, resizePty, killPty, writePty, detachPty, ptyExitSignalName };
+module.exports = { setPtyOpLogger, guardPtyInputErrors, trackWindowsPty, releaseWindowsPty, withPty, isKilled, resizePty, killPty, stopPtyWithEvidence, writePty, detachPty, ptyExitSignalName };

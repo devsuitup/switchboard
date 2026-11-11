@@ -9,6 +9,29 @@ TUI. Lists the daemon's `--bg` sessions and the external interactive ones,
 attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 `docs/background-agents.md`.
 
+## Dormant guarded stop ports (#474 A4c2a)
+
+A4c2a adds `checkStop(id, options)` and `runStop(id, options)` properties to the
+callable unsubscribe returned by IPC `init`; `respawnForHandoff` is preserved.
+The existing stop handler delegates to `runStop(id)` and keeps its historical
+return values and permissive unknown/hosted policy. No handler calls another
+handler, and no new production consumer uses strict mode.
+
+Strict options are `{ strict: true, jobId, sessionIds, deadline }`, where jobId
+must equal id, sessionIds are the complete expected conversation parts, and
+deadline is an absolute `Date.now()` millisecond deadline. Reads and the verb
+are bounded (maximum 15 seconds per await). `checkStop` requires a readable
+matching conversation with `workerLiveness: 'all'`, known live/dead worker
+evidence, no conflicting continuation job, no ordinary local PTY and no foreign
+live process. Only the job's own attach PTY/descriptor is exempted from those
+foreign-owner checks. `runStop` rechecks immediately before issuing the verb,
+then repeats the strict checks after its ACK. Only `workerLiveness: 'dead'`
+produces `{ ok: true, ended: true }`; state `done`, a successful CLI stop and a
+detached tab are not death. Unknown/changed ownership, live worker, timeout or
+failure returns `ok: false, ended: false`. An uncertain verb result is never
+automatically retried. A4c2b must retain admission and incarnation ownership
+through this composition and detach the pinned attachment only after death.
+
 ## Key files
 
 | File | Role |

@@ -6,6 +6,24 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 
+test('A4c2a retained termination serializes before observation and release', async t => {
+  const f = fixture(t);
+  assert.equal(typeof f.helper.terminateWithEvidence, 'function', 'helper must expose bounded retained termination');
+  const assign = f.helper.assign('one', 897, 100);
+  f.child.stdout.emit('data', 'ready\nassigned one\n'); await assign;
+  const stopped = f.helper.terminateWithEvidence('one', { deadline: Date.now() + 1000 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.writes.at(-1), 'terminate-retained one\n');
+  f.child.stdout.emit('data', 'terminated one\n');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.writes.at(-1), 'observe one\n');
+  f.child.stdout.emit('data', 'observed one 0\n');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.writes.at(-1), 'release one\n');
+  f.child.stdout.emit('data', 'released one\n');
+  assert.equal((await stopped).ended, true);
+});
+
 function fixture(t, options = {}) {
   const filename = path.join(__dirname, '../src/main/terminals/windows-job-helper.js');
   assert.ok(fs.existsSync(filename), 'a resident helper must replace per-close snapshots');
@@ -69,7 +87,7 @@ test('one hidden helper reads the packaged script and queues assigns until ready
   const { program, args, opts } = f.invocations[0];
   assert.equal(program, path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'));
   assert.deepEqual(args.slice(0, 3), ['-NoProfile', '-NonInteractive', '-EncodedCommand']);
-  const script = fs.readFileSync(path.join(__dirname, '../src/main/terminals/windows-job-helper.ps1'), 'utf8').replace(/\r\n/g, '\n');
+  const script = fs.readFileSync(path.join(__dirname, '../src/main/terminals/windows-job-helper.ps1'), 'utf8').replace(/\r\n/g, '\n').replace(/^[ \t]+/gm, '');
   assert.equal(Buffer.from(args[3], 'base64').toString('utf16le'), script);
   assert.ok([program, ...args].join(' ').length < 32700);
   assert.equal(opts.windowsHide, true);

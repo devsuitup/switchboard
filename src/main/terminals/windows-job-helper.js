@@ -76,7 +76,7 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
     if (started) return readiness;
     started = true;
     try {
-      const script = fs.readFileSync(path.join(__dirname, 'windows-job-helper.ps1'), 'utf8').replace(/\r\n/g, '\n');
+      const script = fs.readFileSync(path.join(__dirname, 'windows-job-helper.ps1'), 'utf8').replace(/\r\n/g, '\n').replace(/^[ \t]+/gm, '');
       child = spawnChild(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
         ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
         { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -108,7 +108,7 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
     let resolveRequest;
     const done = new Promise(resolve => { resolveRequest = resolve; });
     const entry = { op, id, line: `${op} ${id}${args}`, current, resolve: resolveRequest, done,
-      response: { assign: 'assigned', terminate: 'terminated', release: 'released', observe: 'observed' }[op] };
+      response: { assign: 'assigned', terminate: 'terminated', 'terminate-retained': 'terminated', release: 'released', observe: 'observed' }[op] };
     if (pending.has(id)) {
       if (!waiting.has(id)) waiting.set(id, []);
       waiting.get(id).push(entry);
@@ -153,6 +153,41 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
     } catch { return sendPids([]); }
   }
 
+  async function terminateWithEvidence(id, { deadline = Date.now() + 5000 } = {}) {
+    let timer, expired = false;
+    const unknown = { ended: false, code: 'UNKNOWN' };
+    if (!Number.isFinite(deadline)) return unknown;
+    deadline = Math.min(deadline, Date.now() + 15000);
+    const timeout = new Promise(resolve => {
+      timer = setTimeout(() => { expired = true; fail('stop evidence timed out'); resolve(null); }, Math.max(0, deadline - Date.now()));
+    });
+    const bounded = work => Promise.race([Promise.resolve().then(() => {
+      if (!expired && Date.now() < deadline) return work();
+      expired = true; fail('stop evidence timed out'); return null;
+    }), timeout]);
+    let proof = unknown;
+    try {
+      const values = await bounded(() => protectedPids());
+      if (!Array.isArray(values) || values.some(value => !Number.isSafeInteger(value?.pid) || value.pid <= 0
+        || value.pid > 0xffffffff || typeof value.procStart !== 'string' || !/^\d{17,19}$/.test(value.procStart))) return unknown;
+      const roster = [...new Set(values.map(value => `${value.pid}:${value.procStart}`))];
+      const terminated = await bounded(() => request('terminate-retained', id, roster.length ? ` ${roster.join(',')}` : '',
+        () => !expired && Date.now() < deadline));
+      if (!terminated) return unknown;
+      while (!expired && Date.now() < deadline) {
+        const observed = await bounded(() => request('observe', id));
+        if (!observed || typeof observed !== 'object') break;
+        if (observed.ended === true) { proof = observed; break; }
+        await bounded(() => new Promise(resolve => setTimeout(resolve, Math.min(25, Math.max(0, deadline - Date.now())))));
+      }
+    } catch { proof = unknown; }
+    finally {
+      try { if (!await bounded(() => finish('release', id))) proof = unknown; }
+      finally { clearTimeout(timer); }
+    }
+    return expired ? unknown : proof;
+  }
+
   return {
     start,
     observe(id) {
@@ -164,6 +199,7 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
       return request('assign', id, ` ${pid} ${spawnTime}`, current);
     },
     terminate,
+    terminateWithEvidence,
     release: id => finish('release', id),
   };
 }

@@ -20,6 +20,44 @@ const PID_FORCE_MARKER = 'PID_KILLED_FORCE';
 const TERM_WAIT_TICKS = 6;
 const TERM_WAIT_STEP_S = '0.5';
 
+const STRICT_STOP_SCRIPT = `import base64,json,os,signal,sys,time,select
+x=json.loads(base64.b64decode(sys.argv[1]))
+p=x['pid']; fd=None
+identity=str(p)+' '+x['procStart']+' '+x['sessionId']+' '+x['bootId']
+def emit(kind):
+ print(kind+' '+identity,flush=True)
+def guard():
+ if time.time()*1000>=x['deadline']: raise RuntimeError('deadline')
+ if open('/proc/sys/kernel/random/boot_id').read().strip()!=x['bootId']: raise RuntimeError('host identity')
+def start():
+ return open('/proc/'+str(p)+'/stat').read().rsplit(') ',1)[1].split()[19]
+try:
+ guard()
+ if x['phase']=='observe':
+  if not os.path.isdir('/proc/'+str(p)): emit('STOP_ENDED')
+  elif start()!=x['procStart']: emit('STOP_REUSED')
+  else: emit('STOP_LIVE')
+ else:
+  fd=os.pidfd_open(p,0)
+  if start()!=x['procStart']: raise RuntimeError('start identity')
+  args=open('/proc/'+str(p)+'/cmdline','rb').read().split(b'\\0')
+  sid=x['sessionId'].encode()
+  if not any(args[i] in (b'--session-id',b'--resume') and args[i+1]==sid for i in range(len(args)-1)): raise RuntimeError('session identity')
+  if select.select([fd],[],[],0)[0]: raise RuntimeError('exited before signal')
+  guard()
+  signal.pidfd_send_signal(fd,signal.SIGTERM if x['phase']=='TERM' else signal.SIGKILL)
+  emit('STOP_SIGNALLED')
+except Exception:
+ emit('STOP_IDENTITY'); sys.exit(1)
+finally:
+ if fd is not None: os.close(fd)
+`;
+
+function buildStrictStopCommand(identity, phase, deadline) {
+  const payload = Buffer.from(JSON.stringify({ ...identity, phase, deadline })).toString('base64');
+  return `python3 -c '${STRICT_STOP_SCRIPT.replaceAll("'", "'\"'\"'")}' '${payload}'`;
+}
+
 // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
 function buildRefusalGuard(pid) {
   const check = buildProcCmdlineCheck(pid);
@@ -68,7 +106,45 @@ function createRemoteStopAdapter(opts = {}) {
   const runRemoteCommand = opts.runRemoteCommand || defaultRunRemoteCommand;
   const log = opts.log || { info() {}, warn() {}, error() {} };
 
-  async function stop(alias, descriptor) {
+  async function stopStrict(alias, descriptor, options) {
+    const unknown = error => ({ ok: false, ended: false, error });
+    const identity = options.identity && { ...options.identity }, deadline = Math.min(options.deadline, Date.now() + DEFAULT_STOP_TIMEOUT_MS);
+    const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+    if (!identity || identity.alias !== alias || !alias || !isValidPid(identity.pid) || identity.pid !== descriptor?.pid
+      || identity.sessionId !== descriptor?.sessionId || !uuid.test(identity.sessionId)
+      || typeof identity.procStart !== 'string' || !/^\d{1,20}$/.test(identity.procStart) || identity.procStart !== descriptor?.procStart
+      || typeof identity.bootId !== 'string' || !uuid.test(identity.bootId) || identity.bootId !== descriptor?.bootId
+      || !Number.isFinite(deadline) || deadline <= Date.now()) return unknown('strict stop identity or deadline is unavailable');
+    const suffix = `${identity.pid} ${identity.procStart} ${identity.sessionId} ${identity.bootId}`;
+    const read = async phase => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error('stop deadline expired');
+      let timer;
+      try {
+        const result = await Promise.race([runRemoteCommand(alias, buildStrictStopCommand(identity, phase, deadline), { timeoutMs: remaining }),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('stop deadline expired')), remaining); })]);
+        if (Date.now() >= deadline || result?.code !== 0) throw new Error('remote observation unavailable');
+        const text = String(result.stdout || '').trim();
+        return ['STOP_SIGNALLED', 'STOP_ENDED', 'STOP_LIVE', 'STOP_REUSED'].find(marker => text === `${marker} ${suffix}`) || 'UNKNOWN';
+      } finally { clearTimeout(timer); }
+    };
+    try {
+      for (const phase of ['TERM', 'KILL']) {
+        if (await read(phase) !== 'STOP_SIGNALLED') return unknown('remote signal identity was not acknowledged');
+        for (let i = 0; i < TERM_WAIT_TICKS; i++) {
+          const state = await read('observe');
+          if (state === 'STOP_ENDED') return { ok: true, ended: true, scope: 'process', identity, observedAt: Date.now(), method: `pid-${phase.toLowerCase()}` };
+          if (state !== 'STOP_LIVE') return unknown('remote death is unknown or the pid was reused');
+          if (deadline <= Date.now()) return unknown('stop deadline expired');
+          await new Promise(resolve => setTimeout(resolve, Math.min(50, deadline - Date.now())));
+        }
+      }
+      return unknown('remote process is still live');
+    } catch (error) { return unknown(error.message || String(error)); }
+  }
+
+  async function stop(alias, descriptor, options = {}) {
+    if (options.strict) return stopStrict(alias, descriptor, options);
     if (!isValidPid(descriptor && descriptor.pid)) {
       return { ok: false, error: 'session carries no readable pid — cannot stop it' };
     }

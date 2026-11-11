@@ -1,6 +1,34 @@
-# Project deletion: dormant backend (#474 A4a–A4c1)
+# Project deletion: dormant backend (#474 A4a–A4c2a)
 
-## Current state: bounded inventory and recovery reads (A4c1)
+## Current state: inventory/recovery reads and dormant stop seams (A4c2a)
+
+A4c2a adds opt-in stop evidence to the existing PTY, background job and remote
+adapters. `stopPtyWithEvidence` pins the PTY object, PID and generation; Windows
+retains the assigned job through termination and a bounded empty-membership
+observation. Unsupported platforms refuse before closing. Background IPC init
+returns callable `checkStop`/`runStop` ports alongside its existing unsubscribe
+and handoff function. Strict checks name the exact job and conversation parts,
+use `workerLiveness: 'all'`, check continuations, and read again after stop.
+Remote strict mode pins a Linux PID with pidfd, validates boot/start/session
+identity before each signal and obtains death from a separate SSH read. Its
+proof has `scope: 'process'`; it does not certify descendants or successors.
+See [session-state.md](session-state.md), [bg-agents.md](bg-agents.md) and the
+Windows helper section of [ipc-bridge.md](ipc-bridge.md) for contracts/limits.
+
+These seams have no new production caller. A4c2b still owes
+`project-delete-stop.js` with preflight/stop/verify, pinned map/incarnation checks,
+post-stop continuation/tree checks and exit-drain composition. A4c3/A4c4 still
+owe service and main wiring. No deletion, preload, UI or scheduler stop is
+enabled. `cliSessionState.getScheduleRunSnapshot` was already exported by A4c1;
+headless schedules remain named blocking targets without safe tree control.
+
+An unknown transcript folder with an inaccessible cwd only refuses the selected
+project when that cwd is lexically under the project path (including equality).
+The comparison reuses already resolved ancestor spellings, so an 8.3 cwd and
+the planner's canonical long project path still identify the same subtree even
+when the final cwd realpath is denied. It performs no new lookup after denial.
+Budget errors still propagate, and a failed ownership lookup does not stop the
+scan before later attributable transcripts.
 
 A4b4 already supplies `completeProjectDeletion`, integer writer revision and
 project epoch fences, exact groups/members plus jobs/tabs/schedules inventory,

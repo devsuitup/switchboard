@@ -131,7 +131,7 @@ public static class PtyJobs {
    }
   } while (changed);
  }
- static int TerminateMembers(IntPtr job, Dictionary<uint, long> roster) {
+ static int TerminateMembers(IntPtr job, Dictionary<uint, long> roster, bool strict = false) {
   var protect = new HashSet<uint>();
   var skipped = new HashSet<uint>();
   var members = new Dictionary<uint, Member>();
@@ -141,20 +141,22 @@ public static class PtyJobs {
    IntPtr process = IntPtr.Zero;
    try {
     process = OpenProcess(0x1000, false, pid);
-    if (process == IntPtr.Zero) { WarnCommand(pid); continue; }
+    if (process == IntPtr.Zero) { if(strict){skipped.Add(pid);error=5;} WarnCommand(pid); continue; }
     bool inJob;
-    if (!IsProcessInJob(process, job, out inJob) || !inJob) continue;
+    if (!IsProcessInJob(process, job, out inJob) || !inJob) { if(strict){skipped.Add(pid);error=5;} continue; }
     var member = Identity(process, pid);
     if (member != null) members[pid] = member;
     long expected;
     if (member != null && roster.TryGetValue(pid, out expected) && MatchesStart(member.Created, expected)) protect.Add(pid);
     string command = CommandLine(process);
+    if(strict&&(command==null||member==null)){skipped.Add(pid);error=5;}
     if (command == null) WarnCommand(pid);
     if (IsBackgroundAgent(command)) protect.Add(pid);
    } catch (Exception) { skipped.Add(pid); if (error == 0) error = 87; WarnMember(pid); }
    finally { if (process != IntPtr.Zero) CloseHandle(process); }
   }
   ProtectDescendants(members, protect);
+  if(strict&&protect.Count>0)error=5;
   foreach (uint pid in pids) {
    if (protect.Contains(pid) || skipped.Contains(pid)) continue;
    IntPtr process = IntPtr.Zero;
@@ -191,13 +193,13 @@ public static class PtyJobs {
     try {
      if (a.Length == 4 && a[0] == "assign") { error = Assign(id, uint.Parse(a[2]), long.Parse(a[3])); response = "assigned"; }
      if(a.Length==2&&a[0]=="observe"&&Jobs.ContainsKey(id)){Console.WriteLine("observed "+id+" "+Members(Jobs[id]).Count);Console.Out.Flush();continue;}
-     if ((a.Length == 2 || a.Length == 3) && (a[0] == "terminate" || a[0] == "release")) {
+     if ((a.Length == 2 || a.Length == 3) && (a[0] == "terminate" || a[0] == "release" || a[0] == "terminate-retained")) {
       var roster = new Dictionary<uint, long>();
       if (a.Length == 3) foreach (string value in a[2].Split(',')) {
        string[] pair = value.Split(':'); uint pid; long created;
        if (pair.Length == 2 && uint.TryParse(pair[0], out pid) && pid > 0 && long.TryParse(pair[1], out created) && created > 0) roster[pid] = created;
       }
-      error = Finish(id, a[0] == "terminate", roster); response = a[0] == "terminate" ? "terminated" : "released";
+      error = a[0]=="terminate-retained" ? (Jobs.ContainsKey(id)?TerminateMembers(Jobs[id],roster,true):6) : Finish(id, a[0] == "terminate", roster); response = a[0] == "release" ? "released" : "terminated";
      }
     } catch { error = 87; }
     Console.WriteLine(error == 0 ? response + " " + id : "error " + id + " " + error); Console.Out.Flush();
