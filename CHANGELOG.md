@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.105 — 2026-11-11
+
 ### New
 - Local callers can request a session's current state through a read-only typed trigger; opening a session through a typed request is still refused. (#380)
 - A schedule can now be created from the optional Schedules tab (Global Settings → Schedules tab). (#792)
