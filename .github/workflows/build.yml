@@ -141,4 +141,4 @@ jobs:
             echo "**Full changelog**: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${TAG}" >> release-notes.md
           fi
           # Stays a draft: edit only replaces the body.
-          gh release edit "$TAG" --notes-file release-notes.md
+          gh release edit "$TAG" --repo "${GITHUB_REPOSITORY}" --notes-file release-notes.md

@@ -75,14 +75,15 @@ gh's default here is the upstream repository, `doctly/switchboard`.
    run ID and `<x.y.z>` with its version:
 
    ```bash
-   gh run download <run> --repo devsuitup/switchboard --dir .work-files/release-artifacts
+   gh run download <run> --repo devsuitup/switchboard --dir .work-files/release-artifacts-v<x.y.z>
    ```
 
-   Use a fresh download directory, then merge its `dist-*` artifact directories
-   into one fresh directory containing only the assets to upload. Both Linux
-   jobs produce `switchboard-doctly-<v>.pacman` with the same filename: keep the
-   copy from `dist-linux-x64`, which is the architecture always published for
-   that asset, and discard the arm64 copy before merging. If macOS
+   The download directory must not exist yet. Merge its `dist-*` artifact
+   directories into one fresh directory containing only the assets to upload.
+   Both Linux jobs produce `switchboard-doctly-<v>.pacman` with the same
+   filename: keep the copy from `dist-linux-x64` and discard the arm64 copy.
+   (CI merges the artifacts with `merge-multiple`, so which copy CI publishes
+   depends on download order; v0.0.104's matches x64.) If macOS
    artifacts are absent, omit `latest-mac.yml`. Never copy a previous release's
    mac manifest: upload it only when its version, filenames, sizes and hashes
    match the macOS files actually attached to this release.
@@ -100,6 +101,8 @@ gh's default here is the upstream repository, `doctly/switchboard`.
 
    ```bash
    node scripts/changelog-section.js v<x.y.z> > .work-files/release-notes.md
+   PREV_TAG="$(git describe --tags --abbrev=0 v<x.y.z>^)"
+   printf '\n**Full changelog**: https://github.com/devsuitup/switchboard/compare/%s...v<x.y.z>\n' "$PREV_TAG" >> .work-files/release-notes.md
    gh release edit v<x.y.z> --repo devsuitup/switchboard --notes-file .work-files/release-notes.md
    gh release view v<x.y.z> --repo devsuitup/switchboard --json assets --jq '.assets[] | {name, size}'
    ```
