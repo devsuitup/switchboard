@@ -17,7 +17,7 @@ for (const delayed of [false, true]) {
     t.after(async () => {
       await client.dispose();
       ctx.destroy();
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
     });
     let now = 1_800_000_000_000;
     ctx.window.Date.now = () => now;
@@ -45,6 +45,7 @@ for (const delayed of [false, true]) {
     append({ type: 'system', subtype: 'informational', content: 'auto mode' });
     await read();
     const head = ctx.read('headTurns.get("root")');
+    assert.equal(head.state, 'open', 'the transcript head must still classify as open');
     assert.equal(busy(), false, 'idle descriptor and OSC must survive the informational append');
     now += 16000;
     await read();
