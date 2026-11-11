@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- Arch/Manjaro downloads now include a separate package for each architecture, so x64 users no longer sometimes receive an ARM package. (#1089)
+
 ## v0.0.105 — 2026-11-11
 
 ### New

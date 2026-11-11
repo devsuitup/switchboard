@@ -29,6 +29,25 @@ function matrixFor(eventName, ref) {
   return evaluate(workflow.jobs.build.strategy.matrix.include, eventName, ref);
 }
 
+test('Linux pacman artifacts keep distinct architecture names when release downloads merge', () => {
+  const { build, version } = require('../package.json');
+  const { expandMacro } = require('app-builder-lib/out/util/macroExpander');
+  const { Arch, getArtifactArchName } = require('builder-util/out/arch');
+  const names = matrixFor('push').filter(({ platform }) => platform === 'linux').map(({ arch }) =>
+    expandMacro(build.pacman.artifactName, getArtifactArchName(Arch[arch], 'pacman'), { version }, { ext: 'pacman' }));
+  assert.equal(new Set(names).size, 2, 'merged release must retain both Linux pacman packages');
+  assert.deepEqual(names, [
+    `switchboard-doctly-${version}-x64.pacman`,
+    `switchboard-doctly-${version}-aarch64.pacman`,
+  ]);
+  assert.ok(build.linux.target.includes('pacman'));
+  assert.equal(build.pacman.packageName, 'switchboard-doctly');
+  const upload = workflow.jobs.build.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
+  assert.ok(upload.with.path.split(/\r?\n/).includes('dist/*.pacman'));
+  const download = workflow.jobs.publish.steps.find(step => step.uses?.startsWith('actions/download-artifact@'));
+  assert.equal(download.with['merge-multiple'], true);
+});
+
 test('pull requests build exactly Windows and both Linux architectures', () => {
   assert.deepEqual(matrixFor('pull_request'), nonMac);
 });
