@@ -16,7 +16,6 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### Fixed
 - Triggers wait while the session index is unavailable, and a trigger whose result could not be published is kept and retried. (#380)
 - Restarting no longer reopens a finished background tab or shows a false "Restore failed" notice when its worker cannot be found. You can still open the conversation from the sidebar. (#1065)
-- A resumed session no longer shows as busy when Claude Code adds an informational notice, such as the auto mode notice, after finishing its turn. (#1083)
 
 ## v0.0.104 — 2026-11-09
 
