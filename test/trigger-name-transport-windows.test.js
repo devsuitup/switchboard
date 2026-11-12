@@ -132,7 +132,7 @@ const WRAPPED = [
 for (const [label, request, expected] of WRAPPED) {
   test(`a native wrapper receives ${label} arguments through cmd.exe and node-pty and hands claude.exe the exact argv`, { skip, timeout: 60000 }, async () => {
     const wrapper = path.join(bins.wrapper, 'wrapper.exe');
-    const options = { ...request.options, preLaunchCmd: `"${wrapper}"` };
+    const options = { ...request.options, preLaunchCmd: wrapper };
     assert.deepEqual(await runThroughNodePty('exe', { ...request, options }), expected);
   });
 }
