@@ -37,6 +37,15 @@ const changes = [
   }],
   ['the descriptor is renamed', ({ write, descriptor }) => { write({ name: 'Other' }); fs.utimesSync(descriptor, new Date(), new Date(Date.now() + 5000)); }],
   ['the descriptor is rewritten for a different process start', ({ write }) => { write({ procStart: '301' }); }],
+  ['the writer becomes a background writer', ({ write, descriptor }) => { write({ kind: 'bg' }); fs.utimesSync(descriptor, new Date(), new Date(Date.now() + 5000)); }],
+  ['the writer kind disappears', ({ descriptor }) => {
+    const raw = JSON.parse(fs.readFileSync(descriptor, 'utf8')); delete raw.kind; fs.writeFileSync(descriptor, JSON.stringify(raw));
+  }],
+  ['the descriptor PID changes to a live process with the same start', ({ write, starts }) => { starts[301] = '300'; write({ pid: 301 }); }],
+  ['the descriptor loses its PID', ({ descriptor }) => {
+    const raw = JSON.parse(fs.readFileSync(descriptor, 'utf8')); delete raw.pid; fs.writeFileSync(descriptor, JSON.stringify(raw));
+  }],
+  ['the descriptor becomes unparseable', ({ descriptor }) => { fs.writeFileSync(descriptor, '{'); }],
   ['the writer PID is reused', ({ starts }) => { starts[300] = '301'; }],
   ['the PTY anchor PID is reused', ({ starts }) => { starts[100] = '101'; }],
 ];

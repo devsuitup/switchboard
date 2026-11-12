@@ -8,7 +8,7 @@ async function launch(shellPath, { name, isNew = true, options = {}, env = {}, t
   const f = fixture({ resolveShell: () => ({ path: shellPath }), quoteArgvForShell: profiles.quoteArgvForShell,
     shellArgs: profiles.shellArgs, isWslShell: profiles.isWslShell, windowsToWslPath: profiles.windowsToWslPath, os: require('node:os'),
     validatePreLaunchCmd, sandboxScriptPath: () => '/opt/switchboard/claude-sandbox.sh', sandboxBindEnv: () => null,
-    sessionTranscriptExists: () => transcript, cleanPtyEnv: env, isGitRepo: () => git, isGitRepo: () => git,
+    sessionTranscriptExists: () => transcript, cleanPtyEnv: env, isGitRepo: () => git,
     parseAddDirs: value => String(value || '').split(',').map(dir => dir.trim()).filter(Boolean) });
   if (name !== undefined) {
     f.permit.mode = 'new'; f.permit.requestedSessionId = null; f.permit.name = name; f.authorize();

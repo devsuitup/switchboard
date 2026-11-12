@@ -274,10 +274,14 @@ doubled single quotes, cmd.exe caret escaping via `escapeForCmd`) and the
 sandbox/prefix wrappers. For cmd.exe the interactive launch gives node-pty one
 command line, `/s /c "<command>"` (`shellArgs(..., { pty: true })`), so node-pty
 adds no quoting of its own; `/d` is not passed, so Command Processor AutoRun
-still runs. Arguments are escaped once when the `claude` that cmd will run
-(launch directory first, then PATH, in PATHEXT order) is an executable, twice
-when it is a `.cmd`/`.bat` shim, whose `%*` re-parses them, and once when a launch
-prefix runs first (`cmdEscapePasses`).
+still runs. The `claude` found before the shell starts (launch directory first, then
+PATH, in PATHEXT order) is run by its absolute path, escaped like an argument, so the
+program cmd executes and the escaping depth cannot disagree whatever AutoRun does to
+PATH: arguments are escaped once for an executable and twice for a `.cmd`/`.bat`
+shim, whose `%*` re-parses them (`resolveCmdLaunch`, `claudeCommandForShell`). When
+nothing is found the bare `claude` is kept with one pass. A launch prefix (trimmed;
+whitespace-only is none) runs the bare `claude` itself and its own parsing is not
+modelled: one pass is an assumption, not a qualification.
 
 Qualification: `test/trigger-name-transport.test.js` runs the real encoders
 through the extracted `open-terminal` handler and an injected PTY edge. On Linux

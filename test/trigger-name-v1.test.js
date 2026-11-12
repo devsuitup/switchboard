@@ -11,7 +11,7 @@ function named({ observe = () => 'Task', now } = {}) {
   const pin = f.ctx.pinDelivery;
   f.ctx.pinDelivery = (...args) => {
     const pinned = pin(...args);
-    pinned.binding.observeName = () => { f.observed++; f.events.push(['observe']); return observe(); };
+    pinned.binding.observeName = (...args) => { f.observed++; f.events.push(['observe']); return observe(...args); };
     return pinned;
   };
   const order = kind => f.events.findIndex(e => e[0] === kind);
@@ -383,4 +383,20 @@ test('a named result keeps its snapshot through journal publication, a failed re
   const state = actions.readState(resultPath, nodePath.join(processed, 'none.action.json'));
   assert.equal(state.committed, true); assert.equal(state.result.actualName, 'Task-2'); assert.equal(state.result.requestedName, 'Task');
   assert.equal(nodeFs.readFileSync(resultPath, 'utf8'), bytes);
+});
+
+test('the action hands the binding a callback that follows its deadline, cancellation and target', async () => {
+  let clock = Date.now(); const seen = [];
+  const f = named({ now: () => clock, observe: admit => {
+    seen.push(admit()); clock += 10 * 60 * 1000; seen.push(admit()); return 'Task';
+  } });
+  const r = await f.run('Task');
+  assert.deepEqual(seen, [true, false]); assert.equal(r.actualName, null);
+  let allowed = true; const g = named({ observe: admit => { const before = admit(); allowed = false; return [before, admit()].join() && 'Task'; } });
+  g.ctx.lifecycle.launchAllowed = () => allowed;
+  assert.equal((await g.new()).actualName, null);
+  const h = named({ observe: admit => { const before = admit(); h.session.generation = 8; seenTarget.push(before, admit()); return 'Task'; } });
+  const seenTarget = [];
+  await h.new();
+  assert.deepEqual(seenTarget, [true, false]);
 });

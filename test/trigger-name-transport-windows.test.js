@@ -47,7 +47,8 @@ function makeBin(kind) {
 before(() => { if (!skip) for (const kind of ['exe', 'cmd', 'bat']) bins[kind] = makeBin(kind); });
 after(() => { for (const dir of Object.values(bins)) fs.rmSync(dir, { recursive: true, force: true }); });
 
-async function runThroughNodePty(kind, request, { cwdKind } = {}) {
+let lastLine = '';
+async function runThroughNodePty(kind, request, { cwdKind, runFirst = [] } = {}) {
   const out = path.join(bins[kind], 'argv.json');
   fs.rmSync(out, { force: true });
   const env = { ...process.env, PATH: `${bins[kind]};${process.env.PATH}`, SB_ARGV_OUT: out };
@@ -59,7 +60,9 @@ async function runThroughNodePty(kind, request, { cwdKind } = {}) {
     const { argsToCommandLine } = require('node-pty/lib/windowsPtyAgent');
     const line = argsToCommandLine(shell, spawned.args);
     const rest = line.slice(argsToCommandLine(shell, []).length + 1);
-    const ran = spawnSync(shell, [rest], { windowsVerbatimArguments: true, encoding: 'utf8', env, cwd: process.cwd() });
+    lastLine = line;
+    const runEnv = { ...env, PATH: `${runFirst.map(other => bins[other]).join(';')};${env.PATH}` };
+    const ran = spawnSync(shell, [rest], { windowsVerbatimArguments: true, encoding: 'utf8', env: runEnv, cwd: process.cwd() });
     assert.equal(ran.status, 0, `${line}\n${ran.stdout}${ran.stderr}`);
     return JSON.parse(fs.readFileSync(out, 'utf8'));
   } finally { process.chdir(original); }
@@ -96,5 +99,16 @@ const TRICKY = { name: `say "hi" & %PATH% ^ \\`, args: ['--session-id', ID, '--n
 for (const [pathKind, cwdKind] of [['cmd', 'exe'], ['bat', 'exe'], ['exe', 'cmd'], ['exe', 'bat']]) {
   test(`a claude.${cwdKind} in the working directory shadows a claude.${pathKind} on PATH and still gets exact arguments`, { skip, timeout: 60000 }, async () => {
     assert.deepEqual(await runThroughNodePty(pathKind, { name: TRICKY.name }, { cwdKind }), TRICKY.args);
+  });
+}
+
+for (const kind of ['exe', 'cmd', 'bat']) {
+  const others = ['exe', 'cmd', 'bat'].filter(other => other !== kind);
+  test(`cmd.exe runs the claude.${kind} found before startup by absolute path even when startup puts other claude files first on PATH`, { skip, timeout: 60000 }, async () => {
+    assert.deepEqual(await runThroughNodePty(kind, { name: TRICKY.name }, { runFirst: others }), TRICKY.args);
+    assert.ok(lastLine.includes(path.join(bins[kind], `claude.${kind}`)), lastLine);
+  });
+  test(`a prefix of only whitespace leaves a claude.${kind} launch exact`, { skip, timeout: 60000 }, async () => {
+    assert.deepEqual(await runThroughNodePty(kind, { name: TRICKY.name, options: { preLaunchCmd: '   ' } }), TRICKY.args);
   });
 }

@@ -1011,9 +1011,11 @@ function observeTabWriter(ptyPid, snapshot) {
 function confirmDeliveryWriter(raw) {
   try {
     const file = path.join(dir, `${raw.pid}.json`);
-    const again = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return again.sessionId === raw.sessionId && again.name === raw.name
-      && again.procStart === raw.procStart && deliveryProcessIdentity(raw) === 'valid';
+    const text = fs.readFileSync(file, 'utf8');
+    const again = parseDescriptor(text);
+    if (again?.pid !== raw.pid || again.kind !== 'interactive' || again.sessionId !== raw.sessionId || again.name !== raw.name) return false;
+    const reread = { ...JSON.parse(text), descriptorMtimeMs: fs.statSync(file).mtimeMs };
+    return reread.procStart === raw.procStart && deliveryProcessIdentity(reread) === 'valid';
   } catch { return false; }
 }
 
