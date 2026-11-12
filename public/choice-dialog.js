@@ -40,6 +40,7 @@ function openChoiceDialog({
   danger = false,
   secondaryAction = null,
   returnFocus,
+  fallbackFocus = null,
   closeWith = null,
   onChange = null,
   planDetails = null,
@@ -265,8 +266,8 @@ function openChoiceDialog({
       overlay.remove();
       unregister();
       if (returnFocus?.isConnected && typeof returnFocus.focus === 'function') returnFocus.focus();
-      else if (returnFocus) {
-        const fallback = document.getElementById('sidebar-content');
+      else if (fallbackFocus) {
+        const fallback = fallbackFocus();
         if (fallback) { fallback.tabIndex = -1; fallback.focus(); }
       }
       resolve(value);

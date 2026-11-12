@@ -413,12 +413,34 @@ test('the shared schedule launch refuses an archived project and releases its ru
 });
 
 test('preload exposes distinct legacy, preview, execution, state and recovery contracts', () => {
-  const source = read('preload.js');
-  for (const [name, channel] of [['previewProjectDelete', 'preview-project-delete'], ['deleteProject', 'delete-project'], ['projectDeleteState', 'project-delete-state']]) {
-    assert.ok(source.includes(`${name}: request => ipcRenderer.invoke('${channel}', request)`));
+  let api;
+  const calls = [], listeners = new Map(), response = { ok: true };
+  const filename = path.join(ROOT, 'preload.js');
+  vm.runInNewContext(read('preload.js'), {
+    process: { platform: 'win32', argv: [], env: {} },
+    require: name => {
+      assert.equal(name, 'electron');
+      return { contextBridge: { exposeInMainWorld: (key, value) => { assert.equal(key, 'api'); api = value; } },
+        ipcRenderer: { invoke: (...args) => { calls.push(args); return response; }, on: (channel, listener) => listeners.set(channel, listener) } };
+    },
+  }, { filename });
+  for (const [name, channel, args] of [
+    ['archiveProjectSettings', 'archive-project-settings', ['/repo', 'box::folder']],
+    ['unarchiveProject', 'unarchive-project', ['box::/repo']],
+    ['removeProjectLegacy', 'remove-project', ['/repo', 'box::folder']],
+    ['previewProjectDelete', 'preview-project-delete', [{ projectPath: '/repo', options: { settings: true } }]],
+    ['deleteProject', 'delete-project', [{ token: 'token', fingerprint: 'fingerprint' }]],
+    ['projectDeleteState', 'project-delete-state', [{ operationId: 'op' }]],
+  ]) {
+    assert.equal(typeof api[name], 'function');
+    assert.equal(api[name](...args), response);
+    assert.deepEqual(calls.at(-1), [channel, ...args], `${name} must forward exact IPC arguments`);
   }
-  assert.match(source, /removeProjectLegacy: \(projectPath, folderKey\).*'remove-project', projectPath, folderKey/);
-  assert.match(source, /onProjectDeleteRecovery: callback.*'project-delete-recovery'/);
+  const received = [], payload = { operations: [{ operationId: 'op', host: 'box', projectPath: '/repo' }] };
+  api.onProjectDeleteRecovery((...args) => received.push(args));
+  assert.equal(typeof listeners.get('project-delete-recovery'), 'function');
+  listeners.get('project-delete-recovery')({ sender: 'not exposed' }, payload);
+  assert.deepEqual(received, [[payload]], 'recovery forwards the payload without the Electron event');
 });
 
 function settingsDom(t, h) {

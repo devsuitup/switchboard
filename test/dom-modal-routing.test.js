@@ -11,6 +11,17 @@ const { setupSidebarDom } = require('./dom-setup');
 const { JSDOM } = require('jsdom');
 const { createCanvas } = require('@napi-rs/canvas');
 
+for (const optedIn of [false, true]) test(`choice fallback focus requires opt-in (${optedIn})`, async t => {
+  const ctx = setupSidebarDom(); t.after(() => ctx.destroy());
+  const opener = ctx.document.createElement('button'); ctx.document.body.append(opener); opener.focus();
+  const sidebar = ctx.document.getElementById('sidebar-content');
+  const pending = ctx.window.showChoiceDialog({ title: 'Choice', returnFocus: opener,
+    ...(optedIn ? { fallbackFocus: () => sidebar } : {}) });
+  await new Promise(resolve => setImmediate(resolve));
+  opener.remove(); ctx.document.querySelector('.choice-dialog-cancel').click(); await pending;
+  assert.equal(ctx.document.activeElement === sidebar, optedIn, 'only an explicit fallback may move focus to the sidebar');
+});
+
 function setup(api = {}) {
   const writes = [];
   const ctx = setupTerminalDom({ api: { sendInput: (...args) => writes.push(args), getEffectiveSettings: async () => ({}), ...api } });

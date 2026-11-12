@@ -16,6 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
+const { loadAppFunctions } = require('./app-source');
 const { SETTING_DEFAULTS } = require('../public/setting-defaults');
 
 const ROOT = path.join(__dirname, '..');
@@ -63,6 +64,10 @@ function setupPanel(stored = {}, onSave = async () => ({ ok: true })) {
     <div id="jsonl-viewer"></div>
   </body></html>`, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
+  window.cachedAllProjects = [];
+  loadAppFunctions(dom.getInternalVMContext(), { functions: ['saveGlobalSettings'], declarations: ['_persistChain'] });
+  loadAppFunctions(dom.getInternalVMContext(), { sourcePath: path.join(PUBLIC_DIR, 'sidebar.js'),
+    functions: ['isProjectDeleting', 'projectDeletionKey', 'paintProjectDeletionBusy'], declarations: ['deletingProjectKeys', 'projectDeletionUnavailable'] });
 
   window.api = new Proxy({ platform: 'linux' }, {
     get(target, prop) {
@@ -167,6 +172,7 @@ for (const storedValue of [true, false]) {
       const toggle = ctx.document.querySelector('#sv-receive-beta-versions');
       assert.equal(toggle.checked, storedValue);
       toggle.click();
+      assert.equal(typeof ctx.window.saveGlobalSettings, 'function', 'global Settings must load the shared persistence function');
       ctx.document.querySelector('#sv-save-btn').click();
       const { key, settings } = await done;
       assert.equal(key, 'global');
@@ -182,7 +188,7 @@ for (const storedValue of [true, false]) {
 test('project settings do not offer the beta toggle', async () => {
   const ctx = setupPanel();
   try {
-    await ctx.window.openSettingsViewer('project', '/example');
+    await assert.doesNotReject(() => ctx.window.openSettingsViewer('project', '/example'));
     assert.equal(ctx.document.querySelector('#sv-receive-beta-versions'), null);
   } finally {
     ctx.destroy();

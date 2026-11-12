@@ -882,8 +882,22 @@ let sidebarRenderKey = null;
 const deletingProjectKeys = new Set();
 const projectDeletionOperations = new Map();
 const completedProjectDeletionKeys = new Set();
-const projectDeletionRestoreTargets = new Set();
-window.isDeletedProjectRestoreTarget = item => projectDeletionRestoreTargets.has(JSON.stringify([projectDeletionKey(item), item.sessionId]));
+const projectDeletionRestoreTargets = new Map();
+const projectDeletionWriteKeys = new Map();
+window.isDeletedProjectRestoreTarget = item => [...projectDeletionRestoreTargets].some(([key, ids]) =>
+  ids.has(item?.sessionId) && typeof item.projectPath === 'string' &&
+  projectDeletionKey({ projectPath: item.projectPath, alias: JSON.parse(key)[0] }) === key);
+window.clearReappearedProjectDeletionTargets = () => {
+  for (const project of cachedAllProjects) projectDeletionRestoreTargets.delete(projectDeletionKey(project));
+};
+window.flushDeferredProjectDeletionWrites = () => {
+  if (window.projectDeletionWritesBlocked) return;
+  const patch = window.projectDeletionDeferredSettings, workingSet = window.projectDeletionDeferredWorkingSet;
+  window.projectDeletionDeferredSettings = null;
+  window.projectDeletionDeferredWorkingSet = null;
+  if (patch) void saveGlobalSettings(patch).catch(() => {});
+  if (workingSet) void window.persistWorkingSet(workingSet).catch(error => console.warn('[switchboard] failed to persist deferred working set', error));
+};
 let projectDeletionUnavailable = '';
 let projectDeletionRecoveryRevision = 0;
 const PROJECT_DELETION_RECOVERY_REASON = 'Project deletion is unavailable until recovery of an interrupted deletion finishes';
@@ -895,6 +909,13 @@ function projectDeletionKey(project) {
     path = path.replace(/\\/g, '/');
     if (window.api.platform === 'win32') path = path.toLowerCase();
   }
+  const parts = [];
+  for (const part of path.split('/')) {
+    if (part === '.') continue;
+    if (part === '..') { if (parts.length > 1) parts.pop(); }
+    else if (part || !parts.length) parts.push(part);
+  }
+  path = parts.join('/');
   return JSON.stringify([host, path.replace(/\/+$/, '')]);
 }
 
@@ -934,26 +955,30 @@ function paintProjectDeletionBusy(root = document) {
 
 function setProjectDeletionBusy(project, busy) {
   const key = projectDeletionKey(project);
-  if (busy && !deletingProjectKeys.has(key)) window.projectDeletionWriteEpoch = (window.projectDeletionWriteEpoch || 0) + 1;
   if (busy) deletingProjectKeys.add(key); else deletingProjectKeys.delete(key);
-  window.projectDeletionWritesBlocked = deletingProjectKeys.size > 0;
   paintProjectDeletionBusy();
+}
+
+function setProjectDeletionWritesBlocked(project, blocked) {
+  const key = projectDeletionKey(project);
+  const count = projectDeletionWriteKeys.get(key) || 0;
+  if (blocked && !count) window.projectDeletionWriteEpoch = (window.projectDeletionWriteEpoch || 0) + 1;
+  if (blocked) projectDeletionWriteKeys.set(key, count + 1);
+  else if (count > 1) projectDeletionWriteKeys.set(key, count - 1);
+  else projectDeletionWriteKeys.delete(key);
+  window.projectDeletionWritesBlocked = projectDeletionWriteKeys.size > 0;
+  window.flushDeferredProjectDeletionWrites();
 }
 
 async function projectDeletionCall(method, input, { retryRecovery = false } = {}) {
   const revision = projectDeletionRecoveryRevision;
-  let timer;
-  try {
-    const reply = await Promise.race([window.api[method](input), new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error('Project deletion response timed out. Check its state before trying again.')), 15000);
-    })]);
-    if (reply?.code === 'NOT_READY') {
-      projectDeletionRecoveryRevision++;
-      projectDeletionUnavailable = PROJECT_DELETION_RECOVERY_REASON;
-    } else if (retryRecovery && reply?.ok && revision === projectDeletionRecoveryRevision) projectDeletionUnavailable = '';
-    paintProjectDeletionBusy();
-    return reply;
-  } finally { clearTimeout(timer); }
+  const reply = await window.api[method](input);
+  if (reply?.code === 'NOT_READY') {
+    projectDeletionRecoveryRevision++;
+    projectDeletionUnavailable = PROJECT_DELETION_RECOVERY_REASON;
+  } else if (retryRecovery && reply?.ok && revision === projectDeletionRecoveryRevision) projectDeletionUnavailable = '';
+  paintProjectDeletionBusy();
+  return reply;
 }
 
 function projectDeletionPlanReason(reply) {
@@ -961,6 +986,9 @@ function projectDeletionPlanReason(reply) {
   if (reply?.code === 'NOT_READY') return PROJECT_DELETION_RECOVERY_REASON;
   const plan = reply?.plan;
   if (!plan) return reply?.error || 'Project deletion preview is unavailable. Close and reopen Delete to retry.';
+  if (plan.jobs?.some(job => !['running', 'stopped'].includes(job.liveness?.state))) {
+    return 'Background worker liveness cannot be verified. Check the Agents view. Stopping a job may not unblock project deletion.';
+  }
   if (plan.jobs?.some(job => job.liveness?.state !== 'stopped') || plan.stops?.some(stop => stop.excluded || stop.jobId || stop.scheduleId || stop.evidence?.source === 'job')) {
     return 'Stop the background job from the Agents view first, then reopen Delete project.';
   }
@@ -1024,9 +1052,14 @@ async function settleProjectDeletion(project, result, { historical = false } = {
         { operationId: operation.operationId, host: project.remoteAlias ?? project.host ?? null, projectPath: project.projectPath },
       ] }) } : undefined);
   } else {
+    const operation = projectDeletionOperations.get(key);
     projectDeletionNotice(project, (result?.error || result?.code || 'Deletion could not be completed.') +
       (result?.refresh ? ' Review a fresh preview before confirming again.' : ' Check the project, then retry.') + '\n' +
-      JSON.stringify({ completed: result?.completed, kept: result?.kept, failed: result?.failed, skipped: result?.skipped, stopped: result?.stopped }, null, 2));
+      JSON.stringify({ completed: result?.completed, kept: result?.kept, failed: result?.failed, skipped: result?.skipped, stopped: result?.stopped }, null, 2),
+    operation ? { actionLabel: 'Check deletion state', onAction: () => reconcileProjectDeletions({ operations: [
+      { operationId: operation.operationId, host: project.remoteAlias ?? project.host ?? null, projectPath: project.projectPath },
+    ] }) } : { actionLabel: 'Review deletion', onAction: () => confirmAndDeleteProjectFolder(project) });
+    if (!result?.state) projectDeletionOperations.delete(key);
   }
   if (result?.state === 'notStarted') projectDeletionOperations.delete(key);
   setProjectDeletionBusy(project, projectDeletionOperations.has(key));
@@ -1041,6 +1074,7 @@ async function reconcileProjectDeletions({ operations = [] } = {}) {
     const historical = projectDeletionOperations.get(key)?.historical ?? true;
     projectDeletionOperations.set(key, { operationId: operation.operationId, project, historical });
     setProjectDeletionBusy(project, true);
+    setProjectDeletionWritesBlocked(project, true);
     try {
       const state = await projectDeletionCall('projectDeleteState', { operationId: operation.operationId });
       if (state?.projectPath && projectDeletionKey(state) !== key) throw new Error('Recovered project identity changed. Reload to check again.');
@@ -1048,6 +1082,8 @@ async function reconcileProjectDeletions({ operations = [] } = {}) {
     } catch (error) {
       projectDeletionNotice(project, 'Deletion is unresolved. ' + error.message,
         { actionLabel: 'Check deletion state', onAction: () => reconcileProjectDeletions({ operations: [operation] }) });
+    } finally {
+      setProjectDeletionWritesBlocked(project, false);
     }
   }
 }
@@ -1091,10 +1127,13 @@ async function confirmAndDeleteProjectFolder(project, button) {
       },
       planDetails: projectDeletionDetails, planUnavailable: projectDeletionPlanReason,
       confirmLabel: 'Delete project', danger: true, initialFocus: 'cancel', returnFocus: button,
+      fallbackFocus: () => document.getElementById('sidebar-content'),
     });
     if (!answers) return false;
     if (projectDeletionUnavailable) { projectDeletionNotice(project, projectDeletionUnavailable); return false; }
     accepted = true;
+    setProjectDeletionWritesBlocked(project, true);
+    await window.flushProjectDeletionWrites?.();
     const result = await projectDeletionCall('deleteProject', { token: answers.plan.token, fingerprint: answers.plan.plan.fingerprint });
     return await settleProjectDeletion(project, result);
   } catch (error) {
@@ -1103,6 +1142,7 @@ async function confirmAndDeleteProjectFolder(project, button) {
       accepted ? { actionLabel: 'Reload window', onAction: () => window.location.reload() } : undefined);
     return false;
   } finally {
+    if (accepted) setProjectDeletionWritesBlocked(project, false);
     if (!unresolved && !projectDeletionOperations.has(projectDeletionKey(project)) && !completedProjectDeletionKeys.has(projectDeletionKey(project))) setProjectDeletionBusy(project, false);
     if (!button?.isConnected || button.disabled) {
       const target = document.getElementById('ph-' + folderId(project.projectPath, project.remoteAlias)) || document.getElementById('sidebar-content');

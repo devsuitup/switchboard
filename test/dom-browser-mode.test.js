@@ -13,7 +13,7 @@ for (const platform of ['linux', 'win32', 'darwin']) {
       try {
         if (kind === 'new') await ctx.window.showNewSessionDialog({ projectPath: '/fixture' });
         else if (kind === 'resume') await ctx.window.showResumeSessionDialog({ sessionId: 's', projectPath: '/fixture' });
-        else await ctx.window.openSettingsViewer(kind, '/fixture');
+        else await assert.doesNotReject(() => ctx.window.openSettingsViewer(kind, '/fixture'));
         const prefix = kind === 'new' ? 'nsd' : kind === 'resume' ? 'rsd' : 'sv';
         const select = ctx.document.querySelector(`#${prefix}-browser-mode`);
         assert.ok(select, 'Browser select must render');

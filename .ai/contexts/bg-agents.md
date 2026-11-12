@@ -11,6 +11,14 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 
 ## Dormant guarded stop ports (#474 A4c2a)
 
+Project deletion's job-file inventory reads `state` through `parseJobState`.
+Even `done`, `stopped` and `failed` records cannot prove worker death from the
+record alone. The current inventory therefore retains unknown worker liveness
+and the #1090 refusal. Its renderer explains that liveness cannot be verified
+and that stopping a job may not unblock deletion; it does not promise that Stop
+followed by reopening Delete is sufficient. Terminal-state inventory tests
+retain this distinction until worker-incarnation control is available.
+
 A4c2a adds `checkStop(id, options)` and `runStop(id, options)` properties to the
 callable unsubscribe returned by IPC `init`; `respawnForHandoff` is preserved.
 The existing stop handler delegates to `runStop(id)` and keeps its historical

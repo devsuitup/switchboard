@@ -72,6 +72,10 @@ answers, focus, dynamic labels/danger, queueing and cancellation are unchanged.
 
 ## Question queue and the unsaved guard
 
+`fallbackFocus: () => element` opts into focus recovery when `returnFocus` is
+gone. Project deletion uses the sidebar container. Other choice-dialog callers
+keep their existing focus behavior without this option.
+
 `showChoiceDialog({ replace: true })` is the one way to jump the queue: it cancels the open choice dialog (resolving it as Cancel) and enqueues its question at the front (`enqueueModalQuestion(open, { front: true })`). `closeWith`, a promise, closes the dialog with the value it resolves to; both paths close through the same function that unregisters from the modal stack. The window-close question (#478, [window-frame](window-frame.md), "Closing the window") uses both.
 
 Use async `appConfirm({ title, message, confirmLabel, danger })` and `appAlert({ title, message })` from `public/app-dialogs.js`. They adapt `showChoiceDialog`, which shares `enqueueModalQuestion` with session/worktree deletion and the Save/Discard/Cancel guard. Busy questions stay pending rather than resolving as Cancel. Regular questions use FIFO order; only one queued question is mounted at a time. A question may sit on top of a configuration modal.

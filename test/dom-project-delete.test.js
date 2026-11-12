@@ -9,6 +9,104 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+function persistence(h) {
+  let global = { hiddenProjects: [], sidebarWidth: 100 };
+  Object.assign(h.w, { exitingApp: false, skippedWorkingSetEntries: new Map(), dormantWorkingSet: new Map(),
+    restoreAwaitingConsent: [], restoreInFlight: new Map(), restoreSavedIndex: new Map(), restorePlanner: null });
+  h.w.api.getSetting = async () => structuredClone(global);
+  h.w.api.setSetting = async (key, value) => { h.calls.writes.push([key, value]); global = structuredClone(value); };
+  loadAppFunctions(h.context, { functions: ['persistWorkingSet', 'pendingRestoreEntries', 'saveGlobalSettings'], declarations: ['_persistChain'] });
+  h.w.flushProjectDeletionWrites = () => vm.runInContext('_persistChain', h.context);
+  return () => global;
+}
+
+test('overlapping state reads keep writes held until the last reply', async t => {
+  const h = setup(t), saved = persistence(h), replies = [];
+  h.w.api.projectDeleteState = () => new Promise(resolve => replies.push(resolve));
+  const operation = { operationId: 'same', host: null, projectPath: h.p.projectPath };
+  const first = h.w.reconcileProjectDeletions({ operations: [operation] });
+  const second = h.w.reconcileProjectDeletions({ operations: [operation] });
+  await h.w.saveGlobalSettings({ sidebarWidth: 400 });
+  replies[0]({ state: 'unknown', operationId: 'same' }); await first; await flush();
+  assert.equal(saved().sidebarWidth, 100, 'one state reply must not release another in-flight read');
+  replies[1]({ state: 'unknown', operationId: 'same' }); await second; await flush(); await h.w.flushProjectDeletionWrites();
+  assert.equal(saved().sidebarWidth, 400);
+  assert.equal(h.calls.writes.length, 1);
+});
+
+for (const method of ['deleteProject', 'projectDeleteState']) test(`${method} preserves the backend bounded unknown reply and operation ID`, async t => {
+  const h = setup(t), timers = new Map(); let id = 0, reply;
+  h.w.setTimeout = (fn, ms) => { timers.set(++id, { fn, ms }); return id; };
+  h.w.clearTimeout = key => timers.delete(key);
+  h.w.api[method] = () => new Promise(resolve => { reply = resolve; });
+  const pending = method === 'deleteProject' ? h.start()
+    : h.w.reconcileProjectDeletions({ operations: [{ operationId: 'op-15s', host: null, projectPath: h.p.projectPath }] });
+  await flush();
+  if (method === 'deleteProject') { h.confirm().click(); await flush(); }
+  for (const timer of timers.values()) if (timer.ms <= 15000) timer.fn();
+  await flush();
+  reply({ state: 'unknown', operationId: 'op-15s' }); await pending;
+  assert.equal(h.document.querySelector('.app-notice-action')?.textContent, 'Check deletion state', 'backend reply must win without a competing renderer timeout');
+  assert.doesNotMatch(h.document.querySelector('.app-notice').textContent, /timed out/, 'state replies must also retain the backend result');
+  h.w.api.projectDeleteState = async request => { h.calls.state.push(request); return { state: 'unknown', operationId: request.operationId }; };
+  h.document.querySelector('.app-notice-action').click(); await flush();
+  assert.equal(h.calls.state.at(-1).operationId, 'op-15s');
+});
+
+test('a state response without state releases busy and offers an actionable check', async t => {
+  const h = setup(t); h.w.api.projectDeleteState = async () => ({ ok: false, code: 'UNKNOWN_OPERATION' });
+  await h.w.reconcileProjectDeletions({ operations: [{ operationId: 'missing', host: null, projectPath: h.p.projectPath }] });
+  assert.equal(h.document.querySelector('.project-delete-btn').disabled, false, 'unrecognized operation must not lock the project forever');
+  assert.equal(h.document.querySelector('.app-notice-action')?.textContent, 'Check deletion state');
+});
+
+test('unknown background worker evidence does not promise that Stop unblocks deletion', async t => {
+  const h = setup(t, { jobs: [{ id: 'finished-record', liveness: { state: 'unknown', source: 'job' } }] });
+  const pending = h.start(); await flush();
+  assert.equal(h.confirm().disabled, true);
+  assert.match(h.document.querySelector('.choice-dialog').textContent, /worker liveness.*cannot be verified/i);
+  assert.doesNotMatch(h.document.querySelector('.choice-dialog').textContent, /Stop the background job.*then reopen/i);
+  h.cancel(); await pending;
+});
+
+for (const state of ['unknown', 'partial', 'committed', 'rejected']) test(`writes resume once after ${state} execute reply and keep the latest state`, async t => {
+  const h = setup(t), saved = persistence(h);
+  let reply, reject;
+  h.w.api.deleteProject = request => { h.calls.execute.push(request); return new Promise((yes, no) => { reply = yes; reject = no; }); };
+  const pending = h.start(); await flush();
+  await h.w.saveGlobalSettings({ sidebarWidth: 150 });
+  assert.equal(saved().sidebarWidth, 150, 'preview must not suspend settings writes');
+  h.confirm().click(); await flush();
+  await h.w.saveGlobalSettings({ sidebarWidth: 200 });
+  await h.w.saveGlobalSettings({ sidebarWidth: 300 });
+  h.w.openSessions.set('new', { session: { sessionId: 'new', projectPath: '/other' } });
+  await h.w.persistWorkingSet();
+  h.w.openSessions.set('latest', { session: { sessionId: 'latest', projectPath: '/other' } });
+  await h.w.persistWorkingSet();
+  assert.equal(saved().sidebarWidth, 150, 'execute must hold writes');
+  if (state === 'rejected') reject(new Error('lost response'));
+  else reply({ state, operationId: 'held', ok: state === 'committed', invalidation: { sessionIds: [], restoreTargets: [] } });
+  await pending; await flush(); await h.w.flushProjectDeletionWrites();
+  assert.equal(h.w.projectDeletionWritesBlocked, false, 'a receipt must release the global write block');
+  assert.equal(saved().sidebarWidth, 300, 'the latest dropped sidebar width must be written');
+  assert.deepEqual(saved().openWorkingSet.map(item => item.sessionId), ['new', 'latest']);
+  assert.equal(h.calls.writes.length, 3, 'one initial write, one merged patch and one latest working set');
+});
+
+test('a final working-set flush during execute logs its deferral and is replayed on receipt', async t => {
+  const h = setup(t), saved = persistence(h), warnings = [];
+  h.w.console.warn = (...args) => warnings.push(args.join(' '));
+  let reply;
+  h.w.api.deleteProject = () => new Promise(resolve => { reply = resolve; });
+  const pending = h.start(); await flush(); h.confirm().click(); await flush();
+  h.w.openSessions.set('final', { session: { sessionId: 'final', projectPath: '/other' } });
+  await h.w.persistWorkingSet({ final: true, checked: true });
+  assert.ok(warnings.some(line => /final.*defer.*deletion/i.test(line)), 'final flush must explain why it was deferred');
+  h.w.exitingApp = true;
+  reply({ state: 'unknown', operationId: 'op' }); await pending; await flush(); await h.w.flushProjectDeletionWrites();
+  assert.equal(saved().openWorkingSet?.[0]?.sessionId, 'final', 'the deferred final working set must be written after receipt');
+});
+
 async function settings(h) {
   for (const id of ['settings-viewer', 'settings-viewer-title', 'settings-viewer-body', 'terminal-area', 'terminal-header', 'stats-viewer', 'memory-viewer', 'jsonl-viewer']) {
     if (!h.document.getElementById(id)) { const el = h.document.createElement('div'); el.id = id; h.document.body.append(el); }
@@ -115,7 +213,10 @@ test('Settings and sidebar share one operation and empty project completes', asy
 
 for (const callback of ['previewProjectDelete', 'deleteProject', 'projectDeleteState']) test(`${callback} NOT_READY blocks both entry points without another execution`, async t => {
   const h = setup(t); const button = await settings(h);
-  h.w.api[callback] = async () => ({ ok: false, code: 'NOT_READY', retryable: true });
+  h.w.api[callback] = async request => {
+    if (callback === 'deleteProject') h.calls.execute.push(request);
+    return { ok: false, code: 'NOT_READY', retryable: true };
+  };
   if (callback === 'projectDeleteState') await h.w.reconcileProjectDeletions({ operations: [{ operationId: 'recover', host: null, projectPath: h.p.projectPath }] });
   else {
     button.click(); await flush();
@@ -124,7 +225,7 @@ for (const callback of ['previewProjectDelete', 'deleteProject', 'projectDeleteS
   assert.match(h.document.body.textContent, new RegExp(unavailable));
   h.w.api.previewProjectDelete = async () => ({ ok: false, code: 'NOT_READY' });
   await h.w.confirmAndDeleteProjectFolder({ ...h.p, projectPath: '/other' });
-  assert.equal(h.calls.execute.length, 0);
+  assert.equal(h.calls.execute.length, callback === 'deleteProject' ? 1 : 0);
 });
 
 test('committed refresh failure offers reload; unknown and partial outcomes never replay', async t => {
@@ -149,7 +250,7 @@ test('recovery NOT_READY retains a retry action for the announced operation', as
   assert.equal(h.document.querySelector('.app-notice-action')?.textContent, 'Check deletion state');
 });
 
-test('committed ACK prunes only acknowledged tabs and pending restore targets', async t => {
+for (const alias of [null, 'box']) test(`committed ACK prunes only acknowledged tabs and pending restore targets (${alias || 'local'})`, async t => {
   const h = setup(t);
   const source = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
   assert.match(source, /function applyProjectDeletion\(/, 'app must consume acknowledged invalidation');
@@ -165,14 +266,29 @@ test('committed ACK prunes only acknowledged tabs and pending restore targets', 
   const oldTouched = { type: 'touched', data: { files: ['stale'] } };
   h.w.filePanelState = new Map([['own', { currentTab: { type: 'changes', returnList: oldTouched } }]]);
   const destroyed = []; h.w.destroySession = id => { destroyed.push(id); h.w.openSessions.delete(id); };
-  h.w.openSessions.set('own', { session: own }); h.w.openSessions.set('other', { session: other });
-  loadAppFunctions(h.context, { functions: ['applyProjectDeletion', 'pendingRestoreEntries'] });
-  await h.w.applyProjectDeletion({ ok: true, state: 'committed', invalidation: { sessionIds: ['own'], restoreTargets: [{ ...own, alias: null }] } });
+  h.w.openSessions.set('own', { session: { ...own, remoteAlias: alias } }); h.w.openSessions.set('other', { session: other });
+  Object.assign(h.w, { exitingApp: false });
+  h.w.api.getSetting = async () => ({ openWorkingSet: [own, other] });
+  loadAppFunctions(h.context, { functions: ['applyProjectDeletion', 'pendingRestoreEntries', 'persistWorkingSet'], declarations: ['_persistChain'] });
+  await h.w.applyProjectDeletion({ ok: true, state: 'committed', invalidation: { sessionIds: ['own'], restoreTargets: [{ ...own, alias }] } });
   assert.deepEqual(destroyed, ['own']); assert.equal(h.w.openSessions.has('other'), true);
   assert.deepEqual(Array.from(h.w.pendingRestoreEntries(), row => row.item.sessionId), ['other', 'other', 'other']);
   assert.equal(h.w.pendingSessions.has('own'), false);
   assert.notEqual(h.w.filePanelState.get('own').currentTab.returnList, oldTouched, 'late Touched replies must target a detached list');
   assert.equal(memories, 1, 'Agent Files must refresh after ACK');
+  assert.equal(h.w.isDeletedProjectRestoreTarget({ ...own, sessionId: 'unrelated' }), false);
+  assert.equal(h.w.isDeletedProjectRestoreTarget({ ...own, projectPath: '/another/project' }), false);
+  assert.equal(h.w.isDeletedProjectRestoreTarget({ ...own, projectPath: own.projectPath.toUpperCase() }), alias === null, 'path case follows the deletion host, not the hostless saved item');
+  assert.equal(h.w.isDeletedProjectRestoreTarget({ ...own, projectPath: own.projectPath + '/child/..' }), true);
+  await h.w.persistWorkingSet();
+  assert.equal(h.calls.writes.at(-1)[1].openWorkingSet.some(item => item.sessionId === 'own'), false, 'hostless restore entries must not be persisted after remote deletion');
+  h.w.cachedAllProjects = [];
+  h.w.api.getProjects = async () => ({ defaultProjects: [h.p], allProjects: [{ ...h.p, remoteAlias: alias }] });
+  h.w.api.getActiveTerminals = async () => [];
+  Object.assign(h.w, { loadingStatus: h.document.createElement('div'), reportActivityFocus() {}, reportActivityTitles() {}, refreshSidebar() {}, renderDefaultStatus() {} });
+  loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects'] });
+  await h.w.loadProjects();
+  assert.equal(h.w.isDeletedProjectRestoreTarget(own), false, 'a reappeared project must release its restore tombstones');
 });
 
 test('historical committed recovery refreshes without tearing down a re-added session', async t => {
@@ -191,7 +307,7 @@ test('a global snapshot read before deletion cannot overwrite its committed hidd
     restoreAwaitingConsent: [], restoreInFlight: new Map(), restoreSavedIndex: new Map(), restorePlanner: null });
   loadAppFunctions(h.context, { functions: ['persistWorkingSet', 'pendingRestoreEntries'], declarations: ['_persistChain'] });
   const write = h.w.persistWorkingSet(); await flush();
-  h.w.setProjectDeletionBusy(h.p, true);
+  h.w.setProjectDeletionWritesBlocked(h.p, true);
   resolveRead({ hiddenProjects: [] }); await write;
   assert.equal(h.calls.writes.length, 0, 'stale global snapshot must not overwrite deletion visibility');
 });

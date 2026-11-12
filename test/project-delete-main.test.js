@@ -183,14 +183,15 @@ for (const kind of ['failed-stop', 'replacement', 'success', 'late-natural']) te
   assert.equal(h.notifications.filter(n => n[0] === 'projects').length, success ? 1 : 0);
 });
 
-test('no-tab background records and headless schedules cannot disappear from preview', supported, async t => {
+for (const state of ['done', 'stopped', 'failed']) test(`no-tab ${state} background records and headless schedules cannot disappear from preview`, supported, async t => {
   const h = await setup(t);
   fs.mkdirSync(path.join(h.ports.jobsDir, '1234abcd'), { recursive: true });
-  fs.writeFileSync(path.join(h.ports.jobsDir, '1234abcd', 'state.json'), JSON.stringify({ state: 'done', cwd: h.projectPath,
+  fs.writeFileSync(path.join(h.ports.jobsDir, '1234abcd', 'state.json'), JSON.stringify({ state, cwd: h.projectPath,
     sessionId: '12345678-1234-1234-1234-123456789abc' }));
   h.ports.cliSessionState.getScheduleRunSnapshot = () => [{ sessionId: 'headless', cwd: h.projectPath, pid: 987, scheduleName: 'scheduled' }];
   h.load(); await h.main.startRecovery(); const p = await h.preview();
   assert.equal(p.token, null); assert.ok(p.plan.jobs.some(row => row.id === '1234abcd')); assert.ok(p.plan.jobs.some(row => row.id === 'headless'));
+  assert.equal(p.plan.jobs.find(row => row.id === '1234abcd').liveness.state, 'unknown', 'terminal state alone has no worker-death evidence');
   assert.ok(p.plan.refusals.some(row => row.error.includes('#1090')));
   assert.equal(h.calls.filter(c => c === 'completeProjectDeletion').length, 0);
 });

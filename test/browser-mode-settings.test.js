@@ -101,7 +101,7 @@ for (const [scope, row, global, expected, inherited] of [
     const key = scope === 'global' ? 'global' : 'project:/fixture';
     const ctx = setup({ rows: { global, [key]: row } });
     try {
-      await ctx.window.openSettingsViewer(scope, '/fixture');
+      await assert.doesNotReject(() => ctx.window.openSettingsViewer(scope, '/fixture'));
       const select = ctx.document.querySelector('#sv-browser-mode');
       assert.ok(select, 'Browser select must render');
       assert.equal(select.value, expected);
@@ -113,6 +113,7 @@ for (const [scope, row, global, expected, inherited] of [
         inherit.checked = true;
         inherit.dispatchEvent(new ctx.window.Event('change'));
       } else select.value = 'off';
+      if (scope === 'global') assert.equal(typeof ctx.window.saveGlobalSettings, 'function', 'global Settings must load the shared persistence function');
       ctx.document.querySelector('#sv-save-btn').click();
       await ctx.flush();
       assert.equal(Object.hasOwn(ctx.rows[key], 'chrome'), false);

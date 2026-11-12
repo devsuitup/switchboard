@@ -216,11 +216,18 @@ window.flushProjectDeletionWrites = () => _persistChain;
 
 function saveGlobalSettings(patch) {
   const epoch = window.projectDeletionWriteEpoch;
+  const defer = () => {
+    window.projectDeletionDeferredSettings = { ...window.projectDeletionDeferredSettings, ...patch };
+    queueMicrotask(() => window.flushDeferredProjectDeletionWrites?.());
+    return false;
+  };
   const write = _persistChain.then(async () => {
-    if (window.projectDeletionWritesBlocked || epoch !== window.projectDeletionWriteEpoch) return false;
+    if (window.projectDeletionWritesBlocked || epoch !== window.projectDeletionWriteEpoch) return defer();
     const current = await window.api.getSetting('global');
-    if (window.projectDeletionWritesBlocked || epoch !== window.projectDeletionWriteEpoch) return false;
-    await window.api.setSetting('global', { ...current, ...patch });
+    if (window.projectDeletionWritesBlocked || epoch !== window.projectDeletionWriteEpoch) return defer();
+    const settings = { ...current, ...patch };
+    if (Object.hasOwn(patch, 'browserMode')) delete settings.chrome;
+    await window.api.setSetting('global', settings);
     return true;
   });
   _persistChain = write.catch(error => console.warn('[switchboard] failed to persist global settings', error));
@@ -241,11 +248,16 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
     persistSkippedWhileExiting = true;
     return _persistChain;
   }
+  const defer = () => {
+    window.projectDeletionDeferredWorkingSet = { final: final || !!window.projectDeletionDeferredWorkingSet?.final, checked };
+    if (final) console.warn('[switchboard] final working-set flush deferred: project deletion is awaiting a reply or invalidated its snapshot');
+    queueMicrotask(() => window.flushDeferredProjectDeletionWrites?.());
+  };
   const write = _persistChain.then(async () => {
-    if (window.projectDeletionWritesBlocked) return;
+    if (window.projectDeletionWritesBlocked) return defer();
     const epoch = window.projectDeletionWriteEpoch;
     const g = await window.api.getSetting('global');
-    if (window.projectDeletionWritesBlocked || epoch !== window.projectDeletionWriteEpoch) return;
+    if (window.projectDeletionWritesBlocked || epoch !== window.projectDeletionWriteEpoch) return defer();
     const global = g || {};
     const set = [];
     for (const [sessionId, entry] of openSessions) {
@@ -307,7 +319,11 @@ function pendingRestoreEntries() {
 async function applyProjectDeletion(result) {
   if (!result?.ok || result.state !== 'committed' || !result.invalidation) return;
   const targets = result.invalidation.restoreTargets || [];
-  for (const target of targets) projectDeletionRestoreTargets.add(JSON.stringify([projectDeletionKey(target), target.sessionId]));
+  for (const target of targets) {
+    const key = projectDeletionKey(target);
+    if (!projectDeletionRestoreTargets.has(key)) projectDeletionRestoreTargets.set(key, new Set());
+    projectDeletionRestoreTargets.get(key).add(target.sessionId);
+  }
   const matches = item => !!item && !!window.isDeletedProjectRestoreTarget(item);
   for (const target of targets) {
     const id = target.sessionId;
@@ -2226,6 +2242,7 @@ async function loadProjects({ resort = false } = {}) {
     setRemoteHostLabels(globalSettings?.remoteHosts);
     cachedProjects = defaultProjects;
     cachedAllProjects = allProjects;
+    window.clearReappearedProjectDeletionTargets?.();
     const newerPending = state.latest !== job && state.latest.pending;
     loadingStatus.style.display = newerPending ? '' : 'none';
     loadingStatus.className = newerPending ? 'active' : '';

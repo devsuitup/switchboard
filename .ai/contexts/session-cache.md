@@ -2881,13 +2881,37 @@ committed deletion. Existing computed effects retain WRITER_STALE precedence.
 ACK or positively reconciled committed status supplies exact invalidations to
 the facade observer; main touched state and renderer pending saves remain A4c/d.
 See [project-delete.md](project-delete.md) for ownership, recovery and budget limits.
-# Project deletion renderer boundary (#474 A4d)
+
+## Project deletion renderer boundary (#474 A4d)
 
 The sidebar and Settings share a full-preview token controller. Committed ACKs
 remove exact tabs and pending/dormant restore entries; a renderer tombstone
-filters saved sets and late restore continuations by host, path and session ID.
+filters saved sets and late restore continuations by session ID and path using
+the deletion target's host for path normalization, as writer finalization does.
+Saved restore entries have no host field, including for remote projects. The
+tombstones are grouped by deleted project identity and cleared when that project
+reappears in an accepted `cachedAllProjects` refresh.
 Whole-global working-set, sidebar-width and Settings writes share a serial
 chain, with a deletion generation checked after reads so stale snapshots cannot
-resurrect hidden state. Deletion drains prior submissions before planning.
+resurrect hidden state. Busy controls are independent of the write block: writes
+are held only during execute/state requests through application of the reply.
+Unknown/partial outcomes and refresh failures release writes while retaining
+their operation controls. Deletion drains prior submissions before planning and
+again before execution. Dropped settings patches merge their latest values;
+working-set retries read the latest tabs and restore slots. Release flushes each
+once through the serial chain. A final flush retains its final flag and logs why
+it was deferred, including when no reply arrives before exit.
 Unknown outcomes reconcile without replay; historical committed receipts refresh
-without closing re-added sessions. See [project-delete.md](project-delete.md).
+without closing re-added sessions. Execute/state rely on the backend's bounded
+reply, preserving its operation ID instead of racing it with a renderer timer.
+A state response without a state or NOT_READY releases busy controls and offers
+an explicit check. See [project-delete.md](project-delete.md).
+
+Settings fixtures that evaluate `settings-panel.js` load `saveGlobalSettings`
+and `_persistChain` from `app.js`, and the deletion busy painter, its key helpers
+and state from `sidebar.js`; they provide `cachedAllProjects`. Startup extraction
+fixtures also provide the preload `onProjectDeleteRecovery` registration port.
+These are shipped-source dependencies, not duplicate test implementations.
+The shared global save merges unrelated current keys but removes legacy `chrome`
+when the patch supplies `browserMode`, so merging cannot undo the Settings
+panel's migration. Patches unrelated to Browser leave that migration untouched.
