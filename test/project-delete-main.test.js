@@ -16,6 +16,24 @@ catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; }
 const supported = { skip: !openStore.supported && 'SQLite needs Node 22 or a matching native ABI' };
 const options = { sessions: true, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false };
 const flush = () => new Promise(resolve => setImmediate(resolve));
+function startupFixture(projectDeleteHolds, overrides = {}) {
+  const filename = path.join(__dirname, '..', 'main.js'), source = fs.readFileSync(filename, 'utf8');
+  const oldStart = source.indexOf('    void projectDeleteRecovery.then(');
+  const start = oldStart >= 0 ? oldStart : source.lastIndexOf('    try {', source.indexOf('scheduleIpc.init(log, runScheduleCommand'));
+  const end = source.indexOf('    // Full cache rebuild', start);
+  assert.ok(start > 0 && end > start, 'startup callbacks must be extractable without running Electron');
+  const order = [], errors = [];
+  const context = vm.createContext({
+    projectDeleteRecovery: new Promise(() => {}), projectDeleteHolds, appQuitting: false, shutdownPromise: undefined,
+    scheduleIpc: { init: () => order.push('ipc') }, runScheduleCommand() {}, isAllowedMemoryPath() {}, isProjectSettingsArchived() {},
+    log: { error: (...args) => errors.push(args) }, scheduleProjects: () => ({ list: async () => { order.push('seed'); return []; } }),
+    startScheduler: () => order.push('scheduler'), powerMonitor: {}, path, DB_PATH: '/data/db', activeSessions: new Map(),
+    cliSessionState: {}, PROJECTS_DIR: '/projects', triggerLifecycleDeps: () => ({}), writer: {},
+    createTriggerContext: value => value, require: () => ({ start: () => order.push('trigger') }), ...overrides,
+  });
+  vm.runInContext(source.slice(start, end), context, { filename });
+  return { order, errors, context };
+}
 function clock() {
   let time = Date.now(), id = 0;
   const timers = new Map();
@@ -112,20 +130,23 @@ test('early attach binds first loaded document and reload revokes old token', su
 });
 
 for (const failure of ['reject', 'hang']) test(`recovery ${failure} reaches window immediately and startup barrier is bounded`, supported, async t => {
-  const h = await setup(t);
+  const warnings = [];
+  const h = await setup(t, false, { log: { warn: text => warnings.push(text) } });
   h.faults.listProjectDeletionOperations = () => failure === 'reject' ? Promise.reject(new Error('offline')) : new Promise(() => {});
   const order = [];
   const filename = path.join(__dirname, '..', 'main.js'), source = fs.readFileSync(filename, 'utf8');
-  const start = source.indexOf('    const projectDeleteRecovery =');
+  const start = source.indexOf('    const projectDeleteRecovery =') >= 0 ? source.indexOf('    const projectDeleteRecovery =') : source.indexOf('    void projectDeleteMain.startRecovery();');
   const end = source.indexOf('    startProjectsWatcher();', start);
   assert.ok(start > 0 && end > start, 'main startup composition must exist');
   const context = vm.createContext({ projectDeleteMain: h.main, buildMenu() {}, createWindow() { order.push('createWindow'); h.load(); } });
   vm.runInContext(source.slice(start, end), context, { filename, lineOffset: source.slice(0, start).split('\n').length - 1 });
   const recovery = vm.runInContext('projectDeleteHolds', context);
-  let started = false; const startup = recovery.then(recovered => { if (recovered) { started = true; order.push('scheduler', 'trigger'); } });
+  const startup = startupFixture(recovery);
   assert.deepEqual(order, ['createWindow']);
-  await flush(); h.time.advance(120000); await startup;
-  assert.equal(started, false, 'failed recovery must leave automation off');
+  await flush(); h.time.advance(120000); await recovery; await flush();
+  assert.deepEqual(startup.order, ['ipc', 'seed', 'scheduler', 'trigger'], 'failed recovery must still start automation after the bounded wait');
+  assert.equal(warnings.length, 1, 'failed holds wait logs exactly one reason');
+  assert.match(warnings[0], failure === 'reject' ? /offline/ : /HOLDS_TIMEOUT.*120000/);
   assert.equal((await h.preview()).code, 'NOT_READY'); assert.equal((await h.preview()).retryable, true);
   assert.equal((await h.invoke('delete-project', { token: 'x', fingerprint: 'x' })).code, 'NOT_READY');
   assert.equal((await h.invoke('project-delete-state', { operationId: 'x' })).code, 'NOT_READY');
@@ -346,7 +367,7 @@ test('recovered holds precede slow reconciliation of every recovered receipt', s
   h.time.advance(1000); await flush(); assert.equal(completed, false);
 });
 
-test('holds milestone has a short fail-closed deadline and disposal settles it', supported, async t => {
+test('holds milestone reports its short deadline and disposal settles it', supported, async t => {
   const h = await setup(t);
   h.faults.listProjectDeletionOperations = () => new Promise(() => {});
   h.main.startRecovery();
@@ -354,7 +375,7 @@ test('holds milestone has a short fail-closed deadline and disposal settles it',
   let result;
   const pending = h.main.whenHoldsInstalled().then(value => { result = value; });
   h.time.advance(120000); await flush();
-  assert.equal(result, false, 'timed-out enumeration must not enable automation');
+  assert.equal(result, false, 'timed-out enumeration must report incomplete holds');
   await pending;
   h.main.dispose();
   assert.equal(await h.main.whenHoldsInstalled(), false);
@@ -372,27 +393,92 @@ test('dispose during enumeration settles both recovery barriers false', supporte
   assert.equal(await recovery, false);
 });
 
-for (const quitting of [false, true]) test(`main startup isolates recovery and respects shutdown=${quitting}`, async () => {
+for (const shutdown of ['none', 'quitting', 'promise']) test(`main startup isolates recovery and respects shutdown=${shutdown}`, async () => {
   const filename = path.join(__dirname, '..', 'main.js'), source = fs.readFileSync(filename, 'utf8');
   assert.equal(source.includes('    await projectDeleteRecovery;'), false, 'cache, updater and activate must not wait for recovery');
-  const start = source.indexOf('    void projectDeleteRecovery.then(');
-  const end = source.indexOf('    // Full cache rebuild', start);
-  assert.ok(start > 0 && end > start, 'startup callbacks must be extractable without running Electron');
   let resolveRecovery, resolveHolds;
-  const order = [];
-  const context = vm.createContext({
+  const { order } = startupFixture(new Promise(resolve => { resolveHolds = resolve; }), {
     projectDeleteRecovery: new Promise(resolve => { resolveRecovery = resolve; }),
-    projectDeleteHolds: new Promise(resolve => { resolveHolds = resolve; }), appQuitting: quitting, shutdownPromise: quitting ? Promise.resolve() : undefined,
-    scheduleIpc: { init: () => order.push('ipc') }, runScheduleCommand() {}, isAllowedMemoryPath() {}, isProjectSettingsArchived() {},
-    log: { error: () => assert.fail('unexpected startup error') }, scheduleProjects: () => ({ list: async () => [] }),
-    startScheduler: () => order.push('scheduler'), powerMonitor: {}, path, DB_PATH: '/data/db', activeSessions: new Map(),
-    cliSessionState: {}, PROJECTS_DIR: '/projects', triggerLifecycleDeps: () => ({}), writer: {},
-    createTriggerContext: value => value, require: () => ({ start: () => order.push('trigger') }),
+    appQuitting: shutdown === 'quitting', shutdownPromise: shutdown === 'promise' ? Promise.resolve() : undefined,
   });
-  vm.runInContext(source.slice(start, end), context, { filename });
-  assert.deepEqual(order, []);
+  await flush();
+  assert.deepEqual(order, shutdown === 'none' ? ['ipc'] : [], 'schedule IPC must not wait for sequential receipt recovery');
   resolveHolds(true); await flush();
-  assert.deepEqual(order, quitting ? [] : ['scheduler', 'trigger']);
-  resolveRecovery(!quitting); await flush();
-  assert.deepEqual(order, quitting ? [] : ['scheduler', 'trigger', 'ipc']);
+  assert.deepEqual(order, shutdown === 'none' ? ['ipc', 'seed', 'scheduler', 'trigger'] : []);
+  resolveRecovery(false); await flush();
+  assert.deepEqual(order, shutdown === 'none' ? ['ipc', 'seed', 'scheduler', 'trigger'] : []);
+});
+
+for (const method of ['readLiveness', 'readConversation']) test(`runtime ${method} outside a scope returns a typed discovery failure`, async () => {
+  const runtime = implementation.createProjectDeleteRuntime({ activeSessions: new Map() });
+  await assert.rejects(runtime[method]({ id: 'unscoped', sessionIds: ['unscoped'] }, { deadline: Date.now() + 1000 }),
+    { code: 'DISCOVERY_UNAVAILABLE' }, 'unscoped reads must fail with DISCOVERY_UNAVAILABLE');
+});
+
+test('startup seed ordering rationale is recorded in its context', () => {
+  const schedules = fs.readFileSync(path.join(__dirname, '../.ai/contexts/schedule-runner.md'), 'utf8');
+  assert.match(schedules, /seeded before any session can run/i, 'schedule context must preserve seed ordering rationale');
+  assert.match(schedules, /sandboxed one cannot plant into the seed/i);
+});
+
+test('I3 rationale is recorded in the trigger context', () => {
+  const triggers = fs.readFileSync(path.join(__dirname, '../.ai/contexts/trigger-watcher.md'), 'utf8');
+  assert.match(triggers, /I3:.*try\/catch/, 'trigger context must preserve I3 boot failure containment');
+  assert.match(triggers, /auto-updater/);
+});
+
+for (const failure of ['enumeration', 'limit']) test(`recovery retries missed ${failure} holds without starting automation twice`, supported, async t => {
+  const warnings = [];
+  const h = await setup(t, false, { log: { warn: text => warnings.push(text) } });
+  const paths = Array.from({ length: failure === 'limit' ? 33 : 1 }, (_, i) => path.join(h.projectPath, `recovered-${i}`));
+  const rows = paths.map((projectPath, i) => ({ operationId: `retry-${i}`, projectKey: JSON.stringify([null, projectPath]),
+    expectedEpoch: 0, optionsJson: JSON.stringify(options), sealed: false }));
+  h.faults.listProjectDeletionOperations = async () => {
+    if (failure === 'enumeration') throw new Error('enumeration offline');
+    return { revision: 1, nextCursor: null, rows };
+  };
+  const first = h.main.startRecovery();
+  const startup = startupFixture(h.main.whenHoldsInstalled());
+  assert.equal(await first, false); await flush();
+  assert.deepEqual(startup.order, ['ipc', 'seed', 'scheduler', 'trigger'], 'failed recovery must not strand automation');
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], failure === 'limit' ? /OPERATION_LIMIT/ : /enumeration offline/);
+  if (failure === 'limit') assert.equal(h.ports.gate.tryAdmit(paths[0]), null, 'already installed holds survive failure');
+  const missed = h.ports.gate.tryAdmit(paths.at(-1));
+  assert.ok(missed, 'last operation was not held on the first attempt'); missed.release();
+  h.faults.listProjectDeletionOperations = async () => ({ revision: 1, nextCursor: null, rows });
+  h.faults.getProjectDeletionState = async ({ operationId }) => operationId === rows.at(-1).operationId
+    ? { state: 'unknown' } : { state: 'partial', terminal: true, receiptAvailable: true };
+  h.faults.fenceProjectDeletion = async () => ({ state: 'unknown' });
+  const retry = h.main.startRecovery();
+  assert.equal(await h.main.whenHoldsInstalled(), true, 'retry must install operations omitted by the first pass');
+  assert.equal(await retry, true);
+  assert.equal(h.ports.gate.tryAdmit(paths.at(-1)), null, 'missed operation is now guarded');
+  await flush();
+  assert.deepEqual(startup.order, ['ipc', 'seed', 'scheduler', 'trigger'], 'retry must not start scheduler or trigger twice');
+});
+
+for (const shutdown of ['appQuitting', 'shutdownPromise']) test(`shutdown during schedule seed suppresses automation via ${shutdown}`, async () => {
+  let seed;
+  const { order, context } = startupFixture(Promise.resolve(true), {
+    scheduleProjects: () => ({ list: () => new Promise(resolve => { seed = resolve; }) }),
+  });
+  await flush(); context[shutdown] = true; seed([]); await flush();
+  assert.deepEqual(order, ['ipc']);
+});
+
+test('trigger boot failure is contained and logged after scheduler startup', async () => {
+  const { order, errors } = startupFixture(Promise.resolve(true), {
+    require: () => ({ start() { throw new Error('watcher unavailable'); } }),
+  });
+  await flush();
+  assert.deepEqual(order, ['ipc', 'seed', 'scheduler']);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].join(' '), /trigger-watcher.*watcher unavailable/);
+});
+
+test('notification context specifies the cross-process 24-hour replay boundary', () => {
+  const context = fs.readFileSync(path.join(__dirname, '../.ai/contexts/project-delete.md'), 'utf8');
+  assert.match(context, /committed receipts younger than 24 hours notify again/, 'restart replay age and outcome must be explicit');
+  assert.match(context, /idempotent\s+refreshes/);
 });

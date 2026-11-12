@@ -105,7 +105,9 @@ function createProjectDeleteRuntime(ports) {
   const sessionsFor = id => [...ports.activeSessions].filter(([key, session]) =>
     [key, session.sessionId, session.realSessionId].includes(id));
   async function readLiveness(row, budget) {
-    const { members, pins } = scopes.getStore();
+    const scope = scopes.getStore();
+    if (!scope) throw fail('DISCOVERY_UNAVAILABLE', 'Runtime operation scope unavailable.');
+    const { members, pins } = scope;
     if (members.size >= 50000 && !members.has(row.id)) throw fail('DISCOVERY_LIMIT', 'Runtime identity limit.');
     members.set(row.id, row);
     if (row.alias !== null || row.runtime === 'codex' || row.jobId) return { state: 'unknown' };
@@ -143,7 +145,9 @@ function createProjectDeleteRuntime(ports) {
       session, supported: true, attachments: [] };
   }
   async function readConversation(conversation) {
-    const { members, pins } = scopes.getStore();
+    const scope = scopes.getStore();
+    if (!scope) throw fail('DISCOVERY_UNAVAILABLE', 'Runtime operation scope unavailable.');
+    const { members, pins } = scope;
     const owners = [], budget = { deadline: now() + 10000 };
     for (const id of conversation.sessionIds) {
       const row = members.get(id);
@@ -209,9 +213,15 @@ function createProjectDeleteMain(deps) {
     if (disposed) return Promise.resolve(false);
     if (recovery) return recovery;
     ready = false;
+    let holdsOutcome;
     holds = new Promise(resolve => {
-      const timer = schedule(() => settleHolds(false), HOLDS_TIMEOUT_MS);
-      settleHolds = value => { cancel(timer); resolve(value); };
+      const timer = schedule(() => settleHolds(false, `HOLDS_TIMEOUT: ${HOLDS_TIMEOUT_MS} ms elapsed.`), HOLDS_TIMEOUT_MS);
+      settleHolds = (value, reason) => {
+        if (holdsOutcome !== undefined) return;
+        holdsOutcome = value; cancel(timer);
+        if (!value && reason) deps.log?.warn('[project-delete] holds wait failed: ' + reason);
+        resolve(value);
+      };
     });
     recovery = (async () => {
       let timer;
@@ -230,7 +240,11 @@ function createProjectDeleteMain(deps) {
         })]);
         if (result && !disposed) { ready = true; deps.announce?.(registration.rebind() || []); }
         return result;
-      } catch (error) { deps.log?.warn('[project-delete] recovery unavailable: ' + error.message); return false; }
+      } catch (error) {
+        if (holdsOutcome === true) deps.log?.warn('[project-delete] recovery unavailable: ' + error.message);
+        settleHolds(false, `${error.code || 'RECOVERY_UNAVAILABLE'}: ${error.message}`);
+        return false;
+      }
       finally { settleHolds(false); cancel(timer); cancelRecovery = null; recovery = null; }
     })();
     return recovery;

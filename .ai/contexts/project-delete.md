@@ -39,18 +39,26 @@ release, even if a later state read supplies terminal proof. Unresolved operatio
 retain evidence with their holds. Non-Windows local PTY plans may still mint a
 token; the strict stop preflight returns STOP_UNSUPPORTED without stopping or
 submitting deletion. Preview platform refusal is deferred to the planner contract.
+Runtime liveness and conversation reads outside `withScope` reject with the typed
+DISCOVERY_UNAVAILABLE failure; no unscoped member or pin maps are created.
 
 Recovery starts before buildMenu/createWindow without awaiting it. The scheduler
 and trigger startup wait for enumeration and acquisition of every recovered hold,
 before sequential receipt reconciliation. This milestone has a 120,000 ms bound;
-failure, timeout or disposal leaves automation off for that startup. Cache rebuild,
-updater setup and activate registration proceed immediately. Both startup callbacks
-check shutdown, including after awaiting schedule registration seeding.
+failure or timeout still starts the scheduler and trigger watcher once. A failed
+wait logs one line with its error code/message or HOLDS_TIMEOUT and the deadline.
+Already installed holds continue to guard their projects. Later recovery retries
+install holds missed by a failed enumeration or OPERATION_LIMIT without repeating
+automation startup. Cache rebuild, updater setup and activate registration proceed
+immediately. Startup checks appQuitting and shutdownPromise, including after
+awaiting schedule registration seeding; disposal during shutdown starts nothing.
 
-Schedule IPC registration waits for successful full recovery: run-now uses the
-operation gate, but create-schedule-session writes directly without admission.
-It therefore cannot be exposed at the earlier holds milestone. The deletion
-callbacks also wait for full recovery. Its ceiling remains 126,090,000 ms:
+Schedule IPC registration is unconditional with respect to recovery, while still
+checking shutdown: run-schedule-now uses the operation gate, but
+create-schedule-session writes directly without admission. A holds milestone does
+not protect that second callback, so waiting for full recovery would only disable
+schedule IPC on recovery failure. This does not add admission to session creation.
+The three deletion callbacks still wait for full recovery. Its ceiling remains 126,090,000 ms:
 4,096 sequential receipts at 30 seconds, 65 enumeration pages at 10 seconds,
 plus 32 unresolved-operation stalls at 80 seconds. The window remains usable
 throughout; a rejected or expired barrier leaves all three callbacks NOT_READY,
@@ -70,7 +78,8 @@ revision and current epoch (a committed operation seals at expectedEpoch + 2).
 It drops reopened/superseded epochs and deduplicates operation/epoch/revision
 per sink in main-owned notificationState. Recreating the service with that state
 cannot replay publication. A full application restart creates new consumers and
-may deliver the same current-epoch invalidation; no durable exactly-once delivery
+recovered committed receipts younger than 24 hours notify again if their epoch is
+still current; no durable exactly-once delivery
 is claimed. Cross-restart repeats are accepted: the consumers perform idempotent
 refreshes. Deduplication is process-local, including across service recreation.
 Sinks must remain synchronous at the side-effect boundary.

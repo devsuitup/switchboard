@@ -4113,7 +4113,7 @@ if (!app.isPackaged) {
       });
     });
 
-    const projectDeleteRecovery = projectDeleteMain.startRecovery();
+    void projectDeleteMain.startRecovery();
     const projectDeleteHolds = projectDeleteMain.whenHoldsInstalled();
     buildMenu();
     createWindow();
@@ -4234,11 +4234,11 @@ if (!app.isPackaged) {
       }
     }
 
-    void projectDeleteRecovery.then(recovered => {
-      if (recovered && !appQuitting && !shutdownPromise) scheduleIpc.init(log, runScheduleCommand, isAllowedMemoryPath, isProjectSettingsArchived);
-    }).catch(error => log.error('[schedule] IPC startup failed:', error));
-    void projectDeleteHolds.then(async recovered => {
-      if (!recovered || appQuitting || shutdownPromise) return;
+    try {
+      if (!appQuitting && !shutdownPromise) scheduleIpc.init(log, runScheduleCommand, isAllowedMemoryPath, isProjectSettingsArchived);
+    } catch (error) { log.error('[schedule] IPC startup failed:', error); }
+    void projectDeleteHolds.then(async () => {
+      if (appQuitting || shutdownPromise) return;
       await scheduleProjects().list();
       if (appQuitting || shutdownPromise) return;
       stopScheduler = startScheduler(log, runScheduleCommand, {

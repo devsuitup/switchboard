@@ -16,7 +16,7 @@ const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 test('project deletion composition is wired after background ports and before window/automation startup', () => {
   const composition = mainSrc.indexOf('const projectDeleteMain = createProjectDeleteMain(');
   assert.ok(composition > mainSrc.indexOf('const unsubscribeBgAgents ='), 'main must wire project deletion after background IPC');
-  const recovery = mainSrc.indexOf('const projectDeleteRecovery = projectDeleteMain.startRecovery();');
+  const recovery = mainSrc.indexOf('void projectDeleteMain.startRecovery();');
   assert.ok(recovery > mainSrc.indexOf('app.whenReady().then(async () =>'), 'startup must start deletion recovery');
   assert.ok(recovery < mainSrc.indexOf('    buildMenu();'), 'recovery starts before window without awaiting');
   assert.ok(mainSrc.indexOf('    createWindow();') < mainSrc.indexOf('void projectDeleteHolds.then('), 'window must not await recovery');
