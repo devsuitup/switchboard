@@ -3265,7 +3265,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
           log.warn(`[open-terminal] ${spawnCwd} is not a git repository — launching without --worktree`);
           launchOptions = { ...sessionOptions, worktree: false };
         }
-        claudeArgs.push(...getHarness().buildLaunchArgs({ sessionId, isNew: startsFresh, options: launchOptions }));
+        claudeArgs.push(...getHarness().buildLaunchArgs({ sessionId, isNew: startsFresh, options: launchOptions,
+          name: triggerPermit?.name }));
       }
 
       let claudeCmd = 'claude ' + quoteArgvForShell(shell, claudeArgs);

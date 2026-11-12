@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const ID = '01234567-89ab-cdef-0123-456789abcdef';
 const filename = path.resolve(__dirname, '../../main.js');
-function fixture() {
+function fixture(overrides = {}) {
   const map = new Map(); const spawns = []; const marks = [];
   let handler;
   const context = vm.createContext({ require: createRequire(filename), process, path, fs, setTimeout, clearTimeout,
@@ -29,6 +29,7 @@ function fixture() {
     revealIfSdkSession() {}, activityReporter: { sessionStarted() {} },
     cliSessionState: { ensureWatching: () => true, deliveryPtyStart: () => '10' },
     wireSessionPty: session => { session.generation = 1; }, getMcpState: () => null,
+    ...overrides,
   });
   const source = fs.readFileSync(filename, 'utf8');
   const start = source.indexOf("ipcMain.handle('open-terminal'");

@@ -59,3 +59,31 @@ test('Claude pure argv builder exposes the characterized launch contract', () =>
     assert.deepEqual(buildLaunchArgs({ sessionId: 'session', isNew: startsFresh, options: effective }), expected);
   }
 });
+
+const { buildLaunchArgs: claudeArgs } = require('../harnesses/claude');
+const awkwardNames = ['smithy hardening', `it's "quoted"`, 'a\\', 'C:\\dir\\', '$HOME `id` $(id) %PATH% !x ^y', 'a&b|c>d<e (f)',
+  '--dangerously-skip-permissions', 'cafe\u0301 \u{1F600}', '-n'];
+
+for (const name of awkwardNames) {
+  test(`fresh launch passes ${JSON.stringify(name)} as one --name value`, () => {
+    assert.deepEqual(claudeArgs({ sessionId: 'session', isNew: true, options: {}, name }), ['--session-id', 'session', '--name', name]);
+  });
+}
+test('launch name coexists with the other fresh-launch options', () => {
+  const options = { permissionMode: 'plan', worktree: true, worktreeName: 'branch', addDirs: '/a', appendSystemPrompt: 'prompt' };
+  assert.deepEqual(claudeArgs({ sessionId: 'session', isNew: true, options, name: 'Task' }),
+    ['--session-id', 'session', '--name', 'Task', '--permission-mode', 'plan', '--worktree', 'branch', '--add-dir', '/a', '--append-system-prompt', 'prompt']);
+});
+test('a name inside the session options never becomes the launch name', () => {
+  assert.deepEqual(claudeArgs({ sessionId: 'session', isNew: true, options: { name: 'sneaky' } }), ['--session-id', 'session']);
+});
+test('resume and fork ignore the launch name', () => {
+  assert.deepEqual(claudeArgs({ sessionId: 'session', isNew: false, options: {}, name: 'Task' }), ['--resume', 'session']);
+  assert.deepEqual(claudeArgs({ sessionId: 'session', isNew: true, options: { forkFrom: 'source' }, name: 'Task' }),
+    ['--resume', 'source', '--fork-session']);
+});
+test('a launch name that is not a nonempty string is not passed', () => {
+  for (const name of [{ toString: () => 'x' }, 5, '', null, ['a']]) {
+    assert.deepEqual(claudeArgs({ sessionId: 'session', isNew: true, options: {}, name }), ['--session-id', 'session']);
+  }
+});

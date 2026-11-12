@@ -17,10 +17,11 @@ function findOnPath(name, { pathEnv, pathExt, exists, sep }) {
   return null;
 }
 
-function escapeForCmd(arg) {
+function escapeForCmd(arg, passes = 2) {
   let s = String(arg).replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1');
   s = `"${s}"`;
-  return s.replace(CMD_META, '^$1').replace(CMD_META, '^$1');
+  for (let pass = 0; pass < passes; pass++) s = s.replace(CMD_META, '^$1');
+  return s;
 }
 
 function resolveWindowsClaude(argv, env = {}, deps = {}) {
@@ -50,7 +51,7 @@ function resolveWindowsClaude(argv, env = {}, deps = {}) {
   if (argv.some((a) => /[\r\n]/.test(a))) {
     return { error: 'a multi-line argument cannot go through a claude.cmd shim; install claude with its native installer or pick a bash profile' };
   }
-  const line = [found, ...argv].map(escapeForCmd).join(' ');
+  const line = [found, ...argv].map(arg => escapeForCmd(arg)).join(' ');
   return { program: env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', `"${line}"`], verbatim: true };
 }
 

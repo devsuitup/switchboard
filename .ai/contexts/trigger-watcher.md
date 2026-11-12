@@ -172,6 +172,7 @@ Main-process modules `trigger-watcher.js` and `trigger-context.js` live in
 | File | LOC | Role |
 |---|---|---|
 | `src/main/triggers/trigger-watcher.js` | ~2170 | The entire module: directory setup, `fs.watch` listener, idle-wait logic, single + chained trigger processing, submit-with-verify busy-rise/fall polling, input validation, PTY write, result file. |
+| `src/main/triggers/trigger-name.js` | ~30 | The new-session name rules: unpaired-surrogate test, `requestedName`/`actualName` result fields, marker naming provenance and its recovery validation (see "Naming a new session"). |
 | `src/main/triggers/trigger-context.js` | ~420 | `createTriggerContext({ activeSessions, log, getCliStatus, projectsDir, getLiveDescriptor, resolveSessionId, remote })` — builds the whole `ctx` object out of `main.js`'s session map, including the pinned per-tab delivery binding (`pinDelivery`) and the descriptor fallback lookup (`lookupDeliveryFallback`). |
 | `transcript-turn.js` | ~230 | Whether a session transcript's main turn is closed, read from its tail; backs `ctx.getTranscriptTurn` (see "Transcript fallback while the descriptor stays busy"). |
 | `src/main/terminals/terminal-input.js` | ~35 | `handleTerminalInput(activeSessions, sessionId, data, now)` — the body of the `terminal-input` IPC handler; feeds `session.composerState`. |
@@ -250,6 +251,7 @@ Preload exposes the three named APIs and a per-subscription cleanup function.
 `launchNewSession` with activation disabled, exact IDs and current ordinary
 defaults. It adds grid cards without focusing them. Main persists only the new
 ID's trimmed name through the writer before delivery. No prompt enters CLI argv.
+The trimmed name does: see "Naming a new session" below.
 `deliverSingle` is shared by legacy commands and v1 prompts. v1 supplies the
 absolute action deadline to verification and every write. A new launch requires
 fresh status at or after `launchStartedAt`, continuous settled idle and a free,
@@ -257,6 +259,47 @@ quiet composer; no-prompt opens need only the verified terminal ACK.
 The FIFO starts before resolution and the tab mutex covers ensure-open,
 delivery and result publication. A timed-out FIFO waiter releases its eventual
 lock. True created/resumed and partial submission evidence survive refusals.
+
+### Naming a new session (issue #1099)
+
+The canonical name (`new.name.trim()`) travels `operation.name` → the broker's
+record → `permitView` (new mode only, frozen) → `open-terminal`, which reads it
+from the consumed permit alone and hands it to `buildLaunchArgs({ name })`.
+Renderer options, defaults and placeholder labels cannot supply it. Only
+`harnesses/claude.js` turns it into `--name <name>`, on a fresh launch; resume
+and fork ignore it. The argv element is passed whole through the shell encoders
+(`quoteArgForShell`: POSIX and fish single quotes, PowerShell doubled quotes,
+cmd.exe caret escaping via `escapeForCmd(arg, 1)`) and the sandbox/prefix
+wrappers. `test/trigger-name-transport.test.js` pins those encodings and the
+`resolveWindowsClaude` plans through injected edges; it is not a live shell,
+node-pty or Claude Code qualification.
+
+A name with an unpaired surrogate is schema-valid but cannot survive UTF-8, so
+`executeOpen` refuses it right after the first cancellation/deadline check, before
+project lookup, rate reservation, UUID allocation, renderer dispatch or marker.
+`src/main/triggers/trigger-name.js` holds that test and the marker rules.
+
+Order is unchanged: launch, ordered name save (the requested name, never the
+observed one), startup and prompt delivery, then result construction. The result
+carries `requestedName` and `actualName`. `actualName` comes from one call to
+`pinned.binding.observeName()` (synchronous, no waiting, no retry), made only
+when the accepted launch is still admitted (no cancellation, deadline not
+reached, session/PTY/generation unchanged) and skipped otherwise. The binding
+observes through the same tab-writer observation as delivery (ordinary or Linux
+sandbox) and returns the descriptor `name` only for a certain, unique writer whose
+session ID is the new UUID, whose identity matches any identity delivery already
+pinned, and whose PTY has a real PID. It reports `null` for macOS (unsupported),
+Windows PID 0, uncertain or missing proof, and an absent, empty or non-string
+name. It mutates no delivery binding. A different or `null` name changes nothing
+else. Finalization that turns the launch into a refusal drops the name.
+
+Every open-new marker carries `nameVersion: 1` and `requestedName`. Recovery
+accepts them only for an `open`/`new` marker whose version is numeric 1 and whose
+name is nonempty, trimmed, at most 256 code units, free of controls and unpaired
+surrogates, and then adds `requestedName` and `actualName:null` to the interrupted
+result. Older or malformed markers recover without either field and keep their
+recorded effects. Recovery never launches, saves, delivers or reads a descriptor.
+A saved result is immutable: replay and publication retries reuse its snapshot.
 
 ### Versioned stop (issue #1022, slice D)
 

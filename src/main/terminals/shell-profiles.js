@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const { escapeForCmd } = require('../../../claude-binary');
 
 // --- Cross-platform shell resolution ---
 const isWindows = process.platform === 'win32';
@@ -167,6 +168,7 @@ function quoteArgForShell(shellPath, value) {
   const isBashLike = base.includes('bash') || base.includes('zsh') || base === 'sh' || base === 'dash' || base === 'ksh' || base === 'fish' || base === 'nu' || isWslShell(shellPath);
   const isPowerShell = base.includes('powershell') || base.includes('pwsh');
 
+  if (base === 'fish') return "'" + s.replace(/\\/g, '\\\\').replace(/'/g, "'\\''") + "'";
   if (isBashLike) {
     // POSIX: wrap in single quotes, escape embedded single quotes as '\''
     return "'" + s.replace(/'/g, "'\\''") + "'";
@@ -175,9 +177,7 @@ function quoteArgForShell(shellPath, value) {
     // PowerShell: single-quoted string, escape ' as ''
     return "'" + s.replace(/'/g, "''") + "'";
   }
-  // cmd.exe: double-quote, escape " as \" and ^-escape shell metachars
-  const escaped = s.replace(/"/g, '\\"').replace(/([&|<>^%])/g, '^$1');
-  return '"' + escaped + '"';
+  return escapeForCmd(s, 1);
 }
 
 function quoteArgvForShell(shellPath, argv) {

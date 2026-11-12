@@ -382,6 +382,17 @@ function createTriggerContext(deps) {
       return binding.effectiveId;
     };
     binding.checkStop = () => check('stop');
+    binding.observeName = () => {
+      try {
+        if (!own || binding.revoked || !valid() || pid === null) return null;
+        const observed = observationForTab();
+        const writer = observed?.writer;
+        if (!writer || observed.uncertain || !observed.identity
+          || normalizeSessionId(writer.sessionId) !== normalizeSessionId(requestedId)
+          || (binding.writerIdentity !== null && observed.identity !== binding.writerIdentity)) return null;
+        return typeof writer.name === 'string' && writer.name ? writer.name : null;
+      } catch { return null; }
+    };
     const handle = { isAlive: () => valid() && entry.handle.isAlive(), write(data) {
       const outcome = check(data === '\r' ? 'enter' : 'text');
       const preId = binding.effectiveId;

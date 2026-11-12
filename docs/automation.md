@@ -346,7 +346,11 @@ defaults (replace the path with an absolute path native to your host):
 {"version":1,"action":"open","new":{"project":"C:\\work\\project","name":"Follow-up"},"prompt":"Investigate the failure"}
 ```
 
-New requires a nonempty name (maximum 256 characters) and prompt. Prompt length
+New requires a nonempty name (maximum 256 characters, measured before trimming)
+and prompt. The trimmed name is passed to Claude Code as `--name` when the session
+starts and is saved in Switchboard's index before the prompt is delivered. A name
+containing an unpaired UTF-16 surrogate is refused before anything is launched
+(`session name cannot be transported`). Prompt length
 is at most 4096 JS characters and may not contain CR, LF, NUL or ESC. Launch
 flags and `focus` are not accepted. Settings-hidden/removed projects are refused;
 a visible archived group with its ordinary + action remains eligible. New has
@@ -354,7 +358,17 @@ a bucket of three launches, refilling one token every 20 seconds.
 
 Read `processed/<request-uuid>.result.json`. v1 results carry `version`, `action`,
 `ok`, `outcome`, `reason`, `sessionId`, `resumed` or `created` for opens, `submitted`,
-`wrote` and `steps_total`, plus delivery evidence. `opened` means the terminal
+`wrote` and `steps_total`, plus delivery evidence. A new open also carries
+`requestedName` (the trimmed name) and `actualName`: the name in Claude Code's own
+session descriptor, read once when the result is built, or `null` when that read
+is unavailable (no live descriptor proven to belong to this launch, an unreadable
+file, macOS, or the deadline already reached). The two can differ, for example
+when Claude Code adds a suffix or shortens the name; a difference or a `null`
+never refuses the open or holds back the prompt. They describe one moment: they
+do not show that the name stays the same later, nor that other tools find the
+session by it. A result for a refused or interrupted new open carries
+`requestedName` and `actualName:null`; an interrupted new open recorded before
+this field existed carries neither. `opened` means the terminal
 was acknowledged and any requested prompt finished submission verification;
 it does not mean the answer is complete. `submitted:"assumed"` stays assumed.
 The one deadline covers queueing, opening, startup and delivery (default 300000
