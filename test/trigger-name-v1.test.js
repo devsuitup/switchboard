@@ -137,15 +137,17 @@ test('transport refusal follows cancellation and deadline checks', async () => {
   const r = await f.run('x\ud800y');
   assert.equal(r.reason, 'Switchboard is closing.');
 });
-test('an expired deadline wins over the transport refusal and nothing is looked up or launched', async () => {
-  const start = Date.now(); const calls = [];
-  const f = named({ now: () => start + 10 * 60 * 1000 });
-  f.ctx.lifecycle.getProjectSnapshot = async () => { calls.push('project'); return { allProjects: [], hiddenProjects: [], hiddenProjectKinds: {} }; };
-  f.ctx.lifecycle.randomUUID = () => { calls.push('uuid'); return NEW; };
-  const r = await f.run('x\ud800y');
-  assert.equal(r.reason, 'session action timed out'); assert.equal(r.requestedName, 'x\ud800y');
-  assert.deepEqual(calls, []); assert.deepEqual(kinds(f).filter(kind => kind !== 'result'), []);
-});
+for (const offset of [0, 1]) {
+  test(`a deadline reached at +${offset} ms wins over the transport refusal and nothing is looked up or launched`, async () => {
+    const calls = []; let f;
+    f = named({ now: () => f ? f.execution.deadline + offset : Date.now() });
+    f.ctx.lifecycle.getProjectSnapshot = async () => { calls.push('project'); return { allProjects: [], hiddenProjects: [], hiddenProjectKinds: {} }; };
+    f.ctx.lifecycle.randomUUID = () => { calls.push('uuid'); return NEW; };
+    const r = await f.run('x\ud800y');
+    assert.equal(r.reason, 'session action timed out'); assert.equal(r.requestedName, 'x\ud800y');
+    assert.deepEqual(calls, []); assert.deepEqual(kinds(f).filter(kind => kind !== 'result'), []);
+  });
+}
 
 test('the requested name is the trimmed name and the 256 limit is measured before trimming', () => {
   const ok = name => validateTrigger({ version: 1, action: 'open', new: { project, name }, prompt: 'p' }, STEM);
@@ -284,12 +286,15 @@ test('a name read schedules no timer', () => {
   assert.deepEqual(timers, []);
 });
 
-test('a deadline reached while the name is being read discards the name', async () => {
-  let clock = Date.now(); const f = named({ now: () => clock, observe: () => { clock += 10 * 60 * 1000; return 'Task'; } });
-  const r = await f.run('Task');
-  assert.equal(r.outcome, 'opened'); assert.equal(r.actualName, null); assert.equal(f.observed, 1);
-  assert.equal(r.enter_written, true);
-});
+for (const offset of [0, 1]) {
+  test(`a deadline reached at +${offset} ms while the name is being read discards the name`, async () => {
+    let clock = Date.now(), f;
+    f = named({ now: () => clock, observe: () => { clock = f.execution.deadline + offset; return 'Task'; } });
+    const r = await f.run('Task');
+    assert.equal(r.outcome, 'opened'); assert.equal(r.actualName, null); assert.equal(f.observed, 1);
+    assert.equal(r.enter_written, true);
+  });
+}
 test('cancellation during the name read discards the name', async () => {
   let allowed = true; const f = named({ observe: () => { allowed = false; return 'Task'; } });
   f.ctx.lifecycle.launchAllowed = () => allowed;
@@ -395,12 +400,14 @@ test('a named result keeps its snapshot through journal publication, a failed re
 });
 
 test('the action hands the binding a callback that follows its deadline, cancellation and target', async () => {
-  let clock = Date.now(); const seen = [];
-  const f = named({ now: () => clock, observe: admit => {
-    seen.push(admit()); clock += 10 * 60 * 1000; seen.push(admit()); return 'Task';
-  } });
-  const r = await f.run('Task');
-  assert.deepEqual(seen, [true, false]); assert.equal(r.actualName, null);
+  for (const offset of [0, 1]) {
+    let clock = Date.now(); const seen = []; let h;
+    h = named({ now: () => clock, observe: admit => {
+      seen.push(admit()); clock = h.execution.deadline + offset; seen.push(admit()); return 'Task';
+    } });
+    const r = await h.run('Task');
+    assert.deepEqual(seen, [true, false]); assert.equal(r.actualName, null);
+  }
   let allowed = true; const cancelled = [];
   const g = named({ observe: admit => { cancelled.push(admit()); allowed = false; cancelled.push(admit()); return 'Task'; } });
   g.ctx.lifecycle.launchAllowed = () => allowed;
