@@ -2,6 +2,7 @@
 
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const { createProjectDeleteInventory } = require('./project-delete-inventory');
 const { createProjectDeletePlanner } = require('./project-delete-plan');
 const { createProjectDeleteStop } = require('./project-delete-stop');
@@ -12,11 +13,20 @@ const { stopPtyWithEvidence, detachPty } = require('../terminals/pty-ops');
 const { fail } = require('./project-delete-identity');
 
 const RECOVERY_TIMEOUT_MS = 4096 * 30000 + 65 * 10000 + 32 * 80000;
+const HOLDS_TIMEOUT_MS = 120000;
 
 function createProjectDeleteRuntime(ports) {
   const io = ports.fs || fs, now = ports.now || Date.now;
   const schedule = ports.schedule || setTimeout, cancel = ports.cancel || clearTimeout;
-  const members = new Map(), pins = new Map();
+  const scopes = new AsyncLocalStorage();
+  const captureRuntimeRelease = () => {
+    const scope = scopes.getStore();
+    return () => { scope?.members.clear(); scope?.pins.clear(); };
+  };
+  const withScope = (fn, retain = false) => scopes.run({ members: new Map(), pins: new Map() }, () => {
+    const release = captureRuntimeRelease(), work = Promise.resolve(fn());
+    return retain ? work : work.finally(release);
+  });
   const normalize = value => (process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value)).replaceAll('\\', '/');
   async function bounded(fn, budget, dispose) {
     if (budget.signal?.aborted || now() >= budget.deadline) throw fail('DISCOVERY_TIMEOUT', 'Runtime inventory deadline expired.');
@@ -65,7 +75,7 @@ function createProjectDeleteRuntime(ports) {
       if (error.code !== 'ENOENT') throw error;
     } finally { await directory?.close(); }
     const result = await bounded(() => ports.runClaude(['agents', '--json', '--all'],
-      { timeout: Math.max(1, budget.deadline - now()), maxOutputBytes: 8 * 1048576 }), budget);
+      { cwd: ports.homeDir, timeout: Math.max(1, budget.deadline - now()), maxOutputBytes: 8 * 1048576 }), budget);
     if (result.code !== 0 || Buffer.byteLength(result.stdout || '') > 8 * 1048576) throw fail('DISCOVERY_UNAVAILABLE', 'Authoritative background list unavailable.');
     const listed = parseCliList(result.stdout);
     let raw;
@@ -76,10 +86,15 @@ function createProjectDeleteRuntime(ports) {
       if (!row.id || !records.has(row.id)) candidates.push({ id: row.id || row.sessionId, reason: 'Background list has no durable job record.' });
       else records.set(row.id, { ...records.get(row.id), cwd: row.cwd || records.get(row.id).cwd });
     }
+    const root = await bounded(() => io.realpath(project.projectPath), budget);
     for (const [id, row] of records) {
       if (!row.cwd || !path.isAbsolute(row.cwd) || !row.sessionId) { candidates.push({ id, reason: 'Background ownership unavailable.' }); continue; }
-      const cwd = await bounded(() => io.realpath(row.cwd), budget);
-      const root = await bounded(() => io.realpath(project.projectPath), budget);
+      let cwd;
+      try { cwd = row.cwd === project.projectPath ? root : await bounded(() => io.realpath(row.cwd), budget); }
+      catch (error) {
+        if (error.code !== 'ENOENT') candidates.push({ id, reason: error.message });
+        continue;
+      }
       if (normalize(cwd) !== normalize(root)) continue;
       jobs.push({ id, jobId: id, alias: null, projectPath: root, runtime: 'claude', verified: true,
         conversationId: row.sessionId, sessionIds: [row.sessionId], liveness: { state: 'unknown', source: 'job' } });
@@ -90,6 +105,7 @@ function createProjectDeleteRuntime(ports) {
   const sessionsFor = id => [...ports.activeSessions].filter(([key, session]) =>
     [key, session.sessionId, session.realSessionId].includes(id));
   async function readLiveness(row, budget) {
+    const { members, pins } = scopes.getStore();
     if (members.size >= 50000 && !members.has(row.id)) throw fail('DISCOVERY_LIMIT', 'Runtime identity limit.');
     members.set(row.id, row);
     if (row.alias !== null || row.runtime === 'codex' || row.jobId) return { state: 'unknown' };
@@ -127,6 +143,7 @@ function createProjectDeleteRuntime(ports) {
       session, supported: true, attachments: [] };
   }
   async function readConversation(conversation) {
+    const { members, pins } = scopes.getStore();
     const owners = [], budget = { deadline: now() + 10000 };
     for (const id of conversation.sessionIds) {
       const row = members.get(id);
@@ -137,7 +154,7 @@ function createProjectDeleteRuntime(ports) {
     }
     return { known: true, complete: true, owners };
   }
-  return { readJobs, readLiveness, readTarget, readConversation,
+  return { readJobs, readLiveness, readTarget, readConversation, withScope, captureRuntimeRelease,
     getScheduleRunSnapshot: () => ports.cliSessionState.getScheduleRunSnapshot(),
     bg: ports.bg, remote: ports.remote,
     detach: attachment => detachPty(attachment.session, attachment.sessionKey),
@@ -179,16 +196,23 @@ function createProjectDeleteMain(deps) {
   const planner = createProjectDeletePlanner({ ...inventory, ...clock });
   const stop = createProjectDeleteStop({ ...deps, ...runtime, ...clock });
   const service = createProjectDeleteService({ ...clock, writer, inventory, planner, stop, gate: deps.gate,
+    captureRuntimeRelease: runtime.captureRuntimeRelease,
+    onHoldsInstalled: () => settleHolds?.(!disposed),
     notifyProjects: notify('notifyProjects'), notifySchedules: notify('notifySchedules') });
   let ready = false, disposed = false, recovery = null, pendingAttach = null, cancelRecovery, bootstrap = 0;
+  let holds, settleHolds;
   const guarded = { rebind: sender => service.rebind(sender) };
   for (const method of ['preview', 'execute', 'readState']) guarded[method] = (sender, input) => ready && !disposed
-    ? service[method](sender, input) : { ok: false, code: 'NOT_READY', retryable: true, ...(method === 'preview' ? { token: null } : {}) };
+    ? runtime.withScope(() => service[method](sender, input), method === 'execute') : { ok: false, code: 'NOT_READY', retryable: true, ...(method === 'preview' ? { token: null } : {}) };
   const registration = registerProjectDeleteIpc({ ...deps, service: guarded });
   function startRecovery() {
     if (disposed) return Promise.resolve(false);
     if (recovery) return recovery;
     ready = false;
+    holds = new Promise(resolve => {
+      const timer = schedule(() => settleHolds(false), HOLDS_TIMEOUT_MS);
+      settleHolds = value => { cancel(timer); resolve(value); };
+    });
     recovery = (async () => {
       let timer;
       try {
@@ -207,7 +231,7 @@ function createProjectDeleteMain(deps) {
         if (result && !disposed) { ready = true; deps.announce?.(registration.rebind() || []); }
         return result;
       } catch (error) { deps.log?.warn('[project-delete] recovery unavailable: ' + error.message); return false; }
-      finally { cancel(timer); cancelRecovery = null; recovery = null; }
+      finally { settleHolds(false); cancel(timer); cancelRecovery = null; recovery = null; }
     })();
     return recovery;
   }
@@ -226,7 +250,8 @@ function createProjectDeleteMain(deps) {
     win.webContents.once('did-finish-load', bind); win.once('closed', closed);
   }
   return { startRecovery, attach, recoveryTimeoutMs: RECOVERY_TIMEOUT_MS,
-    dispose() { disposed = true; ready = false; cancelRecovery?.(); clearPending(); unsubscribe?.(); registration.dispose(); service.dispose(); } };
+    whenHoldsInstalled() { return disposed ? Promise.resolve(false) : holds || Promise.resolve(false); },
+    dispose() { disposed = true; ready = false; settleHolds?.(false); cancelRecovery?.(); clearPending(); unsubscribe?.(); registration.dispose(); service.dispose(); } };
 }
 
 module.exports = { createProjectDeleteMain, createProjectDeleteRuntime };

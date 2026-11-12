@@ -19,8 +19,9 @@ test('project deletion composition is wired after background ports and before wi
   const recovery = mainSrc.indexOf('const projectDeleteRecovery = projectDeleteMain.startRecovery();');
   assert.ok(recovery > mainSrc.indexOf('app.whenReady().then(async () =>'), 'startup must start deletion recovery');
   assert.ok(recovery < mainSrc.indexOf('    buildMenu();'), 'recovery starts before window without awaiting');
-  assert.ok(mainSrc.indexOf('    createWindow();') < mainSrc.indexOf('await projectDeleteRecovery;'), 'window must not await recovery');
-  assert.ok(mainSrc.indexOf('await projectDeleteRecovery;') < mainSrc.indexOf('stopScheduler = startScheduler('), 'scheduler waits bounded recovery');
+  assert.ok(mainSrc.indexOf('    createWindow();') < mainSrc.indexOf('void projectDeleteHolds.then('), 'window must not await recovery');
+  assert.ok(mainSrc.indexOf('void projectDeleteHolds.then(') < mainSrc.indexOf('stopScheduler = startScheduler('), 'scheduler waits for recovered holds');
+  assert.doesNotMatch(mainSrc, /await projectDeleteRecovery;/);
   assert.match(mainSrc, /projectDeleteMain\.attach\(mainWindow\)/);
   assert.match(mainSrc, /projectDeleteMain\.dispose\(\)/);
   assert.match(mainSrc, /onBootstrap:.*projectDeletionBootstraps/s);

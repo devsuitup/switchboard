@@ -16,7 +16,11 @@ The existing CLI runner accepts an optional maxOutputBytes; deletion uses 8 MiB
 across stdout/stderr and terminates only that reader process on overflow. Other
 callers retain the unlimited default. Malformed JSON/list entries refuse rather
 than being filtered into an apparently complete empty list. Late filesystem
-handles are closed even after the inventory deadline.
+handles are closed even after the inventory deadline. The agents reader runs
+with the supplied home directory as cwd. Output accounting adds each chunk's
+byte length once. Job discovery resolves the project root once per scan;
+ENOENT for a job cwd means it no longer belongs to this project, while other
+cwd read errors produce an unreadable candidate for that record.
 Background records remain explicitly blocked on #1090, even when a daemon state
 says done. Current headless schedules retain the inventory's blocking targets.
 Remote ownership/schedule discovery lacks an exhaustive production port and
@@ -28,9 +32,25 @@ read checks for external writers and validates the PTY start identity; no active
 tab can conceal another process. The stop adapter obtains native tree evidence.
 Subsequent inventory rereads both stopEvidence and late statusTreeExit on the
 pinned PTY, and then checks CLI liveness. Map removal alone never proves death.
+Async-local runtime scopes isolate each preview and accepted operation. Preview
+completion clears its members/pins; an operation retains its own pins across
+revalidation and an early IPC reply, then its captured cleanup clears them on
+release, even if a later state read supplies terminal proof. Unresolved operations
+retain evidence with their holds. Non-Windows local PTY plans may still mint a
+token; the strict stop preflight returns STOP_UNSUPPORTED without stopping or
+submitting deletion. Preview platform refusal is deferred to the planner contract.
 
 Recovery starts before buildMenu/createWindow without awaiting it. The scheduler
-and trigger startup wait for its bounded barrier. The ceiling is 126,090,000 ms:
+and trigger startup wait for enumeration and acquisition of every recovered hold,
+before sequential receipt reconciliation. This milestone has a 120,000 ms bound;
+failure, timeout or disposal leaves automation off for that startup. Cache rebuild,
+updater setup and activate registration proceed immediately. Both startup callbacks
+check shutdown, including after awaiting schedule registration seeding.
+
+Schedule IPC registration waits for successful full recovery: run-now uses the
+operation gate, but create-schedule-session writes directly without admission.
+It therefore cannot be exposed at the earlier holds milestone. The deletion
+callbacks also wait for full recovery. Its ceiling remains 126,090,000 ms:
 4,096 sequential receipts at 30 seconds, 65 enumeration pages at 10 seconds,
 plus 32 unresolved-operation stalls at 80 seconds. The window remains usable
 throughout; a rejected or expired barrier leaves all three callbacks NOT_READY,
@@ -51,7 +71,9 @@ It drops reopened/superseded epochs and deduplicates operation/epoch/revision
 per sink in main-owned notificationState. Recreating the service with that state
 cannot replay publication. A full application restart creates new consumers and
 may deliver the same current-epoch invalidation; no durable exactly-once delivery
-is claimed. Sinks must remain synchronous at the side-effect boundary.
+is claimed. Cross-restart repeats are accepted: the consumers perform idempotent
+refreshes. Deduplication is process-local, including across service recreation.
+Sinks must remain synchronous at the side-effect boundary.
 
 Plain-Node composition tests use the real worker fixture and SQLite adapter,
 fake external process/IPC ports, and disposable paths. Actual Windows tree death,
@@ -101,8 +123,10 @@ is preserved in the returned stopped-work list. Before completion it compares
 membership rather than the volatile full fingerprint. Only a positively proven
 stop can preserve a disappeared tab/job identity. It then rereads the writer
 scope, re-inventories and independently verifies death after that await.
-Completion is invoked once. Unknown outcomes cause fresh reads/fencing and
-bounded retained-file observation; no second completion call occurs even if
+Completion is invoked once. Post-stop revalidation without a plan returns
+REVALIDATION_UNAVAILABLE with the read error, rather than claiming an ownership
+change. Unknown outcomes cause fresh reads/fencing and bounded retained-file
+observation; no second completion call occurs even if
 the facade could deduplicate it. Both holds survive unavailable read/fence.
 After the 60-second completion wait, successful absent/inProgress reads are
 polled using the injected scheduler, backing off from 100 ms to 2 seconds.

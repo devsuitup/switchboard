@@ -2932,6 +2932,7 @@ function runClaudeCommand(claudeArgv, { cwd, timeout, maxOutputBytes = Infinity 
     const killTree = claudeArgv[0] !== '--bg';
     let stdout = '';
     let stderr = '';
+    let outputBytes = 0;
     let settled = false;
     const finish = (code, err) => {
       if (settled) return;
@@ -2963,7 +2964,8 @@ function runClaudeCommand(claudeArgv, { cwd, timeout, maxOutputBytes = Infinity 
     }, timeout);
     const collect = (stream, data) => {
       if (settled) return;
-      if (Number.isFinite(maxOutputBytes) && Buffer.byteLength(stdout) + Buffer.byteLength(stderr) + data.length > maxOutputBytes) {
+      outputBytes += data.length;
+      if (Number.isFinite(maxOutputBytes) && outputBytes > maxOutputBytes) {
         clearTimeout(timer); stopCommand(); finish(null, new Error('claude output exceeds the read budget')); return;
       }
       if (stream === 'stdout') stdout += data.toString();
@@ -3818,7 +3820,7 @@ const unsubscribeBgAgents = require('./src/main/bg-agents/bg-agents-ipc').init({
   activeSessions, cliSessionState, sessionHasPty, ptyPids, getSetting: key => getSetting(key) });
 const { createProjectDeleteMain } = require('./src/main/projects/project-delete-main');
 const projectDeleteMain = createProjectDeleteMain({
-  writer, ipcMain, activeSessions, cliSessionState, log,
+  writer, ipcMain, activeSessions, cliSessionState, log, homeDir: os.homedir(),
   projectsDir: PROJECTS_DIR, dataDir: path.dirname(DB_PATH), jobsDir: path.join(CLAUDE_DIR, 'jobs'),
   bg: unsubscribeBgAgents, remote: remoteStopAdapter, runClaude: runClaudeCommand,
   gate: require('./src/main/shared/project-operation-gate').projectOperationGate,
@@ -4112,6 +4114,7 @@ if (!app.isPackaged) {
     });
 
     const projectDeleteRecovery = projectDeleteMain.startRecovery();
+    const projectDeleteHolds = projectDeleteMain.whenHoldsInstalled();
     buildMenu();
     createWindow();
     startProjectsWatcher();
@@ -4231,60 +4234,60 @@ if (!app.isPackaged) {
       }
     }
 
-    await projectDeleteRecovery;
-    scheduleIpc.init(log, runScheduleCommand, isAllowedMemoryPath, isProjectSettingsArchived);
-    // Seeded before any session can run, so a sandboxed one cannot plant into the seed.
-    await scheduleProjects().list();
-    stopScheduler = startScheduler(log, runScheduleCommand, {
-      resumeSource: powerMonitor,
-      stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'),
-      projects: async () => (await scheduleProjects().list()).filter(p => !isProjectSettingsArchived(p)),
-    });
+    void projectDeleteRecovery.then(recovered => {
+      if (recovered && !appQuitting && !shutdownPromise) scheduleIpc.init(log, runScheduleCommand, isAllowedMemoryPath, isProjectSettingsArchived);
+    }).catch(error => log.error('[schedule] IPC startup failed:', error));
+    void projectDeleteHolds.then(async recovered => {
+      if (!recovered || appQuitting || shutdownPromise) return;
+      await scheduleProjects().list();
+      if (appQuitting || shutdownPromise) return;
+      stopScheduler = startScheduler(log, runScheduleCommand, {
+        resumeSource: powerMonitor,
+        stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'),
+        projects: async () => (await scheduleProjects().list()).filter(p => !isProjectSettingsArchived(p)),
+      });
 
-    // File-trigger watcher — allows harness scripts to inject input into open
-    // PTY sessions by dropping a JSON file in ~/.switchboard/triggers/.
-    // I3: wrapped in try/catch so a boot failure here doesn't abort
-    // app.whenReady (auto-updater, etc. would otherwise be silently lost).
-    try {
-      require('./src/main/triggers/trigger-watcher').start(createTriggerContext({
-        activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR,
-        lifecycle: triggerLifecycleDeps(),
-        sessionRequests: writer,
-        statusSources: {
-          getKnown: id => {
-            const row = getCachedSession(id);
-            return row && !row.parentSessionId && !parseFolderKey(row.folder).alias ? row : null;
+      try {
+        require('./src/main/triggers/trigger-watcher').start(createTriggerContext({
+          activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR,
+          lifecycle: triggerLifecycleDeps(),
+          sessionRequests: writer,
+          statusSources: {
+            getKnown: id => {
+              const row = getCachedSession(id);
+              return row && !row.parentSessionId && !parseFolderKey(row.folder).alias ? row : null;
+            },
+            readHead: (id, row, session, deadline) => {
+              const folder = row?.folder || session?.projectFolder;
+              const dir = folder && !parseFolderKey(folder).alias && projectsDirForFolder(folder);
+              return dir ? taskRecords.readHeadForStatus(path.join(dir, id + '.jsonl'), id, deadline) : null;
+            },
+            hosted: id => {
+              const job = bgAgents.getSnapshot().roster.find(job => job.sessionId === id);
+              return job ? { id: job.id, live: false, verified: false } : null;
+            },
+            exits: activeSessions.statusExits ||= new Map(),
           },
-          readHead: (id, row, session, deadline) => {
-            const folder = row?.folder || session?.projectFolder;
-            const dir = folder && !parseFolderKey(folder).alias && projectsDirForFolder(folder);
-            return dir ? taskRecords.readHeadForStatus(path.join(dir, id + '.jsonl'), id, deadline) : null;
+          getLiveDescriptor: (id) => cliSessionState.findLiveProcess(id),
+          resolveSessionId: (id) => sessionTransitions.currentSessionId(id),
+          get remote() {
+            const settings = getSetting('global') || {};
+            if ((settings.remoteTriggers ?? SETTING_DEFAULTS.remoteTriggers) === true) {
+              const aliases = new Set(enabledHosts(settings.remoteHosts).map(host => host.alias));
+              return {
+                indexer: remoteIndexer,
+                adapter: remoteSendAdapter,
+                isEnabled: alias => aliases.has(alias),
+                maxAgeMs: 2 * normalizeRefreshMs(settings.remoteRefreshMs),
+              };
+            }
+            return undefined;
           },
-          hosted: id => {
-            const job = bgAgents.getSnapshot().roster.find(job => job.sessionId === id);
-            return job ? { id: job.id, live: false, verified: false } : null;
-          },
-          exits: activeSessions.statusExits ||= new Map(),
-        },
-        getLiveDescriptor: (id) => cliSessionState.findLiveProcess(id),
-        resolveSessionId: (id) => sessionTransitions.currentSessionId(id),
-        get remote() {
-          const settings = getSetting('global') || {};
-          if ((settings.remoteTriggers ?? SETTING_DEFAULTS.remoteTriggers) === true) {
-            const aliases = new Set(enabledHosts(settings.remoteHosts).map(host => host.alias));
-            return {
-              indexer: remoteIndexer,
-              adapter: remoteSendAdapter,
-              isEnabled: alias => aliases.has(alias),
-              maxAgeMs: 2 * normalizeRefreshMs(settings.remoteRefreshMs),
-            };
-          }
-          return undefined;
-        },
-      }));
-    } catch (err) {
-      log.error('[trigger-watcher] Failed to start trigger watcher:', err.message);
-    }
+        }));
+      } catch (err) {
+        log.error('[trigger-watcher] Failed to start trigger watcher:', err.message);
+      }
+    }).catch(error => log.error('[automation] startup failed:', error));
 
     // Full cache rebuild on every startup — prunes stale rows for deleted
     // transcripts (sub-agent/workflow runs cleaned up between sessions leave

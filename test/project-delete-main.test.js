@@ -121,18 +121,18 @@ for (const failure of ['reject', 'hang']) test(`recovery ${failure} reaches wind
   assert.ok(start > 0 && end > start, 'main startup composition must exist');
   const context = vm.createContext({ projectDeleteMain: h.main, buildMenu() {}, createWindow() { order.push('createWindow'); h.load(); } });
   vm.runInContext(source.slice(start, end), context, { filename, lineOffset: source.slice(0, start).split('\n').length - 1 });
-  const recovery = vm.runInContext('projectDeleteRecovery', context);
-  let started = false; const startup = recovery.then(() => { started = true; order.push('scheduler', 'trigger'); });
+  const recovery = vm.runInContext('projectDeleteHolds', context);
+  let started = false; const startup = recovery.then(recovered => { if (recovered) { started = true; order.push('scheduler', 'trigger'); } });
   assert.deepEqual(order, ['createWindow']);
-  await flush(); h.time.advance(h.main.recoveryTimeoutMs); await startup;
-  assert.equal(started, true);
+  await flush(); h.time.advance(120000); await startup;
+  assert.equal(started, false, 'failed recovery must leave automation off');
   assert.equal((await h.preview()).code, 'NOT_READY'); assert.equal((await h.preview()).retryable, true);
   assert.equal((await h.invoke('delete-project', { token: 'x', fingerprint: 'x' })).code, 'NOT_READY');
   assert.equal((await h.invoke('project-delete-state', { operationId: 'x' })).code, 'NOT_READY');
 });
 
 for (const kind of ['failed-stop', 'replacement', 'success', 'late-natural']) test(`local runtime composition ${kind} preserves pinned stop and housekeeping evidence`, supported, async t => {
-  const h = await setup(t, true);
+  const h = await setup(t, true, { platform: 'win32' });
   const session = { kind: 'local-pty', sessionId: 'part', projectPath: h.projectPath, generation: 7,
     statusPtyStart: 'start', pty: { pid: 123 }, exitDrain: Promise.resolve() };
   h.activeSessions.set('part', session);
@@ -219,16 +219,20 @@ test('deletion background discovery bounds the shipped CLI runner output before 
   const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
   child.pid = 123; child.exitCode = child.signalCode = null;
   const time = clock(); let stopped = 0;
-  const context = vm.createContext({ Buffer, path, getSetting: () => ({}), SETTING_DEFAULTS: { shellProfile: 'test' },
+  let measured = 0;
+  const countedBuffer = { byteLength: value => { measured += value.length; return Buffer.byteLength(value); } };
+  const context = vm.createContext({ Buffer: countedBuffer, path, getSetting: () => ({}), SETTING_DEFAULTS: { shellProfile: 'test' },
     resolveShell: () => ({ path: '/bin/sh' }), isWindows: false, cleanPtyEnv: {}, shellArgs: () => [], quoteArgvForShell: () => '',
     spawnChild: () => child, stopProcessTree: async () => { stopped++; return true; },
     setTimeout: time.schedule, clearTimeout: time.cancel });
   vm.runInContext(require('./app-source').extractFunction(source, 'runClaudeCommand'), context, { filename });
   const pending = context.runClaudeCommand(['agents', '--json', '--all'], { timeout: 1000, maxOutputBytes: 8 });
-  child.stdout.emit('data', Buffer.alloc(16, 'x')); child.emit('close', 0);
+  child.stdout.emit('data', Buffer.alloc(4, 'x')); child.stderr.emit('data', Buffer.alloc(4, 'y'));
+  child.stdout.emit('data', Buffer.alloc(1, 'z')); child.emit('close', 0);
   const result = await pending;
   assert.equal(stopped, 1, 'oversized discovery output must stop its own reader process');
   assert.equal(result.code, null); assert.ok(result.stdout.length <= 8);
+  assert.equal(measured, 0, 'buffer chunks must use a running byte count, never rescan collected output');
 });
 
 test('recovery deadline covers sequential receipt limits; bootstrap retries before admitting callbacks', supported, async t => {
@@ -260,4 +264,135 @@ test('repeated notifications after service restart are deduped and reopened epoc
   h.ports.notificationState = new Map();
   const newer = h.compose(); await newer.startRecovery();
   assert.equal(h.notifications.filter(n => n[0] === 'projects').length, 1, 'old receipt cannot invalidate reopened project epoch');
+});
+
+test('non-Windows PTY stop refuses without completing deletion', supported, async t => {
+  const h = await setup(t, true, { platform: 'linux', stopPtyWithEvidence: () => assert.fail('unsupported stop must not run') });
+  h.activeSessions.set('part', { kind: 'local-pty', projectPath: h.projectPath, generation: 7,
+    statusPtyStart: 'start', pty: { pid: 123 }, exitDrain: Promise.resolve() });
+  h.load(); await h.main.startRecovery();
+  const p = await h.preview(); assert.ok(p.token);
+  const result = await h.execute(p);
+  assert.equal(result.failed[0].code, 'STOP_UNSUPPORTED');
+  assert.equal(h.calls.filter(c => c === 'completeProjectDeletion').length, 0);
+});
+
+for (const code of ['ENOENT', 'EACCES']) test(`foreign job cwd ${code} stays local to that record`, supported, async t => {
+  const h = await setup(t);
+  const missing = path.join(h.projectPath, 'missing');
+  for (const [id, cwd] of [['1234abcd', missing], ['abcd1234', h.projectPath]]) {
+    fs.mkdirSync(path.join(h.ports.jobsDir, id), { recursive: true });
+    fs.writeFileSync(path.join(h.ports.jobsDir, id, 'state.json'), JSON.stringify({ state: 'done', cwd,
+      sessionId: '12345678-1234-1234-1234-123456789abc' }));
+  }
+  let roots = 0;
+  const runtime = implementation.createProjectDeleteRuntime({ ...h.ports, fs: { ...fs.promises, realpath: async file => {
+    if (file === h.projectPath) roots++;
+    if (file === missing) throw Object.assign(new Error('unreadable cwd'), { code });
+    return fs.promises.realpath(file);
+  } } });
+  const result = await runtime.readJobs({ alias: null, projectPath: h.projectPath }, { deadline: h.time.now() + 10000, limit: 100 })
+    .catch(error => ({ error: error.code }));
+  assert.equal(result.complete, true, 'one foreign cwd must not reject all discovery');
+  assert.deepEqual(result.jobs.map(row => row.id), ['abcd1234']);
+  assert.equal(result.candidates.some(row => row.id === '1234abcd'), code !== 'ENOENT');
+  assert.equal(roots, 1, 'project realpath is memoized for the entire job scan');
+});
+
+test('background CLI inventory uses the supplied home cwd', supported, async t => {
+  let cwd;
+  const h = await setup(t, false, { homeDir: os.tmpdir(), runClaude: async (_args, opts) => { cwd = opts.cwd; return { code: 0, stdout: '[]' }; } });
+  h.load(); await h.main.startRecovery(); await h.preview();
+  assert.equal(cwd, os.tmpdir());
+});
+
+test('runtime identity and exited PTY pins do not survive an operation scope', async () => {
+  const time = clock(), activeSessions = new Map();
+  const runtime = implementation.createProjectDeleteRuntime({ ...time, activeSessions, cliSessionState: {
+    readStatusEvidence: async () => ({ known: true, live: null }) } });
+  assert.equal(typeof runtime.withScope, 'function', 'runtime must isolate preview and operation identity storage');
+  const row = { id: 'old', sessionId: 'old', alias: null, runtime: 'terminal' };
+  const session = { kind: 'local-pty', statusPtyStart: 'start', generation: 1, pty: { pid: 123 } };
+  activeSessions.set('old', session);
+  await runtime.withScope(async () => {
+    assert.equal((await runtime.readLiveness(row, { deadline: time.now() + 1000 })).state, 'running');
+    activeSessions.clear(); session.exited = true; session.pty.stopEvidence = { ended: true };
+    assert.equal((await runtime.readLiveness(row, { deadline: time.now() + 1000 })).state, 'stopped');
+  });
+  await runtime.withScope(async () => {
+    assert.equal((await runtime.readConversation({ sessionIds: ['old'] })).known, false);
+    assert.equal((await runtime.readLiveness(row, { deadline: time.now() + 1000 })).state, 'unknown', 'previous operation must not retain exited PTY proof');
+  });
+});
+
+test('recovered holds precede slow reconciliation of every recovered receipt', supported, async t => {
+  const h = await setup(t);
+  const other = path.join(h.projectPath, 'other');
+  h.faults.listProjectDeletionOperations = async () => ({ revision: 1, nextCursor: null, rows: [h.projectPath, other].map((projectPath, i) => ({
+    operationId: `recovered-${i}`, projectKey: JSON.stringify([null, projectPath]), expectedEpoch: 0, optionsJson: JSON.stringify(options), sealed: false,
+  })) });
+  h.faults.getProjectDeletionState = () => new Promise(() => {});
+  const recovery = h.main.startRecovery();
+  assert.equal(typeof h.main.whenHoldsInstalled, 'function', 'startup needs a separate recovered-holds milestone');
+  let completed = false; recovery.then(() => { completed = true; });
+  let installed;
+  const milestone = h.main.whenHoldsInstalled().then(value => { installed = value; });
+  await flush();
+  assert.equal(installed, true, 'holds milestone must settle before slow receipt readback');
+  await milestone;
+  assert.equal(completed, false, 'milestone must not wait for sequential reconcile');
+  assert.equal(h.ports.gate.tryAdmit(h.projectPath), null);
+  assert.equal(h.ports.gate.tryAdmit(other), null, 'all recovered projects must be held before reconciling the first');
+  h.time.advance(1000); await flush(); assert.equal(completed, false);
+});
+
+test('holds milestone has a short fail-closed deadline and disposal settles it', supported, async t => {
+  const h = await setup(t);
+  h.faults.listProjectDeletionOperations = () => new Promise(() => {});
+  h.main.startRecovery();
+  assert.equal(typeof h.main.whenHoldsInstalled, 'function');
+  let result;
+  const pending = h.main.whenHoldsInstalled().then(value => { result = value; });
+  h.time.advance(120000); await flush();
+  assert.equal(result, false, 'timed-out enumeration must not enable automation');
+  await pending;
+  h.main.dispose();
+  assert.equal(await h.main.whenHoldsInstalled(), false);
+});
+
+test('dispose during enumeration settles both recovery barriers false', supported, async t => {
+  const h = await setup(t);
+  h.faults.listProjectDeletionOperations = () => new Promise(() => {});
+  const recovery = h.main.startRecovery(), holds = h.main.whenHoldsInstalled();
+  h.main.dispose();
+  let installed;
+  holds?.then(value => { installed = value; });
+  await flush();
+  assert.equal(installed, false, 'quit must settle the pending holds barrier');
+  assert.equal(await recovery, false);
+});
+
+for (const quitting of [false, true]) test(`main startup isolates recovery and respects shutdown=${quitting}`, async () => {
+  const filename = path.join(__dirname, '..', 'main.js'), source = fs.readFileSync(filename, 'utf8');
+  assert.equal(source.includes('    await projectDeleteRecovery;'), false, 'cache, updater and activate must not wait for recovery');
+  const start = source.indexOf('    void projectDeleteRecovery.then(');
+  const end = source.indexOf('    // Full cache rebuild', start);
+  assert.ok(start > 0 && end > start, 'startup callbacks must be extractable without running Electron');
+  let resolveRecovery, resolveHolds;
+  const order = [];
+  const context = vm.createContext({
+    projectDeleteRecovery: new Promise(resolve => { resolveRecovery = resolve; }),
+    projectDeleteHolds: new Promise(resolve => { resolveHolds = resolve; }), appQuitting: quitting, shutdownPromise: quitting ? Promise.resolve() : undefined,
+    scheduleIpc: { init: () => order.push('ipc') }, runScheduleCommand() {}, isAllowedMemoryPath() {}, isProjectSettingsArchived() {},
+    log: { error: () => assert.fail('unexpected startup error') }, scheduleProjects: () => ({ list: async () => [] }),
+    startScheduler: () => order.push('scheduler'), powerMonitor: {}, path, DB_PATH: '/data/db', activeSessions: new Map(),
+    cliSessionState: {}, PROJECTS_DIR: '/projects', triggerLifecycleDeps: () => ({}), writer: {},
+    createTriggerContext: value => value, require: () => ({ start: () => order.push('trigger') }),
+  });
+  vm.runInContext(source.slice(start, end), context, { filename });
+  assert.deepEqual(order, []);
+  resolveHolds(true); await flush();
+  assert.deepEqual(order, quitting ? [] : ['scheduler', 'trigger']);
+  resolveRecovery(!quitting); await flush();
+  assert.deepEqual(order, quitting ? [] : ['scheduler', 'trigger', 'ipc']);
 });
