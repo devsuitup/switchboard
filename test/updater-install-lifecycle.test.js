@@ -49,6 +49,7 @@ function setup(behavior) {
     unsubscribeTaskJobs() {}, taskRecords: { dispose() {} },
     projectsWatcher: { close: () => calls.push('watcher') }, cliSessionState: { stop() {} },
     bgAgents: { stop() {} }, remoteIndexer: { dispose: () => calls.push('indexer') },
+    projectDeleteMain: { dispose() {} },
     remoteWatcher: { stopAll() {} }, remoteActivityTracker: { dispose() {} },
     activityTrace: { close: () => calls.push('trace') },
   });

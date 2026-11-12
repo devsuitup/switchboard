@@ -224,7 +224,7 @@ test('stop-session detaches an attach session instead of killing it', () => {
 test('window close releases the Agents subscriber and app quit stops the job watchers', async () => {
   const idx = MAIN.indexOf("mainWindow.on('closed'");
   const end = MAIN.indexOf('\n  });', idx) + '\n  });'.length;
-  let closed, _beforeQuit, unsubscribed = 0, stopped = 0;
+  let closed, _beforeQuit, unsubscribed = 0, stopped = 0, deletionDisposed = 0;
   const context = {
     managedBrowser: { stopForQuit() {} },
     mainWindow: { on: (_name, callback) => { closed = callback; } },
@@ -233,6 +233,7 @@ test('window close releases the Agents subscriber and app quit stops the job wat
     subagentWatchers: new Map(), unsubscribeBgAgents: () => { unsubscribed++; },
     unsubscribeTaskJobs() {}, taskRecords: { dispose() {} },
     bgAgents: { stop: () => { stopped++; } },
+    projectDeleteMain: { dispose: () => { deletionDisposed++; } },
     app: { on: (_name, callback) => { _beforeQuit = callback; } },
     unsavedGuard: { beforeQuit: () => false, committedToken: () => null, invalidate() {} }, activityFlushedForQuit: false,
     activityReporter: { hasPendingWork: false, stop() {} }, mainLoopMonitor: { stop() {} },
@@ -261,6 +262,7 @@ test('window close releases the Agents subscriber and app quit stops the job wat
   vm.runInNewContext(MAIN.slice(quitStart, quitEnd) + '\nshutdownForExit();', context, { filename: MAIN_FILENAME, lineOffset: MAIN.slice(0, quitStart).split('\n').length - 1 });
   await context.shutdownForExit();
   assert.equal(stopped, 1, 'app quit releases the job watchers');
+  assert.equal(deletionDisposed, 1, 'app quit disposes deletion authority');
 });
 
 test('preload exposes the four agents-view entries', () => {

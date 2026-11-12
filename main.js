@@ -214,8 +214,10 @@ async function startApplication() {
 if (!await acquireInstanceLock(app, { log })) { app.quit(); return; }
 const privilegeNotice = readNoNewPrivs({ log });
 const bgAgents = require('./src/main/bg-agents/bg-agents');
+const projectDeletionBootstraps = new Set();
 const writer = require('./session-index-writer').createSessionIndexWriter({
   log,
+  onBootstrap: () => { for (const listener of projectDeletionBootstraps) listener(); },
   onBusyCounts: counts => {
     if (TRACE.on) trace('session-index-writer.busy', null, { counts });
   },
@@ -455,6 +457,7 @@ function createWindow() {
   powerLog ||= createPowerLog({ powerMonitor, logger: log });
   powerLog.observeWindow(mainWindow);
   triggerRendererBridge.attach(mainWindow);
+  projectDeleteMain.attach(mainWindow);
 
   // Set position after creation to prevent macOS from clamping size
   if (restorePosition) {
@@ -2909,7 +2912,7 @@ function wireSessionPty(session, sessionId, ptyProcess) {
 }
 
 // Run `claude <argv>` to completion through the login shell -- see .ai/contexts/bg-agents.md ("Running the CLI")
-function runClaudeCommand(claudeArgv, { cwd, timeout }) {
+function runClaudeCommand(claudeArgv, { cwd, timeout, maxOutputBytes = Infinity }) {
   return new Promise((resolve) => {
     const globalSettings = getSetting('global') || {};
     const profile = resolveShell(globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile);
@@ -2945,7 +2948,7 @@ function runClaudeCommand(claudeArgv, { cwd, timeout }) {
       finish(null, err);
       return;
     }
-    const timer = setTimeout(() => {
+    const stopCommand = () => {
       if (killTree) {
         const isCurrent = () => child.exitCode === null && child.signalCode === null;
         void stopProcessTree(child.pid, { isCurrent }).then(stopped => {
@@ -2953,10 +2956,21 @@ function runClaudeCommand(claudeArgv, { cwd, timeout }) {
         });
       }
       else { try { child.kill('SIGKILL'); } catch {} }
+    };
+    const timer = setTimeout(() => {
+      stopCommand();
       finish(null, new Error(`claude ${claudeArgv[0]} timed out after ${timeout} ms`));
     }, timeout);
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    const collect = (stream, data) => {
+      if (settled) return;
+      if (Number.isFinite(maxOutputBytes) && Buffer.byteLength(stdout) + Buffer.byteLength(stderr) + data.length > maxOutputBytes) {
+        clearTimeout(timer); stopCommand(); finish(null, new Error('claude output exceeds the read budget')); return;
+      }
+      if (stream === 'stdout') stdout += data.toString();
+      else stderr += data.toString();
+    };
+    child.stdout.on('data', data => collect('stdout', data));
+    child.stderr.on('data', data => collect('stderr', data));
     child.on('error', (err) => { clearTimeout(timer); finish(null, err); });
     child.on('close', (code) => { clearTimeout(timer); finish(code); });
     child.on('exit', (code) => {
@@ -3802,6 +3816,22 @@ bgAgents.init({
 });
 const unsubscribeBgAgents = require('./src/main/bg-agents/bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log,
   activeSessions, cliSessionState, sessionHasPty, ptyPids, getSetting: key => getSetting(key) });
+const { createProjectDeleteMain } = require('./src/main/projects/project-delete-main');
+const projectDeleteMain = createProjectDeleteMain({
+  writer, ipcMain, activeSessions, cliSessionState, log,
+  projectsDir: PROJECTS_DIR, dataDir: path.dirname(DB_PATH), jobsDir: path.join(CLAUDE_DIR, 'jobs'),
+  bg: unsubscribeBgAgents, remote: remoteStopAdapter, runClaude: runClaudeCommand,
+  gate: require('./src/main/shared/project-operation-gate').projectOperationGate,
+  getMainWindow: () => mainWindow,
+  onBootstrap: listener => { projectDeletionBootstraps.add(listener); return () => projectDeletionBootstraps.delete(listener); },
+  notifyProjects: () => notifyRendererProjectsChanged('project-deleted'),
+  notifySchedules: (invalidation, operationId, change) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('project-delete-schedules-changed', { invalidation, operationId, ...change });
+  },
+  announce: operationIds => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('project-delete-recovery', { operationIds });
+  },
+});
 bgAgents.onJobsChanged(() => notifyRendererProjectsChanged('bg-jobs'));
 bgAgents.onJobsChanged(() => {
   sessionTransitions.detectPendingBackgroundContinuations();
@@ -4081,6 +4111,7 @@ if (!app.isPackaged) {
       });
     });
 
+    const projectDeleteRecovery = projectDeleteMain.startRecovery();
     buildMenu();
     createWindow();
     startProjectsWatcher();
@@ -4200,6 +4231,7 @@ if (!app.isPackaged) {
       }
     }
 
+    await projectDeleteRecovery;
     scheduleIpc.init(log, runScheduleCommand, isAllowedMemoryPath, isProjectSettingsArchived);
     // Seeded before any session can run, so a sandboxed one cannot plant into the seed.
     await scheduleProjects().list();
@@ -4318,6 +4350,7 @@ function stopNonDatabaseResources(closeTrace = false) {
     () => localTranscriptTracker.dispose(), () => unsubscribeTaskJobs(),
     () => { taskRecordsStopped = Promise.resolve().then(() => taskRecords.dispose()); return taskRecordsStopped; },
     () => { if (projectsWatcher) { projectsWatcher.close(); projectsWatcher = null; } },
+    () => projectDeleteMain.dispose(),
     () => cliSessionState.stop(), () => bgAgents.stop(), () => remoteIndexer.dispose(),
     () => remoteWatcher.stopAll(), () => remoteActivityTracker.dispose(),
     ...(closeTrace ? [() => activityTrace.close()] : []),

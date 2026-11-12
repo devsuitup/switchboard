@@ -13,6 +13,23 @@ const path   = require('path');
 
 const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 
+test('project deletion composition is wired after background ports and before window/automation startup', () => {
+  const composition = mainSrc.indexOf('const projectDeleteMain = createProjectDeleteMain(');
+  assert.ok(composition > mainSrc.indexOf('const unsubscribeBgAgents ='), 'main must wire project deletion after background IPC');
+  const recovery = mainSrc.indexOf('const projectDeleteRecovery = projectDeleteMain.startRecovery();');
+  assert.ok(recovery > mainSrc.indexOf('app.whenReady().then(async () =>'), 'startup must start deletion recovery');
+  assert.ok(recovery < mainSrc.indexOf('    buildMenu();'), 'recovery starts before window without awaiting');
+  assert.ok(mainSrc.indexOf('    createWindow();') < mainSrc.indexOf('await projectDeleteRecovery;'), 'window must not await recovery');
+  assert.ok(mainSrc.indexOf('await projectDeleteRecovery;') < mainSrc.indexOf('stopScheduler = startScheduler('), 'scheduler waits bounded recovery');
+  assert.match(mainSrc, /projectDeleteMain\.attach\(mainWindow\)/);
+  assert.match(mainSrc, /projectDeleteMain\.dispose\(\)/);
+  assert.match(mainSrc, /onBootstrap:.*projectDeletionBootstraps/s);
+  const block = mainSrc.slice(composition, mainSrc.indexOf("bgAgents.onJobsChanged", composition));
+  assert.doesNotMatch(block, /getProjectsSnapshot|scheduleProjects/);
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
+  assert.doesNotMatch(preload, /preview-project-delete|delete-project|project-delete-state/);
+});
+
 /** Slice the balanced `(...)` group that starts at the first `(` at or after `from`. */
 function balancedParens(src, from) {
   const open = src.indexOf('(', from);
