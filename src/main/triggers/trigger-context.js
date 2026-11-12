@@ -391,7 +391,8 @@ function createTriggerContext(deps) {
           || normalizeSessionId(writer.sessionId) !== normalizeSessionId(requestedId)
           || (binding.writerIdentity !== null && observed.identity !== binding.writerIdentity)) return null;
         if (!sandboxV1 && (!admitted() || !source.confirmDeliveryWriter(writer))) return null;
-        return valid() && typeof writer.name === 'string' && writer.name ? writer.name : null;
+        if (!valid() || start == null || source.deliveryPtyStart(pid) !== start) return null;
+        return typeof writer.name === 'string' && writer.name ? writer.name : null;
       } catch { return null; }
     };
     const handle = { isAlive: () => valid() && entry.handle.isAlive(), write(data) {

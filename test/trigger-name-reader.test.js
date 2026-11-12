@@ -10,7 +10,7 @@ const cli = require('../cli-session-state');
 const { createTriggerContext } = require('../src/main/triggers/trigger-context');
 const ID = '01234567-89ab-cdef-0123-456789abcdef';
 
-function world(t, { during } = {}) {
+function world(t, { during, anchor: anchorMode = 'start' } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-name-reader-'));
   t.after(() => { cli.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
   const descriptor = path.join(dir, '300.json');
@@ -18,14 +18,20 @@ function world(t, { during } = {}) {
     procStart: '300', name: 'Task', ...fields }));
   write({});
   const starts = { 100: '100', 300: '300' };
+  const anchor = { mode: anchorMode };
   let reads = 0;
-  cli.init({ dir, platform: 'linux', isProcessAlive: () => true, readProcStart: pid => starts[pid],
+  cli.init({ dir, platform: 'linux', isProcessAlive: () => true, readProcStart: pid => {
+      if (pid === 100 && anchor.mode === 'throw') throw new Error('unreadable');
+      if (pid === 100 && anchor.mode === 'null') return null;
+      if (pid === 100 && anchor.mode === 'undefined') return undefined;
+      return starts[pid];
+    },
     readParentPid: pid => { if (reads++ === 0) during?.({ write, starts, descriptor }); return ({ 300: 100, 100: 1 })[pid]; } });
   const session = { pty: { pid: 100, write() {} }, generation: 7, host: null, cwd: '/p', composerState: { pending: 0, lastInputAt: 0 } };
   const ctx = createTriggerContext({ activeSessions: new Map([[ID, session]]), cliSessionState: cli, isPtyAlive: () => true,
     getCliStatus: () => undefined, lifecycle: { launchAllowed: () => true } });
   const pinned = ctx.pinDelivery(ID, ctx.getPtyForSession(ID), false, { v1: true, deadline: Date.now() + 5000 });
-  return { pinned, starts, write, descriptor, reads: () => reads };
+  return { pinned, starts, write, descriptor, anchor, reads: () => reads };
 }
 
 test('a stable writer reports the descriptor name from the real ordinary reader', t => {
@@ -66,4 +72,22 @@ test('no confirmation read starts once the action is no longer admitted', t => {
   assert.equal(confirm.mock.callCount(), 0);
   assert.equal(w.pinned.binding.observeName(() => true), 'Task');
   assert.equal(confirm.mock.callCount(), 1);
+});
+
+for (const mode of ['null', 'undefined', 'throw']) {
+  test(`an anchor start that reads as ${mode} after the confirmation yields no name`, t => {
+    const w = world(t); const real = cli.confirmDeliveryWriter;
+    t.mock.method(cli, 'confirmDeliveryWriter', raw => { const confirmed = real(raw); w.anchor.mode = mode; return confirmed; });
+    assert.equal(w.pinned.binding.observeName(), null);
+    assert.equal(w.pinned.binding.writerIdentity, null);
+  });
+}
+test('an anchor start that changes after the confirmation yields no name', t => {
+  const w = world(t); const real = cli.confirmDeliveryWriter;
+  t.mock.method(cli, 'confirmDeliveryWriter', raw => { const confirmed = real(raw); w.starts[100] = '101'; return confirmed; });
+  assert.equal(w.pinned.binding.observeName(), null);
+});
+test('an anchor whose start was never readable yields no name even when it stays unreadable', t => {
+  const w = world(t, { anchor: 'null' });
+  assert.equal(w.pinned.binding.observeName(), null);
 });
