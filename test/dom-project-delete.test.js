@@ -34,6 +34,22 @@ test('overlapping state reads keep writes held until the last reply', async t =>
   assert.equal(h.calls.writes.length, 1);
 });
 
+test('global patches remove keys only when requested and retain removal through deferral', async t => {
+  const h = setup(t), saved = persistence(h);
+  saved().chrome = true;
+  assert.equal(await h.w.saveGlobalSettings({ browserMode: 'off' }), true);
+  assert.equal(saved().chrome, true, 'generic patches must not infer key removal from browserMode');
+  h.w.setProjectDeletionWritesBlocked(h.p, true);
+  assert.equal(await h.w.saveGlobalSettings({ browserMode: 'managed' }, { remove: ['chrome'] }), 'deferred');
+  await h.w.saveGlobalSettings({ sidebarWidth: 321 });
+  assert.equal(saved().chrome, true);
+  h.w.setProjectDeletionWritesBlocked(h.p, false);
+  await flush(); await h.w.flushProjectDeletionWrites();
+  assert.equal(Object.hasOwn(saved(), 'chrome'), false);
+  assert.equal(saved().browserMode, 'managed');
+  assert.equal(saved().sidebarWidth, 321);
+});
+
 for (const method of ['deleteProject', 'projectDeleteState']) test(`${method} preserves the backend bounded unknown reply and operation ID`, async t => {
   const h = setup(t), timers = new Map(); let id = 0, reply;
   h.w.setTimeout = (fn, ms) => { timers.set(++id, { fn, ms }); return id; };
@@ -107,18 +123,81 @@ test('a final working-set flush during execute logs its deferral and is replayed
   assert.equal(saved().openWorkingSet?.[0]?.sessionId, 'final', 'the deferred final working set must be written after receipt');
 });
 
-async function settings(h) {
+async function settings(h, scope = 'project') {
   for (const id of ['settings-viewer', 'settings-viewer-title', 'settings-viewer-body', 'terminal-area', 'terminal-header', 'stats-viewer', 'memory-viewer', 'jsonl-viewer']) {
     if (!h.document.getElementById(id)) { const el = h.document.createElement('div'); el.id = id; h.document.body.append(el); }
   }
   h.w.api.getSetting = async () => ({}); h.w.api.getShellProfiles = async () => [];
-  for (const file of ['setting-defaults.js', 'shortcuts.js', 'terminal-themes.js', 'settings-panel.js']) {
+  for (const file of ['setting-defaults.js', 'shortcuts.js', 'terminal-themes.js', 'remote-enrol-panel.js', 'settings-panel.js']) {
     const filename = path.join(__dirname, '../public', file);
     vm.runInContext(fs.readFileSync(filename, 'utf8'), h.context, { filename });
   }
-  await h.w.openSettingsViewer('project', h.p.projectPath, h.p.folder);
+  await h.w.openSettingsViewer(scope, h.p.projectPath, h.p.folder);
   return h.document.querySelector('#sv-delete-btn');
 }
+
+test('Global Settings deferred by deletion apply in-window and persist after its receipt', async t => {
+  const h = setup(t);
+  await settings(h, 'global');
+  const saved = persistence(h), applied = {};
+  saved().chrome = true;
+  h.w._setVisibleSessionCount = value => { applied.count = value; };
+  h.w._setSessionMaxAge = value => { applied.age = value; };
+  h.w._applyTerminalTheme = value => { applied.theme = value; };
+  h.document.querySelector('#sv-visible-count').value = '23';
+  h.document.querySelector('#sv-max-age').value = '42';
+  const theme = h.document.querySelector('#sv-terminal-theme');
+  theme.selectedIndex = 1;
+  h.document.querySelector('#sv-remote-add').click();
+  for (const [selector, value] of [['.rh-alias', 'box'], ['.rh-label', 'Test host']]) {
+    const input = h.document.querySelector(selector);
+    input.value = value;
+    input.dispatchEvent(new h.w.Event('input'));
+  }
+  let read;
+  const getSetting = h.w.api.getSetting;
+  h.w.api.getSetting = () => new Promise(resolve => { read = resolve; });
+  h.document.querySelector('#sv-save-btn').click();
+  await flush();
+  h.w.setProjectDeletionWritesBlocked(h.p, true);
+  read({ chrome: true });
+  await flush();
+  assert.deepEqual(applied, { count: 23, age: 42, theme: theme.value }, 'deferred settings must apply immediately in this window');
+  assert.equal(h.w.remoteHostLabel('box'), 'Test host');
+  assert.doesNotMatch(h.document.querySelector('#app-notices').textContent, /not saved|save again/i);
+  assert.equal(h.calls.writes.length, 0, 'the deletion must still hold persistence');
+  h.w.api.getSetting = getSetting;
+  saved().hiddenProjects = ['/deleted'];
+  h.w.setProjectDeletionWritesBlocked(h.p, false);
+  await flush(); await h.w.flushProjectDeletionWrites();
+  assert.equal(saved().visibleSessionCount, 23);
+  assert.equal(saved().sessionMaxAgeDays, 42);
+  assert.equal(saved().terminalTheme, theme.value);
+  assert.equal(saved().remoteHosts[0].label, 'Test host');
+  assert.deepEqual(saved().hiddenProjects, ['/deleted']);
+  assert.equal(Object.hasOwn(saved(), 'chrome'), false, 'deferred Settings must remove the legacy chrome key');
+  assert.equal(h.calls.writes.length, 1);
+});
+
+test('remote Project Settings refuses Save while its deletion dialog is open', async t => {
+  const h = setup(t);
+  h.p.remoteAlias = 'box';
+  h.p.folder = 'box::' + h.p.folder;
+  h.w.cachedAllProjects = [{ ...h.p, remoteAlias: null, folder: 'local' }, h.p];
+  await settings(h);
+  const pending = h.start();
+  await flush();
+  assert.ok(h.confirm(), 'the remote deletion preview must be open');
+  assert.equal(!!h.w.projectDeletionWritesBlocked, false, 'preview does not hold global writes');
+  h.document.querySelector('#sv-save-btn').click();
+  await flush();
+  assert.equal(h.calls.writes.length, 0, 'remote project settings must not save during its deletion preview');
+  assert.match(h.document.querySelector('#app-notices').textContent, /not saved/i);
+  h.cancel(); await pending;
+  h.document.querySelector('#sv-save-btn').click();
+  await flush();
+  assert.equal(h.calls.writes.length, 1, 'cancelling deletion must allow Save again');
+});
 function setup(t, extra = {}) {
   const ctx = setupSidebarDom(); t.after(() => ctx.destroy());
   const w = ctx.window, p = makeSampleProject();
@@ -270,6 +349,12 @@ for (const alias of [null, 'box']) test(`committed ACK prunes only acknowledged 
   Object.assign(h.w, { exitingApp: false });
   h.w.api.getSetting = async () => ({ openWorkingSet: [own, other] });
   loadAppFunctions(h.context, { functions: ['applyProjectDeletion', 'pendingRestoreEntries', 'persistWorkingSet'], declarations: ['_persistChain'] });
+  let oldReply;
+  h.w.api.getProjects = () => new Promise(resolve => { oldReply = resolve; });
+  h.w.api.getActiveTerminals = async () => [];
+  Object.assign(h.w, { loadingStatus: h.document.createElement('div'), reportActivityFocus() {}, reportActivityTitles() {}, refreshSidebar() {}, renderDefaultStatus() {} });
+  loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects'] });
+  const oldLoad = h.w.loadProjects();
   await h.w.applyProjectDeletion({ ok: true, state: 'committed', invalidation: { sessionIds: ['own'], restoreTargets: [{ ...own, alias }] } });
   assert.deepEqual(destroyed, ['own']); assert.equal(h.w.openSessions.has('other'), true);
   assert.deepEqual(Array.from(h.w.pendingRestoreEntries(), row => row.item.sessionId), ['other', 'other', 'other']);
@@ -280,13 +365,13 @@ for (const alias of [null, 'box']) test(`committed ACK prunes only acknowledged 
   assert.equal(h.w.isDeletedProjectRestoreTarget({ ...own, projectPath: '/another/project' }), false);
   assert.equal(h.w.isDeletedProjectRestoreTarget({ ...own, projectPath: own.projectPath.toUpperCase() }), alias === null, 'path case follows the deletion host, not the hostless saved item');
   assert.equal(h.w.isDeletedProjectRestoreTarget({ ...own, projectPath: own.projectPath + '/child/..' }), true);
+  oldReply({ defaultProjects: [h.p], allProjects: [{ ...h.p, remoteAlias: alias }] });
+  await oldLoad;
+  assert.equal(h.w.isDeletedProjectRestoreTarget(own), true, 'a load started before the deletion ACK must retain restore tombstones');
   await h.w.persistWorkingSet();
   assert.equal(h.calls.writes.at(-1)[1].openWorkingSet.some(item => item.sessionId === 'own'), false, 'hostless restore entries must not be persisted after remote deletion');
   h.w.cachedAllProjects = [];
   h.w.api.getProjects = async () => ({ defaultProjects: [h.p], allProjects: [{ ...h.p, remoteAlias: alias }] });
-  h.w.api.getActiveTerminals = async () => [];
-  Object.assign(h.w, { loadingStatus: h.document.createElement('div'), reportActivityFocus() {}, reportActivityTitles() {}, refreshSidebar() {}, renderDefaultStatus() {} });
-  loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects'] });
   await h.w.loadProjects();
   assert.equal(h.w.isDeletedProjectRestoreTarget(own), false, 'a reappeared project must release its restore tombstones');
 });

@@ -884,18 +884,21 @@ const projectDeletionOperations = new Map();
 const completedProjectDeletionKeys = new Set();
 const projectDeletionRestoreTargets = new Map();
 const projectDeletionWriteKeys = new Map();
-window.isDeletedProjectRestoreTarget = item => [...projectDeletionRestoreTargets].some(([key, ids]) =>
+window.isDeletedProjectRestoreTarget = item => [...projectDeletionRestoreTargets].some(([key, { ids }]) =>
   ids.has(item?.sessionId) && typeof item.projectPath === 'string' &&
   projectDeletionKey({ projectPath: item.projectPath, alias: JSON.parse(key)[0] }) === key);
-window.clearReappearedProjectDeletionTargets = () => {
-  for (const project of cachedAllProjects) projectDeletionRestoreTargets.delete(projectDeletionKey(project));
+window.clearReappearedProjectDeletionTargets = generation => {
+  for (const project of cachedAllProjects) {
+    const key = projectDeletionKey(project);
+    if (generation > projectDeletionRestoreTargets.get(key)?.loadGeneration) projectDeletionRestoreTargets.delete(key);
+  }
 };
 window.flushDeferredProjectDeletionWrites = () => {
   if (window.projectDeletionWritesBlocked) return;
   const patch = window.projectDeletionDeferredSettings, workingSet = window.projectDeletionDeferredWorkingSet;
   window.projectDeletionDeferredSettings = null;
   window.projectDeletionDeferredWorkingSet = null;
-  if (patch) void saveGlobalSettings(patch).catch(() => {});
+  if (patch) void saveGlobalSettings(patch.patch, { remove: patch.remove }).catch(() => {});
   if (workingSet) void window.persistWorkingSet(workingSet).catch(error => console.warn('[switchboard] failed to persist deferred working set', error));
 };
 let projectDeletionUnavailable = '';

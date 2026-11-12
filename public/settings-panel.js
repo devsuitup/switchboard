@@ -614,6 +614,8 @@
       });
     });
 
+    const project = isProject ? cachedAllProjects.find(p => p.projectPath === projectPath && (!folderKey || p.folder === folderKey)) : null;
+
     // Save button
     settingsViewerBody.querySelector('#sv-save-btn').addEventListener('click', async () => {
       let settings = {};
@@ -677,16 +679,16 @@
       }
       stopShortcutCapture();
 
-      // Merge form values into existing settings to preserve keys not managed by the form
       delete settings.chrome;
-      if (window.projectDeletionWritesBlocked || (isProject && isProjectDeleting({ projectPath }))) {
+      if (window.projectDeletionWritesBlocked || (isProject && isProjectDeleting(project || { projectPath }))) {
         showAppNotice({ id: 'settings-delete-busy', kind: 'error', message: 'Settings were not saved while a project deletion is pending. Check its outcome, then save again.' });
         return;
       }
+      let deferred = false;
       if (!isProject) {
-        if (!await saveGlobalSettings(settings)) {
-          showAppNotice({ id: 'settings-delete-busy', kind: 'error', message: 'Settings were not saved because a project deletion started. Check its outcome, then save again.' });
-          return;
+        deferred = await saveGlobalSettings(settings, { remove: ['chrome'] }) === 'deferred';
+        if (deferred) {
+          showAppNotice({ id: 'settings-delete-busy', message: 'Settings applied. They will be saved when the project deletion finishes.' });
         }
       } else await window.api.setSetting(settingsKey, settings);
       if (!isProject) setRemoteHostLabels(settings.remoteHosts);
@@ -729,7 +731,7 @@
       }
 
       const saveBtn = settingsViewerBody.querySelector('#sv-save-btn');
-      saveBtn.textContent = '✓ Saved';
+      saveBtn.textContent = deferred ? '✓ Applied' : '✓ Saved';
       saveBtn.style.background = '#2ea043';
       saveBtn.style.color = '#fff';
       setTimeout(() => closeSettingsViewer(), 600);
@@ -769,7 +771,6 @@
     for (const action of ['archive', 'delete']) {
       const button = settingsViewerBody.querySelector('#sv-' + action + '-btn');
       if (!button) continue;
-      const project = cachedAllProjects.find(p => p.projectPath === projectPath && (!folderKey || p.folder === folderKey));
       if (project) button.dataset.deleteProjectKey = projectDeletionKey(project);
       paintProjectDeletionBusy();
       button.addEventListener('click', async () => {

@@ -214,19 +214,23 @@ function clearDormantRow(sessionId) {
 let _persistChain = Promise.resolve();
 window.flushProjectDeletionWrites = () => _persistChain;
 
-function saveGlobalSettings(patch) {
+function saveGlobalSettings(patch, { remove = [] } = {}) {
   const epoch = window.projectDeletionWriteEpoch;
   const defer = () => {
-    window.projectDeletionDeferredSettings = { ...window.projectDeletionDeferredSettings, ...patch };
+    const pending = window.projectDeletionDeferredSettings;
+    window.projectDeletionDeferredSettings = {
+      patch: { ...pending?.patch, ...patch },
+      remove: [...new Set([...(pending?.remove || []).filter(key => !Object.hasOwn(patch, key)), ...remove])],
+    };
     queueMicrotask(() => window.flushDeferredProjectDeletionWrites?.());
-    return false;
+    return 'deferred';
   };
   const write = _persistChain.then(async () => {
     if (window.projectDeletionWritesBlocked || epoch !== window.projectDeletionWriteEpoch) return defer();
     const current = await window.api.getSetting('global');
     if (window.projectDeletionWritesBlocked || epoch !== window.projectDeletionWriteEpoch) return defer();
     const settings = { ...current, ...patch };
-    if (Object.hasOwn(patch, 'browserMode')) delete settings.chrome;
+    for (const key of remove) delete settings[key];
     await window.api.setSetting('global', settings);
     return true;
   });
@@ -321,8 +325,10 @@ async function applyProjectDeletion(result) {
   const targets = result.invalidation.restoreTargets || [];
   for (const target of targets) {
     const key = projectDeletionKey(target);
-    if (!projectDeletionRestoreTargets.has(key)) projectDeletionRestoreTargets.set(key, new Set());
-    projectDeletionRestoreTargets.get(key).add(target.sessionId);
+    if (!projectDeletionRestoreTargets.has(key)) projectDeletionRestoreTargets.set(key, { ids: new Set(), loadGeneration: 0 });
+    const tombstone = projectDeletionRestoreTargets.get(key);
+    tombstone.ids.add(target.sessionId);
+    tombstone.loadGeneration = loadProjects.state?.started || 0;
   }
   const matches = item => !!item && !!window.isDeletedProjectRestoreTarget(item);
   for (const target of targets) {
@@ -2242,7 +2248,7 @@ async function loadProjects({ resort = false } = {}) {
     setRemoteHostLabels(globalSettings?.remoteHosts);
     cachedProjects = defaultProjects;
     cachedAllProjects = allProjects;
-    window.clearReappearedProjectDeletionTargets?.();
+    window.clearReappearedProjectDeletionTargets?.(job.generation);
     const newerPending = state.latest !== job && state.latest.pending;
     loadingStatus.style.display = newerPending ? '' : 'none';
     loadingStatus.className = newerPending ? 'active' : '';

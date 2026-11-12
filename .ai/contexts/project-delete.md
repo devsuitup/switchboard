@@ -26,7 +26,15 @@ renders. Settings/sidebar actions share it, and Archive/new/stop controls check
 it synchronously. Busy changes repaint immediately and enter sidebarRenderInputs.
 The working-set, sidebar-width and Global Settings writers share _persistChain;
 deletion drains earlier submissions, rejects stale reads by generation, and
-blocks whole-global saves while pending. A cancelled dialog itself writes nothing.
+defers already-submitted global patches while writes are blocked. A cancelled
+dialog itself writes nothing. `saveGlobalSettings` resolves to `true` after a
+write or `'deferred'` when queued; persistence failures reject. Settings applies
+a deferred save in the current window and announces that persistence will follow
+deletion, while refusing a new Save if the write block is already active.
+Global Settings explicitly requests `remove: ['chrome']`; removals travel with
+deferred patches and are applied to a fresh global snapshot on replay. A later
+patch can set a previously removed key again. Project Settings checks the matched
+folder's host/path identity so remote deletion previews block Save as well.
 
 Any NOT_READY reply makes deletion globally unavailable with the retryable
 reason "Project deletion is unavailable until recovery of an interrupted deletion
@@ -47,7 +55,10 @@ its tabs through destroySession, filters deferred restores/working-set saves,
 detaches old Touched list references, and refreshes search, Agent Files, Work
 Files and schedules. Historical committed recovery has no fresh epoch proof
 for renderer teardown: it refreshes projects without closing potentially
-re-added sessions. Main already gates its notification sinks by current epoch.
+re-added sessions. Restore tombstones record the latest started `loadProjects`
+generation at ACK. Only an accepted load started after that generation may clear
+them when the project reappears; a pre-ACK load completing late cannot do so.
+Main already gates its notification sinks by current epoch.
 This conservative boundary avoids extending the authorized backend change.
 Failed refresh after acknowledged completion offers reload and blocks another
 Delete on that stale view. Completion is never inferred from a transport error.
