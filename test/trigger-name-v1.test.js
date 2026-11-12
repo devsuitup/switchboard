@@ -137,6 +137,15 @@ test('transport refusal follows cancellation and deadline checks', async () => {
   const r = await f.run('x\ud800y');
   assert.equal(r.reason, 'Switchboard is closing.');
 });
+test('an expired deadline wins over the transport refusal and nothing is looked up or launched', async () => {
+  const start = Date.now(); const calls = [];
+  const f = named({ now: () => start + 10 * 60 * 1000 });
+  f.ctx.lifecycle.getProjectSnapshot = async () => { calls.push('project'); return { allProjects: [], hiddenProjects: [], hiddenProjectKinds: {} }; };
+  f.ctx.lifecycle.randomUUID = () => { calls.push('uuid'); return NEW; };
+  const r = await f.run('x\ud800y');
+  assert.equal(r.reason, 'session action timed out'); assert.equal(r.requestedName, 'x\ud800y');
+  assert.deepEqual(calls, []); assert.deepEqual(kinds(f).filter(kind => kind !== 'result'), []);
+});
 
 test('the requested name is the trimmed name and the 256 limit is measured before trimming', () => {
   const ok = name => validateTrigger({ version: 1, action: 'open', new: { project, name }, prompt: 'p' }, STEM);

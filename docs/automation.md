@@ -366,9 +366,11 @@ file, macOS, or the deadline already reached). The two can differ, for example
 when Claude Code adds a suffix or shortens the name; a difference or a `null`
 never refuses the open or holds back the prompt. They describe one moment: they
 do not show that the name stays the same later, nor that other tools find the
-session by it. A result for a refused or interrupted new open carries
-`requestedName` and `actualName:null`; an interrupted new open recorded before
-this field existed carries neither. `opened` means the terminal
+session by it. A refused new open carries `requestedName`; its `actualName` is `null`
+unless the launch had been accepted, in which case it is the name observed at
+that moment (a failed name save, for example, still reports it). An
+interrupted new open carries `requestedName` and `actualName:null`, or neither
+when it was recorded before these fields existed. `opened` means the terminal
 was acknowledged and any requested prompt finished submission verification;
 it does not mean the answer is complete. `submitted:"assumed"` stays assumed.
 The one deadline covers queueing, opening, startup and delivery (default 300000
