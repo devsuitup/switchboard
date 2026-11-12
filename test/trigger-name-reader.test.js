@@ -18,10 +18,11 @@ function world(t, { during, anchor: anchorMode = 'start' } = {}) {
     procStart: '300', name: 'Task', ...fields }));
   write({});
   const starts = { 100: '100', 300: '300' };
-  const anchor = { mode: anchorMode };
+  const anchor = { mode: anchorMode, flipped: 0 };
   let reads = 0;
   cli.init({ dir, platform: 'linux', isProcessAlive: () => true, readProcStart: pid => {
       if (pid === 100 && anchor.mode === 'throw') throw new Error('unreadable');
+      if (pid === 100 && anchor.mode === 'flip' && anchor.flipped++ > 0) return '101';
       if (pid === 100 && anchor.mode === 'null') return null;
       if (pid === 100 && anchor.mode === 'undefined') return undefined;
       return starts[pid];
@@ -31,7 +32,7 @@ function world(t, { during, anchor: anchorMode = 'start' } = {}) {
   const ctx = createTriggerContext({ activeSessions: new Map([[ID, session]]), cliSessionState: cli, isPtyAlive: () => true,
     getCliStatus: () => undefined, lifecycle: { launchAllowed: () => true } });
   const pinned = ctx.pinDelivery(ID, ctx.getPtyForSession(ID), false, { v1: true, deadline: Date.now() + 5000 });
-  return { pinned, starts, write, descriptor, anchor, reads: () => reads };
+  return { pinned, starts, write, descriptor, anchor, session, reads: () => reads };
 }
 
 test('a stable writer reports the descriptor name from the real ordinary reader', t => {
@@ -89,5 +90,16 @@ test('an anchor start that changes after the confirmation yields no name', t => 
 });
 test('an anchor whose start was never readable yields no name even when it stays unreadable', t => {
   const w = world(t, { anchor: 'null' });
+  assert.equal(w.pinned.binding.observeName(), null);
+});
+test('a PTY whose PID changes during the observation yields no name while the old PID keeps its start', t => {
+  const w = world(t); const real = cli.confirmDeliveryWriter;
+  t.mock.method(cli, 'confirmDeliveryWriter', raw => { const confirmed = real(raw); w.session.pty.pid = 101; return confirmed; });
+  assert.equal(w.starts[100], '100');
+  assert.equal(w.pinned.binding.observeName(), null);
+});
+test('an anchor start that changes only at the final read yields no name', t => {
+  const w = world(t); const real = cli.confirmDeliveryWriter;
+  t.mock.method(cli, 'confirmDeliveryWriter', raw => { const confirmed = real(raw); w.anchor.mode = 'flip'; return confirmed; });
   assert.equal(w.pinned.binding.observeName(), null);
 });
