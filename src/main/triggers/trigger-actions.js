@@ -720,7 +720,7 @@ async function executeOpen(trigger, execution) {
   function observeName() {
     try {
       if (!acceptedCheck || !admitted() || acceptedCheck()) return null;
-      const name = pinned?.binding.observeName?.();
+      const name = pinned?.binding.observeName?.(() => admitted() && !acceptedCheck());
       return typeof name === 'string' && name && admitted() && !acceptedCheck() ? name : null;
     } catch { return null; }
   }

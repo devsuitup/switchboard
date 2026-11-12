@@ -186,8 +186,8 @@ function isCmdShell(shellPath) {
   return base === 'cmd.exe' || base === 'cmd';
 }
 
-function quoteArgvForShell(shellPath, argv, { env } = {}) {
-  const passes = env && isCmdShell(shellPath) ? cmdEscapePasses(env) : 1;
+function quoteArgvForShell(shellPath, argv, { env, cwd, wrapped } = {}) {
+  const passes = env && isCmdShell(shellPath) ? cmdEscapePasses(env, { cwd, wrapped }) : 1;
   return argv.map(a => quoteArgForShell(shellPath, a, passes)).join(' ');
 }
 
@@ -210,7 +210,7 @@ function shellArgs(shellPath, cmd, extraArgs, { pty = false } = {}) {
     if (isFish) return ['-l', '-c', cmd];
     if (isNushell) return ['-l', '-c', cmd];
     if (base.includes('powershell') || base.includes('pwsh')) return ['-NoLogo', '-Command', cmd];
-    return pty && isCmdShell(shellPath) ? `/d /s /c "${cmd}"` : ['/C', cmd];
+    return pty && isCmdShell(shellPath) ? `/s /c "${cmd}"` : ['/C', cmd];
   }
   if (isBashLike) return ['-l', '-i'];
   if (isFish) return ['-l', '-i'];

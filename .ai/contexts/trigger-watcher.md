@@ -272,10 +272,12 @@ and fork ignore it. The argv element is passed whole through the shell encoders
 backslashes, nushell double-quoted strings with `\\` and `\"` escapes, PowerShell
 doubled single quotes, cmd.exe caret escaping via `escapeForCmd`) and the
 sandbox/prefix wrappers. For cmd.exe the interactive launch gives node-pty one
-command line, `/d /s /c "<command>"` (`shellArgs(..., { pty: true })`), so node-pty
-adds no quoting of its own; arguments are escaped once when `claude` resolves to
-an executable and twice when it resolves to a `.cmd`/`.bat` shim, whose `%*`
-re-parses them (`cmdEscapePasses`).
+command line, `/s /c "<command>"` (`shellArgs(..., { pty: true })`), so node-pty
+adds no quoting of its own; `/d` is not passed, so Command Processor AutoRun
+still runs. Arguments are escaped once when the `claude` that cmd will run
+(launch directory first, then PATH, in PATHEXT order) is an executable, twice
+when it is a `.cmd`/`.bat` shim, whose `%*` re-parses them, and once when a launch
+prefix runs first (`cmdEscapePasses`).
 
 Qualification: `test/trigger-name-transport.test.js` runs the real encoders
 through the extracted `open-terminal` handler and an injected PTY edge. On Linux
@@ -285,7 +287,7 @@ such shell runs there). `test/trigger-name-transport-windows.test.js` runs only
 on Windows (the `windows-2022` leg of the test workflow, selected by
 `scripts/platform-tests.js`): it serializes the real launch arguments with
 node-pty's `argsToCommandLine`, starts `cmd.exe` with that exact command line and
-compares the argv a disposable echo executable and a `claude.cmd` shim received
+compares the argv a disposable echo executable and `claude.cmd` / `claude.bat` shims received, including a launch-directory executable shadowing a PATH shim and the reverse,
 with the input. Neither file is a live Claude Code or ConPTY qualification;
 PowerShell and nushell remain unexecuted.
 
@@ -305,9 +307,11 @@ sandbox) and returns the descriptor `name` only for a certain, unique writer who
 session ID is the new UUID, whose identity matches any identity delivery already
 pinned, and whose PTY has a real PID. It reports `null` for macOS (unsupported),
 Windows PID 0, uncertain or missing proof, and an absent, empty or non-string
-name. The ordinary reader is read a second time to confirm the same writer
-identity, session and name (the sandbox reader revalidates internally); a
-change between the two reads yields `null`. The name is also discarded when the
+name. The ordinary reader is followed by one confirmation (`confirmDeliveryWriter`: descriptor
+reread for the same session, name and process start, and the writer's live process
+start; the sandbox reader revalidates internally) and a recheck of the pinned PTY
+start; a change yields `null`, and no confirmation starts once the action is no
+longer admitted. The name is also discarded when the
 deadline passes or the launch is cancelled during the read. It mutates no delivery binding. A different or `null` name changes nothing
 else. Finalization that turns the launch into a refusal, or finds an already refused launch invalidated, drops the name.
 

@@ -67,8 +67,8 @@ test('main.js: a session with no transcript is started, not resumed', () => {
   assert.match(src, /const startsFresh = isNew/, 'launch path must decide start-vs-resume explicitly');
   assert.match(src, /sessionTranscriptExists\(PROJECTS_DIR, sessionId\)/,
     'the decision must be based on the transcript actually existing');
-  assert.match(src, /getHarness\(\)\.buildLaunchArgs\(\{ sessionId, isNew: startsFresh, options: launchOptions \}\)/,
-    'the characterized builder receives the resolved start-vs-resume decision and options');
+  assert.match(src, /getHarness\(\)\.buildLaunchArgs\(\{ sessionId, isNew: startsFresh, options: launchOptions,\s*name: triggerPermit\?\.name \}\)/,
+    'the characterized builder receives the resolved start-vs-resume decision, the options and only the permit name');
 });
 
 test('main.js: --worktree is dropped in a non-git directory instead of failing the launch', () => {

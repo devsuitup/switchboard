@@ -29,11 +29,12 @@ class P { static int Main(string[] a) {
 const ECHO_JS = 'require("fs").writeFileSync(process.env.SB_ARGV_OUT, JSON.stringify(process.argv.slice(2)));';
 
 const bins = {};
+const SHIMS = { cmd: 'claude.cmd', bat: 'claude.bat' };
 function makeBin(kind) {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), `sb-argv-${kind}-`)));
-  if (kind === 'shim') {
+  if (SHIMS[kind]) {
     fs.writeFileSync(path.join(dir, 'echo.js'), ECHO_JS);
-    fs.writeFileSync(path.join(dir, 'claude.cmd'), `@echo off\r\n"${process.execPath}" "%~dp0echo.js" %*\r\n`);
+    fs.writeFileSync(path.join(dir, SHIMS[kind]), `@echo off\r\n"${process.execPath}" "%~dp0echo.js" %*\r\n`);
   } else {
     fs.writeFileSync(path.join(dir, 'echo.cs'), CS);
     const built = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
@@ -43,22 +44,25 @@ function makeBin(kind) {
   }
   return dir;
 }
-before(() => { if (!skip) for (const kind of ['exe', 'shim']) bins[kind] = makeBin(kind); });
+before(() => { if (!skip) for (const kind of ['exe', 'cmd', 'bat']) bins[kind] = makeBin(kind); });
 after(() => { for (const dir of Object.values(bins)) fs.rmSync(dir, { recursive: true, force: true }); });
 
-async function runThroughNodePty(kind, request) {
-  const dir = bins[kind];
-  const out = path.join(dir, 'argv.json');
+async function runThroughNodePty(kind, request, { cwdKind } = {}) {
+  const out = path.join(bins[kind], 'argv.json');
   fs.rmSync(out, { force: true });
-  const env = { ...process.env, PATH: `${dir};${process.env.PATH}`, SB_ARGV_OUT: out };
+  const env = { ...process.env, PATH: `${bins[kind]};${process.env.PATH}`, SB_ARGV_OUT: out };
   const shell = process.env.ComSpec;
-  const spawned = await launch(shell, { ...request, env });
-  const { argsToCommandLine } = require('node-pty/lib/windowsPtyAgent');
-  const line = argsToCommandLine(shell, spawned.args);
-  const rest = line.slice(argsToCommandLine(shell, []).length + 1);
-  const ran = spawnSync(shell, [rest], { windowsVerbatimArguments: true, encoding: 'utf8', env });
-  assert.equal(ran.status, 0, `${line}\n${ran.stdout}${ran.stderr}`);
-  return JSON.parse(fs.readFileSync(out, 'utf8'));
+  const original = process.cwd();
+  if (cwdKind) process.chdir(bins[cwdKind]);
+  try {
+    const spawned = await launch(shell, { ...request, env });
+    const { argsToCommandLine } = require('node-pty/lib/windowsPtyAgent');
+    const line = argsToCommandLine(shell, spawned.args);
+    const rest = line.slice(argsToCommandLine(shell, []).length + 1);
+    const ran = spawnSync(shell, [rest], { windowsVerbatimArguments: true, encoding: 'utf8', env, cwd: process.cwd() });
+    assert.equal(ran.status, 0, `${line}\n${ran.stdout}${ran.stderr}`);
+    return JSON.parse(fs.readFileSync(out, 'utf8'));
+  } finally { process.chdir(original); }
 }
 
 const NAMES = ['smithy hardening', `it's "quoted"`, 'a\\', 'C:\\dir\\', 'say "hi\\"', 'a"', '100%', '%PATH%', 'x^y', '^', 'a&b', 'a|b', 'a<b>c',
@@ -69,17 +73,28 @@ const EXISTING = [
   ['a resume', { isNew: false, transcript: true, options: { addDirs: 'C:\\space dir\\', appendSystemPrompt: 'two  spaces & ^ %PATH% |<>' } },
     ['--resume', ID, '--add-dir', 'C:\\space dir\\', '--append-system-prompt', 'two  spaces & ^ %PATH% |<>']],
   ['a fork', { isNew: true, options: { forkFrom: 'src id', permissionMode: 'plan' } }, ['--resume', 'src id', '--fork-session', '--permission-mode', 'plan']],
+  ['a fresh launch with a worktree', { isNew: true, git: true, options: { worktree: true, worktreeName: 'topic$SUFFIX' } },
+    ['--session-id', ID, '--worktree', 'topic$SUFFIX']],
+  ['a fork with a worktree', { isNew: true, git: true, options: { forkFrom: 'src', worktree: true, worktreeName: 'a b%PATH%^&' } },
+    ['--resume', 'src', '--fork-session', '--worktree', 'a b%PATH%^&']],
 ];
 
-for (const kind of ['exe', 'shim']) {
+for (const kind of ['exe', 'cmd', 'bat']) {
   for (const name of NAMES) {
-    test(`cmd.exe through node-pty hands a claude ${kind} the exact name ${JSON.stringify(name)}`, { skip, timeout: 60000 }, async () => {
+    test(`cmd.exe through node-pty hands a claude.${kind} the exact name ${JSON.stringify(name)}`, { skip, timeout: 60000 }, async () => {
       assert.deepEqual(await runThroughNodePty(kind, { name }), ['--session-id', ID, '--name', name]);
     });
   }
   for (const [label, request, expected] of EXISTING) {
-    test(`cmd.exe through node-pty hands a claude ${kind} ${label} its exact arguments`, { skip, timeout: 60000 }, async () => {
+    test(`cmd.exe through node-pty hands a claude.${kind} ${label} its exact arguments`, { skip, timeout: 60000 }, async () => {
       assert.deepEqual(await runThroughNodePty(kind, request), expected);
     });
   }
+}
+
+const TRICKY = { name: `say "hi" & %PATH% ^ \\`, args: ['--session-id', ID, '--name', `say "hi" & %PATH% ^ \\`] };
+for (const [pathKind, cwdKind] of [['cmd', 'exe'], ['bat', 'exe'], ['exe', 'cmd'], ['exe', 'bat']]) {
+  test(`a claude.${cwdKind} in the working directory shadows a claude.${pathKind} on PATH and still gets exact arguments`, { skip, timeout: 60000 }, async () => {
+    assert.deepEqual(await runThroughNodePty(pathKind, { name: TRICKY.name }, { cwdKind }), TRICKY.args);
+  });
 }

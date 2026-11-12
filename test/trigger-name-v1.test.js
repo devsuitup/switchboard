@@ -155,12 +155,13 @@ test('a 201-character name is neither truncated nor refused', async () => {
 
 function world({ pid = 12345, sandbox = false, flags = {} } = {}) {
   const state = { writer: { sessionId: ID, pid: 300, procStart: '30', name: 'Task', kind: 'interactive' }, uncertain: false,
-    identity: 'id-1', supported: true, calls: { legacy: 0, v1: 0 } };
+    identity: 'id-1', supported: true, start: '10', confirm: true, calls: { legacy: 0, v1: 0, confirm: 0 } };
   const session = { pty: { pid, write() {} }, generation: 7, host: null, cwd: '/first', sandbox, ...flags,
     composerState: { pending: 0, lastInputAt: 0 } };
   const map = new Map([[ID, session]]);
   const source = {
-    deliveryPtyStart: p => p > 0 ? '10' : null,
+    deliveryPtyStart: p => p > 0 ? state.start : null,
+    confirmDeliveryWriter: () => { state.calls.confirm++; return state.confirm; },
     observeTabWriter: () => {
       state.calls.legacy++;
       const seen = state.supported ? { supported: true, writer: state.writer, uncertain: state.uncertain, identity: state.identity } : { supported: false };
@@ -176,7 +177,7 @@ function world({ pid = 12345, sandbox = false, flags = {} } = {}) {
   return { state, session, pinned, map };
 }
 test('the ordinary tab writer supplies the descriptor name for the launched session', () => {
-  const w = world(); assert.equal(w.pinned.binding.observeName(), 'Task'); assert.ok(w.state.calls.legacy <= 2);
+  const w = world(); assert.equal(w.pinned.binding.observeName(), 'Task'); assert.equal(w.state.calls.legacy, 1);
 });
 test('the Linux sandbox reader supplies the name through its namespace proof', () => {
   const w = world({ sandbox: true }); assert.equal(w.pinned.binding.observeName(), 'Task');
@@ -235,23 +236,31 @@ test('a background-attach or plain-terminal tab yields no name', () => {
 });
 
 const stale = [
-  ['a writer whose identity is replaced during the read', w => { w.state.identity = 'id-2'; }],
-  ['a descriptor replaced by another session during the read', w => { w.state.writer = { ...w.state.writer, sessionId: '99999999-9999-9999-9999-999999999999' }; }],
-  ['a descriptor renamed during the read', w => { w.state.writer = { ...w.state.writer, name: 'Other' }; }],
-  ['evidence that becomes uncertain during the read', w => { w.state.uncertain = true; }],
-  ['a writer that disappears during the read', w => { w.state.writer = undefined; }],
+  ['a writer that fails its final confirmation', w => { w.state.confirm = false; }],
+  ['a PTY whose process start changes during the read', w => { w.state.start = '20'; }],
 ];
 for (const [label, change] of stale) {
   test(`${label} yields no name from the ordinary reader`, () => {
-    const w = world(); w.state.onRead = n => { if (n === 1) change(w); };
+    const w = world(); w.state.onRead = () => change(w);
     assert.equal(w.pinned.binding.observeName(), null);
   });
 }
-test('the ordinary reader confirms a stable writer with a bounded number of reads', () => {
-  const w = world(); assert.equal(w.pinned.binding.observeName(), 'Task'); assert.ok(w.state.calls.legacy <= 2);
+test('the ordinary reader reads once and confirms the writer once', () => {
+  const w = world(); assert.equal(w.pinned.binding.observeName(), 'Task');
+  assert.equal(w.state.calls.legacy, 1); assert.equal(w.state.calls.confirm, 1);
 });
-test('a sandbox observation is not read twice', () => {
-  const w = world({ sandbox: true }); w.pinned.binding.observeName(); assert.equal(w.state.calls.v1, 1);
+test('an action that is no longer admitted starts neither the read nor the confirmation', () => {
+  const w = world(); assert.equal(w.pinned.binding.observeName(() => false), null);
+  assert.equal(w.state.calls.legacy, 0);
+  let calls = 0; assert.equal(w.pinned.binding.observeName(() => calls++ === 0), null);
+  assert.equal(w.state.calls.confirm, 0);
+});
+test('a sandbox writer of another session yields no name and needs no confirmation', () => {
+  const w = world({ sandbox: true }); w.state.writer = { ...w.state.writer, sessionId: '99999999-9999-9999-9999-999999999999' };
+  assert.equal(w.pinned.binding.observeName(), null); assert.equal(w.state.calls.confirm, 0);
+});
+test('a sandbox writer is confirmed by its own reader, not a second confirmation', () => {
+  const w = world({ sandbox: true }); assert.equal(w.pinned.binding.observeName(), 'Task'); assert.equal(w.state.calls.confirm, 0);
 });
 test('a name read leaves the delivery binding untouched', () => {
   const w = world(); const before = JSON.stringify({ ...w.pinned.binding, observeName: undefined });
@@ -363,8 +372,10 @@ test('a named result keeps its snapshot through journal publication, a failed re
   const resultPath = nodePath.join(processed, STEM + '.result.json');
   assert.equal(nodeFs.existsSync(resultPath), false);
   failRename = false;
+  const committed = Buffer.from((await journal.querySessionRequestOutcome({ stemKey: STEM.toLowerCase() })).owner.resultBytes);
   const replay = await createSessionRequestNamespace({ fs: nodeFs, journal, publisher, actions, processedDir: processed }).begin(STEM, input);
   assert.deepEqual(replay, { done: true });
+  assert.deepEqual(nodeFs.readFileSync(resultPath), committed);
   const bytes = nodeFs.readFileSync(resultPath, 'utf8');
   assert.deepEqual(JSON.parse(bytes), JSON.parse(JSON.stringify(result)));
   assert.equal(JSON.parse(bytes).actualName, 'Task-2'); assert.equal(JSON.parse(bytes).requestedName, 'Task');

@@ -382,20 +382,16 @@ function createTriggerContext(deps) {
       return binding.effectiveId;
     };
     binding.checkStop = () => check('stop');
-    binding.observeName = () => {
+    binding.observeName = (admitted = () => true) => {
       try {
-        if (!own || binding.revoked || !valid() || pid === null) return null;
+        if (!own || binding.revoked || !valid() || pid === null || !admitted()) return null;
         const observed = observationForTab();
         const writer = observed?.writer;
         if (!writer || observed.uncertain || !observed.identity
           || normalizeSessionId(writer.sessionId) !== normalizeSessionId(requestedId)
           || (binding.writerIdentity !== null && observed.identity !== binding.writerIdentity)) return null;
-        if (!sandboxV1) {
-          const again = observationForTab();
-          if (again?.uncertain || again?.identity !== observed.identity || again.writer?.name !== writer.name
-            || normalizeSessionId(again.writer?.sessionId) !== normalizeSessionId(requestedId)) return null;
-        }
-        return typeof writer.name === 'string' && writer.name ? writer.name : null;
+        if (!sandboxV1 && (!admitted() || !source.confirmDeliveryWriter(writer))) return null;
+        return valid() && typeof writer.name === 'string' && writer.name ? writer.name : null;
       } catch { return null; }
     };
     const handle = { isAlive: () => valid() && entry.handle.isAlive(), write(data) {
