@@ -3830,8 +3830,8 @@ const projectDeleteMain = createProjectDeleteMain({
   notifySchedules: (invalidation, operationId, change) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('project-delete-schedules-changed', { invalidation, operationId, ...change });
   },
-  announce: operationIds => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('project-delete-recovery', { operationIds });
+  announce: operations => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('project-delete-recovery', { operations });
   },
 });
 bgAgents.onJobsChanged(() => notifyRendererProjectsChanged('bg-jobs'));

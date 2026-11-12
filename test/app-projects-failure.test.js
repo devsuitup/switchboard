@@ -18,6 +18,7 @@ function setup() {
   w.pollActiveSessions = async () => {};
   w.api = { getProjects: async () => { throw new Error('worker failed'); }, getSetting: async () => ({}), getActiveTerminals: async () => [] };
   w.api.onTriggerSessionAction = () => {};
+  w.api.onProjectDeleteRecovery = () => {};
   w.handleTriggerSessionAction = () => {};
   w.console = { ...console, warn: () => {} };
   loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects'] });
@@ -40,7 +41,9 @@ test('startup retries a failed project load and restores even when both attempts
     const start = source.indexOf('\n}', source.indexOf('async function restoreStartupSessions(')) + 2;
     const end = source.indexOf('// Live-reload sidebar', start);
     try {
-      await Promise.resolve(vm.runInContext(source.slice(start, end), h.context)).catch(() => {});
+      let startup;
+      assert.doesNotThrow(() => { startup = vm.runInContext(source.slice(start, end), h.context, { filename: path.join(__dirname, '../public/app.js') }); });
+      await Promise.resolve(startup).catch(() => {});
       assert.equal(calls, 2, 'startup must retry its first failed load');
       assert.equal(restores, 1, 'saved working-set restore must run after failed loads');
     } finally { h.destroy(); }

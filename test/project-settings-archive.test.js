@@ -14,7 +14,6 @@ const vm = require('node:vm');
 const { createHash } = require('node:crypto');
 const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
-const { JSDOM } = require('jsdom');
 const { extractFunction, loadAppFunctions } = require('./app-source');
 const { setupSidebarDom } = require('./dom-setup');
 const { encodeProjectPath } = require('../encode-project-path');
@@ -413,41 +412,64 @@ test('the shared schedule launch refuses an archived project and releases its ru
   assert.equal(done, 1);
 });
 
-test('preload forwards Archive, Unarchive and Delete to their distinct IPC handlers', t => {
-  const h = setup(t);
+test('preload exposes distinct legacy, preview, execution, state and recovery contracts', () => {
   let api;
-  const calls = [];
-  const context = vm.createContext({ process: { platform: 'win32', argv: [], env: {} }, require: () => ({
-    contextBridge: { exposeInMainWorld: (_name, value) => { api = value; } },
-    ipcRenderer: { invoke: (...args) => calls.push(args) },
-  }) });
-  vm.runInContext(read('preload.js'), context, { filename: path.join(ROOT, 'preload.js') });
-  api.archiveProjectSettings(h.projectPath, h.folder);
-  api.unarchiveProject('server::' + h.projectPath);
-  api.deleteProject(h.projectPath, h.folder);
-  assert.deepEqual(calls, [['archive-project-settings', h.projectPath, h.folder],
-    ['unarchive-project', 'server::' + h.projectPath], ['remove-project', h.projectPath, h.folder]]);
+  const calls = [], listeners = new Map(), response = { ok: true };
+  const filename = path.join(ROOT, 'preload.js');
+  vm.runInNewContext(read('preload.js'), {
+    process: { platform: 'win32', argv: [], env: {} },
+    require: name => {
+      assert.equal(name, 'electron');
+      return { contextBridge: { exposeInMainWorld: (key, value) => { assert.equal(key, 'api'); api = value; } },
+        ipcRenderer: { invoke: (...args) => { calls.push(args); return response; }, on: (channel, listener) => listeners.set(channel, listener) } };
+    },
+  }, { filename });
+  for (const [name, channel, args] of [
+    ['archiveProjectSettings', 'archive-project-settings', ['/repo', 'box::folder']],
+    ['unarchiveProject', 'unarchive-project', ['box::/repo']],
+    ['removeProjectLegacy', 'remove-project', ['/repo', 'box::folder']],
+    ['previewProjectDelete', 'preview-project-delete', [{ projectPath: '/repo', options: { settings: true } }]],
+    ['deleteProject', 'delete-project', [{ token: 'token', fingerprint: 'fingerprint' }]],
+    ['projectDeleteState', 'project-delete-state', [{ operationId: 'op' }]],
+  ]) {
+    assert.equal(typeof api[name], 'function');
+    assert.equal(api[name](...args), response);
+    assert.deepEqual(calls.at(-1), [channel, ...args], `${name} must forward exact IPC arguments`);
+  }
+  const received = [], payload = { operations: [{ operationId: 'op', host: 'box', projectPath: '/repo' }] };
+  api.onProjectDeleteRecovery((...args) => received.push(args));
+  assert.equal(typeof listeners.get('project-delete-recovery'), 'function');
+  listeners.get('project-delete-recovery')({ sender: 'not exposed' }, payload);
+  assert.deepEqual(received, [[payload]], 'recovery forwards the payload without the Electron event');
 });
 
 function settingsDom(t, h) {
   const ids = ['settings-viewer', 'settings-viewer-title', 'settings-viewer-body', 'terminal-area',
     'terminal-header', 'placeholder', 'stats-viewer', 'memory-viewer', 'jsonl-viewer', 'app-notices'];
-  const dom = new JSDOM(ids.map(id => `<div id="${id}"></div>`).join(''), { url: 'http://localhost', runScripts: 'outside-only' });
-  t.after(() => dom.window.close());
+  const ctx = setupSidebarDom();
+  const dom = { window: ctx.window, getInternalVMContext: () => ctx.context };
+  for (const id of ids) if (!ctx.document.getElementById(id)) {
+    const el = ctx.document.createElement('div'); el.id = id; ctx.document.body.append(el);
+  }
+  t.after(() => ctx.destroy());
+  dom.window.cachedAllProjects = [{ projectPath: h.projectPath, folder: h.folder, sessions: [] }];
   const calls = [];
   dom.window.api = new Proxy({
     platform: 'win32', getSetting: async key => h.getSetting(key), getShellProfiles: async () => [],
     setSetting: async (key, value) => { h.setSetting(key, value); return { ok: true }; },
     archiveProjectSettings: async (...args) => { calls.push(['archive', ...args]); return (await h.archive(...args)); },
-    deleteProject: async (...args) => { calls.push(['delete', ...args]); return (await h.invoke('remove-project', ...args)); },
+    previewProjectDelete: async request => ({ ok: true, token: 'preview', plan: { project: { projectPath: h.projectPath }, fingerprint: 'fp',
+      categories: { sessions: { available: true, selected: request.options.sessions }, settings: { available: true, selected: request.options.settings } }, refusals: [] } }),
+    deleteProject: async request => { calls.push(['delete', request]); return { ok: true, state: 'committed', invalidation: { sessionIds: [], restoreTargets: [] } }; },
     unarchiveProject: async entry => { calls.push(['unarchive', entry]); return (await h.invoke('unarchive-project', entry)); },
   }, { get: (obj, key) => key in obj ? obj[key] : async () => ({ ok: true }) });
   dom.window.confirm = () => { throw new Error('native confirm must not be used'); };
   dom.window.alert = () => { throw new Error('native alert must not be used'); };
   let reloads = 0;
   dom.window.loadProjects = async () => { reloads++; };
-  vm.runInContext(extractFunction(read('public/sidebar.js'), 'showProjectArchiveUndo'), dom.getInternalVMContext(), { filename: path.join(ROOT, 'public/sidebar.js') });
-  for (const file of ['setting-defaults.js', 'utils.js', 'shortcuts.js', 'terminal-themes.js', 'modal-stack.js', 'choice-dialog.js', 'app-notices.js', 'settings-panel.js']) {
+  dom.window.applyProjectDeletion = async () => {};
+  loadAppFunctions(ctx.context, { functions: ['saveGlobalSettings'], declarations: ['_persistChain'] });
+  for (const file of ['setting-defaults.js', 'shortcuts.js', 'terminal-themes.js', 'settings-panel.js']) {
     vm.runInContext(read('public/' + file), dom.getInternalVMContext(), { filename: path.join(ROOT, 'public', file) });
   }
   return { window: dom.window, document: dom.window.document, calls, reloads: () => reloads };
@@ -481,20 +503,21 @@ test('delete confirmation describes its effects, cancels safely and uses an in-a
   const button = dom.document.querySelector('#sv-delete-btn');
   assert.ok(button, 'delete must have a separate project action');
   button.click();
+  await settle();
   const dialog = dom.document.querySelector('.choice-dialog');
   assert.ok(dialog);
   assert.match(dialog.textContent, /project settings/i);
-  assert.match(dialog.textContent, /cache.*search index/i);
-  assert.match(dialog.textContent, /schedule registration/i);
-  assert.match(dialog.textContent, /folder.*session.*schedule files.*not deleted/i);
+  assert.match(dialog.textContent, /app metadata/i);
+  assert.match(dialog.textContent, /Kept on disk:.*folder.*transcripts.*schedules/i);
   assert.ok(dialog.querySelector('.choice-dialog-confirm').classList.contains('delete-worktree-confirm-btn'));
   dialog.querySelector('.choice-dialog-cancel').click();
   await settle();
   assert.equal(dom.calls.length, 0);
   button.click();
+  await settle();
   dom.document.querySelector('.choice-dialog-confirm').click();
   await settle();
-  assert.deepEqual(dom.calls, [['delete', h.projectPath, h.folder]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(dom.calls)), [['delete', { token: 'preview', fingerprint: 'fp' }]]);
   assert.equal(dom.reloads(), 1);
   assert.equal(dom.document.querySelector('#app-notices .app-notice-action'), null);
 });

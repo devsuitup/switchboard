@@ -1,12 +1,79 @@
-# Project deletion: internal main composition (#474 A4a–A4c4)
+# Project deletion (#474 A4a–A4d)
+
+## Renderer boundary (A4d)
+
+Both the sidebar Delete button and Project Settings use
+`confirmAndDeleteProjectFolder`. The preload exposes previewProjectDelete,
+token-shaped deleteProject, projectDeleteState and onProjectDeleteRecovery.
+The former positional bridge is explicitly removeProjectLegacy; neither UI
+entry calls it. R5 is resolved by this simultaneous switch.
+
+R4 / #1090 boundary: stopBackgroundJobs is always the strict boolean false.
+No stop-job consent is offered or remembered. Live background plans disable
+Confirm and direct the user to stop the job in Agents first. Off win32, a plan
+with a local PTY stop also disables Confirm, even if main minted a token;
+the strict backend STOP_UNSUPPORTED behavior remains unchanged.
+
+R6: a bounded read-only capabilities preview precedes the dialog. Only session
+metadata (initial false) and available project settings (initial true) are
+remembered on acceptance. Disabled remembered choices become unchecked without
+a write. Physical categories stay kept. The literal expandable full plan is
+installed only after latest-response/answer matching; failures cannot enable
+Confirm. Changed membership requires a new dialog/confirmation.
+
+The host/canonical-path busy Set survives skipped, partial and full sidebar
+renders. Settings/sidebar actions share it, and Archive/new/stop controls check
+it synchronously. Busy changes repaint immediately and enter sidebarRenderInputs.
+The working-set, sidebar-width and Global Settings writers share _persistChain;
+deletion drains earlier submissions, rejects stale reads by generation, and
+defers already-submitted global patches while writes are blocked. A cancelled
+dialog itself writes nothing. `saveGlobalSettings` resolves to `true` after a
+write or `'deferred'` when queued; persistence failures reject. Settings applies
+a deferred save in the current window and announces that persistence will follow
+deletion, while refusing a new Save if the write block is already active.
+Global Settings explicitly requests `remove: ['chrome']`; removals travel with
+deferred patches and are applied to a fresh global snapshot on replay. A later
+patch can set a previously removed key again. Project Settings checks the matched
+folder's host/path identity so remote deletion previews block Save as well.
+
+Any NOT_READY reply makes deletion globally unavailable with the retryable
+reason "Project deletion is unavailable until recovery of an interrupted deletion
+finishes". Only a successful capability probe on the next open can clear it;
+older preview replies cannot override a newer NOT_READY. Only announced operation IDs get a
+project-specific unresolved state. Unknown outcomes keep Check deletion state;
+sealed partial outcomes offer Review remaining deletion, which requests a fresh
+plan and consent rather than replaying the old operation.
+
+Recovery announcements carry {operations:[{operationId,host,projectPath}]} and
+known operation views carry host/projectPath from the main-owned registry.
+Local host is null, remote host is its alias; projectPath is canonical. Authority
+remains restricted to the current trusted document. No identity is fabricated
+for operations omitted because recovery failed before registry admission.
+
+An accepted operation's committed ACK prunes exact restore targets, destroys
+its tabs through destroySession, filters deferred restores/working-set saves,
+detaches old Touched list references, and refreshes search, Agent Files, Work
+Files and schedules. Historical committed recovery has no fresh epoch proof
+for renderer teardown: it refreshes projects without closing potentially
+re-added sessions. Restore tombstones record the latest started `loadProjects`
+generation at ACK. Only an accepted load started after that generation may clear
+them when the project reappears; a pre-ACK load completing late cannot do so.
+Main already gates its notification sinks by current epoch.
+This conservative boundary avoids extending the authorized backend change.
+Failed refresh after acknowledged completion offers reload and blocks another
+Delete on that stale view. Completion is never inferred from a transport error.
+
+Plain-Node renderer fixtures exercise the production scripts and extracted app
+functions. Native layout/focus, real Electron IPC and process death remain CI
+or manual integration checks; the A4d brief prohibits launching them locally.
 
 ## Current state: internal main composition (A4c4)
 
 `project-delete-main.js` composes the shipped inventory, planner, stop adapter,
 service and IPC registration after background IPC initialization. Main supplies
 the writer, active session map, CLI evidence, background stop ports, remote stop
-adapter, launch gate and notification sinks. No preload or renderer action uses
-the three callbacks yet; legacy remove-project, Archive and Stop are unchanged.
+adapter, launch gate and notification sinks. A4d's preload and renderer use the
+three callbacks; legacy remove-project, Archive and Stop keep their contracts.
 
 The runtime read adapter reads bounded job files and the read-only CLI agents
 list, including records absent from the roster cache. Unreadable, unowned,

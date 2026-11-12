@@ -49,6 +49,7 @@ Buttons on a project header:
 | Create scheduled task | Opens a Claude session that writes a schedule file — see [Automation](automation.md#creating-a-schedule) |
 | Project settings | Per-project overrides — see [Settings reference](settings.md#project-settings) |
 | Archive folder | Opens a dialog that archives the folder's sessions and disables its schedules, each optional, and hides the folder — see [Archive a folder](#archive-a-folder) |
+| Delete | Previews removal from Switchboard with separate session metadata and project settings choices. Files and nested worktrees stay on disk — see [Settings reference](settings.md#project-settings). |
 | New session (`+`) | The launch menu — see [Launching sessions](launching-sessions.md) |
 
 A project on a [remote host](remote-hosts.md) carries a host status dot and a

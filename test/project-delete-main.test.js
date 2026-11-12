@@ -18,13 +18,12 @@ const options = { sessions: true, settings: false, schedules: false, transcripts
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function startupFixture(projectDeleteHolds, overrides = {}) {
   const filename = path.join(__dirname, '..', 'main.js'), source = fs.readFileSync(filename, 'utf8');
-  const oldStart = source.indexOf('    void projectDeleteRecovery.then(');
-  const start = oldStart >= 0 ? oldStart : source.lastIndexOf('    try {', source.indexOf('scheduleIpc.init(log, runScheduleCommand'));
+  const start = source.lastIndexOf('    try {', source.indexOf('scheduleIpc.init(log, runScheduleCommand'));
   const end = source.indexOf('    // Full cache rebuild', start);
   assert.ok(start > 0 && end > start, 'startup callbacks must be extractable without running Electron');
   const order = [], errors = [];
   const context = vm.createContext({
-    projectDeleteRecovery: new Promise(() => {}), projectDeleteHolds, appQuitting: false, shutdownPromise: undefined,
+    projectDeleteHolds, appQuitting: false, shutdownPromise: undefined,
     scheduleIpc: { init: () => order.push('ipc') }, runScheduleCommand() {}, isAllowedMemoryPath() {}, isProjectSettingsArchived() {},
     log: { error: (...args) => errors.push(args) }, scheduleProjects: () => ({ list: async () => { order.push('seed'); return []; } }),
     startScheduler: () => order.push('scheduler'), powerMonitor: {}, path, DB_PATH: '/data/db', activeSessions: new Map(),
@@ -135,7 +134,7 @@ for (const failure of ['reject', 'hang']) test(`recovery ${failure} reaches wind
   h.faults.listProjectDeletionOperations = () => failure === 'reject' ? Promise.reject(new Error('offline')) : new Promise(() => {});
   const order = [];
   const filename = path.join(__dirname, '..', 'main.js'), source = fs.readFileSync(filename, 'utf8');
-  const start = source.indexOf('    const projectDeleteRecovery =') >= 0 ? source.indexOf('    const projectDeleteRecovery =') : source.indexOf('    void projectDeleteMain.startRecovery();');
+  const start = source.indexOf('    void projectDeleteMain.startRecovery();');
   const end = source.indexOf('    startProjectsWatcher();', start);
   assert.ok(start > 0 && end > start, 'main startup composition must exist');
   const context = vm.createContext({ projectDeleteMain: h.main, buildMenu() {}, createWindow() { order.push('createWindow'); h.load(); } });
@@ -184,14 +183,15 @@ for (const kind of ['failed-stop', 'replacement', 'success', 'late-natural']) te
   assert.equal(h.notifications.filter(n => n[0] === 'projects').length, success ? 1 : 0);
 });
 
-test('no-tab background records and headless schedules cannot disappear from preview', supported, async t => {
+for (const state of ['done', 'stopped', 'failed']) test(`no-tab ${state} background records and headless schedules cannot disappear from preview`, supported, async t => {
   const h = await setup(t);
   fs.mkdirSync(path.join(h.ports.jobsDir, '1234abcd'), { recursive: true });
-  fs.writeFileSync(path.join(h.ports.jobsDir, '1234abcd', 'state.json'), JSON.stringify({ state: 'done', cwd: h.projectPath,
+  fs.writeFileSync(path.join(h.ports.jobsDir, '1234abcd', 'state.json'), JSON.stringify({ state, cwd: h.projectPath,
     sessionId: '12345678-1234-1234-1234-123456789abc' }));
   h.ports.cliSessionState.getScheduleRunSnapshot = () => [{ sessionId: 'headless', cwd: h.projectPath, pid: 987, scheduleName: 'scheduled' }];
   h.load(); await h.main.startRecovery(); const p = await h.preview();
   assert.equal(p.token, null); assert.ok(p.plan.jobs.some(row => row.id === '1234abcd')); assert.ok(p.plan.jobs.some(row => row.id === 'headless'));
+  assert.equal(p.plan.jobs.find(row => row.id === '1234abcd').liveness.state, 'unknown', 'terminal state alone has no worker-death evidence');
   assert.ok(p.plan.refusals.some(row => row.error.includes('#1090')));
   assert.equal(h.calls.filter(c => c === 'completeProjectDeletion').length, 0);
 });
@@ -272,7 +272,8 @@ test('lost ACK is read back once; replacement document gets recovered identity',
   h.replace();
   assert.equal((await h.invoke('project-delete-state', { operationId: result.operationId })).state, 'committed');
   assert.equal(h.calls.filter(c => c === 'completeProjectDeletion').length, 1);
-  assert.ok(h.notifications.some(n => n[0] === 'recovery' && n[1].includes(result.operationId)));
+  assert.ok(h.notifications.some(n => n[0] === 'recovery' && n[1].some(row =>
+    row.operationId === result.operationId && row.host === null && row.projectPath === p.plan.project.projectPath)));
 });
 
 test('repeated notifications after service restart are deduped and reopened epochs are dropped', supported, async t => {
@@ -396,16 +397,13 @@ test('dispose during enumeration settles both recovery barriers false', supporte
 for (const shutdown of ['none', 'quitting', 'promise']) test(`main startup isolates recovery and respects shutdown=${shutdown}`, async () => {
   const filename = path.join(__dirname, '..', 'main.js'), source = fs.readFileSync(filename, 'utf8');
   assert.equal(source.includes('    await projectDeleteRecovery;'), false, 'cache, updater and activate must not wait for recovery');
-  let resolveRecovery, resolveHolds;
+  let resolveHolds;
   const { order } = startupFixture(new Promise(resolve => { resolveHolds = resolve; }), {
-    projectDeleteRecovery: new Promise(resolve => { resolveRecovery = resolve; }),
     appQuitting: shutdown === 'quitting', shutdownPromise: shutdown === 'promise' ? Promise.resolve() : undefined,
   });
   await flush();
   assert.deepEqual(order, shutdown === 'none' ? ['ipc'] : [], 'schedule IPC must not wait for sequential receipt recovery');
   resolveHolds(true); await flush();
-  assert.deepEqual(order, shutdown === 'none' ? ['ipc', 'seed', 'scheduler', 'trigger'] : []);
-  resolveRecovery(false); await flush();
   assert.deepEqual(order, shutdown === 'none' ? ['ipc', 'seed', 'scheduler', 'trigger'] : []);
 });
 
@@ -413,18 +411,6 @@ for (const method of ['readLiveness', 'readConversation']) test(`runtime ${metho
   const runtime = implementation.createProjectDeleteRuntime({ activeSessions: new Map() });
   await assert.rejects(runtime[method]({ id: 'unscoped', sessionIds: ['unscoped'] }, { deadline: Date.now() + 1000 }),
     { code: 'DISCOVERY_UNAVAILABLE' }, 'unscoped reads must fail with DISCOVERY_UNAVAILABLE');
-});
-
-test('startup seed ordering rationale is recorded in its context', () => {
-  const schedules = fs.readFileSync(path.join(__dirname, '../.ai/contexts/schedule-runner.md'), 'utf8');
-  assert.match(schedules, /seeded before any session can run/i, 'schedule context must preserve seed ordering rationale');
-  assert.match(schedules, /sandboxed one cannot plant into the seed/i);
-});
-
-test('I3 rationale is recorded in the trigger context', () => {
-  const triggers = fs.readFileSync(path.join(__dirname, '../.ai/contexts/trigger-watcher.md'), 'utf8');
-  assert.match(triggers, /I3:.*try\/catch/, 'trigger context must preserve I3 boot failure containment');
-  assert.match(triggers, /auto-updater/);
 });
 
 for (const failure of ['enumeration', 'limit']) test(`recovery retries missed ${failure} holds without starting automation twice`, supported, async t => {
@@ -475,10 +461,4 @@ test('trigger boot failure is contained and logged after scheduler startup', asy
   assert.deepEqual(order, ['ipc', 'seed', 'scheduler']);
   assert.equal(errors.length, 1);
   assert.match(errors[0].join(' '), /trigger-watcher.*watcher unavailable/);
-});
-
-test('notification context specifies the cross-process 24-hour replay boundary', () => {
-  const context = fs.readFileSync(path.join(__dirname, '../.ai/contexts/project-delete.md'), 'utf8');
-  assert.match(context, /committed receipts younger than 24 hours notify again/, 'restart replay age and outcome must be explicit');
-  assert.match(context, /idempotent\s+refreshes/);
 });

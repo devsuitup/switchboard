@@ -614,6 +614,8 @@
       });
     });
 
+    const project = isProject ? cachedAllProjects.find(p => p.projectPath === projectPath && (!folderKey || p.folder === folderKey)) : null;
+
     // Save button
     settingsViewerBody.querySelector('#sv-save-btn').addEventListener('click', async () => {
       let settings = {};
@@ -677,14 +679,18 @@
       }
       stopShortcutCapture();
 
-      // Merge form values into existing settings to preserve keys not managed by the form
-      if (!isProject) {
-        const existing = (await window.api.getSetting('global')) || {};
-        settings = { ...existing, ...settings };
-      }
-
       delete settings.chrome;
-      await window.api.setSetting(settingsKey, settings);
+      if (window.projectDeletionWritesBlocked || (isProject && isProjectDeleting(project || { projectPath }))) {
+        showAppNotice({ id: 'settings-delete-busy', kind: 'error', message: 'Settings were not saved while a project deletion is pending. Check its outcome, then save again.' });
+        return;
+      }
+      let deferred = false;
+      if (!isProject) {
+        deferred = await saveGlobalSettings(settings, { remove: ['chrome'] }) === 'deferred';
+        if (deferred) {
+          showAppNotice({ id: 'settings-delete-busy', message: 'Settings applied. They will be saved when the project deletion finishes.' });
+        }
+      } else await window.api.setSetting(settingsKey, settings);
       if (!isProject) setRemoteHostLabels(settings.remoteHosts);
 
       // Update visibleSessionCount, sessionMaxAgeDays, and theme
@@ -725,7 +731,7 @@
       }
 
       const saveBtn = settingsViewerBody.querySelector('#sv-save-btn');
-      saveBtn.textContent = '✓ Saved';
+      saveBtn.textContent = deferred ? '✓ Applied' : '✓ Saved';
       saveBtn.style.background = '#2ea043';
       saveBtn.style.color = '#fff';
       setTimeout(() => closeSettingsViewer(), 600);
@@ -765,26 +771,22 @@
     for (const action of ['archive', 'delete']) {
       const button = settingsViewerBody.querySelector('#sv-' + action + '-btn');
       if (!button) continue;
+      if (project) button.dataset.deleteProjectKey = projectDeletionKey(project);
+      paintProjectDeletionBusy();
       button.addEventListener('click', async () => {
         const deleting = action === 'delete';
         if (deleting) {
-          const result = await showChoiceDialog({
-            title: `Delete project "${shortName}"?`,
-            message: [
-              'This removes the project settings, cached sessions and search index, and schedule registration from Switchboard.',
-              'The project folder, session files and schedule files are not deleted. Adding the project again uses default settings.',
-            ],
-            confirmLabel: 'Delete Project',
-            danger: true,
-            initialFocus: 'cancel',
-            returnFocus: button,
-          });
-          if (!result) return;
+          if (!project) {
+            showAppNotice({ id: 'project-delete-unavailable', kind: 'error', message: 'Project identity is unavailable. Reload the project list, then reopen Settings.' });
+            return;
+          }
+          const completed = await confirmAndDeleteProjectFolder(project, button);
+          if (completed) { settingsViewer.style.display = 'none'; document.getElementById('placeholder').style.display = 'flex'; }
+          return;
         }
+        if (project && isProjectDeleting(project)) return;
         try {
-          const response = deleting
-            ? await window.api.deleteProject(projectPath, folderKey)
-            : await window.api.archiveProjectSettings(projectPath, folderKey);
+          const response = await window.api.archiveProjectSettings(projectPath, folderKey);
           if (response.error) throw new Error(response.error);
           if (!deleting) window.showProjectArchiveUndo(response.entry, shortName);
           settingsViewer.style.display = 'none';

@@ -5894,3 +5894,22 @@ body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-ses
 .panel-image { align-self: flex-start; flex-shrink: 0; max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; }
 .panel-image.panel-image-actual { max-width: none; max-height: none; cursor: zoom-out; }
 .panel-file-refusal { display: flex; align-items: center; gap: 8px; padding: 8px; }
+.choice-dialog-plan pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 40vh;
+  overflow: auto;
+  font-size: 12px;
+}
+
+.project-delete-btn {
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.project-delete-btn:disabled {
+  opacity: .45;
+  cursor: default;
+}

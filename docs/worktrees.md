@@ -59,6 +59,10 @@ it empty (placeholder `auto`) to let the CLI name each worktree.
 
 ## Cleaning up
 
+Deleting the parent project from its header or Project Settings keeps nested
+worktree histories and directories. The full project-deletion preview lists
+those groups as kept; it offers no physical worktree deletion choice.
+
 When the work is merged or abandoned, remove the worktree from Switchboard or
 with git.
 

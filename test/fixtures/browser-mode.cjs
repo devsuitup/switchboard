@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
+const { loadAppFunctions } = require('../app-source');
 
 function setup({ rows = {}, effective = {}, platform = 'linux' } = {}) {
   const dom = new JSDOM('<!doctype html><body>' + [
@@ -34,6 +35,9 @@ function setup({ rows = {}, effective = {}, platform = 'linux' } = {}) {
     createTerminalEntry: () => ({ initialSize: {}, terminal: { write() {} } }),
     syncPtySizeAfterOpen() {}, showSession() {},
   });
+  loadAppFunctions(dom.getInternalVMContext(), { functions: ['saveGlobalSettings'], declarations: ['_persistChain'] });
+  loadAppFunctions(dom.getInternalVMContext(), { sourcePath: path.join(__dirname, '../../public/sidebar.js'),
+    functions: ['isProjectDeleting', 'projectDeletionKey', 'paintProjectDeletionBusy'], declarations: ['deletingProjectKeys', 'projectDeletionUnavailable'] });
   for (const name of ['modal-stack', 'setting-defaults', 'utils', 'shortcuts', 'terminal-themes', 'settings-panel', 'dialogs']) {
     const filename = path.join(__dirname, '../../public', name + '.js');
     vm.runInContext(fs.readFileSync(filename, 'utf8'), dom.getInternalVMContext(), { filename });

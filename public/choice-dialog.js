@@ -40,8 +40,11 @@ function openChoiceDialog({
   danger = false,
   secondaryAction = null,
   returnFocus,
+  fallbackFocus = null,
   closeWith = null,
   onChange = null,
+  planDetails = null,
+  planUnavailable = null,
 } = {}) {
   return new Promise((resolve) => {
     if (onChange && choices.some(choice => choice.id === 'plan' || choice.id === 'choice')) {
@@ -123,10 +126,19 @@ function openChoiceDialog({
       box.type = 'checkbox';
       box.dataset.choiceId = choice.id;
       const stored = choice.rememberKey ? readRememberedChoice(choice.rememberKey) : null;
-      box.checked = stored === '1' ? true : stored === '0' ? false : !!choice.checked;
+      box.disabled = !!choice.disabled;
+      box.checked = !box.disabled && (stored === '1' ? true : stored === '0' ? false : !!choice.checked);
       const text = document.createElement('span');
       text.textContent = typeof choice.label === 'function' ? choice.label(box.checked) : choice.label;
       label.append(box, text);
+      if (box.disabled && choice.disabledReason) {
+        const reason = document.createElement('span');
+        reason.className = 'choice-dialog-detail';
+        reason.id = `choice-dialog-option-${++choiceDialogOptionId}`;
+        reason.textContent = choice.disabledReason;
+        box.setAttribute('aria-describedby', reason.id);
+        label.appendChild(reason);
+      }
       body.appendChild(label);
       boxes.push({ choice, box, text });
     }
@@ -142,6 +154,15 @@ function openChoiceDialog({
     confirmBtn.type = 'button';
     const planError = onChange ? document.createElement('p') : null;
     const planPending = onChange ? document.createElement('p') : null;
+    const details = onChange && planDetails ? document.createElement('details') : null;
+    const detailText = details ? document.createElement('pre') : null;
+    if (details) {
+      details.className = 'choice-dialog-plan';
+      const summary = document.createElement('summary');
+      summary.textContent = 'Full preview: counts, targets and effects';
+      details.append(summary, detailText);
+      body.appendChild(details);
+    }
     if (planError) {
       planError.setAttribute('role', 'alert');
       planError.hidden = true;
@@ -157,7 +178,7 @@ function openChoiceDialog({
     let finishPlanWait = null;
     let isDanger;
     function currentValues() {
-      const values = Object.fromEntries(boxes.map(({ choice, box }) => [choice.id, box.checked]));
+      const values = Object.fromEntries(boxes.map(({ choice, box }) => [choice.id, !box.disabled && box.checked]));
       const selected = radios.find(({ radio }) => radio.checked && !radio.disabled);
       if (selected) return { choice: selected.option.id, ...values };
       return values;
@@ -176,6 +197,7 @@ function openChoiceDialog({
       planError.hidden = true;
       planError.textContent = '';
       planPending.hidden = false;
+      if (detailText) detailText.textContent = '';
       dialog.setAttribute('aria-busy', 'true');
       let finishWait;
       const deadline = new Promise((resolve, reject) => {
@@ -186,6 +208,9 @@ function openChoiceDialog({
       try {
         const nextPlan = await Promise.race([onChange(Object.freeze({ ...values })), deadline]);
         if (closed || request !== planRequest || !matchesCurrentValues(values)) return;
+        if (detailText) detailText.textContent = planDetails(nextPlan);
+        const unavailable = planUnavailable?.(nextPlan);
+        if (unavailable) throw new Error(unavailable);
         plan = nextPlan;
         planValues = values;
         confirmBtn.disabled = !!options && !radios.some(({ radio }) => radio.checked && !radio.disabled);
@@ -241,6 +266,10 @@ function openChoiceDialog({
       overlay.remove();
       unregister();
       if (returnFocus?.isConnected && typeof returnFocus.focus === 'function') returnFocus.focus();
+      else if (fallbackFocus) {
+        const fallback = fallbackFocus();
+        if (fallback) { fallback.tabIndex = -1; fallback.focus(); }
+      }
       resolve(value);
     }
 
@@ -251,8 +280,8 @@ function openChoiceDialog({
       const result = {};
       if (selected) result.choice = selected.option.id;
       for (const { choice, box } of boxes) {
-        result[choice.id] = box.checked;
-        if (choice.rememberKey) writeRememberedChoice(choice.rememberKey, box.checked);
+        result[choice.id] = !box.disabled && box.checked;
+        if (choice.rememberKey && !box.disabled) writeRememberedChoice(choice.rememberKey, box.checked);
       }
       if (onChange) result.plan = plan;
       close(result);

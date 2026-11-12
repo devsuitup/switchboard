@@ -49,14 +49,14 @@ test('remove-project: writes an alias-qualified hidden entry for a remote group'
   assert.ok(commands.includes('hiddenProjects: [...new Set([...(global.hiddenProjects || []), entry])]'));
 });
 
-test('preload: deleteProject forwards the folder key to the main process', () => {
+test('preload: the explicit legacy bridge forwards the folder key to the main process', () => {
   const preload = fs.readFileSync(path.join(ROOT, 'preload.js'), 'utf8');
   assert.match(preload,
-    /deleteProject: \(projectPath, folderKey\) => ipcRenderer\.invoke\('remove-project', projectPath, folderKey\)/,
+    /removeProjectLegacy: \(projectPath, folderKey\) => ipcRenderer\.invoke\('remove-project', projectPath, folderKey\)/,
     'the bridge must widen to two arguments end to end');
 });
 
-test('renderer: the settings viewer threads the group folder key through to remove-project', () => {
+test('renderer: the settings viewer delegates to the shared project deletion controller', () => {
   const sidebar = fs.readFileSync(path.join(ROOT, 'public', 'sidebar.js'), 'utf8');
   assert.match(sidebar, /openSettingsViewer\('project', project\.projectPath, project\.folder\)/,
     'the folder key must be passed into the settings viewer alongside the project path');
@@ -64,6 +64,7 @@ test('renderer: the settings viewer threads the group folder key through to remo
   const panel = fs.readFileSync(path.join(ROOT, 'public', 'settings-panel.js'), 'utf8');
   assert.match(panel, /async function openSettingsViewer\(scope, projectPath, folderKey\)/,
     'the settings viewer must accept the folder key it is given');
-  assert.match(panel, /window\.api\.deleteProject\(projectPath, folderKey\)/,
-    'Delete Project must pass the folder key through, not just the projectPath');
+  assert.match(panel, /confirmAndDeleteProjectFolder\(project, button\)/,
+    'Delete Project must use the shared preview and token controller');
+  assert.match(sidebar, /folderKey: project\.folder/);
 });

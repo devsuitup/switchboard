@@ -212,6 +212,31 @@ function clearDormantRow(sessionId) {
 // (e.g. sidebar-resize and a working-set flush arriving in the same tick)
 // cannot interleave and silently drop each other's keys.
 let _persistChain = Promise.resolve();
+window.flushProjectDeletionWrites = () => _persistChain;
+
+function saveGlobalSettings(patch, { remove = [] } = {}) {
+  const epoch = window.projectDeletionWriteEpoch;
+  const defer = () => {
+    const pending = window.projectDeletionDeferredSettings;
+    window.projectDeletionDeferredSettings = {
+      patch: { ...pending?.patch, ...patch },
+      remove: [...new Set([...(pending?.remove || []).filter(key => !Object.hasOwn(patch, key)), ...remove])],
+    };
+    queueMicrotask(() => window.flushDeferredProjectDeletionWrites?.());
+    return 'deferred';
+  };
+  const write = _persistChain.then(async () => {
+    if (window.projectDeletionWritesBlocked || epoch !== window.projectDeletionWriteEpoch) return defer();
+    const current = await window.api.getSetting('global');
+    if (window.projectDeletionWritesBlocked || epoch !== window.projectDeletionWriteEpoch) return defer();
+    const settings = { ...current, ...patch };
+    for (const key of remove) delete settings[key];
+    await window.api.setSetting('global', settings);
+    return true;
+  });
+  _persistChain = write.catch(error => console.warn('[switchboard] failed to persist global settings', error));
+  return write;
+}
 
 // see docs/session-restore.md ("Closing the app")
 let exitingApp = false;
@@ -227,8 +252,16 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
     persistSkippedWhileExiting = true;
     return _persistChain;
   }
+  const defer = () => {
+    window.projectDeletionDeferredWorkingSet = { final: final || !!window.projectDeletionDeferredWorkingSet?.final, checked };
+    if (final) console.warn('[switchboard] final working-set flush deferred: project deletion is awaiting a reply or invalidated its snapshot');
+    queueMicrotask(() => window.flushDeferredProjectDeletionWrites?.());
+  };
   const write = _persistChain.then(async () => {
+    if (window.projectDeletionWritesBlocked) return defer();
+    const epoch = window.projectDeletionWriteEpoch;
     const g = await window.api.getSetting('global');
+    if (window.projectDeletionWritesBlocked || epoch !== window.projectDeletionWriteEpoch) return defer();
     const global = g || {};
     const set = [];
     for (const [sessionId, entry] of openSessions) {
@@ -270,7 +303,7 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
       const opening = set.find(e => pendingSessions.get(e.sessionId)?.openingActive);
       if (opening) opening.active = true;
     }
-    global.openWorkingSet = set;
+    global.openWorkingSet = set.filter(item => !window.isDeletedProjectRestoreTarget?.(item));
     await window.api.setSetting('global', global);
   });
   _persistChain = write.catch((e) => { if (!checked) console.warn('[switchboard] failed to persist working set', e); });
@@ -281,10 +314,58 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
 function pendingRestoreEntries() {
   const pending = [...restoreAwaitingConsent, ...restoreInFlight.values()];
   if (restorePlanner && !restorePlanner.isSettled()) pending.push(...restorePlanner.pending());
-  return pending.map(item => ({
+  return pending.filter(item => !window.isDeletedProjectRestoreTarget?.(item)).map(item => ({
     item,
     index: restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : Number.MAX_SAFE_INTEGER,
   }));
+}
+
+async function applyProjectDeletion(result) {
+  if (!result?.ok || result.state !== 'committed' || !result.invalidation) return;
+  const targets = result.invalidation.restoreTargets || [];
+  for (const target of targets) {
+    const key = projectDeletionKey(target);
+    if (!projectDeletionRestoreTargets.has(key)) projectDeletionRestoreTargets.set(key, { ids: new Set(), loadGeneration: 0 });
+    const tombstone = projectDeletionRestoreTargets.get(key);
+    tombstone.ids.add(target.sessionId);
+    tombstone.loadGeneration = loadProjects.state?.started || 0;
+  }
+  const matches = item => !!item && !!window.isDeletedProjectRestoreTarget(item);
+  for (const target of targets) {
+    const id = target.sessionId;
+    const entry = openSessions.get(id);
+    if (entry && matches({ ...entry.session, sessionId: id })) {
+      closeAllDiffs(id);
+      destroySession(id);
+    }
+    if (matches(restoreInFlight.get(id))) restoreInFlight.delete(id);
+    const pending = pendingSessions.get(id);
+    if (pending && matches({ ...pending.session, sessionId: id, projectPath: pending.projectPath })) pendingSessions.delete(id);
+    for (const map of [dormantWorkingSet, skippedWorkingSetEntries]) if (matches(map.get(id)?.item)) map.delete(id);
+    if (matches(sessionMap.get(id))) sessionMap.delete(id);
+    restoreSavedIndex.delete(id);
+    window._continuationChoices?.delete(id);
+    window._startupResumeResolutions?.delete(id);
+    if (typeof filePanelState !== 'undefined') {
+      const state = filePanelState.get(id);
+      const tab = state?.currentTab;
+      const touched = tab?.type === 'touched' ? tab : tab?.returnList;
+      if (touched?.type === 'touched') {
+        const fresh = { ...touched, data: null, refreshing: false, refreshPending: false, loading: false };
+        if (tab === touched) state.currentTab = fresh; else tab.returnList = fresh;
+      }
+    }
+  }
+  restoreAwaitingConsent = restoreAwaitingConsent.filter(item => !matches(item));
+  if (!restoreAwaitingConsent.length) document.getElementById('restore-toast')?.remove();
+  if (activeSessionId && !openSessions.has(activeSessionId)) {
+    setActiveSession(null); switchPanel(null);
+    placeholder.style.display = 'flex'; terminalHeader.style.display = 'none';
+  }
+  resetSearchFilter();
+  queueSchedulesReload();
+  if (typeof loadWorkFiles === 'function') await loadWorkFiles();
+  if (typeof loadMemories === 'function') await loadMemories();
 }
 
 function schedulePersistWorkingSet() {
@@ -350,18 +431,20 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       }
     }
     const startsFresh = item => !item.bg && item.fresh && !indexedSessions.has(item.sessionId);
-    const pending = list.filter(item => (startsFresh(item) || indexedSessions.has(item.sessionId)) && !openSessions.has(item.sessionId));
+    const pending = list.filter(item => !window.isDeletedProjectRestoreTarget?.(item) && (startsFresh(item) || indexedSessions.has(item.sessionId)) && !openSessions.has(item.sessionId));
     for (const item of pending) restoreInFlight.set(item.sessionId, item);
     const skippedNow = [];
     const startedAs = new Map();
     try {
       const liveById = await liveElsewhereMany(pending.filter(item => !startsFresh(item)).map(item => item.sessionId), { api: window.api });
       for (const [position, item] of list.entries()) {
+        if (window.isDeletedProjectRestoreTarget?.(item)) continue;
         if (startsFresh(item)) {
           if (!restoreInFlight.has(item.sessionId)) continue;
           try {
             const project = { projectPath: item.projectPath };
             const options = await resolveDefaultSessionOptions(project);
+            if (window.isDeletedProjectRestoreTarget?.(item)) continue;
             delete options.worktree;
             delete options.worktreeName;
             const newId = await launchNewSession(project, options, item.sessionId);
@@ -387,7 +470,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           const task = (async () => {
             try {
               const background = await prepareBackgroundRestore(session, item);
-              if (background) await openSession(session, undefined, { automatic: true, fromRestore: true, allowBgAttach: true, continuationResolved: true, ...background });
+              if (background && !window.isDeletedProjectRestoreTarget?.(item)) await openSession(session, undefined, { automatic: true, fromRestore: true, allowBgAttach: true, continuationResolved: true, ...background });
               const order = new Map(restoreSavedIndex);
               for (const [id, newId] of startedAs) order.set(newId, order.get(id));
               const entries = [...openSessions];
@@ -416,6 +499,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           },
           notify: notice => { continuationNotice = notice; }, resolutions: window._startupResumeResolutions,
           onHold: reason => { holdReason = reason; } });
+        if (window.isDeletedProjectRestoreTarget?.(item)) continue;
         if (!s) {
           const index = restoreSavedIndex.has(originalId) ? restoreSavedIndex.get(originalId) : position;
           skippedWorkingSetEntries.set(originalId, { item, index, retryContinuation: retryAfterIndexing });
@@ -434,6 +518,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           try { live = await window.api.getSessionLiveElsewhere(s.sessionId); } catch { live = null; }
         }
         let opened;
+        if (window.isDeletedProjectRestoreTarget?.(item)) continue;
         let blockedBy;
         try {
           opened = await openSession(s, undefined, {
@@ -633,7 +718,7 @@ async function tickRestorePlanner() {
 
     if (plan.action === 'nothing') return;
 
-    const candidates = plan.candidates;
+    const candidates = plan.candidates.filter(item => !window.isDeletedProjectRestoreTarget?.(item));
 
     if (restoreMode === 'lazy') {
       for (const item of candidates) restoreInFlight.set(item.sessionId, item);
@@ -1145,6 +1230,7 @@ function refreshSidebar({ resort = false, skipUnchanged = false, hiddenSettings,
 
   const skipped = !!(skipUnchanged && !resort && renderProjects.unchanged?.(projects));
   if (!skipped) renderProjects(projects, resort, { keepFocus });
+  paintProjectDeletionBusy();
   const counters = refreshSidebar.counters ||= { renders: 0, skips: 0 };
   if (skipped) counters.skips++;
   else counters.renders++;
@@ -2162,6 +2248,7 @@ async function loadProjects({ resort = false } = {}) {
     setRemoteHostLabels(globalSettings?.remoteHosts);
     cachedProjects = defaultProjects;
     cachedAllProjects = allProjects;
+    window.clearReappearedProjectDeletionTargets?.(job.generation);
     const newerPending = state.latest !== job && state.latest.pending;
     loadingStatus.style.display = newerPending ? '' : 'none';
     loadingStatus.className = newerPending ? 'active' : '';
@@ -2965,11 +3052,7 @@ initAgentsView();
     // Save sidebar width to settings
     const width = parseInt(sidebar.style.width);
     if (width) {
-      window.api.getSetting('global').then(g => {
-        const global = g || {};
-        global.sidebarWidth = width;
-        window.api.setSetting('global', global);
-      });
+      void saveGlobalSettings({ sidebarWidth: width }).catch(() => {});
     }
   });
 }
@@ -3104,6 +3187,7 @@ async function loadStartupProjects() {
 }
 
 window.api.onTriggerSessionAction(handleTriggerSessionAction);
+window.api.onProjectDeleteRecovery(reconcileProjectDeletions);
 loadStartupProjects();
 
 // Live-reload sidebar when filesystem changes are detected

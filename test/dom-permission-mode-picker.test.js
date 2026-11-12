@@ -22,6 +22,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
+const { loadAppFunctions } = require('./app-source');
 const { SETTING_DEFAULTS } = require('../public/setting-defaults');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -171,6 +172,9 @@ function setupSettingsPanelDom() {
     pretendToBeVisual: true,
   });
   const { window } = dom;
+  window.cachedAllProjects = [];
+  loadAppFunctions(dom.getInternalVMContext(), { sourcePath: path.join(PUBLIC_DIR, 'sidebar.js'),
+    functions: ['isProjectDeleting', 'projectDeletionKey', 'paintProjectDeletionBusy'], declarations: ['deletingProjectKeys', 'projectDeletionUnavailable'] });
 
   window.api = new Proxy({}, {
     get(_t, prop) {

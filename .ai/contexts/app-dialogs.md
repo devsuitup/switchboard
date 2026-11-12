@@ -1,5 +1,13 @@
 # Renderer modal stack and questions
 
+Project deletion uses `showChoiceDialog` with `onChange`, `planDetails` and
+`planUnavailable`. Details are literal text, applied only after request sequence
+and current-answer matching. A reason keeps Confirm disabled while preserving
+the inspectable plan. Checkbox `disabled/disabledReason` forces remembered true
+to unchecked without writing storage; acceptance remembers only enabled choices.
+Cancel, close and timeout never persist. Disconnected openers return focus to
+the surviving sidebar. Existing callers without these options keep their queue.
+
 `public/modal-stack.js` loads before every renderer consumer. It owns the modal stack and the only modal `keydown` listener, installed on `document` in capture phase. Each modal calls `registerModal({ overlay, cancel, enter, bodyEnter })` after mounting and calls the returned unregister function on every close path. The stack's last registration owns the keys; neither DOM class order nor the current event target chooses another modal.
 
 Registered surfaces are the choice dialog (including `appConfirm` and `appAlert`), New Session, Resume, remote launch, Send a prompt, Add Project, dispatch-agent, schedule creation, the unsaved-edits guard, session/worktree deletion, Touched info, What's new, and fullscreen transcript images. The New session popover is a menu and retains its own arrow-key navigation.
@@ -30,7 +38,7 @@ The argument is a frozen snapshot of checkbox booleans and, for radio dialogs,
 compute a preview, with no destructive effects. Its resolved value is an opaque
 plan (for example `{ token, details }`); primary acceptance returns
 `{ ...answers, plan }`. Choice ids must not use the reserved `plan` or `choice`
-keys. No caller uses this hook yet; project deletion will integrate it in #474 A4.
+keys. Project deletion uses this hook for its matching preview token and full details.
 When the hook is set, a reserved checkbox id rejects the opening promise before
 mounting or registering a modal. Dynamic labels and danger are also evaluated
 before mounting, so an initialization failure leaves no visible or registered
@@ -63,6 +71,10 @@ gates primary acceptance only. Without `onChange`, result shapes, remembered
 answers, focus, dynamic labels/danger, queueing and cancellation are unchanged.
 
 ## Question queue and the unsaved guard
+
+`fallbackFocus: () => element` opts into focus recovery when `returnFocus` is
+gone. Project deletion uses the sidebar container. Other choice-dialog callers
+keep their existing focus behavior without this option.
 
 `showChoiceDialog({ replace: true })` is the one way to jump the queue: it cancels the open choice dialog (resolving it as Cancel) and enqueues its question at the front (`enqueueModalQuestion(open, { front: true })`). `closeWith`, a promise, closes the dialog with the value it resolves to; both paths close through the same function that unregisters from the modal stack. The window-close question (#478, [window-frame](window-frame.md), "Closing the window") uses both.
 

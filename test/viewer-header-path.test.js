@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
+const { loadAppFunctions } = require('./app-source');
 
 const source = name => fs.readFileSync(path.join(__dirname, '../public', name), 'utf8');
 
@@ -36,6 +37,9 @@ test('Settings selects retain their alias and carry the shared select class when
   { url: 'http://localhost/', runScripts: 'outside-only' });
   try {
     const w = dom.window;
+    w.cachedAllProjects = [];
+    loadAppFunctions(dom.getInternalVMContext(), { sourcePath: path.join(__dirname, '../public/sidebar.js'),
+      functions: ['isProjectDeleting', 'projectDeletionKey', 'paintProjectDeletionBusy'], declarations: ['deletingProjectKeys', 'projectDeletionUnavailable'] });
     w.api = { getSetting: async () => ({}), getShellProfiles: async () => [], getAppVersion: async () => '1.0.0', onUpdaterEvent() {} };
     w.shortProjectPath = p => p;
     w.PERMISSION_MODES = [{ value: null }];
