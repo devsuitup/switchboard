@@ -150,11 +150,24 @@ restores it. Previously hidden projects appear here too, with default settings
 because the old Hide action already removed their settings. A remote entry
 includes its host alias; unarchiving it does not register a local schedule.
 
-**Delete Project** is a separate destructive action in Project Settings. Its
-in-app confirmation names the project settings, cached sessions and search
-index, and schedule registration that will be removed. It deletes no project
-folder, session file or schedule file. The project stays out of the sidebar;
-adding or unarchiving it again rebuilds the cache with default settings.
+**Delete Project** opens the same preview as **Delete** on the project header.
+Choose whether to discard session names, pins and app metadata (initially off)
+and project settings (initially on when available). Unselected session metadata
+is archived. Shared path-only settings cannot be deleted. Only confirmed,
+available choices are remembered; Cancel changes nothing.
+
+The preview shows the full host and path, counts, and expandable complete
+targets and effects. Project files, transcripts, schedules, memory, `.work-files`
+and nested worktrees stay on disk. Kept schedules may reactivate on re-add;
+retained transcripts can restore their titles. Background jobs must be stopped
+from the Agents view first. Local terminal stopping for deletion requires Windows;
+on other platforms stop the terminals first and reopen the preview.
+
+An unresolved deletion offers **Check deletion state**, without replaying it.
+A partial result offers **Review remaining deletion** for a fresh preview.
+If recovery is unavailable, deletion is unavailable for all projects until it
+finishes; reopen Delete or check the announced operation to retry. A completed
+deletion whose views failed to refresh offers **Reload window**.
 
 Project Archive stays in effect until restored explicitly. It differs from
 [Archive folder](session-browser.md#archive-a-folder), which returns on new

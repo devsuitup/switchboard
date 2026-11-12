@@ -2879,3 +2879,13 @@ committed deletion. Existing computed effects retain WRITER_STALE precedence.
 ACK or positively reconciled committed status supplies exact invalidations to
 the facade observer; main touched state and renderer pending saves remain A4c/d.
 See [project-delete.md](project-delete.md) for ownership, recovery and budget limits.
+# Project deletion renderer boundary (#474 A4d)
+
+The sidebar and Settings share a full-preview token controller. Committed ACKs
+remove exact tabs and pending/dormant restore entries; a renderer tombstone
+filters saved sets and late restore continuations by host, path and session ID.
+Whole-global working-set, sidebar-width and Settings writes share a serial
+chain, with a deletion generation checked after reads so stale snapshots cannot
+resurrect hidden state. Deletion drains prior submissions before planning.
+Unknown outcomes reconcile without replay; historical committed receipts refresh
+without closing re-added sessions. See [project-delete.md](project-delete.md).

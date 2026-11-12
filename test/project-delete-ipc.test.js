@@ -135,6 +135,15 @@ let serviceModule, ipcModule;
 try { serviceModule = require('../src/main/projects/project-delete'); } catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; }
 try { ipcModule = require('../src/main/projects/project-delete-ipc'); } catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; }
 
+test('known operation state and recovery announcement identify the exact host and path', supported, async t => {
+  const h = await setup(t);
+  const preview = await h.preview();
+  const result = await h.execute(preview);
+  const state = await h.invoke('project-delete-state', { operationId: result.operationId });
+  assert.deepEqual({ host: state.host, projectPath: state.projectPath }, { host: null, projectPath: preview.plan.project.projectPath });
+  assert.deepEqual(h.registration.rebind(), [{ operationId: result.operationId, host: null, projectPath: preview.plan.project.projectPath }]);
+});
+
 for (const failedRead of [2, 3]) test(`post-stop revalidation read ${failedRead} is not an ownership change`, supported, async t => {
   const h = await setup(t, true);
   const p = await h.preview(); assert.ok(p.token);
@@ -386,7 +395,8 @@ test('recovery acquisition failure cannot leave an unfenced operation registered
   const service = serviceModule.createProjectDeleteService(h.serviceDeps), sender = { valid: () => true };
   await assert.rejects(service.initialize());
   assert.deepEqual(service.rebind(sender), [], 'failed acquisition must not expose an unowned recovery operation');
-  held.release(); await service.initialize(); assert.deepEqual(service.rebind(sender), [id]); service.dispose();
+  held.release(); await service.initialize(); assert.deepEqual(service.rebind(sender), [{ operationId: id, host: null,
+    projectPath: require('../src/main/projects/project-delete-identity').identity(project).projectPath }]); service.dispose();
 });
 
 test('worker replacement seals an interrupted command and service only reconciles', supported, async t => {

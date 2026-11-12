@@ -45,6 +45,32 @@ function planRequests() {
 
 const flushPlans = () => new Promise(resolve => setImmediate(resolve));
 
+test('disabled remembered checkbox is unchecked, explains why, and Cancel preserves storage', async t => {
+  const ctx = setupSidebarDom(); t.after(() => ctx.destroy());
+  ctx.window.localStorage.setItem('k.a', '1');
+  const pending = open(ctx, { choices: [{ id: 'a', label: 'Settings', rememberKey: 'k.a', disabled: true, disabledReason: 'Shared key' }] });
+  assert.equal(box(ctx, 'a').disabled, true);
+  assert.equal(box(ctx, 'a').checked, false);
+  assert.match(shown(ctx).textContent, /Shared key/);
+  cancelBtn(ctx).click(); await pending;
+  assert.equal(ctx.window.localStorage.getItem('k.a'), '1');
+});
+
+test('only latest matching plan renders literal complete details and controls confirmation', async t => {
+  const ctx = setupSidebarDom(); t.after(() => ctx.destroy());
+  const { requests, onChange } = planRequests();
+  const pending = open(ctx, { onChange, planDetails: plan => plan.details, planUnavailable: plan => plan.reason });
+  box(ctx, 'a').click();
+  requests[1].resolve({ details: '<img src=x onerror=alert(1)> last target 12', reason: 'Stop job in Agents first' });
+  await flushPlans();
+  assert.match(shown(ctx).textContent, /last target 12/);
+  assert.equal(shown(ctx).querySelector('img'), null);
+  assert.equal(confirmBtn(ctx).disabled, true);
+  requests[0].resolve({ details: 'stale target' }); await flushPlans();
+  assert.doesNotMatch(shown(ctx).textContent, /stale target/);
+  cancelBtn(ctx).click(); await pending;
+});
+
 function planClock(ctx, t) {
   let now = 0;
   let id = 0;

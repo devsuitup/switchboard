@@ -4,11 +4,11 @@
 
 This file is the **canonical inventory** of the IPC surface. When you add a new IPC, you change three places — main handler, preload bridge, renderer caller — and every IPC name should appear here.
 
-## Internal project deletion callbacks (#474 A4c4)
+## Project deletion callbacks (#474 A4c4/A4d)
 
 `registerProjectDeleteIpc({ipcMain, service, getMainWindow, announce})` is an
 internal factory called by project-delete-main after background IPC setup.
-Preload and renderer callers remain A4d. It registers:
+Preload exposes previewProjectDelete, deleteProject and projectDeleteState. It registers:
 
 - `preview-project-delete({projectPath, folderKey?, options})`: five explicit
   boolean options, inspectable plan and token, or token:null on refusal.
@@ -16,6 +16,8 @@ Preload and renderer callers remain A4d. It registers:
   truthful completed/kept/failed/skipped/stopped lists; no extra options.
 - `project-delete-state({operationId})`: only registry-authorized operation IDs,
   with committed/partial/unknown/notStarted state and receipt invalidation.
+  Known views also include `{host, projectPath}` from their registry project;
+  host is null for local or the remote alias, and projectPath is canonical.
 
 `attach(win)` requires the current trusted main window with its app URL already
 loaded, captures the actual webContents/mainFrame and URL, and revokes authority
@@ -23,7 +25,8 @@ on committed cross-document main-frame navigation (`did-navigate`), renderer exi
 destruction or window replacement. Results recheck authority after awaits.
 Cancelled `did-start-navigation` events leave the current document authorized.
 `did-finish-load` binds a replacement only at the captured trusted URL, then calls `announce` with
-existing main-owned operation IDs. Internal `rebind()` returns the current IDs
+existing main-owned operations. Internal `rebind()` returns
+`[{operationId,host,projectPath}]`
 for main to announce after recovery. Old documents cannot read
 those results and tokens cannot cross document/boot boundaries. Dispose removes
 the exact callbacks and listeners without releasing main-owned operations.
@@ -36,16 +39,18 @@ callbacks with retryable NOT_READY, and awaits a separate bounded recovery
 barrier before scheduler/trigger startup. Writer bootstrap retries recovery;
 shutdown unregisters listeners without dropping unresolved service ownership.
 
-The internal `project-delete-recovery` notification carries `{operationIds}`;
+The `project-delete-recovery` notification carries `{operations:[{operationId,host,projectPath}]}`
+and is exposed as `onProjectDeleteRecovery(callback)`;
 `project-delete-schedules-changed` carries `{invalidation, operationId,
-expectedProjectEpoch, committedRevision}`. Neither has a preload subscription
-yet. Project changes use the existing throttled project notification. Both sinks
+expectedProjectEpoch, committedRevision}` and remains internal. Project changes
+use the existing throttled project notification. Both sinks
 are behind a fresh committed-receipt/current-epoch check and main-owned per-sink
 operation/epoch/revision deduplication. See project-delete.md for restart and
 startup deadline limits. Legacy remove-project remains a separate contract.
 
-Legacy `remove-project(projectPath, folderKey)` and its existing preload
-contract are unchanged. Service sequencing and recovery are documented in
+Legacy `remove-project(projectPath, folderKey)` remains available under the
+explicit preload name `removeProjectLegacy`; both new UI entries use token-shaped
+`deleteProject({token,fingerprint})`. Service sequencing and recovery are documented in
 [project-delete.md](project-delete.md). Main composition must await bounded
 initial recovery before enabling these callbacks and retain #1090's background
 worker-incarnation gate.

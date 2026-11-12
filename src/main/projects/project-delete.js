@@ -39,6 +39,7 @@ function createProjectDeleteService(deps) {
   }
   function view(op) {
     return { ...failure('UNKNOWN'), operationId: op.id, state: 'unknown', ...op.result,
+      host: op.project.alias, projectPath: op.project.projectPath,
       stopped: structuredClone(op.stopped), ...(op.historyUnknown ? { stoppedHistoryUnknown: true } : {}) };
   }
   function acquire(op) {
@@ -254,7 +255,7 @@ function createProjectDeleteService(deps) {
     if (!valid(sender)) return [];
     prune();
     for (const op of operations.values()) { op.authorities.clear(); op.authorities.add(sender); }
-    return [...operations.keys()];
+    return [...operations.values()].map(op => ({ operationId: op.id, host: op.project.alias, projectPath: op.project.projectPath }));
   }
   function initialize() {
     if (initializing) return initializing;

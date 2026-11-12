@@ -1,5 +1,13 @@
 # Renderer modal stack and questions
 
+Project deletion uses `showChoiceDialog` with `onChange`, `planDetails` and
+`planUnavailable`. Details are literal text, applied only after request sequence
+and current-answer matching. A reason keeps Confirm disabled while preserving
+the inspectable plan. Checkbox `disabled/disabledReason` forces remembered true
+to unchecked without writing storage; acceptance remembers only enabled choices.
+Cancel, close and timeout never persist. Disconnected openers return focus to
+the surviving sidebar. Existing callers without these options keep their queue.
+
 `public/modal-stack.js` loads before every renderer consumer. It owns the modal stack and the only modal `keydown` listener, installed on `document` in capture phase. Each modal calls `registerModal({ overlay, cancel, enter, bodyEnter })` after mounting and calls the returned unregister function on every close path. The stack's last registration owns the keys; neither DOM class order nor the current event target chooses another modal.
 
 Registered surfaces are the choice dialog (including `appConfirm` and `appAlert`), New Session, Resume, remote launch, Send a prompt, Add Project, dispatch-agent, schedule creation, the unsaved-edits guard, session/worktree deletion, Touched info, What's new, and fullscreen transcript images. The New session popover is a menu and retains its own arrow-key navigation.
