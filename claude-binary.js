@@ -55,13 +55,12 @@ function resolveWindowsClaude(argv, env = {}, deps = {}) {
   return { program: env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', `"${line}"`], verbatim: true };
 }
 
-function resolveCmdLaunch(env = {}, { cwd, wrapped = false, exists = p => fs.existsSync(p) } = {}) {
-  if (wrapped) return { program: 'claude', passes: 1 };
+function cmdEscapePasses(env = {}, { cwd, wrapped = false, exists = p => fs.existsSync(p) } = {}) {
+  if (wrapped) return 1;
   const found = findOnPath('claude', {
     pathEnv: [cwd, env.PATH || env.Path].filter(Boolean).join(';'), pathExt: env.PATHEXT || '.COM;.EXE;.BAT;.CMD', exists, sep: ';',
   });
-  if (!found) return { program: 'claude', passes: 1 };
-  return { program: found, passes: /\.(cmd|bat)$/i.test(found) ? 2 : 1 };
+  return /\.(cmd|bat)$/i.test(found || '') ? 2 : 1;
 }
 
-module.exports = { resolveWindowsClaude, escapeForCmd, resolveCmdLaunch };
+module.exports = { resolveWindowsClaude, escapeForCmd, cmdEscapePasses };

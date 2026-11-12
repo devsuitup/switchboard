@@ -274,14 +274,15 @@ doubled single quotes, cmd.exe caret escaping via `escapeForCmd`) and the
 sandbox/prefix wrappers. For cmd.exe the interactive launch gives node-pty one
 command line, `/s /c "<command>"` (`shellArgs(..., { pty: true })`), so node-pty
 adds no quoting of its own; `/d` is not passed, so Command Processor AutoRun
-still runs. The `claude` found before the shell starts (launch directory first, then
-PATH, in PATHEXT order) is run by its absolute path, escaped like an argument, so the
-program cmd executes and the escaping depth cannot disagree whatever AutoRun does to
-PATH: arguments are escaped once for an executable and twice for a `.cmd`/`.bat`
-shim, whose `%*` re-parses them (`resolveCmdLaunch`, `claudeCommandForShell`). When
-nothing is found the bare `claude` is kept with one pass. A launch prefix (trimmed;
-whitespace-only is none) runs the bare `claude` itself and its own parsing is not
-modelled: one pass is an assumption, not a qualification.
+still runs. The command keeps the bare `claude`. Arguments are escaped once when
+the `claude` that Switchboard's own environment resolves (launch directory first, then
+PATH, in PATHEXT order) is an executable or nothing is found, and twice when it is a
+`.cmd`/`.bat` shim, whose `%*` re-parses them (`cmdEscapePasses`). A launch prefix
+(trimmed; whitespace-only means none) runs the bare `claude` itself and is escaped
+once. The depth is a prediction made before cmd starts: it can be wrong when AutoRun
+changes PATH, when nothing is found and a shim appears at startup, and for a prefix
+whose own program parses the arguments differently. Starting `claude` on Windows
+without the cmd layer is tracked in devsuitup/switchboard#1101.
 
 Qualification: `test/trigger-name-transport.test.js` runs the real encoders
 through the extracted `open-terminal` handler and an injected PTY edge. On Linux
@@ -291,7 +292,7 @@ such shell runs there). `test/trigger-name-transport-windows.test.js` runs only
 on Windows (the `windows-2022` leg of the test workflow, selected by
 `scripts/platform-tests.js`): it serializes the real launch arguments with
 node-pty's `argsToCommandLine`, starts `cmd.exe` with that exact command line and
-compares the argv a disposable echo executable and `claude.cmd` / `claude.bat` shims received, including a launch-directory executable shadowing a PATH shim and the reverse,
+compares the argv a disposable echo executable and `claude.cmd` / `claude.bat` shims received, including a launch-directory executable shadowing a PATH shim and the reverse, a whitespace-only prefix, and a native wrapper prefix over resume and fork options,
 with the input. Neither file is a live Claude Code or ConPTY qualification;
 PowerShell and nushell remain unexecuted.
 

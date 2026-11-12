@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { escapeForCmd, resolveCmdLaunch } = require('../../../claude-binary');
+const { escapeForCmd, cmdEscapePasses } = require('../../../claude-binary');
 
 // --- Cross-platform shell resolution ---
 const isWindows = process.platform === 'win32';
@@ -186,14 +186,13 @@ function isCmdShell(shellPath) {
   return base === 'cmd.exe' || base === 'cmd';
 }
 
-// launch ({ env, cwd, wrapped }) receives the cmd.exe resolution, which shellArgs then uses to run that file.
-function quoteArgvForShell(shellPath, argv, launch) {
-  if (launch?.env && isCmdShell(shellPath)) launch.resolved = resolveCmdLaunch(launch.env, launch);
-  return argv.map(a => quoteArgForShell(shellPath, a, launch?.resolved?.passes)).join(' ');
+function quoteArgvForShell(shellPath, argv, { env, cwd, wrapped } = {}) {
+  const passes = env && isCmdShell(shellPath) ? cmdEscapePasses(env, { cwd, wrapped }) : 1;
+  return argv.map(a => quoteArgForShell(shellPath, a, passes)).join(' ');
 }
 
 // Returns spawn args appropriate for the resolved shell
-function shellArgs(shellPath, cmd, extraArgs, { pty = false, launch } = {}) {
+function shellArgs(shellPath, cmd, extraArgs, { pty = false } = {}) {
   const base = path.basename(shellPath).toLowerCase();
   const isBashLike = base.includes('bash') || base.includes('zsh') || base === 'sh';
   const isFish = base === 'fish';
@@ -211,10 +210,7 @@ function shellArgs(shellPath, cmd, extraArgs, { pty = false, launch } = {}) {
     if (isFish) return ['-l', '-c', cmd];
     if (isNushell) return ['-l', '-c', cmd];
     if (base.includes('powershell') || base.includes('pwsh')) return ['-NoLogo', '-Command', cmd];
-    if (!pty || !isCmdShell(shellPath)) return ['/C', cmd];
-    const { program, passes } = launch?.resolved || {};
-    const line = program && program !== 'claude' && cmd.startsWith('claude ') ? escapeForCmd(program, passes) + cmd.slice(6) : cmd;
-    return `/s /c "${line}"`;
+    return pty && isCmdShell(shellPath) ? `/s /c "${cmd}"` : ['/C', cmd];
   }
   if (isBashLike) return ['-l', '-i'];
   if (isFish) return ['-l', '-i'];

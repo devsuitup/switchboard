@@ -9,7 +9,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { launch, ID } = require('./fixtures/trigger-name-launch.cjs');
 const profiles = require('../src/main/terminals/shell-profiles');
-const { resolveWindowsClaude, resolveCmdLaunch } = require('../claude-binary');
+const { resolveWindowsClaude, cmdEscapePasses } = require('../claude-binary');
 
 const NAMES = ['smithy hardening', `it's "quoted"`, 'a\\', 'C:\\dir\\', 'say "hi\\"', '$HOME `id` $(id) ${x} %PATH% !x ^y',
   'a&b|c>d<e (f) ; g', '--dangerously-skip-permissions', '-n', 'cafe\u0301 \u{1F600}', "'; touch pwned; '", '"; touch pwned; "'];
@@ -128,65 +128,54 @@ test('the cmd.exe launch does not disable the Command Processor AutoRun commands
   assert.match(cmd.args, /^\/s \/c "claude /);
 });
 const exists = (...files) => file => files.includes(file);
-const launchOf = (env, options) => resolveCmdLaunch(env, options);
-test('cmd launches the claude it finds, by absolute path, with the escaping depth of that file', () => {
+test('cmd escaping depth follows the command cmd will execute', () => {
   const env = { PATH: 'C:\\bin' };
-  assert.deepEqual(launchOf(env, { exists: exists('C:\\bin\\claude.cmd') }), { program: 'C:\\bin\\claude.cmd', passes: 2 });
-  assert.deepEqual(launchOf(env, { exists: exists('C:\\bin\\claude.bat') }), { program: 'C:\\bin\\claude.bat', passes: 2 });
-  assert.deepEqual(launchOf(env, { exists: exists('C:\\bin\\claude.exe') }), { program: 'C:\\bin\\claude.exe', passes: 1 });
-  assert.deepEqual(launchOf({ PATH: 'C:\\none' }, { exists: exists('C:\\bin\\claude.exe') }), { program: 'claude', passes: 1 });
-  assert.deepEqual(launchOf(env, { cwd: 'C:\\project', exists: exists('C:\\project\\claude.exe', 'C:\\bin\\claude.cmd') }),
-    { program: 'C:\\project\\claude.exe', passes: 1 });
-  assert.deepEqual(launchOf(env, { cwd: 'C:\\project', exists: exists('C:\\project\\claude.cmd', 'C:\\bin\\claude.exe') }),
-    { program: 'C:\\project\\claude.cmd', passes: 2 });
-  assert.deepEqual(launchOf({ PATH: 'C:\\bin', PATHEXT: '.CMD;.EXE' }, { exists: exists('C:\\bin\\claude.exe', 'C:\\bin\\claude.cmd') }),
-    { program: 'C:\\bin\\claude.cmd', passes: 2 });
-  assert.deepEqual(launchOf(env, { exists: exists('C:\\bin\\claude.exe', 'C:\\bin\\claude.cmd') }), { program: 'C:\\bin\\claude.exe', passes: 1 });
+  assert.equal(cmdEscapePasses(env, { exists: exists('C:\\bin\\claude.cmd') }), 2);
+  assert.equal(cmdEscapePasses(env, { exists: exists('C:\\bin\\claude.bat') }), 2);
+  assert.equal(cmdEscapePasses(env, { exists: exists('C:\\bin\\claude.exe') }), 1);
+  assert.equal(cmdEscapePasses({ PATH: 'C:\\none' }, { exists: exists('C:\\bin\\claude.exe') }), 1);
+  assert.equal(cmdEscapePasses(env, { cwd: 'C:\\project', exists: exists('C:\\project\\claude.exe', 'C:\\bin\\claude.cmd') }), 1);
+  assert.equal(cmdEscapePasses(env, { cwd: 'C:\\project', exists: exists('C:\\project\\claude.cmd', 'C:\\bin\\claude.exe') }), 2);
+  assert.equal(cmdEscapePasses(env, { cwd: 'C:\\project', exists: exists('C:\\bin\\claude.cmd') }), 2);
+  assert.equal(cmdEscapePasses({ PATH: 'C:\\bin', PATHEXT: '.CMD;.EXE' }, { exists: exists('C:\\bin\\claude.exe', 'C:\\bin\\claude.cmd') }), 2);
+  assert.equal(cmdEscapePasses(env, { exists: exists('C:\\bin\\claude.exe', 'C:\\bin\\claude.cmd') }), 1);
 });
-test('a launch prefix, which runs the bare claude command itself, is escaped once', () => {
-  assert.deepEqual(launchOf({ PATH: 'C:\\bin' }, { wrapped: true, exists: exists('C:\\bin\\claude.cmd') }), { program: 'claude', passes: 1 });
+test('a launch prefix, which parses the arguments first, is escaped once', () => {
+  assert.equal(cmdEscapePasses({ PATH: 'C:\\bin' }, { wrapped: true, exists: exists('C:\\bin\\claude.cmd') }), 1);
 });
-test('shellArgs runs the resolved absolute program, quoted like an argument, for cmd.exe only', t => {
-  const dir = 'C:\\Program Files\\cli & co';
-  claudeOnDisk(t, `${dir}\\claude.exe`);
-  const launch = { env: { PATH: dir } };
-  const quoted = profiles.quoteArgvForShell('cmd.exe', ['a b'], launch);
-  assert.equal(quoted, '^"a^ b^"');
-  assert.equal(profiles.shellArgs('cmd.exe', `claude ${quoted}`, undefined, { pty: true, launch }),
-    '/s /c "^"C:\\Program^ Files\\cli^ ^&^ co\\claude.exe^" ^"a^ b^""');
-  const none = { env: { PATH: 'C:\\none' } };
-  assert.equal(profiles.shellArgs('cmd.exe', `claude ${profiles.quoteArgvForShell('cmd.exe', ['a b'], none)}`, undefined, { pty: true, launch: none }),
-    '/s /c "claude ^"a^ b^""');
-  assert.equal(profiles.quoteArgvForShell('/bin/bash', ['a b'], { env: { PATH: dir } }), "'a b'");
+test('quoteArgvForShell applies the resolved depth to cmd.exe only', () => {
+  const env = { PATH: 'C:\\none' };
+  assert.equal(profiles.quoteArgvForShell('cmd.exe', ['a b'], { env }), '^"a^ b^"');
+  assert.equal(profiles.quoteArgvForShell('/bin/bash', ['a b'], { env }), "'a b'");
 });
 function claudeOnDisk(t, ...files) {
   const original = fs.existsSync;
   t.mock.method(fs, 'existsSync', file => files.includes(file) || original(file));
 }
-test('the cmd.exe launch runs the claude it found by absolute path, escaped for that file', async t => {
+test('the cmd.exe launch picks its escaping depth from the command cmd runs in the launch directory', async t => {
   const env = { PATH: 'C:\\bin' }; const cwd = path.win32.join(process.cwd(), 'claude.exe');
   claudeOnDisk(t, 'C:\\bin\\claude.cmd');
-  const shim = (await launch('cmd.exe', { name: 'a b', env })).args;
-  assert.match(shim, /^\/s \/c "\^\^\^"C:\\bin\\claude\.cmd\^\^\^" \^\^\^"--session-id\^\^\^"/);
-  assert.match(shim, /\^\^\^"--name\^\^\^" \^\^\^"a\^\^\^ b\^\^\^"/);
+  assert.match((await launch('cmd.exe', { name: 'a b', env })).args, /\^\^\^"--name\^\^\^" \^\^\^"a\^\^\^ b\^\^\^"/);
   claudeOnDisk(t, 'C:\\bin\\claude.cmd', cwd);
-  const exe = (await launch('cmd.exe', { name: 'a b', env })).args;
-  assert.match(exe, /^\/s \/c "\^"[^ ]*claude\.exe\^" \^"--session-id\^"/);
-  assert.match(exe, / \^"--name\^" \^"a\^ b\^"/);
+  assert.match((await launch('cmd.exe', { name: 'a b', env })).args, / \^"--name\^" \^"a\^ b\^"/);
 });
-test('the cmd.exe launch keeps the bare claude command when nothing is found', async () => {
-  const args = (await launch('cmd.exe', { name: 'a b', env: { PATH: 'C:\\none' } })).args;
-  assert.match(args, /^\/s \/c "claude \^"--session-id\^"/);
-});
-test('a launch prefix keeps the bare claude command and the single escaping depth under cmd.exe', async t => {
+test('a launch prefix keeps the single escaping depth under cmd.exe', async t => {
   claudeOnDisk(t, 'C:\\bin\\claude.cmd');
   const spawned = await launch('cmd.exe', { name: 'a b', env: { PATH: 'C:\\bin' }, options: { preLaunchCmd: 'FOO=1' } });
   assert.match(spawned.args, /^\/s \/c "FOO=1 claude \^"--session-id\^"/);
 });
-test('a prefix of only whitespace is not a wrapper', async t => {
+test('a prefix of only whitespace is not a wrapper and is not prepended', async t => {
   claudeOnDisk(t, 'C:\\bin\\claude.cmd');
   const spawned = await launch('cmd.exe', { name: 'a b', env: { PATH: 'C:\\bin' }, options: { preLaunchCmd: '   ' } });
-  assert.match(spawned.args, /^\/s \/c "\^\^\^"C:\\bin\\claude\.cmd\^\^\^" \^\^\^"--session-id/);
+  assert.match(spawned.args, /^\/s \/c "claude \^\^\^"--session-id\^\^\^"/);
+});
+test('a wrapped cmd.exe resume and fork escape every existing option once', async () => {
+  const env = { PATH: 'C:\\none' };
+  const resume = await launch('cmd.exe', { isNew: false, transcript: true, env, options: { preLaunchCmd: 'wrapper.exe',
+    addDirs: 'C:\\space dir\\', appendSystemPrompt: 'safe & echo MUTATED' } });
+  assert.equal(resume.args, `/s /c "wrapper.exe claude ^"--resume^" ^"${ID}^" ^"--add-dir^" ^"C:\\space^ dir\\\\^" ^"--append-system-prompt^" ^"safe^ ^&^ echo^ MUTATED^""`);
+  const fork = await launch('cmd.exe', { isNew: true, env, options: { preLaunchCmd: 'wrapper.exe', forkFrom: 'src id', appendSystemPrompt: 'a|b %PATH%', addDirs: 'C:\\x' } });
+  assert.equal(fork.args, '/s /c "wrapper.exe claude ^"--resume^" ^"src^ id^" ^"--fork-session^" ^"--add-dir^" ^"C:\\x^" ^"--append-system-prompt^" ^"a^|b^ ^%PATH^%^""');
 });
 test('WSL receives the POSIX encoding through the distribution shell', async () => {
   const wsl = await launch('wsl.exe', { name: "it's" });

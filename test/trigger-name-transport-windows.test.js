@@ -30,28 +30,46 @@ const ECHO_JS = 'require("fs").writeFileSync(process.env.SB_ARGV_OUT, JSON.strin
 
 const bins = {};
 const SHIMS = { cmd: 'claude.cmd', bat: 'claude.bat' };
+const WRAPPER_CS = `using System; using System.Diagnostics; using System.Text;
+class W {
+  static string Q(string a) {
+    if (a.Length > 0 && a.IndexOfAny(new[] { ' ', '\\t', '"' }) < 0) return a;
+    var b = new StringBuilder("\\""); int bs = 0;
+    foreach (char c in a) {
+      if (c == '\\\\') bs++;
+      else if (c == '"') { b.Append('\\\\', bs * 2 + 1); b.Append('"'); bs = 0; }
+      else { b.Append('\\\\', bs); bs = 0; b.Append(c); }
+    }
+    b.Append('\\\\', bs * 2); b.Append('"'); return b.ToString();
+  }
+  static int Main(string[] a) {
+    var rest = new StringBuilder();
+    for (int i = 1; i < a.Length; i++) { if (i > 1) rest.Append(' '); rest.Append(Q(a[i])); }
+    var p = Process.Start(new ProcessStartInfo(a[0], rest.ToString()) { UseShellExecute = false });
+    p.WaitForExit(); return p.ExitCode;
+  }
+}`;
 function makeBin(kind) {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), `sb-argv-${kind}-`)));
   if (SHIMS[kind]) {
     fs.writeFileSync(path.join(dir, 'echo.js'), ECHO_JS);
     fs.writeFileSync(path.join(dir, SHIMS[kind]), `@echo off\r\n"${process.execPath}" "%~dp0echo.js" %*\r\n`);
   } else {
-    fs.writeFileSync(path.join(dir, 'echo.cs'), CS);
+    fs.writeFileSync(path.join(dir, 'echo.cs'), kind === 'wrapper' ? WRAPPER_CS : CS);
     const built = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
       'Add-Type -TypeDefinition (Get-Content -Raw -LiteralPath $env:SB_CS) -OutputType ConsoleApplication -OutputAssembly $env:SB_EXE'],
-    { encoding: 'utf8', env: { ...process.env, SB_CS: path.join(dir, 'echo.cs'), SB_EXE: path.join(dir, 'claude.exe') } });
+    { encoding: 'utf8', env: { ...process.env, SB_CS: path.join(dir, 'echo.cs'), SB_EXE: path.join(dir, kind === 'wrapper' ? 'wrapper.exe' : 'claude.exe') } });
     assert.equal(built.status, 0, built.stderr + built.stdout);
   }
   return dir;
 }
-before(() => { if (!skip) for (const kind of ['exe', 'cmd', 'bat']) bins[kind] = makeBin(kind); });
+before(() => { if (!skip) for (const kind of ['exe', 'cmd', 'bat', 'wrapper']) bins[kind] = makeBin(kind); });
 after(() => { for (const dir of Object.values(bins)) fs.rmSync(dir, { recursive: true, force: true }); });
 
-let lastLine = '';
-async function runThroughNodePty(kind, request, { cwdKind, runFirst = [] } = {}) {
+async function runThroughNodePty(kind, request, { cwdKind, extraPath } = {}) {
   const out = path.join(bins[kind], 'argv.json');
   fs.rmSync(out, { force: true });
-  const env = { ...process.env, PATH: `${bins[kind]};${process.env.PATH}`, SB_ARGV_OUT: out };
+  const env = { ...process.env, PATH: `${extraPath ? bins[extraPath] + ';' : ''}${bins[kind]};${process.env.PATH}`, SB_ARGV_OUT: out };
   const shell = process.env.ComSpec;
   const original = process.cwd();
   if (cwdKind) process.chdir(bins[cwdKind]);
@@ -60,9 +78,7 @@ async function runThroughNodePty(kind, request, { cwdKind, runFirst = [] } = {})
     const { argsToCommandLine } = require('node-pty/lib/windowsPtyAgent');
     const line = argsToCommandLine(shell, spawned.args);
     const rest = line.slice(argsToCommandLine(shell, []).length + 1);
-    lastLine = line;
-    const runEnv = { ...env, PATH: `${runFirst.map(other => bins[other]).join(';')};${env.PATH}` };
-    const ran = spawnSync(shell, [rest], { windowsVerbatimArguments: true, encoding: 'utf8', env: runEnv, cwd: process.cwd() });
+    const ran = spawnSync(shell, [rest], { windowsVerbatimArguments: true, encoding: 'utf8', env, cwd: process.cwd() });
     assert.equal(ran.status, 0, `${line}\n${ran.stdout}${ran.stderr}`);
     return JSON.parse(fs.readFileSync(out, 'utf8'));
   } finally { process.chdir(original); }
@@ -103,12 +119,20 @@ for (const [pathKind, cwdKind] of [['cmd', 'exe'], ['bat', 'exe'], ['exe', 'cmd'
 }
 
 for (const kind of ['exe', 'cmd', 'bat']) {
-  const others = ['exe', 'cmd', 'bat'].filter(other => other !== kind);
-  test(`cmd.exe runs the claude.${kind} found before startup by absolute path even when startup puts other claude files first on PATH`, { skip, timeout: 60000 }, async () => {
-    assert.deepEqual(await runThroughNodePty(kind, { name: TRICKY.name }, { runFirst: others }), TRICKY.args);
-    assert.ok(lastLine.includes(path.join(bins[kind], `claude.${kind}`)), lastLine);
-  });
   test(`a prefix of only whitespace leaves a claude.${kind} launch exact`, { skip, timeout: 60000 }, async () => {
     assert.deepEqual(await runThroughNodePty(kind, { name: TRICKY.name, options: { preLaunchCmd: '   ' } }), TRICKY.args);
+  });
+}
+const WRAPPED = [
+  ['a resume', { isNew: false, transcript: true, options: { addDirs: 'C:\\space dir\\', appendSystemPrompt: 'safe & echo MUTATED %PATH% ^ |<>' } },
+    ['--resume', ID, '--add-dir', 'C:\\space dir\\', '--append-system-prompt', 'safe & echo MUTATED %PATH% ^ |<>']],
+  ['a fork', { isNew: true, options: { forkFrom: 'src id', addDirs: 'C:\\x y', appendSystemPrompt: 'say "hi" & done\\' } },
+    ['--resume', 'src id', '--fork-session', '--add-dir', 'C:\\x y', '--append-system-prompt', 'say "hi" & done\\']],
+];
+for (const [label, request, expected] of WRAPPED) {
+  test(`a native wrapper receives ${label} arguments through cmd.exe and node-pty and hands claude.exe the exact argv`, { skip, timeout: 60000 }, async () => {
+    const wrapper = path.join(bins.wrapper, 'wrapper.exe');
+    const options = { ...request.options, preLaunchCmd: `"${wrapper}"` };
+    assert.deepEqual(await runThroughNodePty('exe', { ...request, options }), expected);
   });
 }

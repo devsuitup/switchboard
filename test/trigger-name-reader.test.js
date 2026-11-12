@@ -46,6 +46,10 @@ const changes = [
     const raw = JSON.parse(fs.readFileSync(descriptor, 'utf8')); delete raw.pid; fs.writeFileSync(descriptor, JSON.stringify(raw));
   }],
   ['the descriptor becomes unparseable', ({ descriptor }) => { fs.writeFileSync(descriptor, '{'); }],
+  ['the descriptor and the process are replaced by a self-consistent process with another start', ({ write, starts }) => {
+    starts[300] = '301'; write({ procStart: '301' });
+  }],
+  ['the descriptor changes its PID domain', ({ write }) => { write({ pidDomain: 'win32:unproven' }); }],
   ['the writer PID is reused', ({ starts }) => { starts[300] = '301'; }],
   ['the PTY anchor PID is reused', ({ starts }) => { starts[100] = '101'; }],
 ];

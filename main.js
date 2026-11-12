@@ -3242,7 +3242,6 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         }, 300);
       }
     } else {
-      const cmdLaunch = { env: cleanPtyEnv, cwd: spawnCwd, wrapped: !!String(sessionOptions?.preLaunchCmd ?? '').trim() };
       // Build claude command, using array to prevent accidental shell injection
       const claudeArgs = [];
       if (isAttach) {
@@ -3270,7 +3269,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
           name: triggerPermit?.name }));
       }
 
-      let claudeCmd = 'claude ' + quoteArgvForShell(shell, claudeArgs, cmdLaunch);
+      let claudeCmd = 'claude ' + quoteArgvForShell(shell, claudeArgs,
+        { env: cleanPtyEnv, cwd: spawnCwd, wrapped: !!String(sessionOptions?.preLaunchCmd ?? '').trim() });
 
       // Sandbox: run claude inside a bubblewrap sandbox that only exposes the
       // project directory and Claude's own config/state dirs. Linux only —
@@ -3290,7 +3290,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         if (!preCheck.ok) {
           return { ok: false, error: preCheck.error };
         }
-        if (cmdLaunch.wrapped) claudeCmd = pre + ' ' + claudeCmd;
+        if (pre.trim()) claudeCmd = pre + ' ' + claudeCmd;
       }
 
       // Start MCP server for this session so Claude CLI sends diffs/file opens to Switchboard
@@ -3357,7 +3357,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       launchStartedAt = Date.now();
       if (triggerPermit && (launchStartedAt >= triggerPermit.deadline || !unsavedGuard.launchAllowed()
         || !triggerRendererBridge.checkPermit(triggerRequestId))) return { ok: false, reason: 'session action timed out', error: 'session action timed out' };
-      ptyProcess = spawnPty(shell, shellArgs(shell, claudeCmd, shellExtraArgs, { pty: true, launch: cmdLaunch }), {
+      ptyProcess = spawnPty(shell, shellArgs(shell, claudeCmd, shellExtraArgs, { pty: true }), {
         name: 'xterm-256color',
         cols: spawnCols,
         rows: spawnRows,

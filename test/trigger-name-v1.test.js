@@ -392,9 +392,11 @@ test('the action hands the binding a callback that follows its deadline, cancell
   } });
   const r = await f.run('Task');
   assert.deepEqual(seen, [true, false]); assert.equal(r.actualName, null);
-  let allowed = true; const g = named({ observe: admit => { const before = admit(); allowed = false; return [before, admit()].join() && 'Task'; } });
+  let allowed = true; const cancelled = [];
+  const g = named({ observe: admit => { cancelled.push(admit()); allowed = false; cancelled.push(admit()); return 'Task'; } });
   g.ctx.lifecycle.launchAllowed = () => allowed;
   assert.equal((await g.new()).actualName, null);
+  assert.deepEqual(cancelled, [true, false]);
   const h = named({ observe: admit => { const before = admit(); h.session.generation = 8; seenTarget.push(before, admit()); return 'Task'; } });
   const seenTarget = [];
   await h.new();
