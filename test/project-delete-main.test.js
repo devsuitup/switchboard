@@ -101,6 +101,47 @@ async function setup(t, populated = false, overrides = {}) {
     replace() { win = windowFixture(); main.attach(win); load(); }, bootstrap() { for (const fn of bootListeners) fn(); } };
 }
 
+for (const delay of [4000, 8000]) test(`preview accepts background CLI after ${delay} ms within the overall deadline`, supported, async t => {
+  let entered, answer, timeout;
+  const started = new Promise(resolve => { entered = resolve; });
+  const h = await setup(t, false, { runClaude: (_args, opts) => {
+    timeout = opts.timeout; entered(); return new Promise(resolve => { answer = resolve; });
+  } });
+  h.load(); await h.main.startRecovery();
+  const pending = h.preview(); await started;
+  assert.equal(timeout, 10000, 'CLI receives the remaining overall deadline');
+  h.time.advance(delay); answer({ code: 0, stdout: '[]' });
+  const result = await pending;
+  assert.equal(result.ok, true, 'slow CLI must not expire at the short port cap: ' + JSON.stringify(result));
+  assert.ok(result.token, 'successful preview must offer confirmation');
+});
+
+test('hung background CLI expires at the overall preview deadline, not the short port cap', supported, async t => {
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const h = await setup(t, false, { runClaude: () => { entered(); return new Promise(() => {}); } });
+  h.load(); await h.main.startRecovery();
+  let result;
+  const pending = h.preview().then(value => { result = value; }); await started;
+  h.time.advance(9999); await flush();
+  assert.equal(result, undefined, 'hung CLI must remain pending until the overall deadline');
+  h.time.advance(1); await pending;
+  assert.equal(result.code, 'DISCOVERY_TIMEOUT');
+  assert.equal(result.token, null);
+});
+
+test('scheduler inventory is read while the background CLI is still pending', supported, async t => {
+  let entered, answer, reads = 0;
+  const started = new Promise(resolve => { entered = resolve; });
+  const h = await setup(t, false, { runClaude: () => { entered(); return new Promise(resolve => { answer = resolve; }); } });
+  h.ports.cliSessionState.getScheduleRunSnapshot = () => { reads++; return []; };
+  h.load(); await h.main.startRecovery();
+  const pending = h.preview(); await started; await flush();
+  const observed = reads;
+  answer({ code: 0, stdout: '[]' }); await pending;
+  assert.equal(observed, 1, 'independent scheduler read must not wait for CLI startup');
+});
+
 for (const populated of [false, true]) test(`real composition previews and commits ${populated ? 'populated' : 'empty'} project only after ACK`, supported, async t => {
   const h = await setup(t, populated); h.load(); await h.main.startRecovery();
   const before = h.db.changeCount(); const p = await h.preview();

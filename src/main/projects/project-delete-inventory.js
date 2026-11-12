@@ -31,14 +31,14 @@ function createProjectDeleteInventory(deps) {
     c.check(); c.items += items; c.bytes += bytes;
     if (c.items > c.limit || c.bytes > maxBytes) throw fail('DISCOVERY_LIMIT', 'Inventory exceeds aggregate budget.');
   }
-  async function bounded(c, fn, dispose) {
+  async function bounded(c, fn, dispose, timeoutMs = cap(deps.portTimeoutMs, 3000, 15000)) {
     c.check();
     let timer, accepted = false;
     const work = Promise.resolve().then(fn);
     try {
       const value = await Promise.race([work, new Promise((_, reject) => {
         timer = (deps.schedule || setTimeout)(() => reject(fail('DISCOVERY_TIMEOUT', 'Inventory port deadline expired.')),
-          Math.max(1, Math.min(c.deadline - now(), cap(deps.portTimeoutMs, 3000, 15000))));
+          Math.max(1, Math.min(c.deadline - now(), timeoutMs)));
       })]);
       c.check(); accepted = true; return value;
     } finally {
@@ -46,6 +46,7 @@ function createProjectDeleteInventory(deps) {
       if (dispose && !accepted) void work.then(dispose, () => {}).catch(() => {});
     }
   }
+  const processPort = (c, budget, read) => bounded(c, () => read({ ...budget, deadline: c.deadline }), undefined, c.deadline - now());
   const propagate = error => { if (['DISCOVERY_LIMIT', 'DISCOVERY_TIMEOUT', 'SNAPSHOT_STALE'].includes(error.code)) throw error; };
   async function real(c, file) {
     if (!c.realpaths.has(file)) c.realpaths.set(file, bounded(c, () => io.realpath(file)));
@@ -204,7 +205,7 @@ function createProjectDeleteInventory(deps) {
     const candidate = (file, reason) => { charge(c, 1); candidates.push({ path: file, reason }); };
     if (project.alias !== null) {
       if (!deps.readRemoteOwnership) return { complete: true, groups, members, candidates: [{ path: project.projectPath, reason: 'Remote host discovery unavailable.' }] };
-      const remote = await bounded(c, () => deps.readRemoteOwnership(project, budget));
+      const remote = await processPort(c, budget, remaining => deps.readRemoteOwnership(project, remaining));
       charge(c, (remote.groups?.length || 0) + (remote.members?.length || 0) + (remote.candidates?.length || 0));
       charge(c, 0, Buffer.byteLength(JSON.stringify(remote)));
       return remote;
@@ -302,7 +303,7 @@ function createProjectDeleteInventory(deps) {
         const parentOwned = parentRow?.folder === row.folder && owned(c, { alias: null, projectPath: parentRow.projectPath }, project);
         if (!parentOwned && !await belongs(cwd, subagent)) throw new Error('Transcript ownership unavailable or changed.');
         member.present = true; member.size = inspected.size; member.mtimeMs = inspected.mtimeMs;
-        member.liveness = deps.readLiveness ? await bounded(c, () => deps.readLiveness(member, budget)) : { state: 'unknown' };
+        member.liveness = deps.readLiveness ? await processPort(c, budget, remaining => deps.readLiveness(member, remaining)) : { state: 'unknown' };
       } catch (error) { propagate(error); candidate(file, error.message); }
     }
     groups.push(...groupMap.values());
@@ -372,7 +373,7 @@ function createProjectDeleteInventory(deps) {
     const c = context(budget), schedules = [], candidates = [];
     if (project.alias !== null) {
       if (!deps.readRemoteSchedules) return { complete: true, schedules, candidates: [{ path: project.projectPath, reason: 'Remote schedule discovery unavailable.' }] };
-      const remote = await bounded(c, () => deps.readRemoteSchedules(project, budget));
+      const remote = await processPort(c, budget, remaining => deps.readRemoteSchedules(project, remaining));
       charge(c, (remote.schedules?.length || 0) + (remote.candidates?.length || 0) + (remote.retained?.length || 0));
       charge(c, 0, Buffer.byteLength(JSON.stringify(remote)));
       return remote;
@@ -427,17 +428,19 @@ function createProjectDeleteInventory(deps) {
       if (!owned(c, record, project)) continue;
       if (row.fresh && !durable) candidates.push({ id, reason: 'Pending restore lacks acknowledged durable identity.' });
       record.verified = true;
-      record.liveness = deps.readLiveness ? await bounded(c, () => deps.readLiveness(record, budget)) : { state: 'unknown' };
+      record.liveness = deps.readLiveness ? await processPort(c, budget, remaining => deps.readLiveness(record, remaining)) : { state: 'unknown' };
       tabs.set(record.id, record);
     }
     if (!deps.readJobs || !deps.getScheduleRunSnapshot) throw fail('SNAPSHOT_INCOMPLETE', 'Authoritative jobs and scheduler evidence are required.');
-    const roster = await bounded(c, () => deps.readJobs(project, budget));
+    const [roster, runs] = await Promise.all([
+      processPort(c, budget, remaining => deps.readJobs(project, remaining)),
+      bounded(c, () => deps.getScheduleRunSnapshot()),
+    ]);
     if (roster.complete !== true || !Array.isArray(roster.jobs)) throw fail('SNAPSHOT_INCOMPLETE', 'Background job discovery incomplete.');
     charge(c, roster.jobs.length + (roster.candidates?.length || 0));
     charge(c, 0, Buffer.byteLength(JSON.stringify(roster)));
     jobs.push(...roster.jobs);
     candidates.push(...(roster.candidates || []));
-    const runs = await bounded(c, () => deps.getScheduleRunSnapshot());
     charge(c, runs.length);
     charge(c, 0, Buffer.byteLength(JSON.stringify(runs)));
     for (const run of runs) {

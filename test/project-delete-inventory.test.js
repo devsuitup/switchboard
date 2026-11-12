@@ -16,6 +16,72 @@ const supported = { skip: !openStore.supported && 'real SQLite requires Node 22 
 const options = { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: true };
 const budget = () => ({ signal: new AbortController().signal, deadline: 10000, limit: 20000 });
 
+function deadlineClock() {
+  let time = 0, id = 0;
+  const timers = new Map();
+  return { now: () => time, schedule(fn, ms) { timers.set(++id, { fn, at: time + ms }); return id; },
+    cancel: key => timers.delete(key), advance(ms) { time += ms; for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); } } };
+}
+
+for (const port of ['readJobs', 'readRemoteOwnership', 'readRemoteSchedules', 'memberLiveness', 'tabLiveness']) {
+  for (const hangs of [false, true]) test(`process inventory ${port} ${hangs ? 'hangs until the effective deadline' : 'accepts a four-second answer'}`, supported, async t => {
+    const time = deadlineClock();
+    let entered, answer, receivedBudget, first = true;
+    const started = new Promise(resolve => { entered = resolve; });
+    const value = port === 'readJobs' ? { complete: true, jobs: [] }
+      : port === 'readRemoteOwnership' ? { complete: true, groups: [], members: [], candidates: [] }
+        : port === 'readRemoteSchedules' ? { complete: true, schedules: [], candidates: [] } : { state: 'stopped', source: 'descriptor' };
+    const read = (_row, b) => {
+      if (!first) return Promise.resolve(value);
+      first = false; receivedBudget = b; entered();
+      return new Promise(resolve => { answer = resolve; });
+    };
+    const h = await setup(t, { ...time, timeoutMs: 6000, [port.endsWith('Liveness') ? 'readLiveness' : port]: read });
+    const b = budget(); await h.inventory.readSnapshot(b); time.advance(1000);
+    const method = port === 'readRemoteOwnership' || port === 'memberLiveness' ? 'discoverOwnership'
+      : port === 'readRemoteSchedules' ? 'discoverSchedules' : 'readRuntimeState';
+    const project = port.startsWith('readRemote') ? { alias: 'one', projectPath: '/srv/Repo' } : h.project;
+    let outcome;
+    const pending = h.inventory[method](project, b).then(result => { outcome = { result }; }, error => { outcome = { error }; });
+    await started;
+    if (hangs) {
+      time.advance(4999); await new Promise(resolve => setImmediate(resolve));
+      assert.equal(outcome, undefined, 'process port must remain pending until the effective inventory deadline');
+      time.advance(1); await pending;
+      assert.equal(outcome.error?.code, 'DISCOVERY_TIMEOUT');
+    } else {
+      time.advance(4000); answer(value); await pending;
+      assert.equal(outcome.error, undefined, 'process port must accept a response beyond the short port cap');
+      assert.equal(outcome.result.complete, true);
+    }
+    assert.equal(receivedBudget.deadline, 6000, 'process receives the inventory deadline rather than a fresh or wider budget');
+    assert.equal(receivedBudget.signal, b.signal);
+  });
+}
+
+for (const port of ['writer', 'scheduler', 'file']) test(`in-process inventory ${port} retains its short timeout`, supported, async t => {
+  const time = deadlineClock();
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const read = () => { entered(); return new Promise(() => {}); };
+  const io = Object.create(fs.promises);
+  const h = await setup(t, { ...time, fs: io });
+  const b = budget(); await h.inventory.readSnapshot(b);
+  if (port === 'writer') h.writer.readProjectDeletionRevision = read;
+  if (port === 'scheduler') h.deps.getScheduleRunSnapshot = read;
+  if (port === 'file') io.lstat = read;
+  let outcome;
+  const pending = (port === 'writer' ? h.inventory.readRevision(b)
+    : port === 'scheduler' ? h.inventory.readRuntimeState(h.project, b) : h.inventory.inspectRetainedFiles([h.schedule], b))
+    .catch(error => { outcome = error; });
+  await started;
+  time.advance(2999); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(outcome, undefined);
+  time.advance(1); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(outcome?.code, 'DISCOVERY_TIMEOUT', 'ordinary reads still expire at 3000 ms');
+  await pending;
+});
+
 for (const code of ['EACCES', 'EPERM']) test(`A4c2afix denied cwd resolves its readable alternate-spelling ancestor (${code})`, supported, async t => {
   const io = Object.create(fs.promises);
   const h = await setup(t, { fs: io });

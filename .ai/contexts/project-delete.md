@@ -91,6 +91,29 @@ with the supplied home directory as cwd. Output accounting adds each chunk's
 byte length once. Job discovery resolves the project root once per scan;
 ENOENT for a job cwd means it no longer belongs to this project, while other
 cwd read errors produce an unreadable candidate for that record.
+
+Deletion discovery uses one effective deadline: the earlier of the planner's
+budget and the inventory context's timeout (10 seconds by default, capped at
+15 seconds). Process-backed inventory ports (`readJobs`, both remote readers,
+and member/tab `readLiveness`, which can invoke Windows process probes) receive
+that deadline and may use all its remaining time. They do not get the ordinary
+3-second per-port cap. Filesystem, writer and in-process scheduler reads retain
+the short cap, still bounded by the same overall deadline. `readJobs` forwards
+the remaining budget to `runClaude`; its runner stops the reader on timeout.
+The separate 10-second budget in `readConversation` is post-stop evidence, not
+a fresh preview/job-discovery budget.
+
+The background roster and scheduler run snapshot start together with
+`Promise.all`: both are read-only and neither consumes the other's output.
+Their results are validated and charged against the shared budget before use;
+either failure still refuses discovery. Ownership and schedule discovery remain
+ordered before runtime discovery, preserving path registration and liveness
+pinning. No git process is used by this inventory. Remote discovery ports are
+bounded for process/SSH implementations, but production still does not supply
+them. Fake-clock composition tests cover CLI answers at 4 and 8 seconds and a
+hang at the 10-second deadline; inventory tests cover shortened deadlines and
+the retained short caps without starting real CLI or SSH processes (#1103).
+
 Background records remain explicitly blocked on #1090, even when a daemon state
 says done. Current headless schedules retain the inventory's blocking targets.
 Remote ownership/schedule discovery lacks an exhaustive production port and
