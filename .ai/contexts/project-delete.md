@@ -33,7 +33,10 @@ a deferred save in the current window and announces that persistence will follow
 deletion, while refusing a new Save if the write block is already active.
 Global Settings explicitly requests `remove: ['chrome']`; removals travel with
 deferred patches and are applied to a fresh global snapshot on replay. A later
-patch can set a previously removed key again. Project Settings checks the matched
+patch can set a previously removed key again. If replay rejects, the deferred-save
+notice becomes an error explaining that Settings could not be saved, with an
+Open Settings action to review the persisted values and save again. Successful
+replay adds no notice. Project Settings checks the matched
 folder's host/path identity so remote deletion previews block Save as well.
 
 Any NOT_READY reply makes deletion globally unavailable with the retryable
