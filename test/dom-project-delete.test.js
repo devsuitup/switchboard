@@ -48,6 +48,33 @@ test('global patches remove keys only when requested and retain removal through 
   assert.equal(Object.hasOwn(saved(), 'chrome'), false);
   assert.equal(saved().browserMode, 'managed');
   assert.equal(saved().sidebarWidth, 321);
+  assert.equal(h.document.querySelector('.app-notice'), null, 'successful replay must not show a notice');
+});
+
+for (const method of ['getSetting', 'setSetting']) test(`deferred Settings replay ${method} rejection shows an actionable failure notice`, async t => {
+  const h = setup(t);
+  await settings(h, 'global');
+  const saved = persistence(h);
+  saved().chrome = true;
+  h.w.setProjectDeletionWritesBlocked(h.p, true);
+  assert.equal(await h.w.saveGlobalSettings({ browserMode: 'managed' }, { remove: ['chrome'] }), 'deferred');
+  const original = h.w.api[method];
+  h.w.api[method] = async () => { throw new Error('storage unavailable'); };
+  h.w.closeSettingsViewer();
+  h.w.setProjectDeletionWritesBlocked(h.p, false);
+  await flush(); await h.w.flushProjectDeletionWrites();
+  const notice = h.document.querySelector('.app-notice[role="alert"]');
+  assert.ok(notice, 'failed deferred Settings replay must show an error notice');
+  assert.match(notice.textContent, /settings could not be saved/i);
+  assert.match(notice.textContent, /save again/i);
+  assert.equal(saved().chrome, true, 'failed replay must not claim the removal was persisted');
+  h.w.api[method] = original;
+  const action = notice.querySelector('.app-notice-action');
+  assert.equal(action?.textContent, 'Open Settings');
+  action.click(); await flush();
+  assert.equal(h.document.getElementById('settings-viewer').style.display, 'flex');
+  assert.match(h.document.getElementById('settings-viewer-title').textContent, /Global Settings/);
+  assert.ok(h.document.querySelector('#sv-save-btn'), 'recovery must offer the Settings Save control');
 });
 
 for (const method of ['deleteProject', 'projectDeleteState']) test(`${method} preserves the backend bounded unknown reply and operation ID`, async t => {
