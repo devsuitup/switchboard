@@ -1,4 +1,68 @@
-# Project deletion (#474 A4a–A4d)
+# Project deletion (#474 A4a–A4d, E)
+
+## Linked worktree folders (E)
+
+Preview accepts optional `worktrees: string[]` alongside the unchanged five
+boolean writer options. These are exact paths from the main-owned Git inventory,
+not arbitrary filesystem targets. Missing means empty; duplicates and more than
+128 selections refuse. Every registered checkout has a row: path, branch,
+main/project-directory identity, dirty/untracked status, sessions, jobs and an
+availability reason. Status/activity failures are explicit, never rendered as
+clean/idle. The main checkout, the selected project directory and its ancestors
+are never removable. Remote selection refuses because no authoritative remote
+filesystem/removal port exists. Local discovery uses NUL-delimited Git porcelain;
+Git versions without that list format leave physical deletion unavailable.
+
+`project-delete-worktrees.js` calls the existing `worktree-delete` readStatus and
+removeWorktree functions. Clean removal uses no force; dirty content is hashed
+and rechecked. Locked/submodule rows are disabled here and direct users to the
+dedicated dialog for its extra confirmations. Directory-link refusal is shared:
+remove a node_modules junction with nonrecursive `rmdir` before reopening. E
+does not unlink automatically, traverse junctions, delete branches or invoke
+cleanupWorktree. Linked histories remain outside the parent's metadata manifest.
+
+The runtime reads all CLI descriptor writers, indexed session evidence, active
+tabs, schedules and background job files/list. Descendant cwd counts as worktree
+activity. Live or uncertain sessions disable the row; E does not extend A4 stop
+authority to a linked project's sessions. Background records remain refused
+under #1090 even when done. Local subtree launch holds cover selected directories
+and wait for previously admitted descendant launches; archive reservations include
+the selected linked identities as well as the parent. External processes and
+filesystem writers are not locked by these holds.
+
+Rows and selection enter the planner fingerprint, retained in the single-use
+document-bound token. Renderer boxes are individually unchecked on every open
+with no rememberKey. A changed selected row fingerprint requires reopening:
+a newer hidden detail panel cannot silently authorize newly dirty bytes.
+Unselected physical content is kept. Selecting a directory necessarily removes
+all its contents, including ignored files and any schedules/memory/work-files
+inside it; category `kept` applies to the parent's data, not files inside selected
+linked directories.
+
+Execution drains holds, revalidates, stops/verifies parent targets, preflights all
+selected rows, then removes sequentially through the shared path with fresh
+per-removal activity/status checks. A failed removal stops the sequence. Only
+after removal does it reread writer scope and revalidate parent membership/death,
+omitting already-consumed physical selections from this final preview. The
+writer's manifest/options remain metadata-only. The operation retains launch
+holds until Git settles, even after an early IPC unknown reply.
+
+`worktrees` on operation views records removed/failed/remaining paths. An attempted
+disk effect followed by failure remains partial even when the metadata receipt
+proves notStarted. The renderer's persistent notice lists these paths and offers
+fresh review, never replay. A metadata commit still publishes only its own exact
+invalidation targets. Filesystem and SQLite effects are not an atomic transaction.
+Physical progress is process-local: recovered writer receipts explicitly set
+worktreeHistoryUnknown; a crash before writer submission leaves no disk receipt.
+Fresh Git/disk inspection and user consent establish remaining work. Recovery
+never repeats disk removal or treats a metadata receipt as proof of disk success.
+
+Plain-Node tests cover the production planner, service, activity reader, subtree
+gate and shared removal with controlled Git replies and real disposable files.
+The composition witness includes the real writer/SQLite fixture. Separate real
+Git worktree tests are retained for CI; the local sandbox refuses their temporary
+linked `.git` creation. Native UI, full process restart, live process death and
+filesystem races after the shared last scan remain unverified locally.
 
 ## Renderer boundary (A4d)
 
@@ -17,7 +81,7 @@ the strict backend STOP_UNSUPPORTED behavior remains unchanged.
 R6: a bounded read-only capabilities preview precedes the dialog. Only session
 metadata (initial false) and available project settings (initial true) are
 remembered on acceptance. Disabled remembered choices become unchecked without
-a write. Physical categories stay kept. The literal expandable full plan is
+a write. E adds separately unremembered physical worktree choices above. The literal expandable full plan is
 installed only after latest-response/answer matching; failures cannot enable
 Confirm. Changed membership requires a new dialog/confirmation.
 
@@ -190,8 +254,9 @@ The service, inventory and planner share optional `now/schedule/cancel` clock po
 allow expiry, deadlines and retention to share one clock. Tokens are 32 random
 bytes, five-minute, boot/document-bound, with 32 outstanding globally. Preview
 rechecks document authority after discovery/scope reads before minting. Input
-options remain the five booleans; extra fields and physical/worktree choices
-refuse. Reply timeout is separate from accepted main-owned work. The operation
+options remain the five booleans; E's optional worktrees path array belongs to
+preview only and never enters writer options. Other extra fields refuse.
+Reply timeout is separate from accepted main-owned work. The operation
 ID and registry entry precede the first await, and readState cannot fence work
 still admitting or stopping. Reuse/foreign tokens never submit or stop twice.
 

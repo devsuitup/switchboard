@@ -2,7 +2,7 @@
 
 const { randomUUID, randomBytes } = require('node:crypto');
 const { operationId } = require('./project-delete-progress');
-const { membershipDigest, stable, isRecord, text, fail, OPTION_KEYS } = require('./project-delete-identity');
+const { membershipDigest, stable, isRecord, text, fail, OPTION_KEYS, identity } = require('./project-delete-identity');
 
 function createProjectDeleteService(deps) {
   const { writer, planner, inventory, stop, gate, now = Date.now, schedule = setTimeout, cancel = clearTimeout } = deps;
@@ -40,18 +40,27 @@ function createProjectDeleteService(deps) {
   function view(op) {
     return { ...failure('UNKNOWN'), operationId: op.id, state: 'unknown', ...op.result,
       host: op.project.alias, projectPath: op.project.projectPath,
+      worktrees: structuredClone(op.worktreeResults || []), ...(op.historyUnknown ? { worktreeHistoryUnknown: true } : {}),
       stopped: structuredClone(op.stopped), ...(op.historyUnknown ? { stoppedHistoryUnknown: true } : {}) };
   }
   function acquire(op) {
     op.launch = gate.hold(op.project.projectPath, op.project.alias);
-    try { op.archive = writer.reserveProjectDeletion([op.project]); }
-    catch (error) { op.launch.release(); op.launch = null; throw error; }
-    op.admission = Promise.all([op.launch.ready, op.archive.ready]);
+    op.worktreeHolds = [];
+    try {
+      const linked = (op.plan?.worktrees || []).filter(row => row.selected);
+      for (const row of linked) op.worktreeHolds.push(gate.holdTree(row.path, op.project.alias));
+      op.archive = writer.reserveProjectDeletion([op.project, ...linked.map(row => identity({ alias: op.project.alias, projectPath: row.path }))]);
+    } catch (error) {
+      for (const hold of op.worktreeHolds) hold.release();
+      op.launch.release(); op.launch = null; throw error;
+    }
+    op.admission = Promise.all([op.launch.ready, op.archive.ready, ...op.worktreeHolds.map(hold => hold.ready)]);
   }
   async function release(op) {
     if (op.released) return;
     await op.admission;
     op.archive?.release(); op.launch?.release();
+    for (const hold of op.worktreeHolds || []) hold.release();
     op.releaseRuntime?.(); op.releaseRuntime = null;
     op.released = true; op.finished = op.historicalFinished ?? now();
     if (projects.get(op.project.key) === op) projects.delete(op.project.key);
@@ -126,12 +135,13 @@ function createProjectDeleteService(deps) {
   async function acceptState(op, state) {
     const committed = state.state === 'committed' && state.receiptAvailable === true && state.terminal === true && state.invalidation;
     const known = state.receiptAvailable === true && state.terminal === true && ['partial', 'notStarted'].includes(state.state);
-    op.result = { ...failure('UNKNOWN'), operationId: op.id, state: committed ? 'committed' : known ? state.state : 'unknown',
-      ok: !!committed, partial: known && state.state === 'partial', retryable: false,
+    const partial = known && (state.state === 'partial' || op.worktreeResults?.some(row => row.state !== 'remaining'));
+    op.result = { ...failure('UNKNOWN'), operationId: op.id, state: committed ? 'committed' : partial ? 'partial' : known ? state.state : 'unknown',
+      ok: !!committed, partial: !!partial, retryable: false,
       completed: state.completed || [], kept: state.kept || [], failed: state.failed || [], skipped: state.remaining || [],
       observations: { projectHidden: state.projectHidden, settingsPresent: state.settingsPresent, metadata: state.metadata, readRevision: state.readRevision },
       ...(committed ? { code: undefined, invalidation: structuredClone(state.invalidation) } : {}),
-      ...(known ? { code: state.state === 'partial' ? 'PARTIAL' : 'NOT_STARTED', refresh: true } : {}) };
+      ...(known ? { code: partial ? 'PARTIAL' : 'NOT_STARTED', refresh: true } : {}) };
     if (state.terminal || state.noLateCommit) await release(op);
     if (committed) {
       for (const name of ['notifyProjects', 'notifySchedules']) {
@@ -200,8 +210,17 @@ function createProjectDeleteService(deps) {
       if (!after.plan) throw fail('REVALIDATION_UNAVAILABLE', after.error || 'Post-stop inventory read unavailable.');
       let manifestInventory = acceptedInventory(op, after.plan);
       if (!manifestInventory || !(await stop.verify(prepared)).ok) throw fail('PREVIEW_CHANGED', 'Post-stop ownership changed.');
+      const selected = (op.plan.worktrees || []).filter(row => row.selected);
+      if (selected.length) {
+        if (!deps.worktrees) throw fail('WORKTREE_UNAVAILABLE', 'Worktree deletion is unavailable.');
+        const removed = await deps.worktrees.remove(op.project, selected, result => {
+          op.worktreeResults = op.worktreeResults.filter(row => row.path !== result.path);
+          op.worktreeResults.push(result);
+        });
+        if (!removed) throw fail('WORKTREE_FAILED', 'Worktree removal did not complete. Inspect the listed folders and Git registration; review a fresh preview before trying again.');
+      }
       const fresh = await bounded(() => writer.readProjectDeletionScope({ project: op.project }));
-      const final = await planner.revalidate(op.plan);
+      const final = await planner.revalidate(op.plan, { withoutWorktrees: selected.length > 0 });
       if (!final.plan) throw fail('REVALIDATION_UNAVAILABLE', final.error || 'Final inventory read unavailable.');
       manifestInventory = acceptedInventory(op, final.plan);
       if (!manifestInventory || fresh.projectEpoch !== op.epoch || String(fresh.writerRevision) !== final.plan.revision
@@ -212,7 +231,8 @@ function createProjectDeleteService(deps) {
       try { return await acceptState(op, await bounded(() => writer.completeProjectDeletion(manifest), 60000)); }
       catch { return await reconcile(op); }
     } catch (error) {
-      op.result = { ...failure(error.code || 'DELETE_UNAVAILABLE'), error: error.message, state: 'notStarted', refresh: true };
+      const partial = op.worktreeResults?.some(row => row.state !== 'remaining');
+      op.result = { ...failure(error.code || 'DELETE_UNAVAILABLE'), error: error.message, state: partial ? 'partial' : 'notStarted', partial: !!partial, refresh: true };
       return view(op);
     } finally {
       op.running = false;
@@ -234,6 +254,7 @@ function createProjectDeleteService(deps) {
     catch (error) { return Promise.resolve(failure(error.code || 'DELETION_ID')); }
     const op = { id, project: token.plan.project,
       epoch: token.epoch, plan: token.plan, options: token.options, stopped: [], authorities: new Set([sender]), notified: new Set(), running: true,
+      worktreeResults: (token.plan.worktrees || []).filter(row => row.selected).map(row => ({ path: row.path, state: 'remaining' })),
       releaseRuntime: deps.captureRuntimeRelease?.() };
     operations.set(op.id, op); projects.set(op.project.key, op);
     try { acquire(op); }

@@ -9,6 +9,50 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+test('E worktree choices are individually previewed, never remembered, and main remains disabled', async t => {
+  const rows = [
+    { path: 'C:/repo', branch: 'main', main: true, removable: false, reason: 'Main checkout is kept', sessions: [], dirty: [] },
+    { path: 'C:/linked', branch: 'topic', main: false, removable: true, sessions: [], dirty: ['?? draft.txt'] },
+  ];
+  const h = setup(t, { worktrees: rows });
+  h.w.localStorage.setItem('deleteProject.worktree:1', '1');
+  let pending = h.start(); await flush();
+  let box = h.document.querySelector('[data-choice-id="worktree:1"]');
+  assert.ok(box, 'every linked worktree needs its own checkbox');
+  assert.equal(box.checked, false);
+  assert.equal(h.document.querySelector('[data-choice-id="worktree:0"]').disabled, true);
+  assert.match(h.document.querySelector('.choice-dialog').textContent, /C:\/linked.*topic/s);
+  assert.match(h.document.querySelector('.choice-dialog').textContent, /draft\.txt/);
+  box.click(); await flush();
+  assert.deepEqual(Array.from(h.calls.preview.at(-1).worktrees), ['C:/linked']);
+  h.confirm().click(); await pending;
+  pending = h.start(); await flush();
+  box = h.document.querySelector('[data-choice-id="worktree:1"]');
+  assert.equal(box.checked, false, 'accepted destructive worktree choices must reset on every open');
+  h.cancel(); await pending;
+});
+
+test('E partial disk removal notice preserves per-path outcomes and recovery action', async t => {
+  const h = setup(t);
+  await h.w.settleProjectDeletion(h.p, { state: 'partial', operationId: 'disk',
+    worktrees: [{ path: 'C:/removed', state: 'removed' }, { path: 'C:/failed', state: 'failed', error: 'Inspect registration' }] });
+  const notice = h.document.querySelector('.app-notice');
+  assert.match(notice.textContent, /C:\/removed/, 'partial notice must show disk outcomes');
+  assert.match(notice.textContent, /Inspect registration/);
+  assert.equal(notice.querySelector('.app-notice-action').textContent, 'Review remaining deletion');
+});
+
+test('E changed dirty bytes after the visible row require reopening rather than silent new consent', async t => {
+  const row = { path: 'C:/linked', branch: 'topic', removable: true, fingerprint: 'shown', dirty: [], sessions: [] };
+  const h = setup(t, { worktrees: [row] });
+  const pending = h.start(); await flush();
+  row.fingerprint = 'new-bytes'; row.dirty = ['?? unseen.txt'];
+  h.document.querySelector('[data-choice-id="worktree:0"]').click(); await flush();
+  assert.equal(h.confirm().disabled, true, 'changed worktree preview must require reopening');
+  assert.match(h.document.querySelector('.choice-dialog').textContent, /reopen/i);
+  h.cancel(); await pending;
+});
+
 function persistence(h) {
   let global = { hiddenProjects: [], sidebarWidth: 100 };
   Object.assign(h.w, { exitingApp: false, skippedWorkingSetEntries: new Map(), dormantWorkingSet: new Map(),

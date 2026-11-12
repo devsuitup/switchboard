@@ -6,13 +6,18 @@ const { worktreeParentPath } = require('../../../public/worktree-nesting');
 const { OPTION_KEYS, isRecord, text, fail, canonicalPath, identity, stable, digest, compare, membershipRecord } = require('./project-delete-identity');
 
 function validateRequest(request) {
-  if (!isRecord(request) || Object.keys(request).some(key => !['projectPath', 'folderKey', 'options'].includes(key))
+  if (!isRecord(request) || Object.keys(request).some(key => !['projectPath', 'folderKey', 'options', 'worktrees'].includes(key))
     || !text(request.projectPath) || (request.folderKey !== undefined && !text(request.folderKey))
     || !isRecord(request.options) || Object.keys(request.options).length !== OPTION_KEYS.length
     || Object.keys(request.options).some(key => !OPTION_KEYS.includes(key))
     || OPTION_KEYS.some(key => !Object.hasOwn(request.options, key) || typeof request.options[key] !== 'boolean')
     || request.options.schedules || request.options.transcripts) {
     throw fail('INVALID_REQUEST', 'Use the five explicit boolean A4 options; physical deletion is unavailable.');
+  }
+  if (request.worktrees !== undefined && (!Array.isArray(request.worktrees) || request.worktrees.length > 128
+    || request.worktrees.some(value => !text(value) || !path.isAbsolute(value))
+    || new Set(request.worktrees).size !== request.worktrees.length)) {
+    throw fail('INVALID_REQUEST', 'Select each linked worktree by its exact preview path.');
   }
 }
 
@@ -108,6 +113,22 @@ function createProjectDeletePlanner(deps) {
         const rawTabs = items(runtime.tabs), rawJobs = items(runtime.jobs), runtimeCandidates = items(runtime.candidates);
         const refusals = [], warnings = [];
         const refuse = (code, target, error) => refusals.push({ code, target, error });
+        const selectedWorktrees = request.worktrees || [];
+        let worktrees = [];
+        try {
+          if (project.alias !== null && selectedWorktrees.length) throw fail('WORKTREE_UNAVAILABLE', 'Remote worktree removal is unavailable.');
+          if (deps.worktrees && project.alias === null) worktrees = items(await deps.worktrees.preview(project, { ...budget, snapshot }));
+          worktrees = worktrees.map(row => ({ ...row, selected: selectedWorktrees.includes(row.path) }));
+          for (const target of selectedWorktrees) {
+            const row = worktrees.find(row => row.path === target);
+            if (!row?.removable || row.main || canonicalPath(target, null, memo) === project.projectPath) {
+              refuse('WORKTREE_UNAVAILABLE', target, row?.reason || 'This linked worktree is not removable. Reopen Delete for a fresh preview.');
+            }
+          }
+        } catch (error) {
+          if (selectedWorktrees.length) refuse('WORKTREE_UNAVAILABLE', project.projectPath, error.message);
+          else warnings.push({ code: 'WORKTREE_UNAVAILABLE', error: error.message });
+        }
         const rowPath = (row, key, code) => {
           if (row[key] === null) return null;
           try { return canonicalPath(row[key], row.alias, memo); }
@@ -224,7 +245,7 @@ function createProjectDeletePlanner(deps) {
           schedules: { selected: false, available: false, effect: 'kept' },
           transcripts: { selected: false, available: false, effect: 'kept' },
           stopBackgroundJobs: { selected: request.options.stopBackgroundJobs, available: true },
-          memory: { effect: 'kept' }, workFiles: { effect: 'kept' }, worktrees: { effect: 'kept' }, projectDirectory: { effect: 'kept' }, branches: { effect: 'kept' },
+          memory: { effect: 'kept' }, workFiles: { effect: 'kept' }, worktrees: { effect: selectedWorktrees.length ? 'selected' : 'kept' }, projectDirectory: { effect: 'kept' }, branches: { effect: 'kept' },
         };
         warnings.push({ code: 'RETAINED_TRANSCRIPTS', error: 'Retained transcripts can restore transcript titles on re-add even when app names are discarded.' });
         if (schedules.length) warnings.push({ code: 'SCHEDULE_REACTIVATION', error: 'Kept schedule files may reactivate when this project is re-added.' });
@@ -241,11 +262,11 @@ function createProjectDeletePlanner(deps) {
         }
         await ordered(refusals);
         const membershipDigest = digest({ project: { alias: project.alias, projectPath: project.projectPath }, ...membership });
-        const fingerprint = digest({ membershipDigest, groups, members, tabs, jobs, schedules, options: request.options, stops, categories, warnings, refusals });
+        const fingerprint = digest({ membershipDigest, groups, members, tabs, jobs, schedules, worktrees, options: request.options, stops, categories, warnings, refusals });
         const revision = await deps.readRevision(budget);
         expired();
         if (revision !== snapshot.revision) throw fail('SNAPSHOT_STALE', 'Writer changed during discovery; request a fresh preview.');
-        return { ok: true, plan: { project, groups, members, tabs, jobs, stops, schedules, categories,
+        return { ok: true, plan: { project, groups, members, tabs, jobs, stops, schedules, categories, worktrees,
           counts: { conversations: new Set(members.map(row => row.conversationId)).size,
             parts: new Set(members.filter(row => !row.subagentId).map(row => row.partId)).size,
             subagents: members.filter(row => row.subagentId).length, transcripts: members.length, tabs: tabs.length,
@@ -263,11 +284,12 @@ function createProjectDeletePlanner(deps) {
     }
   }
 
-  async function revalidate(plan) {
+  async function revalidate(plan, { withoutWorktrees = false } = {}) {
     try {
       const options = Object.fromEntries(OPTION_KEYS.map(key => [key, plan.categories[key].selected]));
       if (identity(plan.project).key !== plan.project.key) return { same: false, plan: null };
-      const reply = await preview({ projectPath: plan.project.projectPath, options }, plan.project.key);
+      const reply = await preview({ projectPath: plan.project.projectPath, options,
+        worktrees: withoutWorktrees ? [] : (plan.worktrees || []).filter(row => row.selected).map(row => row.path) }, plan.project.key);
       return { same: reply.ok && reply.plan.fingerprint === plan.fingerprint && reply.plan.refusals.length === 0,
         plan: reply.ok ? reply.plan : null };
     } catch {

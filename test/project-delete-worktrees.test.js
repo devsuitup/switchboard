@@ -1,0 +1,243 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { createProjectDeletePlanner } = require('../src/main/projects/project-delete-plan');
+const { createProjectDeleteService } = require('../src/main/projects/project-delete');
+const { createProjectOperationGate } = require('../src/main/shared/project-operation-gate');
+let implementation;
+try { implementation = require('../src/main/projects/project-delete-worktrees'); }
+catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; }
+const options = { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false };
+
+test('E production activity reader includes descendant sessions, schedules and refused background records', async t => {
+  const { createProjectDeleteRuntime } = require('../src/main/projects/project-delete-main');
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'e-activity-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const child = path.join(root, 'child'); fs.mkdirSync(child);
+  const jobsDir = path.join(root, 'jobs'); fs.mkdirSync(path.join(jobsDir, '1234abcd'), { recursive: true });
+  fs.writeFileSync(path.join(jobsDir, '1234abcd', 'state.json'), JSON.stringify({ state: 'done', cwd: child,
+    sessionId: '12345678-1234-1234-1234-123456789abc' }));
+  const runtime = createProjectDeleteRuntime({ activeSessions: new Map([['live', { cwd: child, sessionId: 'live' }]]), jobsDir,
+    homeDir: root, runClaude: async () => ({ code: 0, stdout: '[]' }), cliSessionState: {
+      getSidebarDescriptors: options => {
+        assert.equal(options?.allWriters, true, 'worktree deletion must include every descriptor writer');
+        return [{ sessionId: 'external', cwd: child }];
+      },
+      readStatusEvidence: async () => ({ known: true, live: { pid: 123 }, ambiguous: false }),
+      getScheduleRunSnapshot: () => [{ sessionId: 'schedule', cwd: child }],
+    } });
+  assert.equal(typeof runtime.readWorktreeActivity, 'function', 'linked worktrees require authoritative descendant activity');
+  const result = await runtime.readWorktreeActivity({ alias: null, projectPath: root },
+    { signal: new AbortController().signal, deadline: Date.now() + 15000, limit: 20000, snapshot: { sessions: [] } });
+  assert.ok(result.sessions.some(row => row.sessionId === 'live'));
+  assert.ok(result.sessions.some(row => row.sessionId === 'external'));
+  assert.ok(result.jobs.some(row => row.id === '1234abcd'), 'done background record must remain refused');
+  assert.ok(result.jobs.some(row => row.sessionId === 'schedule'));
+  assert.ok(result.candidates.some(row => row.reason.includes('#1090')));
+});
+
+function planning(rows) {
+  const projectPath = path.resolve(os.tmpdir(), 'e-planning');
+  const state = { rows, removed: [], events: [], revision: '1' };
+  const empty = { complete: true, groups: [], members: [], tabs: [], jobs: [], schedules: [], candidates: [] };
+  const worktrees = {
+    preview: async () => structuredClone(state.rows),
+    async remove(project, selected, record) {
+      for (const row of selected) {
+        state.events.push('remove:' + row.path);
+        const result = { path: row.path, state: state.fail === row.path ? 'failed' : 'removed', error: state.fail === row.path ? 'Git refused; inspect disk' : undefined };
+        record(result);
+        if (result.state === 'failed') return false;
+        state.removed.push(row.path);
+      }
+      return true;
+    },
+  };
+  const deps = {
+    waitForIndex: async () => {}, readSnapshot: async () => ({ complete: true, initialScanComplete: true, revision: state.revision,
+      projects: [{ alias: null, projectPath, folderKeys: [] }], declaredHosts: [] }),
+    discoverOwnership: async () => empty, discoverSchedules: async () => empty,
+    readRuntimeState: async () => empty, readRevision: async () => state.revision, worktrees,
+  };
+  const planner = createProjectDeletePlanner(deps);
+  const request = selected => ({ projectPath, options, worktrees: selected });
+  return { state, deps, planner, request, projectPath, worktrees };
+}
+
+test('E planner binds exact individual selection and content to the fingerprint', async () => {
+  const row = { path: path.resolve(os.tmpdir(), 'linked-e'), branch: 'topic', removable: true, fingerprint: 'one', sessions: [], dirty: [] };
+  const f = planning([row]);
+  const kept = await f.planner.preview(f.request([]));
+  assert.equal(kept.ok, true, 'empty worktree selection must be accepted');
+  const chosen = await f.planner.preview(f.request([row.path]));
+  assert.equal(chosen.ok, true, 'individual worktree selection must be accepted');
+  assert.equal(chosen.plan.worktrees[0].selected, true);
+  assert.notEqual(chosen.plan.fingerprint, kept.plan.fingerprint, 'selection must change the token fingerprint');
+  assert.equal((await f.planner.revalidate(chosen.plan)).same, true);
+  f.state.rows[0].fingerprint = 'changed-content';
+  assert.equal((await f.planner.revalidate(chosen.plan)).same, false, 'changed worktree content must invalidate consent');
+  for (const selected of [[row.path, row.path], [path.resolve(os.tmpdir(), 'foreign')], [f.projectPath]]) {
+    const reply = await f.planner.preview(f.request(selected));
+    assert.ok(!reply.ok || reply.plan.refusals.length, 'foreign, main and duplicate selections must refuse');
+  }
+  f.state.rows[0].removable = false; f.state.rows[0].reason = 'Stop live session first';
+  assert.ok((await f.planner.preview(f.request([row.path]))).plan.refusals.length);
+});
+
+test('E subtree holds drain admitted children and reject new descendant launches', async () => {
+  const gate = createProjectOperationGate(), root = path.resolve(os.tmpdir(), 'e-gate');
+  assert.equal(typeof gate.holdTree, 'function', 'worktree deletion needs subtree exclusion');
+  const lease = gate.tryAdmit(path.join(root, 'nested'));
+  const hold = gate.holdTree(root); let ready = false;
+  hold.ready.then(() => { ready = true; }); await Promise.resolve();
+  assert.equal(ready, false, 'existing descendant launch must drain');
+  assert.equal(gate.tryAdmit(path.join(root, 'new')), null);
+  assert.throws(() => gate.hold(path.join(root, 'child')));
+  const sibling = gate.tryAdmit(root + '-sibling'); assert.ok(sibling); sibling.release();
+  const remote = gate.tryAdmit(root, 'remote'); assert.ok(remote); remote.release();
+  lease.release(); await hold.ready; hold.release();
+  const reopened = gate.tryAdmit(path.join(root, 'new')); assert.ok(reopened); reopened.release();
+});
+
+async function serviceFixture(t, fail) {
+  const a = path.resolve(os.tmpdir(), 'e-selected-a'), b = path.resolve(os.tmpdir(), 'e-selected-b');
+  const f = planning([a, b].map(p => ({ path: p, removable: true, fingerprint: p, sessions: [], dirty: [] })));
+  f.state.fail = fail ? b : undefined;
+  const gate = createProjectOperationGate(), sender = { valid: () => true };
+  const writer = {
+    listProjectDeletionOperations: async () => ({ rows: [], revision: 1, nextCursor: null }),
+    readProjectDeletionScope: async () => ({ writerRevision: 1, projectEpoch: 0, writerMembershipDigest: 'durable' }),
+    reserveProjectDeletion: () => ({ ready: Promise.resolve(), release() {} }),
+    async completeProjectDeletion() {
+      f.state.events.push('metadata');
+      return { state: 'committed', terminal: true, receiptAvailable: true, invalidation: {}, committedRevision: 2 };
+    },
+  };
+  const stop = { preflight: async () => ({ ok: true }), stop: async () => {
+    f.state.events.push('stop'); return { ok: true, stopped: [], failed: [], skipped: [] };
+  }, verify: async () => ({ ok: true }) };
+  const service = createProjectDeleteService({ writer, planner: f.planner, inventory: { inspectRetainedFiles: async () => [] },
+    stop, gate, worktrees: f.worktrees });
+  t.after(() => service.dispose()); await service.initialize();
+  return { ...f, a, b, gate, service, sender, writer };
+}
+
+test('E disk effects remain partial when the metadata writer proves no commit', async t => {
+  const f = await serviceFixture(t);
+  f.writer.completeProjectDeletion = async () => ({ state: 'notStarted', terminal: true, receiptAvailable: true, noLateCommit: true });
+  const preview = await f.service.preview(f.sender, f.request([f.a]));
+  const result = await f.service.execute(f.sender, { token: preview.token, fingerprint: preview.plan.fingerprint });
+  assert.equal(result.state, 'partial', 'removed folders cannot be reported as an operation that never started');
+  assert.equal(result.partial, true);
+  assert.equal(result.worktrees[0].state, 'removed');
+});
+
+test('E service holds selected descendant launches until the removal promise settles', async t => {
+  const f = await serviceFixture(t); let finish, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  f.worktrees.remove = async () => { entered(); await new Promise(resolve => { finish = resolve; }); return false; };
+  const preview = await f.service.preview(f.sender, f.request([f.a]));
+  const executing = f.service.execute(f.sender, { token: preview.token, fingerprint: preview.plan.fingerprint });
+  await started;
+  const lease = f.gate.tryAdmit(path.join(f.a, 'new-session'));
+  finish(); await executing;
+  assert.equal(lease, null, 'no descendant may launch while disk removal is in flight');
+});
+
+test('E service removes only selected worktrees after stop and before metadata', async t => {
+  const f = await serviceFixture(t);
+  const preview = await f.service.preview(f.sender, f.request([f.a]));
+  assert.ok(preview.token, 'selected worktrees must produce an owned token');
+  const result = await f.service.execute(f.sender, { token: preview.token, fingerprint: preview.plan.fingerprint });
+  assert.equal(result.ok, true);
+  assert.deepEqual(f.state.events, ['stop', 'remove:' + f.a, 'metadata']);
+  assert.deepEqual(result.worktrees.map(row => [row.path, row.state]), [[f.a, 'removed']]);
+  assert.deepEqual(f.state.removed, [f.a]);
+});
+
+test('E failed second removal seals a partial result, never submits metadata or replays on state read', async t => {
+  const f = await serviceFixture(t, true);
+  const preview = await f.service.preview(f.sender, f.request([f.a, f.b]));
+  assert.ok(preview.token, 'selected worktrees must produce an owned token');
+  const result = await f.service.execute(f.sender, { token: preview.token, fingerprint: preview.plan.fingerprint });
+  assert.equal(result.state, 'partial'); assert.equal(result.ok, false);
+  assert.deepEqual(result.worktrees.map(row => row.state), ['removed', 'failed']);
+  assert.equal(f.state.events.includes('metadata'), false, 'disk failure must keep parent metadata untouched');
+  await f.service.readState(f.sender, { operationId: result.operationId });
+  assert.deepEqual(f.state.events, ['stop', 'remove:' + f.a, 'remove:' + f.b]);
+  const lease = f.gate.tryAdmit(path.join(f.a, 'child')); assert.ok(lease); lease.release();
+});
+
+function gitFixture(t) {
+  assert.equal(typeof implementation?.createProjectDeleteWorktrees, 'function', 'production linked-worktree adapter must exist');
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'delete-e-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const target = path.join(root, 'linked'), kept = path.join(root, 'kept');
+  fs.mkdirSync(target); fs.mkdirSync(kept); fs.writeFileSync(path.join(root, 'tracked'), 'base');
+  const commands = [], state = { sessions: [], candidates: [], jobs: [] };
+  const runGit = async args => {
+    commands.push(args);
+    if (args.includes('list')) {
+      const separator = args.includes('-z') ? '\0' : '\n';
+      return [root, target, kept].filter(p => fs.existsSync(p)).map(p =>
+        ['worktree ' + p.replaceAll('\\', '/'), 'HEAD abc', 'branch refs/heads/topic', ''].join(separator) + separator).join('');
+    }
+    if (args.includes('rev-parse')) return path.join(root, 'absent-lock') + '\n';
+    if (args.includes('ls-files')) return '';
+    if (args.includes('status')) return fs.existsSync(path.join(args[1], 'untracked')) ? '?? untracked\0' : '';
+    if (args.includes('remove')) { fs.rmSync(args.at(-1), { recursive: true }); return ''; }
+    throw new Error('Unexpected Git command: ' + args.join(' '));
+  };
+  const adapter = implementation.createProjectDeleteWorktrees({ runGit, readActivity: async () => ({ complete: true, ...state }) });
+  const project = { alias: null, projectPath: root.replaceAll('\\', '/').toLowerCase() };
+  if (process.platform !== 'win32') project.projectPath = root;
+  const budget = () => ({ signal: new AbortController().signal, deadline: Date.now() + 15000, limit: 20000 });
+  return { root, target, kept, state, commands, adapter, project, budget };
+}
+
+test('E shared removal with a controlled Git port discovery lists main, branch, dirty/untracked bytes; removes exactly the reviewed linked directory', async t => {
+  const f = gitFixture(t);
+  fs.writeFileSync(path.join(f.target, 'untracked'), 'discard');
+  const rows = await f.adapter.preview(f.project, f.budget());
+  assert.equal(rows.find(row => row.main).removable, false);
+  assert.equal(rows.find(row => row.main).statusKnown, true, 'main checkout status must be previewed even though it is never removable');
+  const selected = rows.find(row => path.resolve(row.path) === f.target);
+  assert.equal(selected.branch, 'topic'); assert.equal(selected.removable, true);
+  assert.ok(selected.dirty.some(line => line.includes('untracked')));
+  const results = [];
+  assert.equal(await f.adapter.remove(f.project, [selected], row => results.push(row)), true);
+  assert.equal(fs.existsSync(f.target), false); assert.equal(fs.existsSync(f.kept), true);
+  assert.equal(fs.readFileSync(path.join(f.root, 'tracked'), 'utf8'), 'base');
+  assert.deepEqual(results.map(row => row.state), ['removed']);
+  assert.equal(f.commands.filter(args => args.includes('remove')).length, 1);
+});
+
+test('E adapter rejects remote, main checkout and uncertain activity without invoking Git removal', async t => {
+  const f = gitFixture(t);
+  await assert.rejects(f.adapter.preview({ ...f.project, alias: 'remote' }, f.budget()), { code: 'WORKTREE_UNAVAILABLE' });
+  let rows = await f.adapter.preview(f.project, f.budget());
+  assert.equal(await f.adapter.remove(f.project, [rows.find(row => row.main)], () => {}), false);
+  f.state.candidates.push({ reason: 'External ownership unknown' });
+  rows = await f.adapter.preview(f.project, f.budget());
+  assert.equal(rows.find(row => path.resolve(row.path) === f.target).removable, false);
+  assert.equal(f.commands.some(args => args.includes('remove')), false);
+});
+
+test('E shared removal with a controlled Git port changed contents and new live sessions refuse before any disk removal', async t => {
+  const f = gitFixture(t);
+  fs.writeFileSync(path.join(f.target, 'untracked'), 'old');
+  const rows = await f.adapter.preview(f.project, f.budget()), selected = rows.find(row => path.resolve(row.path) === f.target);
+  fs.writeFileSync(path.join(f.target, 'untracked'), 'new');
+  assert.equal(await f.adapter.remove(f.project, [selected], () => {}), false);
+  assert.equal(fs.existsSync(f.target), true);
+  const fresh = (await f.adapter.preview(f.project, f.budget())).find(row => path.resolve(row.path) === f.target);
+  f.state.sessions.push({ sessionId: 'live', cwd: f.target });
+  assert.equal(await f.adapter.remove(f.project, [fresh], () => {}), false);
+  assert.equal(f.commands.some(args => args.includes('remove')), false, 'late activity must prevent Git removal');
+  const blocked = (await f.adapter.preview(f.project, f.budget())).find(row => path.resolve(row.path) === f.target);
+  assert.equal(blocked.removable, false); assert.equal(blocked.sessions[0].sessionId, 'live');
+});

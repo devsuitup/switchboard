@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
-- Delete a project from its sidebar header or Project Settings with a full preview and separate choices for session metadata and project settings. Files stay on disk; interrupted deletions show their outcome before you try again. (#474)
+- Delete a project from its sidebar header or Project Settings with a full preview and separate choices for session metadata, project settings and individual linked worktree folders. Worktree removal always starts unchecked; the main checkout stays on disk, and partial deletions show what happened before you try again. (#474)
 
 ### Fixed
 - Arch/Manjaro downloads now include a separate package for each architecture, so x64 users no longer sometimes receive an ARM package. (#1089)

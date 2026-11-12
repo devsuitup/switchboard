@@ -3820,7 +3820,7 @@ const unsubscribeBgAgents = require('./src/main/bg-agents/bg-agents-ipc').init({
   activeSessions, cliSessionState, sessionHasPty, ptyPids, getSetting: key => getSetting(key) });
 const { createProjectDeleteMain } = require('./src/main/projects/project-delete-main');
 const projectDeleteMain = createProjectDeleteMain({
-  writer, ipcMain, activeSessions, cliSessionState, log, homeDir: os.homedir(),
+  writer, ipcMain, activeSessions, cliSessionState, log, homeDir: os.homedir(), worktreeGit,
   projectsDir: PROJECTS_DIR, dataDir: path.dirname(DB_PATH), jobsDir: path.join(CLAUDE_DIR, 'jobs'),
   bg: unsubscribeBgAgents, remote: remoteStopAdapter, runClaude: runClaudeCommand,
   gate: require('./src/main/shared/project-operation-gate').projectOperationGate,

@@ -11,6 +11,8 @@ const { registerProjectDeleteIpc } = require('./project-delete-ipc');
 const { parseJobState, parseCliList, JOB_ID_RE } = require('../bg-agents/bg-agents-roster');
 const { stopPtyWithEvidence, detachPty } = require('../terminals/pty-ops');
 const { fail } = require('./project-delete-identity');
+const { createProjectDeleteWorktrees } = require('./project-delete-worktrees');
+const { parseFolderKey } = require('../remote/remote-hosts');
 
 const RECOVERY_TIMEOUT_MS = 4096 * 30000 + 65 * 10000 + 32 * 80000;
 const HOLDS_TIMEOUT_MS = 120000;
@@ -95,7 +97,7 @@ function createProjectDeleteRuntime(ports) {
         if (error.code !== 'ENOENT') candidates.push({ id, reason: error.message });
         continue;
       }
-      if (normalize(cwd) !== normalize(root)) continue;
+      if (normalize(cwd) !== normalize(root) && !(project.includeDescendants && normalize(cwd).startsWith(normalize(root) + '/'))) continue;
       jobs.push({ id, jobId: id, alias: null, projectPath: root, runtime: 'claude', verified: true,
         conversationId: row.sessionId, sessionIds: [row.sessionId], liveness: { state: 'unknown', source: 'job' } });
       candidates.push({ id, reason: 'Background deletion awaits worker-incarnation control (#1090).' });
@@ -158,7 +160,49 @@ function createProjectDeleteRuntime(ports) {
     }
     return { known: true, complete: true, owners };
   }
-  return { readJobs, readLiveness, readTarget, readConversation, withScope, captureRuntimeRelease,
+  async function readWorktreeActivity(project, budget) {
+    if (project.alias !== null) throw fail('DISCOVERY_UNAVAILABLE', 'Remote worktree activity is unavailable.');
+    const root = normalize(await bounded(() => io.realpath(project.projectPath), budget));
+    const sessions = [], jobs = [], candidates = [], seen = new Set();
+    const descriptors = await bounded(() => ports.cliSessionState.getSidebarDescriptors({ allWriters: true }), budget);
+    const snapshot = budget.snapshot || await ports.readWorktreeSnapshot?.(budget);
+    if (!Array.isArray(descriptors) || !Array.isArray(snapshot?.sessions) || !(ports.activeSessions instanceof Map)) {
+      throw fail('DISCOVERY_UNAVAILABLE', 'Worktree session inventory is incomplete.');
+    }
+    const rows = [...ports.activeSessions].map(([id, row]) => ({ ...row, sessionId: row.realSessionId || row.sessionId || id, active: !row.exited }));
+    rows.push(...descriptors, ...snapshot.sessions);
+    if (rows.length > budget.limit) throw fail('DISCOVERY_LIMIT', 'Too many worktree sessions to inspect.');
+    const within = async row => {
+      if (row.host || row.remoteAlias || row.alias || row.folder && parseFolderKey(row.folder).alias !== null) return false;
+      const value = row.cwd || row.projectPath;
+      if (typeof value !== 'string' || !path.isAbsolute(value)) { candidates.push({ id: row.sessionId, reason: 'Session cwd unavailable.' }); return false; }
+      let cwd;
+      try { cwd = normalize(await bounded(() => io.realpath(value), budget)); }
+      catch (error) {
+        if (error.code !== 'ENOENT') candidates.push({ id: row.sessionId, reason: 'Session cwd unreadable.' });
+        return false;
+      }
+      return cwd === root || cwd.startsWith(root + '/');
+    };
+    for (const row of rows) {
+      if (!await within(row)) continue;
+      const id = row.sessionId || row.id;
+      if (row.active) { sessions.push({ sessionId: id, cwd: row.cwd || row.projectPath }); continue; }
+      if (!id || row.runtime === 'codex') { candidates.push({ id, reason: 'Worktree runtime liveness unavailable.' }); continue; }
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const evidence = await bounded(() => ports.cliSessionState.readStatusEvidence(id, budget.deadline), budget);
+      if (!evidence?.known || evidence.ambiguous) candidates.push({ id, reason: 'Worktree session liveness uncertain.' });
+      else if (evidence.live) sessions.push({ sessionId: id, cwd: row.cwd || row.projectPath });
+    }
+    const roster = await readJobs({ ...project, includeDescendants: true }, budget);
+    jobs.push(...roster.jobs); candidates.push(...roster.candidates);
+    const runs = await bounded(() => ports.cliSessionState.getScheduleRunSnapshot(), budget);
+    if (!Array.isArray(runs) || runs.length + rows.length + jobs.length > budget.limit) throw fail('DISCOVERY_LIMIT', 'Schedule inventory unavailable or oversized.');
+    for (const run of runs) if (await within(run)) jobs.push(run);
+    return { complete: true, sessions, jobs, candidates };
+  }
+  return { readJobs, readLiveness, readTarget, readConversation, readWorktreeActivity, withScope, captureRuntimeRelease,
     getScheduleRunSnapshot: () => ports.cliSessionState.getScheduleRunSnapshot(),
     bg: ports.bg, remote: ports.remote,
     detach: attachment => detachPty(attachment.session, attachment.sessionKey),
@@ -195,11 +239,13 @@ function createProjectDeleteMain(deps) {
     catch (error) { delivered.delete(key); throw error; }
     for (const [old, at] of delivered) if (now() - at >= 86400000) delivered.delete(old);
   };
-  const runtime = createProjectDeleteRuntime({ ...deps, ...clock });
-  const inventory = createProjectDeleteInventory({ ...deps, ...runtime, ...clock, writer });
-  const planner = createProjectDeletePlanner({ ...inventory, ...clock });
+  let inventory;
+  const runtime = createProjectDeleteRuntime({ ...deps, ...clock, readWorktreeSnapshot: budget => inventory.readSnapshot(budget) });
+  inventory = createProjectDeleteInventory({ ...deps, ...runtime, ...clock, writer });
+  const worktrees = deps.worktreeGit ? createProjectDeleteWorktrees({ runGit: deps.worktreeGit, readActivity: runtime.readWorktreeActivity, now }) : null;
+  const planner = createProjectDeletePlanner({ ...inventory, ...clock, worktrees });
   const stop = createProjectDeleteStop({ ...deps, ...runtime, ...clock });
-  const service = createProjectDeleteService({ ...clock, writer, inventory, planner, stop, gate: deps.gate,
+  const service = createProjectDeleteService({ ...clock, writer, inventory, planner, stop, worktrees, gate: deps.gate,
     captureRuntimeRelease: runtime.captureRuntimeRelease,
     onHoldsInstalled: () => settleHolds?.(!disposed),
     notifyProjects: notify('notifyProjects'), notifySchedules: notify('notifySchedules') });

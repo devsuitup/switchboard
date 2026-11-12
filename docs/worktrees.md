@@ -59,9 +59,29 @@ it empty (placeholder `auto`) to let the CLI name each worktree.
 
 ## Cleaning up
 
-Deleting the parent project from its header or Project Settings keeps nested
-worktree histories and directories. The full project-deletion preview lists
-those groups as kept; it offers no physical worktree deletion choice.
+Deleting the parent project from its header or Project Settings keeps linked
+worktree histories and offers a separate checkbox for each registered linked
+worktree folder. Each choice starts unchecked every time. The preview names the
+full path, branch, dirty/untracked files and sessions. The main checkout and the
+selected project directory cannot be removed. Unselected folders and branches
+are kept. Selecting a folder removes its contents, including ignored files,
+memory, schedules or `.work-files` stored inside it; their contents are not backed up.
+
+Stop linked-worktree sessions before selecting their folders. Unknown activity
+and background job records refuse removal; background jobs remain unsupported
+even when reported done. Locked worktrees and submodules require the dedicated
+worktree dialog below. Remote disk removal is unavailable. Directory links use
+the same guards as the dedicated dialog: remove a `node_modules` junction with
+`rmdir <path>` without recursive deletion, then reopen the preview.
+
+After the parent project's sessions stop, selected folders are removed one at a
+time before the project's app metadata is changed. A changed preview requires
+fresh confirmation. A failed removal stops the sequence and lists removed,
+failed and remaining paths in a persistent notice. Review disk and Git
+registration, then choose **Review remaining deletion** for fresh consent.
+There is no rollback or automatic replay. After restarting the app, previous
+disk outcomes may be unknown: a new preview inspects the remaining registration
+and folders; a metadata receipt alone does not prove disk removal succeeded.
 
 When the work is merged or abandoned, remove the worktree from Switchboard or
 with git.
