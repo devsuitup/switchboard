@@ -390,6 +390,11 @@ function createTriggerContext(deps) {
         if (!writer || observed.uncertain || !observed.identity
           || normalizeSessionId(writer.sessionId) !== normalizeSessionId(requestedId)
           || (binding.writerIdentity !== null && observed.identity !== binding.writerIdentity)) return null;
+        if (!sandboxV1) {
+          const again = observationForTab();
+          if (again?.uncertain || again?.identity !== observed.identity || again.writer?.name !== writer.name
+            || normalizeSessionId(again.writer?.sessionId) !== normalizeSessionId(requestedId)) return null;
+        }
         return typeof writer.name === 'string' && writer.name ? writer.name : null;
       } catch { return null; }
     };

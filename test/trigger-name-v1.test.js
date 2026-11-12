@@ -161,7 +161,12 @@ function world({ pid = 12345, sandbox = false, flags = {} } = {}) {
   const map = new Map([[ID, session]]);
   const source = {
     deliveryPtyStart: p => p > 0 ? '10' : null,
-    observeTabWriter: () => { state.calls.legacy++; return state.supported ? { supported: true, writer: state.writer, uncertain: state.uncertain, identity: state.identity } : { supported: false }; },
+    observeTabWriter: () => {
+      state.calls.legacy++;
+      const seen = state.supported ? { supported: true, writer: state.writer, uncertain: state.uncertain, identity: state.identity } : { supported: false };
+      state.onRead?.(state.calls.legacy);
+      return seen;
+    },
     observeTabWriterV1: () => { state.calls.v1++; return { supported: true, writer: state.writer, uncertain: state.uncertain, identity: state.identity }; },
     findDeliveryTab: () => ({}), refreshProcessTable: async () => {}, deliveryProcessTableFresh: () => true,
   };
@@ -171,7 +176,7 @@ function world({ pid = 12345, sandbox = false, flags = {} } = {}) {
   return { state, session, pinned, map };
 }
 test('the ordinary tab writer supplies the descriptor name for the launched session', () => {
-  const w = world(); assert.equal(w.pinned.binding.observeName(), 'Task'); assert.equal(w.state.calls.legacy, 1);
+  const w = world(); assert.equal(w.pinned.binding.observeName(), 'Task'); assert.ok(w.state.calls.legacy <= 2);
 });
 test('the Linux sandbox reader supplies the name through its namespace proof', () => {
   const w = world({ sandbox: true }); assert.equal(w.pinned.binding.observeName(), 'Task');
@@ -227,4 +232,144 @@ test('a background-attach or plain-terminal tab yields no name', () => {
   for (const flag of ['isAttach', 'isPlainTerminal']) {
     const w = world({ flags: { [flag]: true } }); assert.equal(w.pinned.binding.observeName(), null); assert.equal(w.state.calls.legacy, 0);
   }
+});
+
+const stale = [
+  ['a writer whose identity is replaced during the read', w => { w.state.identity = 'id-2'; }],
+  ['a descriptor replaced by another session during the read', w => { w.state.writer = { ...w.state.writer, sessionId: '99999999-9999-9999-9999-999999999999' }; }],
+  ['a descriptor renamed during the read', w => { w.state.writer = { ...w.state.writer, name: 'Other' }; }],
+  ['evidence that becomes uncertain during the read', w => { w.state.uncertain = true; }],
+  ['a writer that disappears during the read', w => { w.state.writer = undefined; }],
+];
+for (const [label, change] of stale) {
+  test(`${label} yields no name from the ordinary reader`, () => {
+    const w = world(); w.state.onRead = n => { if (n === 1) change(w); };
+    assert.equal(w.pinned.binding.observeName(), null);
+  });
+}
+test('the ordinary reader confirms a stable writer with a bounded number of reads', () => {
+  const w = world(); assert.equal(w.pinned.binding.observeName(), 'Task'); assert.ok(w.state.calls.legacy <= 2);
+});
+test('a sandbox observation is not read twice', () => {
+  const w = world({ sandbox: true }); w.pinned.binding.observeName(); assert.equal(w.state.calls.v1, 1);
+});
+test('a name read leaves the delivery binding untouched', () => {
+  const w = world(); const before = JSON.stringify({ ...w.pinned.binding, observeName: undefined });
+  assert.equal(w.pinned.binding.observeName(), 'Task');
+  assert.equal(w.pinned.binding.writerIdentity, null);
+  assert.equal(JSON.stringify({ ...w.pinned.binding, observeName: undefined }), before);
+});
+test('a name read schedules no timer', () => {
+  const w = world(); const original = global.setTimeout; const timers = [];
+  global.setTimeout = (...args) => { timers.push(args[1]); return original(...args); };
+  try { w.pinned.binding.observeName(); } finally { global.setTimeout = original; }
+  assert.deepEqual(timers, []);
+});
+
+test('a deadline reached while the name is being read discards the name', async () => {
+  let clock = Date.now(); const f = named({ now: () => clock, observe: () => { clock += 10 * 60 * 1000; return 'Task'; } });
+  const r = await f.run('Task');
+  assert.equal(r.outcome, 'opened'); assert.equal(r.actualName, null); assert.equal(f.observed, 1);
+  assert.equal(r.enter_written, true);
+});
+test('cancellation during the name read discards the name', async () => {
+  let allowed = true; const f = named({ observe: () => { allowed = false; return 'Task'; } });
+  f.ctx.lifecycle.launchAllowed = () => allowed;
+  const r = await f.new();
+  assert.equal(r.actualName, null); assert.equal(r.requestedName, 'Task');
+});
+test('a target invalidated before commitment drops the name of a refused open and keeps its reason', async () => {
+  const f = named(); let finalize;
+  f.ctx.lifecycle.saveName = async () => ({ name: 'other' });
+  f.execution.publish = (result, fin) => { finalize = fin; f.events.push(['result', result]); };
+  const first = await f.new();
+  assert.equal(first.reason, 'session name could not be saved'); assert.equal(first.actualName, 'Task');
+  f.session.generation = 8;
+  const settled = finalize(first);
+  assert.equal(settled.reason, 'session name could not be saved'); assert.equal(settled.actualName, null);
+  assert.equal(settled.requestedName, 'Task'); assert.equal(settled.created, true);
+});
+
+test('a surrogate refusal happens before project lookup, rate reservation, UUID allocation and dispatch', async () => {
+  const f = named(); const calls = [];
+  f.ctx.lifecycle.getProjectSnapshot = () => { calls.push('project'); return new Promise(() => {}); };
+  f.ctx.lifecycle.randomUUID = () => { calls.push('uuid'); return NEW; };
+  f.ctx.lifecycle.broker.request = async () => { calls.push('renderer'); return { ok: false }; };
+  const r = await f.run('x\ud800y');
+  assert.equal(r.reason, 'session name cannot be transported'); assert.deepEqual(calls, []);
+});
+test('a refused surrogate name does not spend a launch token', async () => {
+  const f = named(); f.ctx.lifecycle.getProjectSnapshot = async () => ({ allProjects: [{ projectPath: project }], hiddenProjects: [], hiddenProjectKinds: {} });
+  const actions = createTriggerActions({ now: () => Date.now() });
+  const trigger = name => ({ version: 1, action: 'open', new: { project, name }, prompt: 'hello' });
+  for (let i = 0; i < 5; i++) assert.equal((await actions.execute(trigger('x\ud800y'), STEM, f.execution)).reason, 'session name cannot be transported');
+  for (let i = 0; i < 3; i++) assert.equal((await actions.execute(trigger('ok'), STEM, f.execution)).outcome, 'opened');
+});
+test('a valid new open with no lifecycle services carries the requested name and no actual name', async () => {
+  const r = await createTriggerActions().execute({ version: 1, action: 'open', new: { project, name: '  Task  ' }, prompt: 'hello' }, STEM, { ctx: {} });
+  assert.equal(r.reason, 'session action not implemented in this build');
+  assert.equal(r.requestedName, 'Task'); assert.equal(r.actualName, null);
+  const bad = await createTriggerActions().execute({ version: 1, action: 'open', new: { project, name: 'Task' }, prompt: '' }, STEM, { ctx: {} });
+  assert.equal('requestedName' in bad, false);
+  const existing = await createTriggerActions().execute({ version: 1, action: 'open', sessionId: ID, prompt: 'hello' }, STEM, { ctx: {} });
+  assert.equal('requestedName' in existing, false);
+  const stop = await createTriggerActions().execute({ version: 1, action: 'stop', sessionId: ID }, STEM, { ctx: {} });
+  assert.equal('requestedName' in stop, false);
+});
+test('post-delivery name observation schedules no timer', async () => {
+  const f = named(); const original = global.setTimeout; let after = false; const late = [];
+  f.execution.deliver = async () => { after = true; return { ok: true, wrote: true, text_written: true, enter_written: true, submitted: 'assumed' }; };
+  global.setTimeout = (...args) => { if (after) late.push(args[1]); return original(...args); };
+  try { await f.new(); } finally { global.setTimeout = original; }
+  assert.deepEqual(late, []);
+});
+test('a name observation leaves the delivery binding without writer authority', async () => {
+  const f = named(); let binding;
+  const pin = f.ctx.pinDelivery;
+  f.ctx.pinDelivery = (...args) => { const pinned = pin(...args); binding = pinned.binding; return pinned; };
+  const before = () => JSON.stringify({ ...binding, observeName: undefined });
+  let snapshot;
+  f.execution.deliver = async () => { snapshot = before(); return { ok: true, wrote: true, text_written: true, enter_written: true, submitted: 'assumed' }; };
+  await f.new();
+  assert.equal(before(), snapshot);
+});
+
+const nodeFs = require('node:fs');
+const os = require('node:os');
+const nodePath = require('node:path');
+const { createJournal } = require('./fixtures/session-request-journal.cjs');
+const { createSessionRequestNamespace } = require('../src/main/triggers/session-request-namespace');
+const { createSessionRequestPublication } = require('../src/main/triggers/session-request-publication');
+
+test('a named result keeps its snapshot through journal publication, a failed rename and replay', async t => {
+  const f = named({ observe: () => 'Task-2' });
+  const root = nodeFs.realpathSync(nodeFs.mkdtempSync(nodePath.join(os.tmpdir(), 'sb-name-journal-')));
+  t.after(() => nodeFs.rmSync(root, { recursive: true, force: true }));
+  const processed = nodePath.join(root, 'processed'); nodeFs.mkdirSync(processed);
+  const input = nodePath.join(root, STEM + '.json');
+  const trigger = { version: 1, action: 'open', new: { project, name: 'Task' }, prompt: 'hello' };
+  nodeFs.writeFileSync(input, JSON.stringify(trigger));
+  const journal = createJournal(); let failRename = true;
+  const publisher = createSessionRequestPublication({ fs: nodeFs, renameWithRetry: (from, to) => {
+    if (failRename && to.endsWith('.result.json')) throw new Error('rename');
+    nodeFs.renameSync(from, to);
+  } });
+  const actions = createTriggerActions();
+  const namespace = createSessionRequestNamespace({ fs: nodeFs, journal, publisher, actions, processedDir: processed });
+  const guarded = await namespace.begin(STEM, input);
+  f.execution.publish = (result, finalize) => actions.publish({ result, namespace: guarded, finalize });
+  const result = await actions.execute(trigger, STEM, f.execution);
+  assert.equal(result.actualName, 'Task-2');
+  const resultPath = nodePath.join(processed, STEM + '.result.json');
+  assert.equal(nodeFs.existsSync(resultPath), false);
+  failRename = false;
+  const replay = await createSessionRequestNamespace({ fs: nodeFs, journal, publisher, actions, processedDir: processed }).begin(STEM, input);
+  assert.deepEqual(replay, { done: true });
+  const bytes = nodeFs.readFileSync(resultPath, 'utf8');
+  assert.deepEqual(JSON.parse(bytes), JSON.parse(JSON.stringify(result)));
+  assert.equal(JSON.parse(bytes).actualName, 'Task-2'); assert.equal(JSON.parse(bytes).requestedName, 'Task');
+  assert.equal(f.observed, 1); assert.equal(kinds(f).filter(k => k === 'name').length, 1); assert.equal(kinds(f).filter(k => k === 'deliver').length, 1);
+  const state = actions.readState(resultPath, nodePath.join(processed, 'none.action.json'));
+  assert.equal(state.committed, true); assert.equal(state.result.actualName, 'Task-2'); assert.equal(state.result.requestedName, 'Task');
+  assert.equal(nodeFs.readFileSync(resultPath, 'utf8'), bytes);
 });

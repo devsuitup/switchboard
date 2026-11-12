@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { escapeForCmd } = require('../../../claude-binary');
+const { escapeForCmd, cmdEscapePasses } = require('../../../claude-binary');
 
 // --- Cross-platform shell resolution ---
 const isWindows = process.platform === 'win32';
@@ -162,12 +162,13 @@ function isWslShell(shellPath) {
 }
 
 // Shell-quote one argv token per shell family
-function quoteArgForShell(shellPath, value) {
+function quoteArgForShell(shellPath, value, cmdPasses = 1) {
   const s = value == null ? '' : String(value);
   const base = path.basename(shellPath).toLowerCase();
   const isBashLike = base.includes('bash') || base.includes('zsh') || base === 'sh' || base === 'dash' || base === 'ksh' || base === 'fish' || base === 'nu' || isWslShell(shellPath);
   const isPowerShell = base.includes('powershell') || base.includes('pwsh');
 
+  if (base === 'nu') return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
   if (base === 'fish') return "'" + s.replace(/\\/g, '\\\\').replace(/'/g, "'\\''") + "'";
   if (isBashLike) {
     // POSIX: wrap in single quotes, escape embedded single quotes as '\''
@@ -177,15 +178,21 @@ function quoteArgForShell(shellPath, value) {
     // PowerShell: single-quoted string, escape ' as ''
     return "'" + s.replace(/'/g, "''") + "'";
   }
-  return escapeForCmd(s, 1);
+  return escapeForCmd(s, cmdPasses);
 }
 
-function quoteArgvForShell(shellPath, argv) {
-  return argv.map(a => quoteArgForShell(shellPath, a)).join(' ');
+function isCmdShell(shellPath) {
+  const base = path.basename(shellPath).toLowerCase();
+  return base === 'cmd.exe' || base === 'cmd';
+}
+
+function quoteArgvForShell(shellPath, argv, { env } = {}) {
+  const passes = env && isCmdShell(shellPath) ? cmdEscapePasses(env) : 1;
+  return argv.map(a => quoteArgForShell(shellPath, a, passes)).join(' ');
 }
 
 // Returns spawn args appropriate for the resolved shell
-function shellArgs(shellPath, cmd, extraArgs) {
+function shellArgs(shellPath, cmd, extraArgs, { pty = false } = {}) {
   const base = path.basename(shellPath).toLowerCase();
   const isBashLike = base.includes('bash') || base.includes('zsh') || base === 'sh';
   const isFish = base === 'fish';
@@ -203,7 +210,7 @@ function shellArgs(shellPath, cmd, extraArgs) {
     if (isFish) return ['-l', '-c', cmd];
     if (isNushell) return ['-l', '-c', cmd];
     if (base.includes('powershell') || base.includes('pwsh')) return ['-NoLogo', '-Command', cmd];
-    return ['/C', cmd];
+    return pty && isCmdShell(shellPath) ? `/d /s /c "${cmd}"` : ['/C', cmd];
   }
   if (isBashLike) return ['-l', '-i'];
   if (isFish) return ['-l', '-i'];
@@ -212,4 +219,4 @@ function shellArgs(shellPath, cmd, extraArgs) {
   return [];
 }
 
-module.exports = { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgForShell, quoteArgvForShell };
+module.exports = { isCmdShell, discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgForShell, quoteArgvForShell };

@@ -1,66 +1,70 @@
 'use strict';
 
-// Establishes argv and launch-plan construction through injected boundaries (the extracted
-// open-terminal handler, the real shell encoders, an injected PTY edge). It is not a live shell
-// or Claude Code qualification.
-
+// see .ai/contexts/trigger-watcher.md ("Naming a new session")
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { fixture, ID } = require('./fixtures/trigger-main-open.cjs');
+const { launch, ID } = require('./fixtures/trigger-name-launch.cjs');
 const profiles = require('../src/main/terminals/shell-profiles');
-const { validatePreLaunchCmd } = require('../src/main/terminals/pre-launch-cmd-guard');
 const { resolveWindowsClaude } = require('../claude-binary');
 
 const NAMES = ['smithy hardening', `it's "quoted"`, 'a\\', 'C:\\dir\\', 'say "hi\\"', '$HOME `id` $(id) ${x} %PATH% !x ^y',
   'a&b|c>d<e (f) ; g', '--dangerously-skip-permissions', '-n', 'cafe\u0301 \u{1F600}', "'; touch pwned; '", '"; touch pwned; "'];
+const posix = ['/bin/bash', '/bin/sh'].filter(shell => process.platform !== 'win32' && fs.existsSync(shell));
 
-function launch(shellPath, name, options = {}) {
-  const f = fixture({ resolveShell: () => ({ path: shellPath }), quoteArgvForShell: profiles.quoteArgvForShell,
-    shellArgs: profiles.shellArgs, isWslShell: profiles.isWslShell, windowsToWslPath: profiles.windowsToWslPath, os, validatePreLaunchCmd,
-    sandboxScriptPath: () => '/opt/switchboard/claude-sandbox.sh', sandboxBindEnv: () => null,
-    parseAddDirs: value => String(value || '').split(',').map(dir => dir.trim()).filter(Boolean) });
-  f.permit.mode = 'new'; f.permit.requestedSessionId = null; f.permit.name = name; f.authorize();
-  return f.open('permit', true, options).then(result => { assert.equal(result.ok, true, JSON.stringify(result)); return f.spawns[0]; });
-}
-const posixArgv = (shellPath, script, cwd) => {
-  const ran = spawnSync(shellPath, ['-c', script], { encoding: 'utf8', cwd, env: { PATH: process.env.PATH } });
+const strip = command => command.replace(/^'cd' '[^']*' && /, '');
+const argvOf = (shellPath, command, cwd, fn = 'claude') => {
+  const ran = spawnSync(shellPath, ['-c', `${fn}() { printf '%s\\0' "$@"; }; ${strip(command)}`], { encoding: 'utf8', cwd, env: { PATH: process.env.PATH } });
   assert.equal(ran.status, 0, ran.stderr);
   return ran.stdout.split('\0').slice(0, -1);
 };
+const tmp = t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-name-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+};
 
-for (const shellPath of ['/bin/bash', '/bin/sh']) {
+for (const shellPath of posix) {
   for (const name of NAMES) {
     test(`${shellPath} parses the launch command of ${JSON.stringify(name)} into the exact argv`, async t => {
-      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-name-'));
-      t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
-      const spawned = await launch(shellPath, name);
-      const command = spawned.args[spawned.args.length - 1];
-      const argv = posixArgv(shellPath, `claude() { printf '%s\\0' "$@"; }; ${command.replace(/^'cd' '[^']*' && /, '')}`, cwd);
-      assert.deepEqual(argv, ['--session-id', ID, '--name', name]);
+      const cwd = tmp(t);
+      const spawned = await launch(shellPath, { name });
+      assert.deepEqual(argvOf(shellPath, spawned.args.at(-1), cwd), ['--session-id', ID, '--name', name]);
       assert.equal(fs.existsSync(path.join(cwd, 'pwned')), false);
+    });
+  }
+  const existing = [
+    ['an unnamed fresh launch', { isNew: true, options: { addDirs: 'C:\\space dir\\', appendSystemPrompt: `it's "x" a\\` } },
+      ['--session-id', ID, '--add-dir', 'C:\\space dir\\', '--append-system-prompt', `it's "x" a\\`]],
+    ['a resume', { isNew: false, transcript: true, options: { addDirs: 'C:\\space dir\\', appendSystemPrompt: 'two  spaces & $x' } },
+      ['--resume', ID, '--add-dir', 'C:\\space dir\\', '--append-system-prompt', 'two  spaces & $x']],
+    ['a fork', { isNew: true, options: { forkFrom: 'src id', permissionMode: 'plan' } },
+      ['--resume', 'src id', '--fork-session', '--permission-mode', 'plan']],
+  ];
+  for (const [label, request, expected] of existing) {
+    test(`${shellPath} parses ${label} with its existing options into the exact argv`, async t => {
+      const spawned = await launch(shellPath, request);
+      assert.deepEqual(argvOf(shellPath, spawned.args.at(-1), tmp(t)), expected);
     });
   }
 }
 
-test('a sandbox launch passes the name to the sandbox script after the script path', async t => {
-  const triggers = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-triggers-'));
+const sandboxIt = process.platform === 'linux' && posix.length ? test : test.skip;
+sandboxIt('a sandbox launch passes the name to the sandbox script after the script path', async t => {
+  const triggers = tmp(t);
   process.env.SWITCHBOARD_TRIGGERS_DIR = triggers;
-  t.after(() => { delete process.env.SWITCHBOARD_TRIGGERS_DIR; fs.rmSync(triggers, { recursive: true, force: true }); });
-  const spawned = await launch('/bin/bash', 'it\'s "x"', { sandbox: true });
-  const command = spawned.args[3].replace(/^'cd' '[^']*' && /, '');
-  const argv = posixArgv('/bin/bash', `bash() { printf '%s\\0' "$@"; }; ${command}`);
-  assert.deepEqual(argv, ['/opt/switchboard/claude-sandbox.sh', '--session-id', ID, '--name', 'it\'s "x"']);
+  t.after(() => { delete process.env.SWITCHBOARD_TRIGGERS_DIR; });
+  const spawned = await launch('/bin/bash', { name: 'it\'s "x"', options: { sandbox: true } });
+  assert.deepEqual(argvOf('/bin/bash', spawned.args[3], tmp(t), 'bash'), ['/opt/switchboard/claude-sandbox.sh', '--session-id', ID, '--name', 'it\'s "x"']);
 });
-test('a launch prefix wraps the quoted name unchanged', async () => {
-  const spawned = await launch('/bin/bash', 'a b$(id)', { preLaunchCmd: 'FOO=1' });
-  const command = spawned.args[3].replace(/^'cd' '[^']*' && /, '');
-  assert.match(command, /^FOO=1 claude /);
-  const argv = posixArgv('/bin/bash', `claude() { printf '%s\\0' "$@"; }; ${command}`);
-  assert.deepEqual(argv, ['--session-id', ID, '--name', 'a b$(id)']);
+const prefixIt = posix.length ? test : test.skip;
+prefixIt('a launch prefix wraps the quoted name unchanged', async t => {
+  const spawned = await launch('/bin/bash', { name: 'a b$(id)', options: { preLaunchCmd: 'FOO=1' } });
+  assert.match(strip(spawned.args[3]), /^FOO=1 claude /);
+  assert.deepEqual(argvOf('/bin/bash', spawned.args[3], tmp(t)), ['--session-id', ID, '--name', 'a b$(id)']);
 });
 
 const q = (shell, name) => profiles.quoteArgvForShell(shell, ['--name', name]);
@@ -69,10 +73,24 @@ test('POSIX encodings are single-quoted with embedded quotes closed and reopened
   assert.equal(q('/bin/bash', 'a\\'), `'--name' 'a\\'`);
   assert.equal(q('/bin/bash', '$HOME `id`'), `'--name' '$HOME \`id\`'`);
 });
-test('fish encoding escapes backslashes inside single quotes', () => {
-  assert.equal(q('/usr/bin/fish', 'a\\'), `'--name' 'a\\\\'`);
-  assert.equal(q('/usr/bin/fish', `it's \\'`), `'--name' 'it'\\''s \\\\'\\'''`);
-});
+const fishCases = [
+  ['a\\', `'a\\\\'`], [`it's \\'`, `'it'\\''s \\\\'\\'''`], ['C:\\dir\\file', `'C:\\\\dir\\\\file'`],
+  ['a\\\\b', `'a\\\\\\\\b'`], ['\\\\server\\share\\x', `'\\\\\\\\server\\\\share\\\\x'`], ['x\\', `'x\\\\'`],
+];
+for (const [name, expected] of fishCases) {
+  test(`fish encoding of ${JSON.stringify(name)} escapes every backslash`, () => {
+    assert.equal(q('/usr/bin/fish', name), `'--name' ${expected}`);
+  });
+}
+const nuCases = [
+  ['it\'s', '"it\'s"'], ['a\\', '"a\\\\"'], ['say "hi"', '"say \\"hi\\""'], ['a; echo marker', '"a; echo marker"'],
+  ['$x (y) `z`', '"$x (y) `z`"'], ['--name', '"--name"'], ['C:\\dir\\file', '"C:\\\\dir\\\\file"'],
+];
+for (const [name, expected] of nuCases) {
+  test(`nushell encoding of ${JSON.stringify(name)} is one escaped double-quoted string`, () => {
+    assert.equal(q('/usr/bin/nu', name), `"--name" ${expected}`);
+  });
+}
 test('PowerShell encoding doubles single quotes inside a single-quoted string', () => {
   assert.equal(q('C:\\Program Files\\PowerShell\\7\\pwsh.exe', `it's "x" & $y`), `'--name' 'it''s "x" & $y'`);
 });
@@ -87,17 +105,25 @@ const cmdCases = [
 ];
 for (const [name, expected] of cmdCases) {
   test(`cmd.exe encoding of ${JSON.stringify(name)} leaves no unescaped metacharacter`, () => {
-    assert.equal(profiles.quoteArgForShell('C:\\Windows\\System32\\cmd.exe', name), expected);
+    assert.equal(profiles.quoteArgForShell('cmd.exe', name), expected);
   });
 }
-test('the cmd.exe and PowerShell launch commands carry the name through the injected PTY', async () => {
-  const cmd = await launch('C:\\Windows\\System32\\cmd.exe', 'a&b');
-  assert.deepEqual(cmd.args, ['/C', `claude ^"--session-id^" ^"${ID}^" ^"--name^" ^"a^&b^"`]);
-  const pwsh = await launch('C:\\Program Files\\PowerShell\\7\\pwsh.exe', "it's");
+test('the cmd.exe launch hands node-pty one command line and PowerShell an argument list', async () => {
+  const cmd = await launch('cmd.exe', { name: 'a&b' });
+  assert.equal(cmd.args, `/d /s /c "claude ^"--session-id^" ^"${ID}^" ^"--name^" ^"a^&b^""`);
+  const pwsh = await launch('pwsh.exe', { name: "it's" });
   assert.deepEqual(pwsh.args, ['-NoLogo', '-Command', `claude '--session-id' '${ID}' '--name' 'it''s'`]);
 });
+test('a cmd.exe launch escapes twice when claude resolves to a command shim and once otherwise', async () => {
+  const shim = { ...process.env, PATH: 'C:\\shim' }, exe = { ...process.env, PATH: 'C:\\exe' };
+  const { cmdEscapePasses } = require('../claude-binary');
+  const exists = file => file === 'C:\\shim\\claude.cmd' || file === 'C:\\exe\\claude.exe';
+  assert.equal(cmdEscapePasses(shim, { exists }), 2);
+  assert.equal(cmdEscapePasses(exe, { exists }), 1);
+  assert.equal(cmdEscapePasses({ PATH: 'C:\\none' }, { exists }), 1);
+});
 test('WSL receives the POSIX encoding through the distribution shell', async () => {
-  const wsl = await launch('wsl.exe', "it's");
+  const wsl = await launch('wsl.exe', { name: "it's" });
   assert.deepEqual(wsl.args.slice(2), ['--', 'bash', '-l', '-i', '-c', `claude '--session-id' '${ID}' '--name' 'it'\\''s'`]);
 });
 

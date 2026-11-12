@@ -721,7 +721,7 @@ async function executeOpen(trigger, execution) {
     try {
       if (!acceptedCheck || !admitted() || acceptedCheck()) return null;
       const name = pinned?.binding.observeName?.();
-      return typeof name === 'string' && name ? name : null;
+      return typeof name === 'string' && name && admitted() && !acceptedCheck() ? name : null;
     } catch { return null; }
   }
   let result;
@@ -736,7 +736,8 @@ async function executeOpen(trigger, execution) {
     }
     if (isNew) result = { ...result, actualName: observeName() };
     const finalize = pending => {
-      const next = pending.ok && acceptedCheck ? acceptedCheck() || pending : pending;
+      const invalid = acceptedCheck?.();
+      const next = pending.ok ? invalid || pending : invalid && isNew ? { ...pending, actualName: null } : pending;
       result = !allowed() && next.reason !== 'Switchboard is closing.'
         ? { ...next, ok: false, outcome: 'refused', reason: 'Switchboard is closing.', error: 'Switchboard is closing.', ...(isNew ? { actualName: null } : {}) } : next;
       return result;

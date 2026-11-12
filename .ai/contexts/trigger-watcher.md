@@ -268,11 +268,26 @@ from the consumed permit alone and hands it to `buildLaunchArgs({ name })`.
 Renderer options, defaults and placeholder labels cannot supply it. Only
 `harnesses/claude.js` turns it into `--name <name>`, on a fresh launch; resume
 and fork ignore it. The argv element is passed whole through the shell encoders
-(`quoteArgForShell`: POSIX and fish single quotes, PowerShell doubled quotes,
-cmd.exe caret escaping via `escapeForCmd(arg, 1)`) and the sandbox/prefix
-wrappers. `test/trigger-name-transport.test.js` pins those encodings and the
-`resolveWindowsClaude` plans through injected edges; it is not a live shell,
-node-pty or Claude Code qualification.
+(`quoteArgForShell`: POSIX single quotes, fish single quotes with doubled
+backslashes, nushell double-quoted strings with `\\` and `\"` escapes, PowerShell
+doubled single quotes, cmd.exe caret escaping via `escapeForCmd`) and the
+sandbox/prefix wrappers. For cmd.exe the interactive launch gives node-pty one
+command line, `/d /s /c "<command>"` (`shellArgs(..., { pty: true })`), so node-pty
+adds no quoting of its own; arguments are escaped once when `claude` resolves to
+an executable and twice when it resolves to a `.cmd`/`.bat` shim, whose `%*`
+re-parses them (`cmdEscapePasses`).
+
+Qualification: `test/trigger-name-transport.test.js` runs the real encoders
+through the extracted `open-terminal` handler and an injected PTY edge. On Linux
+and macOS it decodes the command with real `bash` and `sh` and compares argv; fish,
+nushell, PowerShell and cmd.exe are pinned by literal expected strings only (no
+such shell runs there). `test/trigger-name-transport-windows.test.js` runs only
+on Windows (the `windows-2022` leg of the test workflow, selected by
+`scripts/platform-tests.js`): it serializes the real launch arguments with
+node-pty's `argsToCommandLine`, starts `cmd.exe` with that exact command line and
+compares the argv a disposable echo executable and a `claude.cmd` shim received
+with the input. Neither file is a live Claude Code or ConPTY qualification;
+PowerShell and nushell remain unexecuted.
 
 A name with an unpaired surrogate is schema-valid but cannot survive UTF-8, so
 `executeOpen` refuses it right after the first cancellation/deadline check, before
@@ -290,8 +305,11 @@ sandbox) and returns the descriptor `name` only for a certain, unique writer who
 session ID is the new UUID, whose identity matches any identity delivery already
 pinned, and whose PTY has a real PID. It reports `null` for macOS (unsupported),
 Windows PID 0, uncertain or missing proof, and an absent, empty or non-string
-name. It mutates no delivery binding. A different or `null` name changes nothing
-else. Finalization that turns the launch into a refusal drops the name.
+name. The ordinary reader is read a second time to confirm the same writer
+identity, session and name (the sandbox reader revalidates internally); a
+change between the two reads yields `null`. The name is also discarded when the
+deadline passes or the launch is cancelled during the read. It mutates no delivery binding. A different or `null` name changes nothing
+else. Finalization that turns the launch into a refusal, or finds an already refused launch invalidated, drops the name.
 
 Every open-new marker carries `nameVersion: 1` and `requestedName`. Recovery
 accepts them only for an `open`/`new` marker whose version is numeric 1 and whose

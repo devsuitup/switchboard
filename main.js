@@ -3269,7 +3269,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
           name: triggerPermit?.name }));
       }
 
-      let claudeCmd = 'claude ' + quoteArgvForShell(shell, claudeArgs);
+      let claudeCmd = 'claude ' + quoteArgvForShell(shell, claudeArgs, { env: cleanPtyEnv });
 
       // Sandbox: run claude inside a bubblewrap sandbox that only exposes the
       // project directory and Claude's own config/state dirs. Linux only —
@@ -3356,7 +3356,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       launchStartedAt = Date.now();
       if (triggerPermit && (launchStartedAt >= triggerPermit.deadline || !unsavedGuard.launchAllowed()
         || !triggerRendererBridge.checkPermit(triggerRequestId))) return { ok: false, reason: 'session action timed out', error: 'session action timed out' };
-      ptyProcess = spawnPty(shell, shellArgs(shell, claudeCmd, shellExtraArgs), {
+      ptyProcess = spawnPty(shell, shellArgs(shell, claudeCmd, shellExtraArgs, { pty: true }), {
         name: 'xterm-256color',
         cols: spawnCols,
         rows: spawnRows,

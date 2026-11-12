@@ -95,12 +95,19 @@ test('failed stop result rename retains input and marker for restart; failed unl
 
 const openMarker = extra => ({ version: 1, action: 'open', mode: 'new', requestedSessionId: null, sessionId: ID, tabKey: ID,
   deadline: 1, phase: 'spawned', created: true, wrote: true, text_written: true, enter_written: true, submitted: 'assumed', steps_total: 1, ...extra });
-async function recoverOpen(t, marker, effectsOf) {
+const cliSessionState = require('../cli-session-state');
+async function recoverOpen(t, marker) {
+  const reads = [];
+  for (const name of ['observeTabWriter', 'observeTabWriterV1', 'readStatusEvidence', 'liveElsewhereV1Checked']) {
+    const original = cliSessionState[name];
+    cliSessionState[name] = (...args) => { reads.push(name); return original?.(...args); };
+    t.after(() => { cliSessionState[name] = original; });
+  }
   const watcher = await rig(t, { stem: STEM, orphan: true, payload: { version: 1, action: 'open', new: { project: process.cwd(), name: 'Task' }, prompt: 'hello' },
     setup({ processed }) { fs.writeFileSync(path.join(processed, STEM + '.action.json'), JSON.stringify(marker)); } });
   const result = await waitResult(path.join(watcher.processed, STEM + '.result.json'));
-  assert.equal(watcher.effects(), 0, 'recovery never launches, saves, delivers or observes');
-  effectsOf?.(watcher);
+  assert.equal(watcher.effects(), 0, 'recovery never launches, saves or delivers');
+  assert.deepEqual(reads, [], 'recovery never reads a descriptor');
   return result;
 }
 test('an orphan new-session marker with naming provenance recovers the requested name and no actual name', async t => {
@@ -135,6 +142,10 @@ for (const [label, naming] of unusable) {
     assert.equal('requestedName' in r, false); assert.equal('actualName' in r, false);
   });
 }
+test('naming provenance on a marker of another action is not accepted', async t => {
+  const r = await recoverOpen(t, openMarker({ action: 'stop', mode: 'new', phase: 'claimed', nameVersion: 1, requestedName: 'Task' }));
+  assert.equal(r.reason, 'interrupted by restart'); assert.equal('requestedName' in r, false); assert.equal('actualName' in r, false);
+});
 test('naming provenance on a resume marker is not accepted', async t => {
   const r = await recoverOpen(t, openMarker({ mode: 'resume', created: undefined, resumed: true, requestedSessionId: ID, nameVersion: 1, requestedName: 'Task' }));
   assert.equal('requestedName' in r, false);
