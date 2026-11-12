@@ -30,7 +30,8 @@ blocks whole-global saves while pending. A cancelled dialog itself writes nothin
 
 Any NOT_READY reply makes deletion globally unavailable with the retryable
 reason "Project deletion is unavailable until recovery of an interrupted deletion
-finishes". The next open probes again. Only announced operation IDs get a
+finishes". Only a successful capability probe on the next open can clear it;
+older preview replies cannot override a newer NOT_READY. Only announced operation IDs get a
 project-specific unresolved state. Unknown outcomes keep Check deletion state;
 sealed partial outcomes offer Review remaining deletion, which requests a fresh
 plan and consent rather than replaying the old operation.

@@ -185,6 +185,7 @@ async function settingsPanel(h) {
   h.window.api.getShellProfiles = async () => [];
   h.window.api.setSetting = async (_key, value) => Object.assign(h.settings, value);
   for (const file of ['setting-defaults.js', 'shortcuts.js', 'terminal-themes.js', 'remote-enrol-panel.js', 'settings-panel.js']) h.evalPublic(file);
+  loadAppFunctions(h.context, { functions: ['saveGlobalSettings'], declarations: ['_persistChain'] });
   await h.window.openSettingsViewer('global');
 }
 

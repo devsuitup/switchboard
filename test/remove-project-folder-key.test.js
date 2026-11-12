@@ -56,7 +56,7 @@ test('preload: the explicit legacy bridge forwards the folder key to the main pr
     'the bridge must widen to two arguments end to end');
 });
 
-test('renderer: the settings viewer threads the group folder key through to remove-project', () => {
+test('renderer: the settings viewer delegates to the shared project deletion controller', () => {
   const sidebar = fs.readFileSync(path.join(ROOT, 'public', 'sidebar.js'), 'utf8');
   assert.match(sidebar, /openSettingsViewer\('project', project\.projectPath, project\.folder\)/,
     'the folder key must be passed into the settings viewer alongside the project path');

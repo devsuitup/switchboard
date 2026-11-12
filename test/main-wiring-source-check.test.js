@@ -28,7 +28,11 @@ test('project deletion composition is wired after background ports and before wi
   const block = mainSrc.slice(composition, mainSrc.indexOf("bgAgents.onJobsChanged", composition));
   assert.doesNotMatch(block, /getProjectsSnapshot|scheduleProjects/);
   const preload = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
-  assert.doesNotMatch(preload, /preview-project-delete|delete-project|project-delete-state/);
+  for (const [method, channel] of [['previewProjectDelete', 'preview-project-delete'], ['deleteProject', 'delete-project'], ['projectDeleteState', 'project-delete-state']]) {
+    assert.ok(preload.includes(`${method}: request => ipcRenderer.invoke('${channel}', request)`));
+  }
+  assert.match(preload, /removeProjectLegacy: \(projectPath, folderKey\) => ipcRenderer\.invoke\('remove-project', projectPath, folderKey\)/);
+  assert.match(preload, /onProjectDeleteRecovery: callback => ipcRenderer\.on\('project-delete-recovery'/);
 });
 
 /** Slice the balanced `(...)` group that starts at the first `(` at or after `from`. */

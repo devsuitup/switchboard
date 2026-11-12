@@ -87,6 +87,10 @@ function setup({ traceState, files = [], readResult, deleteResult = { ok: true }
   evalInWindow(dom, path.join(PUBLIC_DIR, 'shortcuts.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'terminal-themes.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'settings-panel.js'));
+  require('./app-source').loadAppFunctions(dom.getInternalVMContext(), { functions: ['saveGlobalSettings'], declarations: ['_persistChain'] });
+  window.cachedAllProjects = [];
+  require('./app-source').loadAppFunctions(dom.getInternalVMContext(), { sourcePath: path.join(PUBLIC_DIR, 'sidebar.js'),
+    functions: ['isProjectDeleting', 'projectDeletionKey', 'paintProjectDeletionBusy'], declarations: ['deletingProjectKeys', 'projectDeletionUnavailable'] });
   evalInWindow(dom, path.join(PUBLIC_DIR, 'activity-trace-panel.js'));
 
   return {

@@ -885,6 +885,7 @@ const completedProjectDeletionKeys = new Set();
 const projectDeletionRestoreTargets = new Set();
 window.isDeletedProjectRestoreTarget = item => projectDeletionRestoreTargets.has(JSON.stringify([projectDeletionKey(item), item.sessionId]));
 let projectDeletionUnavailable = '';
+let projectDeletionRecoveryRevision = 0;
 const PROJECT_DELETION_RECOVERY_REASON = 'Project deletion is unavailable until recovery of an interrupted deletion finishes';
 
 function projectDeletionKey(project) {
@@ -939,19 +940,24 @@ function setProjectDeletionBusy(project, busy) {
   paintProjectDeletionBusy();
 }
 
-async function projectDeletionCall(method, input) {
+async function projectDeletionCall(method, input, { retryRecovery = false } = {}) {
+  const revision = projectDeletionRecoveryRevision;
   let timer;
   try {
     const reply = await Promise.race([window.api[method](input), new Promise((_, reject) => {
       timer = setTimeout(() => reject(new Error('Project deletion response timed out. Check its state before trying again.')), 15000);
     })]);
-    projectDeletionUnavailable = reply?.code === 'NOT_READY' ? PROJECT_DELETION_RECOVERY_REASON : '';
+    if (reply?.code === 'NOT_READY') {
+      projectDeletionRecoveryRevision++;
+      projectDeletionUnavailable = PROJECT_DELETION_RECOVERY_REASON;
+    } else if (retryRecovery && reply?.ok && revision === projectDeletionRecoveryRevision) projectDeletionUnavailable = '';
     paintProjectDeletionBusy();
     return reply;
   } finally { clearTimeout(timer); }
 }
 
 function projectDeletionPlanReason(reply) {
+  if (projectDeletionUnavailable) return projectDeletionUnavailable;
   if (reply?.code === 'NOT_READY') return PROJECT_DELETION_RECOVERY_REASON;
   const plan = reply?.plan;
   if (!plan) return reply?.error || 'Project deletion preview is unavailable. Close and reopen Delete to retry.';
@@ -1058,7 +1064,7 @@ async function confirmAndDeleteProjectFolder(project, button) {
     await window.flushProjectDeletionWrites?.();
     const request = options => ({ projectPath: project.projectPath, ...(project.folder ? { folderKey: project.folder } : {}),
       options: { sessions: options.sessions, settings: options.settings, schedules: false, transcripts: false, stopBackgroundJobs: false } });
-    const capabilities = await projectDeletionCall('previewProjectDelete', request({ sessions: false, settings: false }));
+    const capabilities = await projectDeletionCall('previewProjectDelete', request({ sessions: false, settings: false }), { retryRecovery: true });
     if (!capabilities?.plan) {
       projectDeletionNotice(project, projectDeletionPlanReason(capabilities)); return false;
     }

@@ -64,9 +64,10 @@ test('AC4 AC5 AC11 busy survives skipped partial full renders; duplicate Cancel 
   const h = setup(t); const pending = h.start(); await flush();
   h.w.refreshSidebar({ skipUnchanged: true }); h.w.refreshSidebar({ skipUnchanged: true });
   h.p.sessions[0].summary = 'partial'; h.w.renderProjects([h.p]); h.w.renderProjects([h.p], true);
-  assert.equal(h.document.querySelector('.project-delete-btn').disabled, true);
-  const before = h.calls.preview.length; await h.start();
+  const before = h.calls.preview.length; const duplicate = h.start(); await flush();
   assert.equal(h.calls.preview.length, before, 'rerender must not forget busy ownership');
+  await duplicate;
+  assert.equal(h.document.querySelector('.project-delete-btn').disabled, true);
   h.document.querySelector('[data-choice-id="sessions"]').click(); await flush();
   h.cancel(); await pending;
   assert.equal(h.calls.execute.length, 0); assert.equal(h.calls.writes.length, 0);
@@ -203,4 +204,26 @@ test('partial receipt offers an explicit fresh preview without replaying the old
   assert.equal(action.textContent, 'Review remaining deletion');
   action.click(); await flush(); assert.ok(h.confirm()); assert.equal(h.calls.execute.length, 1);
   h.cancel(); await flush();
+});
+
+test('a late preview cannot clear global NOT_READY; the next open can retry recovery', async t => {
+  const h = setup(t);
+  const preview = h.w.api.previewProjectDelete;
+  let finishPreview;
+  h.w.api.previewProjectDelete = async request => {
+    const reply = await preview(request);
+    if (h.calls.preview.length === 2) await new Promise(resolve => { finishPreview = resolve; });
+    return reply;
+  };
+  const pending = h.start(); await flush();
+  h.w.api.projectDeleteState = async () => ({ ok: false, code: 'NOT_READY' });
+  await h.w.reconcileProjectDeletions({ operations: [{ operationId: 'other-op', host: null, projectPath: '/other' }] });
+  finishPreview(); await flush();
+  assert.equal(h.confirm().disabled, true, 'a stale successful preview must not clear recovery unavailability');
+  assert.match(h.document.querySelector('.choice-dialog').textContent, new RegExp(unavailable));
+  h.cancel(); await pending;
+  assert.equal(h.calls.execute.length, 0);
+  const retry = h.start(); await flush();
+  assert.equal(h.confirm().disabled, false, 'a fresh open probes recovery again');
+  h.cancel(); await retry;
 });

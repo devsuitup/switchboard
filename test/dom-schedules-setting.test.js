@@ -29,6 +29,10 @@ async function setup(t, settings = {}, beforeInit = () => {}) {
   t.after(() => dom.window.close());
   const w = dom.window;
   const ctx = dom.getInternalVMContext();
+  require('./app-source').loadAppFunctions(ctx, { functions: ['saveGlobalSettings'], declarations: ['_persistChain'] });
+  w.cachedAllProjects = [];
+  require('./app-source').loadAppFunctions(ctx, { sourcePath: path.join(root, 'public/sidebar.js'),
+    functions: ['isProjectDeleting', 'projectDeletionKey', 'paintProjectDeletionBusy'], declarations: ['deletingProjectKeys', 'projectDeletionUnavailable'] });
   const calls = [];
   let saved = settings;
   w.api = new Proxy({

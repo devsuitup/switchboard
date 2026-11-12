@@ -2303,9 +2303,11 @@ while archived; an ordinary Archive requires no cache deletion. Missing
 project settings fall through to global settings and `SETTING_DEFAULTS`.
 Folder-archive schedule files remain under their separate re-enable-offer flow.
 
-Delete keeps the existing `remove-project` implementation: write the hidden
-entry, delete that folder's cache and search rows, delete `project:<path>` and
-remove its schedule registration. `deleteProject` names this destructive bridge. The directory, transcripts, schedule files
+The legacy `remove-project` implementation writes the hidden
+entry, deletes that folder's cache and search rows, deletes `project:<path>` and
+removes its schedule registration. `removeProjectLegacy` names this bridge; neither
+current Delete entry point calls it. Both use selective token-based deletion as
+documented in [project-delete.md](project-delete.md). The legacy implementation's directory, transcripts, schedule files
 and session metadata are not deleted. This is separate from Delete worktree
 from disk (#474). Adding the project again later rebuilds defaults.
 

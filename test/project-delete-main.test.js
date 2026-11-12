@@ -461,4 +461,3 @@ test('trigger boot failure is contained and logged after scheduler startup', asy
   assert.equal(errors.length, 1);
   assert.match(errors[0].join(' '), /trigger-watcher.*watcher unavailable/);
 });
-
