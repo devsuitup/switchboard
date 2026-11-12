@@ -270,6 +270,7 @@ function lifecycleFixture(extra = {}) {
     shutdownAllMcp: noop, localTranscriptTracker: { dispose: noop }, unsubscribeTaskJobs: noop,
     taskRecords: { dispose: noop }, projectsWatcher: null, cliSessionState: { stop: noop },
     bgAgents: { stop: noop }, remoteIndexer: { dispose: noop }, remoteWatcher: { stopAll: noop },
+    projectDeleteMain: { dispose: noop },
     remoteActivityTracker: { dispose: noop }, activeSessions: new Map(), closedSessions: new Map(),
     killPty: () => calls.push('kill'), flushProjectsBeforeExit: noop, flushWindowBounds: noop,
     sessionCache: { shutdownProducers: noop }, sessionTransitions: { drainMetadataWrites: noop },

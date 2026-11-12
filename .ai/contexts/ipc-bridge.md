@@ -4,10 +4,11 @@
 
 This file is the **canonical inventory** of the IPC surface. When you add a new IPC, you change three places — main handler, preload bridge, renderer caller — and every IPC name should appear here.
 
-## Dormant project deletion callbacks (#474 A4c3)
+## Internal project deletion callbacks (#474 A4c4)
 
 `registerProjectDeleteIpc({ipcMain, service, getMainWindow, announce})` is an
-internal factory with no main/preload/renderer caller yet. It registers:
+internal factory called by project-delete-main after background IPC setup.
+Preload and renderer callers remain A4d. It registers:
 
 - `preview-project-delete({projectPath, folderKey?, options})`: five explicit
   boolean options, inspectable plan and token, or token:null on refusal.
@@ -27,6 +28,21 @@ for main to announce after recovery. Old documents cannot read
 those results and tokens cannot cross document/boot boundaries. Dispose removes
 the exact callbacks and listeners without releasing main-owned operations.
 `announce` is an injected main lifecycle callback, not renderer-supplied input.
+
+Main's composition accepts an early `attach(win)` and defers the registration's
+attach until the first did-finish-load. This avoids pinning the empty initial URL.
+It starts recovery without awaiting before creating the window, gates all three
+callbacks with retryable NOT_READY, and awaits a separate bounded recovery
+barrier before scheduler/trigger startup. Writer bootstrap retries recovery;
+shutdown unregisters listeners without dropping unresolved service ownership.
+
+The internal `project-delete-recovery` notification carries `{operationIds}`;
+`project-delete-schedules-changed` carries `{invalidation, operationId,
+expectedProjectEpoch, committedRevision}`. Neither has a preload subscription
+yet. Project changes use the existing throttled project notification. Both sinks
+are behind a fresh committed-receipt/current-epoch check and main-owned per-sink
+operation/epoch/revision deduplication. See project-delete.md for restart and
+startup deadline limits. Legacy remove-project remains a separate contract.
 
 Legacy `remove-project(projectPath, folderKey)` and its existing preload
 contract are unchanged. Service sequencing and recovery are documented in

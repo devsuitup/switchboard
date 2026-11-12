@@ -137,6 +137,9 @@ fast-exit/launch-reply ordering.
 
 `scheduleRegistry` reads `scheduleProjects` on each `list`, `add` and `remove`.
 Only an absent or non-array setting invokes the seed; an empty array stays empty.
+The registry is seeded before any session can run, so a sandboxed one cannot plant into the seed.
+Main awaits `scheduleProjects().list()` before starting the scheduler and trigger
+watcher, including when the bounded deletion-holds wait fails or times out.
 Path comparisons share `normalizeProjectPath` in `normalize-project-path.js`
 with `main.js`'s Archive checks and unarchive catch-up reset: use
 `fs.realpathSync.native` when available, replace backslashes with slashes,

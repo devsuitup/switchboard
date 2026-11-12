@@ -2108,6 +2108,20 @@ creates a fresh-session placeholder.
 
 ## Known limits
 
+### Internal project deletion evidence (A4c4)
+
+The deletion composition reads activeSessions without removing a tab or invoking
+the legacy stop IPC. The stop adapter retains the session/PTY/generation through
+exitDrain, and the inventory checks a fresh external-owner read before presenting
+a local CLI stop. An external or unknown owner prevents confirmation.
+After stopping, inventory rereads stopEvidence and then statusTreeExit if the
+intentional stop did not prove death. This covers the late natural-exit proof
+restored by pty-ops after an evidence-stop refusal; it does not change the normal
+exit handler's status publication. Actual native death remains a Windows CI gate.
+Background records are refused pending #1090; headless schedules, remote scopes
+without exhaustive ownership reads and unsupported runtimes remain explicit
+refusals. No renderer action or legacy Stop/Detach behavior changes.
+
 - **The remote-stop pid-reuse guard is weak.** `remote-stop.js`'s
   `buildRefusalGuard` (and `remote-attach.js`'s probe it reuses verbatim)
   decides "is this still the claude CLI" with `grep -qi claude` against

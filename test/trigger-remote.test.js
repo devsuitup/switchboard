@@ -300,7 +300,7 @@ test('U22: main uses a dynamic opt-in getter and the central default', () => {
   assert.match(source, /remoteTriggers[^\n]+=== true/);
   assert.equal(require('../public/setting-defaults').SETTING_DEFAULTS.remoteTriggers, false);
   const start = source.indexOf('get remote()');
-  const end = source.indexOf('\n      }));', start);
+  const end = start + source.slice(start).search(/\n\s*\}\)\);/);
   let settings = {};
   const indexer = {}; const adapter = {};
   const { SETTING_DEFAULTS } = require('../public/setting-defaults');
@@ -315,7 +315,7 @@ test('U22: main uses a dynamic opt-in getter and the central default', () => {
 });
 test('U22: each remote lookup reads global settings once for all aliases and rereads on the next poll', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  const start = source.indexOf('get remote()'); const end = source.indexOf('\n      }));', start);
+  const start = source.indexOf('get remote()'); const end = start + source.slice(start).search(/\n\s*\}\)\);/);
   const descriptor = { sessionId: 'remote' };
   const hosts = [{ alias: 'vps' }, { alias: 'other', enabled: false }, { alias: 'third', enabled: false }];
   let settings = { remoteTriggers: true, remoteHosts: hosts }; let reads = 0;

@@ -135,6 +135,19 @@ let serviceModule, ipcModule;
 try { serviceModule = require('../src/main/projects/project-delete'); } catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; }
 try { ipcModule = require('../src/main/projects/project-delete-ipc'); } catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; }
 
+for (const failedRead of [2, 3]) test(`post-stop revalidation read ${failedRead} is not an ownership change`, supported, async t => {
+  const h = await setup(t, true);
+  const p = await h.preview(); assert.ok(p.token);
+  const planner = h.serviceDeps.planner, original = planner.revalidate;
+  let reads = 0;
+  planner.revalidate = async (...args) => ++reads === failedRead ? { ok: false, code: 'DISCOVERY_UNAVAILABLE', error: 'read offline' } : original(...args);
+  const result = await h.execute(p);
+  assert.equal(result.code, 'REVALIDATION_UNAVAILABLE', 'read failure must not report changed ownership');
+  assert.match(result.error, /read offline/);
+  assert.equal(h.count(), 0);
+  assert.equal(result.stopped.length, 1);
+});
+
 test('A4c3 ships callable service and actual IPC registration', () => {
   assert.equal(typeof serviceModule?.createProjectDeleteService, 'function', 'production deletion service must exist');
   assert.equal(typeof ipcModule?.registerProjectDeleteIpc, 'function', 'production IPC registration must exist');

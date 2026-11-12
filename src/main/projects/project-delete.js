@@ -51,6 +51,7 @@ function createProjectDeleteService(deps) {
     if (op.released) return;
     await op.admission;
     op.archive?.release(); op.launch?.release();
+    op.releaseRuntime?.(); op.releaseRuntime = null;
     op.released = true; op.finished = op.historicalFinished ?? now();
     if (projects.get(op.project.key) === op) projects.delete(op.project.key);
     prune();
@@ -195,10 +196,12 @@ function createProjectDeleteService(deps) {
         return view(op);
       }
       const after = await planner.revalidate(op.plan);
+      if (!after.plan) throw fail('REVALIDATION_UNAVAILABLE', after.error || 'Post-stop inventory read unavailable.');
       let manifestInventory = acceptedInventory(op, after.plan);
       if (!manifestInventory || !(await stop.verify(prepared)).ok) throw fail('PREVIEW_CHANGED', 'Post-stop ownership changed.');
       const fresh = await bounded(() => writer.readProjectDeletionScope({ project: op.project }));
       const final = await planner.revalidate(op.plan);
+      if (!final.plan) throw fail('REVALIDATION_UNAVAILABLE', final.error || 'Final inventory read unavailable.');
       manifestInventory = acceptedInventory(op, final.plan);
       if (!manifestInventory || fresh.projectEpoch !== op.epoch || String(fresh.writerRevision) !== final.plan.revision
         || !(await stop.verify(prepared)).ok) throw fail('PREVIEW_CHANGED', 'Ownership changed during final scope read.');
@@ -229,7 +232,8 @@ function createProjectDeleteService(deps) {
     try { id = operationId(token.plan.project, token.epoch, (deps.randomUUID || randomUUID)()); }
     catch (error) { return Promise.resolve(failure(error.code || 'DELETION_ID')); }
     const op = { id, project: token.plan.project,
-      epoch: token.epoch, plan: token.plan, options: token.options, stopped: [], authorities: new Set([sender]), notified: new Set(), running: true };
+      epoch: token.epoch, plan: token.plan, options: token.options, stopped: [], authorities: new Set([sender]), notified: new Set(), running: true,
+      releaseRuntime: deps.captureRuntimeRelease?.() };
     operations.set(op.id, op); projects.set(op.project.key, op);
     try { acquire(op); }
     catch (error) {
@@ -278,8 +282,9 @@ function createProjectDeleteService(deps) {
           acquire(op); projects.set(op.project.key, op);
         }
         operations.set(op.id, op);
-        await reconcile(op);
       }
+      deps.onHoldsInstalled?.();
+      for (const op of recovered) await reconcile(op);
       ready = true; prune();
     })());
     initializing.catch(() => { initializing = null; });
@@ -287,7 +292,13 @@ function createProjectDeleteService(deps) {
   }
   return { preview, execute, readState, rebind, initialize,
     async whenIdle() { await Promise.all([...tasks]); },
-    async recover() { for (const op of operations.values()) if (!op.running && !op.released) await reconcile(op); await initialize(); },
+    async recover() {
+      const retained = [...operations.values()].filter(op => !op.running && !op.released);
+      if (!initializing) for (const op of retained) await reconcile(op);
+      await initialize();
+      deps.onHoldsInstalled?.();
+      for (const op of retained) if (!op.released) await reconcile(op);
+    },
     dispose() { disposed = true; tokens.clear(); for (const op of operations.values()) op.authorities.clear(); } };
 }
 

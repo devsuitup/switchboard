@@ -83,6 +83,7 @@ async function run() {
     stopScheduler() {}, mainLoopMonitor: { stop() {} }, shutdownAllMcp() {},
     localTranscriptTracker: { dispose() {} }, unsubscribeTaskJobs() {}, taskRecords: { dispose() {} },
     projectsWatcher: null, cliSessionState: { stop() {} }, bgAgents: { stop() {} },
+    projectDeleteMain: { dispose() {} },
     remoteIndexer: { dispose() {} }, remoteWatcher: { stopAll() {} }, remoteActivityTracker: { dispose() {} },
     activityTrace: { close() {} }, activeSessions: new Map(), closedSessions: new Map(), killPty() {},
     flushProjectsBeforeExit: async () => {

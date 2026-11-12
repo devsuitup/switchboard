@@ -691,6 +691,11 @@ delivery errors. Tests: `test/trigger-escape-key.test.js`.
 
 Starts the watcher.  Call once at app boot.
 
+I3: main wraps watcher startup in try/catch so a boot failure cannot abort
+`app.whenReady` and silently lose the auto-updater or other startup work.
+The watcher failure is logged locally; the bounded deletion-holds continuation
+also catches startup errors. Updater initialization stays outside that continuation.
+
 ```js
 // main.js
 require('./src/main/triggers/trigger-watcher').start(createTriggerContext({

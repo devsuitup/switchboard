@@ -1,11 +1,100 @@
-# Project deletion: dormant backend (#474 A4a–A4c3)
+# Project deletion: internal main composition (#474 A4a–A4c4)
 
-## Current state: dormant service and registered callbacks complete (A4c3)
+## Current state: internal main composition (A4c4)
+
+`project-delete-main.js` composes the shipped inventory, planner, stop adapter,
+service and IPC registration after background IPC initialization. Main supplies
+the writer, active session map, CLI evidence, background stop ports, remote stop
+adapter, launch gate and notification sinks. No preload or renderer action uses
+the three callbacks yet; legacy remove-project, Archive and Stop are unchanged.
+
+The runtime read adapter reads bounded job files and the read-only CLI agents
+list, including records absent from the roster cache. Unreadable, unowned,
+unlisted and linked records refuse confirmation. It does not seed schedule
+registration, refresh the index, reconcile the roster or call getProjectsSnapshot.
+The existing CLI runner accepts an optional maxOutputBytes; deletion uses 8 MiB
+across stdout/stderr and terminates only that reader process on overflow. Other
+callers retain the unlimited default. Malformed JSON/list entries refuse rather
+than being filtered into an apparently complete empty list. Late filesystem
+handles are closed even after the inventory deadline. The agents reader runs
+with the supplied home directory as cwd. Output accounting adds each chunk's
+byte length once. Job discovery resolves the project root once per scan;
+ENOENT for a job cwd means it no longer belongs to this project, while other
+cwd read errors produce an unreadable candidate for that record.
+Background records remain explicitly blocked on #1090, even when a daemon state
+says done. Current headless schedules retain the inventory's blocking targets.
+Remote ownership/schedule discovery lacks an exhaustive production port and
+therefore refuses; passing the strict remote stop adapter supplies no discovery
+or whole-tree proof. Codex and unsupported terminal evidence also refuse.
+
+Local PTYs retain their captured object through exitDrain. A fresh CLI ownership
+read checks for external writers and validates the PTY start identity; no active
+tab can conceal another process. The stop adapter obtains native tree evidence.
+Subsequent inventory rereads both stopEvidence and late statusTreeExit on the
+pinned PTY, and then checks CLI liveness. Map removal alone never proves death.
+Async-local runtime scopes isolate each preview and accepted operation. Preview
+completion clears its members/pins; an operation retains its own pins across
+revalidation and an early IPC reply, then its captured cleanup clears them on
+release, even if a later state read supplies terminal proof. Unresolved operations
+retain evidence with their holds. Non-Windows local PTY plans may still mint a
+token; the strict stop preflight returns STOP_UNSUPPORTED without stopping or
+submitting deletion. Preview platform refusal is deferred to the planner contract.
+Runtime liveness and conversation reads outside `withScope` reject with the typed
+DISCOVERY_UNAVAILABLE failure; no unscoped member or pin maps are created.
+
+Recovery starts before buildMenu/createWindow without awaiting it. The scheduler
+and trigger startup wait for enumeration and acquisition of every recovered hold,
+before sequential receipt reconciliation. This milestone has a 120,000 ms bound;
+failure or timeout still starts the scheduler and trigger watcher once. A failed
+wait logs one line with its error code/message or HOLDS_TIMEOUT and the deadline.
+Already installed holds continue to guard their projects. Later recovery retries
+install holds missed by a failed enumeration or OPERATION_LIMIT without repeating
+automation startup. Cache rebuild, updater setup and activate registration proceed
+immediately. Startup checks appQuitting and shutdownPromise, including after
+awaiting schedule registration seeding; disposal during shutdown starts nothing.
+
+Schedule IPC registration is unconditional with respect to recovery, while still
+checking shutdown: run-schedule-now uses the operation gate, but
+create-schedule-session writes directly without admission. A holds milestone does
+not protect that second callback, so waiting for full recovery would only disable
+schedule IPC on recovery failure. This does not add admission to session creation.
+The three deletion callbacks still wait for full recovery. Its ceiling remains 126,090,000 ms:
+4,096 sequential receipts at 30 seconds, 65 enumeration pages at 10 seconds,
+plus 32 unresolved-operation stalls at 80 seconds. The window remains usable
+throughout; a rejected or expired barrier leaves all three callbacks NOT_READY,
+retryable:true. A writer bootstrap retries recovery, including one arriving
+during an older worker's read. The inner service retains
+unresolved work and holds after an outer timeout or disposal. Recovery reads
+do not depend on watchers started after the window.
+
+The composition attaches IPC authority only at the first did-finish-load of
+each new window. Registration then owns same-URL document rebinding and revocation.
+Shutdown removes pending attachment/bootstrap listeners and registration, and
+disposes tokens without releasing unresolved operation ownership.
+
+Project/schedule notification sinks receive only committed receipt targets.
+Before synchronous delivery, the composition rereads the receipt and checks its
+revision and current epoch (a committed operation seals at expectedEpoch + 2).
+It drops reopened/superseded epochs and deduplicates operation/epoch/revision
+per sink in main-owned notificationState. Recreating the service with that state
+cannot replay publication. A full application restart creates new consumers and
+recovered committed receipts younger than 24 hours notify again if their epoch is
+still current; no durable exactly-once delivery
+is claimed. Cross-restart repeats are accepted: the consumers perform idempotent
+refreshes. Deduplication is process-local, including across service recreation.
+Sinks must remain synchronous at the side-effect boundary.
+
+Plain-Node composition tests use the real worker fixture and SQLite adapter,
+fake external process/IPC ports, and disposable paths. Actual Windows tree death,
+Electron lifecycle events, remote discovery and renderer consumption remain CI
+or later-slice gates.
+
+## Service contract (A4c3)
 
 `createProjectDeleteService` in `project-delete.js` composes the real planner,
 inventory, stop adapter, launch gate and writer facade. `project-delete-ipc.js`
-registers its three internal callbacks. There is still no main, preload or
-renderer caller. A4c4 owns composition and A4d owns the user-facing action.
+registers its three internal callbacks. A4c4 supplies main composition; A4d owns
+the preload and renderer action.
 
 Call `initialize()` before admitting previews. Recovery enumerates bounded
 writer receipts, including committed lost replies, and reads/fences rather than
@@ -43,8 +132,10 @@ is preserved in the returned stopped-work list. Before completion it compares
 membership rather than the volatile full fingerprint. Only a positively proven
 stop can preserve a disappeared tab/job identity. It then rereads the writer
 scope, re-inventories and independently verifies death after that await.
-Completion is invoked once. Unknown outcomes cause fresh reads/fencing and
-bounded retained-file observation; no second completion call occurs even if
+Completion is invoked once. Post-stop revalidation without a plan returns
+REVALIDATION_UNAVAILABLE with the read error, rather than claiming an ownership
+change. Unknown outcomes cause fresh reads/fencing and bounded retained-file
+observation; no second completion call occurs even if
 the facade could deduplicate it. Both holds survive unavailable read/fence.
 After the 60-second completion wait, successful absent/inProgress reads are
 polled using the injected scheduler, backing off from 100 ms to 2 seconds.
@@ -116,9 +207,9 @@ See [session-state.md](session-state.md), [bg-agents.md](bg-agents.md) and the
 Windows helper section of [ipc-bridge.md](ipc-bridge.md) for contracts/limits.
 
 `project-delete-stop.js` now composes those seams through
-`createProjectDeleteStop(ports).preflight/stop/verify`. It has no production
-main caller. A4c3 supplies the internal token service and callback tests;
-A4c4 supplies main wiring. No preload, UI or scheduler stop is enabled.
+`createProjectDeleteStop(ports).preflight/stop/verify`. It is composed by the
+internal A4c4 main service. A4c3 supplies the token service and callback tests.
+No preload, UI or scheduler stop is enabled.
 `cliSessionState.getScheduleRunSnapshot` was already exported by A4c1;
 headless schedules remain named blocking targets without safe tree control.
 
