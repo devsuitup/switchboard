@@ -17,6 +17,7 @@ function projectsWorker(h, { onMessage = () => {}, onYield = callback => setImme
       if (sql.startsWith('SELECT m.*')) return { all: () => [...h.meta].map(([sessionId, fields]) => ({ sessionId, ...fields })) };
       if (sql === 'SELECT * FROM cache_meta') return { all: () => structuredClone([...h.folders.values()]) };
       if (sql === 'SELECT key, value FROM settings') return { all: () => [{ key: 'initial_scan_complete', value: 'true' }] };
+      if (sql === 'SELECT projectKey FROM project_delete_fences WHERE blocked = 1') return { all: () => [] };
       throw Error('database write or unknown query: ' + sql);
     }
   }

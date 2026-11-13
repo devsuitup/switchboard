@@ -2868,6 +2868,43 @@ platform injection. This validates a lock scenario, not its frequency in use.
 
 ## Project deletion writer boundary (A4b4)
 
+### Project-list reads after deletion (#1103C)
+
+The deletion reservation is temporary; the durable producer fence remains blocked
+after commit until an explicit re-add. Retained transcripts and the removed folder
+marker make both reconciliation and buildProjectsFromCache's folder fallback
+produce new writes. Those messages bind a fresh epoch, but that epoch is still
+blocked. Previously projects-worker-client handled only WRITER_STALE as a retry;
+PROJECT_EPOCH_STALE failed every list request, including after renderer reload.
+
+On PROJECT_EPOCH_STALE or DELETION_OWNERSHIP from effect publication, the client
+discards that build and requests a fresh read-only snapshot. Progress failures
+mark the build stale until its final reply; further speculative chunks are not
+applied. The fallback skips reconciliation and records no effects, including
+folder markers created during view construction. It preserves the retry budget,
+caller deadline and reconciliation hard deadline. Pending/coalesced requests keep
+the read-only flag, and the fallback checks both database and live-input versions.
+An independent later request starts normally and can bind a reopened epoch.
+No old effect is rebound or replayed, and the writer's per-unit fence is unchanged.
+Unrelated cached projects stay readable; this fallback does not promise to finish
+their interrupted reconciliation. Filesystem watchers and later normal requests
+retain their own indexing paths.
+
+The query worker also excludes deletion-marked hidden identities canonically,
+within their host scope and only while the snapshot's durable fence is blocked.
+An explicit re-add clears that fence even if a differently spelled hide marker
+remains; an obsolete marker must not hide the reopened epoch. Deletion stores a
+canonical path while transcript paths
+may retain Windows case, separators or an 8.3 spelling. Legacy non-deletion hide
+semantics are unchanged. This filter uses the same settings snapshot as the rows.
+
+test/get-projects-after-delete.test.js composes the shipped get-projects handler,
+query worker/cache, client, deletion main/service, writer worker and real SQLite
+fixture through plain Node and unwrapped filename-bearing VMs. It covers repeated
+boolean/paired reads, a fresh client, both effect publication stages, an interleaved
+deletion and explicit reopen using the original transcript path. Long and short TMP
+spellings are exercised on Windows; no Electron or live UI behavior is claimed.
+
 The internal completeProjectDeletion backend invalidates only manifest-owned
 session rows, metrics, session search/staging and continuation choices. Retained
 conversation metadata is archived with names/pins preserved; selected discard
