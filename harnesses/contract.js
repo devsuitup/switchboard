@@ -20,7 +20,7 @@
 /**
  * @typedef {Object} Launcher
  * @property {function(): boolean} available Whether transcript storage exists; does not probe the CLI binary.
- * @property {function({sessionId: string=, isNew: boolean, options: Object=}): string[]} buildLaunchArgs Launch request to argv; sessionId is required for resume, but a fresh launch may use a temporary id or omit it.
+ * @property {function({sessionId: string=, isNew: boolean, options: Object=, name: string=}): string[]} buildLaunchArgs Launch request to argv; sessionId is required for resume, but a fresh launch may use a temporary id or omit it. name is the display name of a fresh launch, separate from options; resume and fork ignore it.
  * @property {function({isNew: boolean, options: Object=}): boolean} needsIdDetection Whether a launch must discover its real id; isNew is the resolved fresh-launch decision and options.forkFrom identifies a fork.
  */
 /**

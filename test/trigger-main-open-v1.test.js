@@ -157,3 +157,37 @@ test('the real validation with an unchanged transcript spawns exactly once', asy
   const result = await f.open();
   assert.equal(result.ok, true); assert.equal(f.spawns.length, 1);
 });
+
+function named(name = 'Task one') {
+  const f = fixture(); f.permit.mode = 'new'; f.permit.requestedSessionId = null; f.permit.name = name; f.authorize();
+  return f;
+}
+test('a new trigger permit launches claude with its broker-owned name', async () => {
+  const f = named();
+  const r = await f.open('permit', true); assert.equal(r.ok, true);
+  assert.ok(f.spawns[0].args[0].endsWith(` && claude --session-id ${ID} --name Task one`), f.spawns[0].args[0]);
+});
+test('renderer options and defaults cannot replace the permit name', async () => {
+  const f = named();
+  const r = await f.open('permit', true, { name: 'renderer', sessionName: 'renderer', worktreeName: 'w' }); assert.equal(r.ok, true);
+  assert.match(f.spawns[0].args[0], /--name Task one/); assert.doesNotMatch(f.spawns[0].args[0], /renderer/);
+});
+test('a launch without a trigger permit never acquires a name', async () => {
+  const f = fixture(); f.permit.name = 'Task one';
+  const r = await f.open(null, true, { name: 'renderer' }); assert.equal(r.ok, true);
+  assert.doesNotMatch(f.spawns[0].args[0], /--name/);
+});
+test('a resume permit carrying a name does not pass it', async () => {
+  const f = fixture(); f.permit.name = 'Task one'; f.authorize();
+  const r = await f.open(); assert.equal(r.ok, true);
+  assert.doesNotMatch(f.spawns[0].args[0], /--name/);
+});
+test('revocation during preparation of a named launch prevents the spawn', async () => {
+  const f = named();
+  f.context.scheduleProjects = () => ({ add: async () => { f.context.triggerRendererBridge.checkPermit = () => null; } });
+  const r = await f.open('permit', true); assert.equal(r.ok, false); assert.equal(f.spawns.length, 0);
+});
+test('a missing or invalid permit cannot authorize a named spawn', async () => {
+  const f = fixture(); f.permit.name = 'Task one';
+  const r = await f.open('permit', true); assert.equal(r.ok, false); assert.equal(f.spawns.length, 0);
+});

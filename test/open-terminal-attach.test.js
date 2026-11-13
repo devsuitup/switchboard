@@ -26,7 +26,7 @@ function launchFixture() {
     log: { info() {}, warn() {}, error() {} },
     sessionTransitions: { snapshotContinuationsBeforeSpawn: async () => null },
     sessionTranscriptExists: () => true, getHarness: require('../harnesses').getHarness,
-    quoteArgvForShell: (_shell, args) => args.join(' '), shellArgs: (_shell, cmd) => [cmd],
+    claudeCommand: (_shell, args, o = {}) => (o.prefix ? o.prefix + ' ' : '') + 'claude ' + args.join(' '), quoteArgvForShell: (_shell, args) => args.join(' '), shellArgs: (_shell, cmd) => [cmd],
     cleanPtyEnv: {}, scheduleProjects: () => ({ add: async () => {} }),
     activityReporter: { sessionStarted() {} },
     cliSessionState: { ensureWatching: () => true, deliveryPtyStart: () => null },

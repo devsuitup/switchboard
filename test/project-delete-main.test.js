@@ -138,7 +138,7 @@ for (const preAborted of [false, true]) test(`CLI reader abort kills only its ch
   child.pid = 123; child.exitCode = child.signalCode = null;
   const time = clock(), stopped = [], controller = new AbortController(); let spawns = 0;
   const context = vm.createContext({ path, getSetting: () => ({}), SETTING_DEFAULTS: { shellProfile: 'test' },
-    resolveShell: () => ({ path: '/bin/sh' }), isWindows: false, cleanPtyEnv: {}, shellArgs: () => [], quoteArgvForShell: () => '',
+    resolveShell: () => ({ path: '/bin/sh' }), isWindows: false, cleanPtyEnv: {}, shellArgs: () => [], claudeCommand: () => 'claude ', quoteArgvForShell: () => '',
     spawnChild: () => { spawns++; return child; }, stopProcessTree: async pid => { stopped.push(pid); return true; },
     setTimeout: time.schedule, clearTimeout: time.cancel });
   vm.runInContext(require('./app-source').extractFunction(source, 'runClaudeCommand'), context, { filename });
@@ -536,7 +536,7 @@ test('deletion background discovery bounds the shipped CLI runner output before 
   let measured = 0;
   const countedBuffer = { byteLength: value => { measured += value.length; return Buffer.byteLength(value); } };
   const context = vm.createContext({ Buffer: countedBuffer, path, getSetting: () => ({}), SETTING_DEFAULTS: { shellProfile: 'test' },
-    resolveShell: () => ({ path: '/bin/sh' }), isWindows: false, cleanPtyEnv: {}, shellArgs: () => [], quoteArgvForShell: () => '',
+    resolveShell: () => ({ path: '/bin/sh' }), isWindows: false, cleanPtyEnv: {}, shellArgs: () => [], claudeCommand: () => 'claude ', quoteArgvForShell: () => '',
     spawnChild: () => child, stopProcessTree: async () => { stopped++; return true; },
     setTimeout: time.schedule, clearTimeout: time.cancel });
   vm.runInContext(require('./app-source').extractFunction(source, 'runClaudeCommand'), context, { filename });

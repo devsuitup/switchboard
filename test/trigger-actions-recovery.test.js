@@ -92,3 +92,67 @@ test('failed stop result rename retains input and marker for restart; failed unl
   assert.equal(await unlink.publish(args), false); assert.equal(retained, 2);
   assert.deepEqual(unlink.readState(f.result, f.marker).result, result);
 });
+
+const openMarker = extra => ({ version: 1, action: 'open', mode: 'new', requestedSessionId: null, sessionId: ID, tabKey: ID,
+  deadline: 1, phase: 'spawned', created: true, wrote: true, text_written: true, enter_written: true, submitted: 'assumed', steps_total: 1, ...extra });
+const cliSessionState = require('../cli-session-state');
+async function recoverOpen(t, marker) {
+  const reads = [];
+  for (const name of ['observeTabWriter', 'observeTabWriterV1', 'readStatusEvidence', 'liveElsewhereV1Checked']) {
+    const original = cliSessionState[name];
+    cliSessionState[name] = (...args) => { reads.push(name); return original?.(...args); };
+    t.after(() => { cliSessionState[name] = original; });
+  }
+  const watcher = await rig(t, { stem: STEM, orphan: true, payload: { version: 1, action: 'open', new: { project: process.cwd(), name: 'Task' }, prompt: 'hello' },
+    setup({ processed }) { fs.writeFileSync(path.join(processed, STEM + '.action.json'), JSON.stringify(marker)); } });
+  const result = await waitResult(path.join(watcher.processed, STEM + '.result.json'));
+  assert.equal(watcher.effects(), 0, 'recovery never launches, saves or delivers');
+  assert.deepEqual(reads, [], 'recovery never reads a descriptor');
+  return result;
+}
+test('an orphan new-session marker with naming provenance recovers the requested name and no actual name', async t => {
+  const r = await recoverOpen(t, openMarker({ nameVersion: 1, requestedName: 'smithy-hardening' }));
+  assert.equal(r.reason, 'interrupted by restart'); assert.equal(r.uncertain, true);
+  assert.equal(r.requestedName, 'smithy-hardening'); assert.equal(r.actualName, null);
+  assert.equal(r.created, true); assert.equal(r.sessionId, ID); assert.equal(r.submitted, 'assumed'); assert.equal(r.steps_total, 1);
+  assert.equal(r.enter_written, true);
+});
+test('an orphan new-session marker from before naming omits both name fields and keeps its effects', async t => {
+  const r = await recoverOpen(t, openMarker({}));
+  assert.equal(r.reason, 'interrupted by restart'); assert.equal(r.uncertain, true);
+  assert.equal('requestedName' in r, false); assert.equal('actualName' in r, false);
+  assert.equal(r.created, true); assert.equal(r.submitted, 'assumed'); assert.equal(r.steps_total, 1);
+});
+const unusable = [
+  ['an unknown version', { nameVersion: 2, requestedName: 'Task' }],
+  ['a string version', { nameVersion: '1', requestedName: 'Task' }],
+  ['a missing version', { requestedName: 'Task' }],
+  ['a missing name', { nameVersion: 1 }],
+  ['an empty name', { nameVersion: 1, requestedName: '' }],
+  ['an untrimmed name', { nameVersion: 1, requestedName: ' Task' }],
+  ['a non-string name', { nameVersion: 1, requestedName: { toString: () => 'Task' } }],
+  ['an over-long name', { nameVersion: 1, requestedName: 'x'.repeat(257) }],
+  ['a control character', { nameVersion: 1, requestedName: 'a\nb' }],
+  ['an isolated surrogate', { nameVersion: 1, requestedName: 'a\ud800b' }],
+];
+for (const [label, naming] of unusable) {
+  test(`an orphan marker with ${label} cannot manufacture a name`, async t => {
+    const r = await recoverOpen(t, openMarker(naming));
+    assert.equal(r.reason, 'interrupted by restart'); assert.equal(r.uncertain, true); assert.equal(r.created, true);
+    assert.equal('requestedName' in r, false); assert.equal('actualName' in r, false);
+  });
+}
+test('naming provenance on a marker of another action is not accepted', async t => {
+  const r = await recoverOpen(t, openMarker({ action: 'stop', mode: 'new', phase: 'claimed', nameVersion: 1, requestedName: 'Task' }));
+  assert.equal(r.reason, 'interrupted by restart'); assert.equal('requestedName' in r, false); assert.equal('actualName' in r, false);
+});
+test('naming provenance on a resume marker is not accepted', async t => {
+  const r = await recoverOpen(t, openMarker({ mode: 'resume', created: undefined, resumed: true, requestedSessionId: ID, nameVersion: 1, requestedName: 'Task' }));
+  assert.equal('requestedName' in r, false);
+});
+test('a stale input beside a named marker does not replay and keeps the marker authoritative for the name', async t => {
+  const watcher = await rig(t, { stem: STEM, stale: true, payload: { version: 1, action: 'open', new: { project: process.cwd(), name: 'Other' }, prompt: 'hello' },
+    setup({ processed }) { fs.writeFileSync(path.join(processed, STEM + '.action.json'), JSON.stringify(openMarker({ nameVersion: 1, requestedName: 'Task' }))); } });
+  const r = await waitResult(path.join(watcher.processed, STEM + '.result.json'));
+  assert.equal(r.requestedName, 'Task'); assert.equal(r.actualName, null); assert.equal(watcher.effects(), 0);
+});

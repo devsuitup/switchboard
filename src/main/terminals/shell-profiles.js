@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const { escapeForCmd, cmdEscapePasses } = require('../../../claude-binary');
 
 // --- Cross-platform shell resolution ---
 const isWindows = process.platform === 'win32';
@@ -160,32 +161,75 @@ function isWslShell(shellPath) {
   return base === 'wsl.exe' || base === 'wsl';
 }
 
+// see .ai/contexts/trigger-watcher.md ("Naming a new session")
+const PS_PREAMBLE = "function __switchboard_launch{param([string]$n)"
+  + "$c=Get-Command $n -ErrorAction Stop|Select-Object -First 1;"
+  + "if($c.CommandType -ne 'Application'){& $c @args;return};"
+  + "$d=if($c.Source -match '\\.(cmd|bat)$'){2}else{0};"
+  + "$l=($args|ForEach-Object{$s='\"'+[regex]::Replace([regex]::Replace($_,'(\\\\*)\"','$1$1\\\"'),'(\\\\*)\\z','$1$1')+'\"';"
+  + "for($k=0;$k -lt $d;$k++){$s=[regex]::Replace($s,'([()\\]\\[%!^\"`<>&|;, *?])','^$1')};$s}) -join ' ';"
+  + "$i=New-Object Diagnostics.ProcessStartInfo $c.Source,$l;$i.UseShellExecute=$false;"
+  + "$p=[Diagnostics.Process]::Start($i);$p.WaitForExit();exit $p.ExitCode};";
+const psLiteral = text => "'" + text.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&') + "'";
+
 // Shell-quote one argv token per shell family
-function quoteArgForShell(shellPath, value) {
+function quoteArgForShell(shellPath, value, cmdPasses = 1) {
   const s = value == null ? '' : String(value);
   const base = path.basename(shellPath).toLowerCase();
   const isBashLike = base.includes('bash') || base.includes('zsh') || base === 'sh' || base === 'dash' || base === 'ksh' || base === 'fish' || base === 'nu' || isWslShell(shellPath);
   const isPowerShell = base.includes('powershell') || base.includes('pwsh');
 
+  if (base === 'nu') return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+  if (base === 'fish') return "'" + s.replace(/\\/g, '\\\\').replace(/'/g, "'\\''") + "'";
   if (isBashLike) {
     // POSIX: wrap in single quotes, escape embedded single quotes as '\''
     return "'" + s.replace(/'/g, "'\\''") + "'";
   }
-  if (isPowerShell) {
-    // PowerShell: single-quoted string, escape ' as ''
-    return "'" + s.replace(/'/g, "''") + "'";
-  }
-  // cmd.exe: double-quote, escape " as \" and ^-escape shell metachars
-  const escaped = s.replace(/"/g, '\\"').replace(/([&|<>^%])/g, '^$1');
-  return '"' + escaped + '"';
+  if (isPowerShell) return psLiteral(s);
+  return escapeForCmd(s, cmdPasses);
 }
 
-function quoteArgvForShell(shellPath, argv) {
-  return argv.map(a => quoteArgForShell(shellPath, a)).join(' ');
+function isCmdShell(shellPath) {
+  const base = path.basename(shellPath).toLowerCase();
+  return base === 'cmd.exe' || base === 'cmd';
+}
+
+function isPowerShellShell(shellPath) {
+  const base = path.basename(shellPath).toLowerCase();
+  return base.includes('powershell') || base.includes('pwsh');
+}
+
+function quoteArgvForShell(shellPath, argv, { env, cwd, wrapped } = {}) {
+  const passes = env && isCmdShell(shellPath) ? cmdEscapePasses(env, { cwd, wrapped }) : 1;
+  return argv.map(a => quoteArgForShell(shellPath, a, passes)).join(' ');
+}
+
+function powershellLaunch(argv, prefix) {
+  const words = prefix.trim().split(/\s+/).filter(Boolean);
+  const [target, ...rest] = words.length ? [...words, 'claude'] : ['claude'];
+  return ['__switchboard_launch', target, ...rest, ...argv].map((word, i) => (i ? psLiteral(word) : word)).join(' ');
+}
+
+const WINDOWS_COMMAND_LINE_LIMIT = 32767;
+
+function fitsCommandLine(shellPath, command, extraArgs) {
+  const { argsToCommandLine } = require('node-pty/lib/windowsPtyAgent');
+  const args = shellArgs(shellPath, command, extraArgs, { pty: true, windows: true });
+  return argsToCommandLine(shellPath, args).length + 1 <= WINDOWS_COMMAND_LINE_LIMIT;
+}
+
+function claudeCommand(shellPath, argv, { env, cwd, prefix = '', windows = isWindows, extraArgs = [], ide = false } = {}) {
+  const wrapped = !!prefix.trim();
+  const quoted = quoteArgvForShell(shellPath, argv, { env, cwd, wrapped });
+  const plain = (wrapped ? prefix + ' ' : '') + 'claude ' + quoted;
+  if (!(windows && isPowerShellShell(shellPath))) return plain;
+  const helper = powershellLaunch(argv, prefix);
+  const baseline = ide ? (wrapped ? prefix + ' ' : '') + 'claude ' + quoteArgvForShell(shellPath, argv.slice(0, -1), { env, cwd, wrapped }) + ' --ide' : plain;
+  return fitsCommandLine(shellPath, helper, extraArgs) || !fitsCommandLine(shellPath, baseline, extraArgs) ? helper : baseline;
 }
 
 // Returns spawn args appropriate for the resolved shell
-function shellArgs(shellPath, cmd, extraArgs) {
+function shellArgs(shellPath, cmd, extraArgs, { pty = false, windows = isWindows } = {}) {
   const base = path.basename(shellPath).toLowerCase();
   const isBashLike = base.includes('bash') || base.includes('zsh') || base === 'sh';
   const isFish = base === 'fish';
@@ -202,8 +246,8 @@ function shellArgs(shellPath, cmd, extraArgs) {
     if (isBashLike) return ['-l', '-i', '-c', cmd];
     if (isFish) return ['-l', '-c', cmd];
     if (isNushell) return ['-l', '-c', cmd];
-    if (base.includes('powershell') || base.includes('pwsh')) return ['-NoLogo', '-Command', cmd];
-    return ['/C', cmd];
+    if (base.includes('powershell') || base.includes('pwsh')) return ['-NoLogo', '-Command', (windows && cmd.startsWith('__switchboard_launch ') ? PS_PREAMBLE : '') + cmd];
+    return pty && isCmdShell(shellPath) ? `/s /c "${cmd}"` : ['/C', cmd];
   }
   if (isBashLike) return ['-l', '-i'];
   if (isFish) return ['-l', '-i'];
@@ -212,4 +256,4 @@ function shellArgs(shellPath, cmd, extraArgs) {
   return [];
 }
 
-module.exports = { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgForShell, quoteArgvForShell };
+module.exports = { isCmdShell, discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgForShell, quoteArgvForShell, claudeCommand };

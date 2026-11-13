@@ -1037,6 +1037,17 @@ function observeTabWriter(ptyPid, snapshot) {
   return { supported: true, writer, identity: `${writer.pid}:${writer.procStart}`, hasBackground, uncertain };
 }
 
+function confirmDeliveryWriter(raw) {
+  try {
+    const file = path.join(dir, `${raw.pid}.json`);
+    const text = fs.readFileSync(file, 'utf8');
+    const again = parseDescriptor(text);
+    if (again?.pid !== raw.pid || again.kind !== 'interactive' || again.sessionId !== raw.sessionId || again.name !== raw.name) return false;
+    const reread = { ...JSON.parse(text), descriptorMtimeMs: fs.statSync(file).mtimeMs };
+    return reread.procStart === raw.procStart && deliveryProcessIdentity(reread) === 'valid';
+  } catch { return false; }
+}
+
 function deliveryPtyStart(pid, options = {}) {
   if (!deliveryInitialized || !Number.isInteger(pid) || pid <= 0) return null;
   if (processTableEnabled && Object.hasOwn(options, 'processTable')) {
@@ -1220,6 +1231,7 @@ module.exports = {
   observeTabWriter,
   findDeliveryTab,
   deliveryPtyStart,
+  confirmDeliveryWriter,
   deliveryProcessTableFresh,
   MAX_LIVE_QUERY_IDS,
   MAX_PROBE_PIDS,
