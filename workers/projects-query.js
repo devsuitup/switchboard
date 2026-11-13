@@ -31,6 +31,10 @@ async function build(message) {
   }));
   const global = settings.get('global') || {}, identities = new Map();
   const blocked = new Set(data.blocked.map(row => row.projectKey));
+  const isProjectWriteBlocked = (alias, projectPath) => {
+    try { return blocked.has(JSON.stringify([alias, canonicalPath(projectPath, alias, identities)])); }
+    catch { return true; }
+  };
   const deleted = (global.hiddenProjects || []).filter(entry => global.hiddenProjectKinds?.[entry] === 'delete');
   const visible = projects => !deleted.length || !blocked.size ? projects : projects.filter(project => {
     const alias = project.remoteAlias || null;
@@ -89,6 +93,7 @@ async function build(message) {
     getMainWindow: () => null,
     log: console,
     db: adapter,
+    isProjectWriteBlocked: blocked.size ? isProjectWriteBlocked : undefined,
   });
   cache.setRemoteRoots(new Map(message.remoteRoots || []));
   cache.resetProjectsWorkerRetainedRows();

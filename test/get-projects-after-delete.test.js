@@ -33,7 +33,7 @@ async function setup(t) {
   process.env.SWITCHBOARD_DATA_DIR = path.join(root, 'data');
   const db = openStore(), read = openStore({ readonly: true });
   const projectsDir = path.join(root, 'transcripts');
-  const projects = ['doomed', 'kept'].map((name, i) => {
+  const projects = ['doomed', 'a-before', 'z-after'].map((name, i) => {
     const projectPath = path.join(root, name), folder = encodeProjectPath(projectPath);
     const sessionId = `12345678-1234-1234-1234-123456789ab${i}`;
     fs.mkdirSync(projectPath);
@@ -80,6 +80,7 @@ async function setup(t) {
   const requests = [], errors = [], accepted = [], clients = [];
   let beforeApply = async () => {};
   const makeList = (reconcile = true) => {
+    let handler;
     const client = createProjectsWorkerClient({
       workerFactory: () => {
         const query = new EventEmitter(), port = new EventEmitter();
@@ -101,23 +102,25 @@ async function setup(t) {
         try { return await writer.applyProjectsWorkerEffects(result); }
         catch (error) { errors.push(error.code); throw error; }
       },
-      accepted: result => accepted.push(result),
+      accepted: result => { accepted.push(result); handler.accepted(result); },
     });
     clients.push(client);
-    const handler = loadGetProjectsHandler({
+    handler = loadGetProjectsHandler({
       TRACE: { on: false }, projectsReconciledAt: reconcile ? 0 : Date.now(),
       getSetting: db.getSetting, isInitialScanComplete: () => true, isCachePopulated: () => true, isSearchIndexPopulated: () => true,
       backfillEntrypoints() {}, backfillCustomTitles() {}, projectsClient: client, writer,
       mergePlaceholderSessions: rows => rows, annotateRemoteAttachable: rows => rows,
       notifyRendererProjectsChanged() {},
     });
-    return async mode => {
+    const list = async mode => {
       let reply;
       await assert.doesNotReject(async () => { reply = await handler(null, mode); },
         'get-projects must survive a fenced project and retain unrelated projects');
       assert.equal(reply.projectsError, undefined, 'a project fence must not become a whole-list conflict');
       return reply;
     };
+    list.reconciledAt = handler.reconciledAt;
+    return list;
   };
   t.after(async () => {
     await Promise.all(clients.map(client => client.shutdown()));
@@ -134,18 +137,49 @@ for (const reconcile of [true, false]) test(`committed deletion followed by get-
   await h.remove();
   for (const list of [h.makeList(reconcile), h.makeList(reconcile)]) {
     for (const mode of [false, true, 'both']) {
+      const builds = h.requests.length;
       const reply = await list(mode);
+      assert.equal(h.requests.length - builds, 1, 'a committed deletion must need exactly one build');
       for (const rows of mode === 'both' ? [reply.defaultProjects, reply.allProjects] : [reply]) {
-        assert.deepEqual(rows.map(row => row.projectPath), [h.projects[1].projectPath]);
-        assert.ok(rows[0].sessions.some(row => row.sessionId === h.projects[1].sessionId));
+        assert.deepEqual(rows.map(row => row.projectPath).sort(), h.projects.slice(1).map(row => row.projectPath).sort());
+        for (const project of h.projects.slice(1)) {
+          assert.ok(rows.find(row => row.projectPath === project.projectPath).sessions.some(row => row.sessionId === project.sessionId));
+        }
       }
       assert.equal(h.db.getCachedSession(h.projects[0].sessionId), null, 'retained transcript must not resurrect deleted cache');
       assert.equal(h.db.getFolderMeta(h.projects[0].folder), null, 'fallback folder discovery must remain fenced');
     }
   }
-  assert.ok(h.errors.includes('PROJECT_EPOCH_STALE'), 'the real writer must exercise its producer fence');
+  assert.deepEqual(h.errors, [], 'a snapshot containing the committed fence must not send doomed writes');
   assert.ok(fs.existsSync(h.projects[0].transcript));
-  assert.ok(h.requests.length <= 12, 'one fresh read per fenced request must suffice');
+  assert.equal(h.requests.length, 6);
+});
+
+test('committed deletion allows reconciliation before and after its folder and advances the main timestamp', supported, async t => {
+  const h = await setup(t);
+  await h.remove();
+  for (const project of h.projects.slice(1)) h.db.deleteCachedSession(project.sessionId);
+  const list = h.makeList();
+  assert.equal(list.reconciledAt(), 0);
+  await list('both');
+  assert.ok(h.accepted[0].reconciled, 'reconciliation must complete despite the retained deleted folder');
+  assert.ok(list.reconciledAt() > 0, 'the shipped acceptance callback must advance projectsReconciledAt');
+  for (const project of h.projects.slice(1)) {
+    assert.ok(h.db.getCachedSession(project.sessionId), 'folders on both sides of the deletion must reconcile');
+  }
+  await list('both');
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.requests[1].reconcile, false, 'the next request must honor the completed reconciliation');
+});
+
+test('a deleted folder with no remaining ownership transcript cannot emit unowned reconcile writes', supported, async t => {
+  const h = await setup(t);
+  await h.remove();
+  fs.unlinkSync(h.projects[0].transcript);
+  await h.makeList()('both');
+  assert.deepEqual(h.errors, [], 'an unresolved folder must not emit writes while the snapshot has a blocked fence');
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.accepted[0].reconciled, true);
 });
 
 test('deletion between project computation and publication fences old effects and refreshes the read', supported, async t => {
@@ -157,11 +191,11 @@ test('deletion between project computation and publication fences old effects an
   const reply = await h.makeList()('both');
   assert.ok(removed, 'deletion must interleave with real computed effects');
   assert.ok(h.errors.includes('PROJECT_EPOCH_STALE'));
-  assert.deepEqual(reply.allProjects.map(row => row.projectPath), [h.projects[1].projectPath]);
+  assert.deepEqual(reply.allProjects.map(row => row.projectPath).sort(), h.projects.slice(1).map(row => row.projectPath).sort());
   assert.equal(h.db.getCachedSession(h.projects[0].sessionId), null);
   assert.equal(h.accepted.length, 1, 'never publish the pre-deletion result');
   await h.writer.revealAddedProject(h.projects[0].projectPath);
   const reopened = await h.makeList()('both');
-  assert.equal(reopened.allProjects.length, 2, 'a later producer must use the fresh reopened epoch');
+  assert.equal(reopened.allProjects.length, 3, 'a later producer must use the fresh reopened epoch');
   assert.ok(h.db.getCachedSession(h.projects[0].sessionId), 'fresh reindex after explicit re-add is writable');
 });

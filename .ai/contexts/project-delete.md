@@ -1073,6 +1073,24 @@ remain A4c/d.
 
 ## Evidence boundary
 
+### Bounded member liveness (#1103E)
+
+Local ownership discovery finishes transcript identity checks before reading the
+verified, present members' liveness. Runtime discovery first resolves and
+deduplicates saved/active tabs, preserving the active record for duplicate IDs.
+Each stage reads at most four independent records concurrently. The runtime pins
+identity before awaiting evidence; distinct IDs use distinct operation-scope map
+entries. All reads retain the same inventory deadline and abort signal. A fatal
+failure stops admission of queued records; already outstanding native reads remain
+bounded and their late completion cannot publish a successful inventory.
+Member read failures still become candidates, while deadline/limit/stale failures
+propagate. Tab read failures still fail the runtime snapshot.
+
+The inventory regression uses eight slow members or tabs with a controlled clock:
+two batches of four finish at six seconds within a shared ten-second deadline.
+Never-settling batches expire with readLiveness attribution without starting the
+queued batch. This measures concurrency and deadline semantics, not host latency.
+
 ### Dormant Windows sessions (#1103B)
 
 The runtime uses `cli-session-state.readStatusEvidence` for transcript-only

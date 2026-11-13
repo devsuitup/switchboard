@@ -23,6 +23,53 @@ function deadlineClock() {
     cancel: key => timers.delete(key), advance(ms) { time += ms; for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); } } };
 }
 
+for (const method of ['discoverOwnership', 'readRuntimeState']) {
+  for (const hangs of [false, true]) test(`${method} bounds concurrent slow liveness reads within one deadline, hangs=${hangs}`, supported, async t => {
+    const time = deadlineClock();
+    let entered, active = 0, maximum = 0;
+    const started = new Promise(resolve => { entered = resolve; });
+    const reads = [];
+    const h = await setup(t, { ...time, readLiveness: (row, b) => {
+      reads.push({ id: row.id, deadline: b.deadline });
+      active++; maximum = Math.max(maximum, active); entered();
+      return new Promise(resolve => {
+        if (!hangs) time.schedule(() => { active--; resolve({ state: 'stopped', source: row.id }); }, 3000);
+      });
+    } });
+    for (let i = 0; i < 4; i++) {
+      const id = 'extra-' + i;
+      h.write(path.join(h.projectsDir, 'local', id + '.jsonl'), JSON.stringify({ type: 'user', sessionId: id, cwd: h.project.projectPath }) + '\n');
+      h.db.upsertCachedSessions([{ sessionId: id, folder: 'local', projectPath: h.project.projectPath, runtime: 'claude' }]);
+    }
+    if (method === 'readRuntimeState') h.db.setSetting('global', { openWorkingSet: Array.from({ length: 8 }, (_, i) =>
+      ({ sessionId: 'tab-' + i, projectPath: h.project.projectPath, runtime: 'terminal' })) });
+    const b = budget(); await h.inventory.readSnapshot(b);
+    let result, error;
+    const pending = h.inventory[method](h.project, b).then(value => { result = value; }, value => { error = value; });
+    try {
+      await started;
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(reads.length, 4, 'four independent liveness reads must start before the first slow answer');
+      if (hangs) {
+        time.advance(10000); await pending;
+        assert.equal(error?.code, 'DISCOVERY_TIMEOUT');
+        assert.equal(error.port, 'readLiveness');
+        assert.equal(reads.length, 4, 'expiry must not start queued liveness reads');
+      } else {
+        time.advance(3000); await new Promise(resolve => setImmediate(resolve));
+        assert.equal(reads.length, 8, 'the second bounded batch must share the original deadline');
+        time.advance(3000); await pending;
+        assert.equal(error, undefined);
+        const rows = result.members || result.tabs;
+        assert.equal(rows.length, 8);
+        for (const row of rows) assert.equal(row.liveness.source, row.id);
+        assert.ok(reads.every(read => read.deadline === 10000));
+      }
+      assert.equal(maximum, 4, 'liveness concurrency must stay capped');
+    } finally { time.advance(10000); await pending; }
+  });
+}
+
 for (const port of ['readJobs', 'readRemoteOwnership', 'readRemoteSchedules', 'memberLiveness', 'tabLiveness']) {
   for (const hangs of [false, true]) test(`process inventory ${port} ${hangs ? 'hangs until the effective deadline' : 'accepts a four-second answer'}`, supported, async t => {
     const time = deadlineClock();

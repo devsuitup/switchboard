@@ -49,6 +49,7 @@ const { state: TRACE, trace } = require('./src/main/shared/activity-trace');
  * Call init(ctx) once with the shared context object.
  */
 let PROJECTS_DIR, activeSessions, getMainWindow, log, writer;
+let isProjectWriteBlocked;
 let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession, touchCachedModified, setCachedFileSize, replaceSessionMetrics;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName;
@@ -200,6 +201,7 @@ function init(ctx) {
   populateRetry = null;
   populateNow = ctx.now || Date.now;
   PROJECTS_DIR = ctx.PROJECTS_DIR;
+  isProjectWriteBlocked = ctx.isProjectWriteBlocked;
   activeSessions = ctx.activeSessions;
   getLocalDescriptors = ctx.getLocalDescriptors || (() => []);
   getLocalJobs = ctx.getLocalJobs || (() => new Map());
@@ -790,6 +792,13 @@ function reconciliationFolders(throttle) {
   }).map(row => row.folder));
   return fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
     .filter(d => d.isDirectory() && d.name !== '.git')
+    .filter(d => {
+      if (!isProjectWriteBlocked) return true;
+      const stored = metaMap.get(d.name)?.projectPath;
+      const projectPath = stored && storedProjectPathMatchesFolder(stored, d.name)
+        ? stored : deriveFolderProjectPath(path.join(PROJECTS_DIR, d.name), d.name);
+      return !isProjectWriteBlocked(null, projectPath);
+    })
     .map(d => {
       const folder = d.name, meta = metaMap.get(folder);
       const refresh = ghostFolders.has(folder) || !meta || getFolderIndexMtimeMs(path.join(PROJECTS_DIR, folder)) > (meta.indexMtimeMs || 0)
@@ -1161,7 +1170,7 @@ function buildProjectsFromCache(showArchived) {
         if (!projectPath) {
           if (scanComplete) {
             projectPath = deriveFolderProjectPath(path.join(dir, d.name), folderKey);
-            if (projectPath && alias === null) setFolderMeta(folderKey, projectPath, 0);
+            if (projectPath && alias === null && !isProjectWriteBlocked?.(alias, projectPath)) setFolderMeta(folderKey, projectPath, 0);
           } else {
             projectPath = decodeProjectFolderBestEffort(d.name);
             placeholder = true;

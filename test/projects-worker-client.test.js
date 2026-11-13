@@ -22,6 +22,51 @@ function fixture(options = {}) {
   return { client, worker, messages, applied, reply, change: () => { version++; } };
 }
 
+for (const changeAt of ['before reply', 'during apply']) test(`deletion read-only retry tolerates an ordinary DB change ${changeAt}`, async () => {
+  let calls = 0;
+  const f = fixture({ apply: async () => {
+    if (++calls === 1) throw Object.assign(new Error('deleted'), { code: 'PROJECT_EPOCH_STALE' });
+    if (changeAt === 'during apply') f.change();
+  } });
+  const request = f.client.request(); request.catch(() => {});
+  try {
+    f.reply(0, { effects: [{ name: 'setFolderMeta' }], keptLiveRows: [] });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.messages[1].readOnly, true);
+    if (changeAt === 'before reply') f.change();
+    const result = { effects: [], keptLiveRows: [], reconciled: false };
+    f.reply(1, result);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.messages.length, 2, 'read-only retries must accept DB drift like ordinary effect-free reads');
+    assert.deepEqual(await request, result);
+  } finally { await f.client.shutdown(); }
+});
+
+for (const progress of [false, true]) test(`pending reconciliation survives a deletion-conflicted ${progress ? 'progress' : 'final'} job`, async () => {
+  let calls = 0;
+  const f = fixture({ apply: async () => {
+    if (++calls === 1) throw Object.assign(new Error('deleted'), { code: 'PROJECT_EPOCH_STALE' });
+  } });
+  const first = f.client.request(); first.catch(() => {});
+  const second = f.client.request({ reconcile: true }); second.catch(() => {});
+  try {
+    const effect = { effects: [{ name: 'setFolderMeta' }], keptLiveRows: [] };
+    if (progress) f.worker.emit('message', { id: f.messages[0].id, progress: effect });
+    else f.reply(0, effect);
+    await new Promise(resolve => setImmediate(resolve));
+    if (progress) { f.reply(0, { effects: [], keptLiveRows: [] }); await new Promise(resolve => setImmediate(resolve)); }
+    assert.equal(f.messages[1].readOnly, true);
+    f.reply(1, { effects: [], keptLiveRows: [], reconciled: false });
+    await first;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.messages.length, 3, 'pending reconciliation must get its own writable dispatch');
+    assert.equal(f.messages[2].reconcile, true);
+    assert.ok(!f.messages[2].readOnly);
+    f.reply(2, { effects: [], keptLiveRows: [], reconciled: true });
+    assert.equal((await second).reconciled, true);
+  } finally { await f.client.shutdown(); }
+});
+
 for (const progress of [false, true]) {
   for (const code of ['WRITER_STALE', 'WRITE_FAILED']) {
     test(`an abandoned ${progress ? 'progress' : 'final'} ${code} apply cannot reject the next worker request`, async t => {

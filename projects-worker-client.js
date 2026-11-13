@@ -50,9 +50,11 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
     if (active !== job) return;
     clearTimeout(job.timer);
     if (++job.discards < maxDiscards && job.waiters.some(waiter => waiters.has(waiter))) {
-      job.options = mergeOptions(job.options, pending?.options);
-      job.waiters.push(...(pending?.waiters || []));
-      pending = null;
+      if (!(job.options.readOnly && pending?.options.reconcile)) {
+        job.options = mergeOptions(job.options, pending?.options);
+        job.waiters.push(...(pending?.waiters || []));
+        pending = null;
+      }
       dispatch(job);
       return;
     }
@@ -91,7 +93,7 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
       }
       const job = active;
       const result = message.result;
-      const allowDbChange = !job.options.readOnly && result.effects?.length === 0 && result.keptLiveRows?.length === 0 && !result.reconciled;
+      const allowDbChange = result.effects?.length === 0 && result.keptLiveRows?.length === 0 && !result.reconciled;
       const stale = job.stale || state.liveVersion !== job.liveVersion || (!allowDbChange && state.version !== job.version);
       if (stale) return conflict(job);
       const finish = acknowledgment => {

@@ -38,6 +38,23 @@ function createProjectDeleteInventory(deps) {
   const processPort = (c, budget, port, read) => bounded(c, port,
     () => read({ ...budget, deadline: c.deadline, pendingPorts: c.pendingPorts }), undefined, c.deadline - now());
   const propagate = error => { if (['DISCOVERY_LIMIT', 'DISCOVERY_TIMEOUT', 'SNAPSHOT_STALE'].includes(error.code)) throw error; };
+  async function readLivenessBatch(c, budget, rows, onError) {
+    let next = 0, stopped = false;
+    await Promise.all(Array.from({ length: Math.min(4, rows.length) }, async () => {
+      while (!stopped && next < rows.length) {
+        const row = rows[next++];
+        try {
+          c.check();
+          row.liveness = deps.readLiveness
+            ? await processPort(c, budget, 'readLiveness', remaining => deps.readLiveness(row, remaining))
+            : { state: 'unknown' };
+        } catch (error) {
+          try { propagate(error); if (onError) onError(row, error); else throw error; }
+          catch (failure) { stopped = true; throw failure; }
+        }
+      }
+    }));
+  }
   async function real(c, file) {
     if (!c.realpaths.has(file)) c.realpaths.set(file, bounded(c, 'fs.realpath', () => io.realpath(file)));
     return c.realpaths.get(file);
@@ -293,9 +310,9 @@ function createProjectDeleteInventory(deps) {
         const parentOwned = parentRow?.folder === row.folder && owned(c, { alias: null, projectPath: parentRow.projectPath }, project);
         if (!parentOwned && !await belongs(cwd, subagent)) throw new Error('Transcript ownership unavailable or changed.');
         member.present = true; member.size = inspected.size; member.mtimeMs = inspected.mtimeMs;
-        member.liveness = deps.readLiveness ? await processPort(c, budget, 'readLiveness', remaining => deps.readLiveness(member, remaining)) : { state: 'unknown' };
       } catch (error) { propagate(error); candidate(file, error.message); }
     }
+    await readLivenessBatch(c, budget, members.filter(member => member.present), (member, error) => candidate(member.sessionFile, error.message));
     groups.push(...groupMap.values());
     const ids = new Set(members.map(row => row.id));
     const durableIds = new Set(snapshot.sessions.flatMap(row => [row.sessionId, ...durableRowLinks(row)]));
@@ -418,9 +435,9 @@ function createProjectDeleteInventory(deps) {
       if (!owned(c, record, project)) continue;
       if (row.fresh && !durable) candidates.push({ id, reason: 'Pending restore lacks acknowledged durable identity.' });
       record.verified = true;
-      record.liveness = deps.readLiveness ? await processPort(c, budget, 'readLiveness', remaining => deps.readLiveness(record, remaining)) : { state: 'unknown' };
       tabs.set(record.id, record);
     }
+    await readLivenessBatch(c, budget, [...tabs.values()]);
     if (!deps.readJobs || !deps.getScheduleRunSnapshot) throw fail('SNAPSHOT_INCOMPLETE', 'Authoritative jobs and scheduler evidence are required.');
     const [roster, runs] = await Promise.all([
       processPort(c, budget, 'readJobs', remaining => deps.readJobs(project, remaining)),
