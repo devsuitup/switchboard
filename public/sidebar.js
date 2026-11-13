@@ -1121,7 +1121,7 @@ async function confirmAndDeleteProjectFolder(project, button) {
       title: 'Delete project from Switchboard?',
       message: [`${project.remoteAlias || 'Local'} — ${capabilities.plan.project.projectPath}`,
         'Choose which app data to discard. Retained session metadata is archived.',
-        'The project folder is always kept. Only individually selected linked worktree folders are removed, including their ignored files. All remote server files are kept.',
+        'Kept on disk: the project folder. Only individually selected linked worktree folders are removed, including their ignored files. All remote server files are kept.',
         'Other transcripts, schedules, memory and .work-files stay on disk. Linked worktree history is kept in Switchboard.',
         'Kept schedules may reactivate when you add the project again. Retained transcripts may restore their titles.'],
       choices: [
@@ -1129,10 +1129,13 @@ async function confirmAndDeleteProjectFolder(project, button) {
           disabled: categories.sessions?.available !== true, disabledReason: categories.sessions?.reason || 'Session metadata is unavailable' },
         { id: 'settings', label: 'Delete project settings', checked: true, rememberKey: 'deleteProject.settings',
           disabled: categories.settings?.available !== true, disabledReason: categories.settings?.reason || 'Project settings are unavailable' },
-        ...worktreeChoices.map((row, i) => ({ id: 'worktree:' + i,
-          label: `${row.main ? 'Main checkout (kept)' : 'Remove worktree from disk'}: ${row.path} — ${row.branch}. ${row.statusKnown === false ? 'Status unavailable' : row.dirty?.length ? row.dirty.join('; ') : 'Clean'}. Sessions: ${row.sessionsKnown === false ? 'uncertain' : (row.sessions || []).map(session => session.sessionId || session.id).join(', ') || 'none'}. Ignored files are removed too.`,
-          checked: false, disabled: row.removable !== true || row.main || row.projectDirectory,
-          disabledReason: row.reason || 'This worktree cannot be removed.' })),
+        ...worktreeChoices.map((row, i) => {
+          const sessionLabel = row.sessionsKnown === false ? 'uncertain' : (row.sessions || []).map(session => session.sessionId || session.id).join(', ') || 'none';
+          return { id: 'worktree:' + i,
+            label: `${row.main ? 'Main checkout (kept)' : 'Remove worktree from disk'}: ${row.path} — ${row.branch}. ${row.statusKnown === false ? 'Status unavailable' : row.dirty?.length ? row.dirty.join('; ') : 'Clean'}. Sessions: ${sessionLabel}. Ignored files are removed too.`,
+            checked: false, disabled: row.removable !== true || row.main || row.projectDirectory,
+            disabledReason: row.reason ? row.reason : 'This worktree cannot be removed.' };
+        }),
       ],
       onChange: async values => {
         const reply = await projectDeletionCall('previewProjectDelete', request(values));

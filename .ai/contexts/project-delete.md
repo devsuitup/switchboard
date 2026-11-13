@@ -39,6 +39,13 @@ all its contents, including ignored files and any schedules/memory/work-files
 inside it; category `kept` applies to the parent's data, not files inside selected
 linked directories.
 
+The dialog keeps the explicit `Kept on disk:` project-folder notice alongside
+the selected linked-folder removal warning. Row session fallbacks are computed
+before formatting the worktree label, and the unavailable reason uses an
+explicit conditional: these are display text, not `SETTING_DEFAULTS` overrides.
+The renderer settings-default scanner remains unchanged; the Settings deletion
+regression retains its disk-retention, cancellation and in-app-dialog assertions.
+
 Execution drains holds, revalidates, stops/verifies parent targets, preflights all
 selected rows, then removes sequentially through the shared path with fresh
 per-removal activity/status checks. A failed removal stops the sequence. Only
