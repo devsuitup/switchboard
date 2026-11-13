@@ -197,6 +197,18 @@ for (const shell of boundaryShells) {
     }
   });
 }
+for (const shell of ['pwsh.exe', 'powershell.exe']) {
+  test(`${shell} with a launch prefix and IDE emulation falls back to the exact baseline command at the limit`, async () => {
+    const baseline = prompt => `wrapper.exe -- claude '--resume' '${ID}' '--add-dir' 'C:\\space dir\\' '--append-system-prompt' '${prompt}' --ide`;
+    const size = command => argsToCommandLine(shell, profiles.shellArgs(shell, command, [], { pty: true, windows: true })).length + 1;
+    const prompt = 'x'.repeat(LIMIT - size(baseline('')));
+    assert.equal(size(baseline(prompt)), LIMIT);
+    const spawned = await resumeWith(shell, prompt, { mcpEmulation: true, preLaunchCmd: 'wrapper.exe --', addDirs: 'C:\\space dir\\' });
+    assert.equal(spawned.args[2], baseline(prompt));
+    const shorter = await resumeWith(shell, prompt.slice(0, -1), { mcpEmulation: true, preLaunchCmd: 'wrapper.exe --', addDirs: 'C:\\space dir\\' });
+    assert.equal(shorter.args[2], baseline(prompt.slice(0, -1)));
+  });
+}
 test('IDE emulation adds --ide to the argv before it is serialized, for every shell', async () => {
   const wrapped = shell => launch(shell, { name: 'a b', options: { mcpEmulation: true } });
   const pwsh = await wrapped('pwsh.exe');
