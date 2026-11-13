@@ -8,9 +8,14 @@ pending PID zero must never inherit it. Both delivery and status capture a
 missing start from the first published real PID and reject later changes.
 
 `readStatusEvidence(id, deadline)` is a read-only adapter over the v1 reader,
-not `findLiveProcess` or a PID-only handle. Windows first races the shared
-process-table refresh against the remaining deadline and verifies table age
-under 3000 ms before and after the identity read. The global probe timeout stays
+not `findLiveProcess` or a PID-only handle. It first asks the v1 reader for
+bounded descriptor evidence. A known absence returns directly, including an
+ENOENT descriptor directory in a fresh HOME; no watcher or global process-table
+warmup is required. Malformed/unreadable descriptors, unresolved live identities,
+ambiguity and expired deadlines cannot take this path. Other Windows results
+still require the shared process-table refresh against the remaining deadline,
+then a new identity read with table age under 3000 ms before and after it.
+The global probe timeout stays
 5000 ms and its table TTL stays 3000 ms. A late refresh can help a later request,
 but cannot change a consumed result. V1 live observations retain parsed state,
 host/raw PID, start and namespace. Linux namespace/ancestry validation remains

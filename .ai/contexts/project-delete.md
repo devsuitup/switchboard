@@ -1045,6 +1045,28 @@ remain A4c/d.
 
 ## Evidence boundary
 
+### Dormant Windows sessions (#1103B)
+
+The runtime uses `cli-session-state.readStatusEvidence` for transcript-only
+members. Known descriptor absence no longer depends on the Windows global
+process-table cache. Previously even a missing sessions directory first needed
+a successful table refresh: failure was cached for 3000 ms from completion,
+while evidence age was measured from probe start. A failed or slow probe could
+therefore yield unknown on the first preview or after an earlier successful
+preview. A later timely refresh could yield stopped for the same dormant member.
+That change alters the plan fingerprint and adds a refusal, so execute returns
+`PREVIEW_CHANGED` at its first revalidation, before stopping or submitting to the
+writer. The existing canonical path and post-stop ownership checks are retained.
+
+The main composition tests use the real descriptor reader, inventory, planner,
+service and SQLite worker fixture. They preserve the original TMP spelling,
+exercise missing descriptor directories before cache warmup and after expiry,
+and refuse a newly appearing unverified live descriptor before commit. On
+Windows they run with both long and 8.3 TMP paths. The same short-path fixture
+with stable liveness confirms successfully without path-normalization changes.
+This reproduces both refusal mechanisms; historical WMI failure/timing in the
+supplied live logs is not measured by these tests.
+
 `test/project-delete-plan.test.js` loads the production module with plain
 require and uses isolated in-memory read-port implementations. It exercises the
 public planning/revalidation API, AC8 host/path isolation, read fences, candidate

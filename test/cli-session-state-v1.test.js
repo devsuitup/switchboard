@@ -9,6 +9,32 @@ const { EventEmitter } = require('node:events');
 const state = require('../cli-session-state');
 
 const ID = '01234567-89ab-cdef-0123-456789abcdef';
+test('fresh HOME absence is authoritative before Windows process-table warmup', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-fresh-home-'));
+  const dir = path.join(home, '.claude', 'sessions');
+  t.after(() => { state.stop(); fs.rmSync(home, { recursive: true, force: true }); });
+  let time = Date.now(), available = false, probes = 0;
+  state.init({ dir, platform: 'win32', activeSessions: new Map(), now: () => time,
+    readProcessTable: async () => { probes++; return available ? new Map([[42, { ppid: 1, created: '100' }]]) : null; } });
+  const first = await state.readStatusEvidence(ID, time + 10000);
+  assert.deepEqual(first, { known: true, live: null }, 'missing descriptor directory must prove absence on the first read');
+  available = true; time += state.PROCESS_TABLE_TTL_MS;
+  assert.deepEqual(await state.readStatusEvidence(ID, time + 10000), first);
+  assert.equal(probes, 0, 'absence needs no global process-table probe');
+  assert.equal(fs.existsSync(dir), false, 'observation does not create the descriptor directory');
+});
+
+for (const mode of ['unreadable', 'malformed', 'unverified-live', 'deadline']) test(`status absence remains unknown for ${mode}`, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-status-unknown-'));
+  t.after(() => { state.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
+  if (mode === 'malformed') fs.writeFileSync(path.join(dir, '42.json'), '{');
+  if (mode === 'unverified-live') fs.writeFileSync(path.join(dir, '42.json'), JSON.stringify({ pid: 42, sessionId: ID }));
+  state.init({ dir, platform: 'win32', activeSessions: new Map(), isProcessAlive: () => true,
+    readProcessTable: async () => new Map([[42, { ppid: 1, created: '100' }]]),
+    v1DescriptorFs: mode === 'unreadable' ? { ...fs, readdirSync() { throw Object.assign(new Error('denied'), { code: 'EACCES' }); } } : fs });
+  assert.equal(await state.readStatusEvidence(ID, mode === 'deadline' ? 0 : Date.now() + 10000), null);
+});
+
 for (const platform of ['win32', 'linux']) {
   test(`1083FIX: ${platform} start identity ignores every non-positive-integer PID`, async t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-pid-guard-'));

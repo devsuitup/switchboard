@@ -47,7 +47,8 @@ function windowFixture() {
 }
 async function setup(t, populated = false, overrides = {}) {
   assert.equal(typeof implementation?.createProjectDeleteMain, 'function', 'main deletion composition must exist');
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'delete-main-')));
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'delete-main-'));
+  const root = overrides.preserveTmpSpelling ? temporary : fs.realpathSync(temporary);
   const projectPath = path.join(root, 'repo'), projectsDir = path.join(root, 'transcripts');
   fs.mkdirSync(projectPath); fs.mkdirSync(projectsDir);
   const previousDataDir = process.env.SWITCHBOARD_DATA_DIR;
@@ -100,6 +101,55 @@ async function setup(t, populated = false, overrides = {}) {
   return { main, ports, compose, db, writer, calls, faults, request, notifications, time, load, invoke, preview, execute, activeSessions, projectPath, transcript,
     replace() { win = windowFixture(); main.attach(win); load(); }, bootstrap() { for (const fn of bootListeners) fn(); } };
 }
+
+test('transcript-only project confirms with the original TMP spelling', supported, async t => {
+  const h = await setup(t, true, { preserveTmpSpelling: true });
+  h.load(); await h.main.startRecovery();
+  const p = await h.preview();
+  assert.ok(p.token, JSON.stringify(p));
+  assert.equal((await h.preview()).plan.fingerprint, p.plan.fingerprint, 'unchanged previews have identical fingerprints');
+  const result = await h.execute(p);
+  assert.equal(result.ok, true, 'unchanged TMP-spelled project must commit: ' + JSON.stringify(result));
+  assert.equal(h.calls.filter(c => c === 'completeProjectDeletion').length, 1);
+  assert.ok(fs.existsSync(h.transcript));
+});
+
+for (const initialTable of [false, true]) test(`fresh HOME project deletion survives process-table availability=${initialTable}`, supported, async t => {
+  const state = require('../cli-session-state');
+  const h = await setup(t, true, { preserveTmpSpelling: true, cliSessionState: state });
+  const dir = path.join(h.projectPath, '.claude', 'sessions');
+  let available = initialTable;
+  state.init({ dir, platform: 'win32', activeSessions: h.activeSessions, now: h.time.now,
+    readProcessTable: async () => available ? new Map([[42, { ppid: 1, created: '100' }]]) : null });
+  t.after(() => state.stop());
+  h.load(); await h.main.startRecovery();
+  const p = await h.invoke('preview-project-delete', { projectPath: h.projectPath, options: { ...options, settings: true } });
+  assert.ok(p.token, 'first preview of dormant transcript must offer confirmation: ' + JSON.stringify(p));
+  available = false; h.time.advance(state.PROCESS_TABLE_TTL_MS);
+  const result = await h.execute(p);
+  assert.equal(result.ok, true, 'descriptor absence must survive confirmation after table expiry: ' + JSON.stringify(result));
+  assert.equal(result.state, 'committed');
+  assert.equal(h.calls.filter(c => c === 'completeProjectDeletion').length, 1);
+  assert.equal(fs.existsSync(dir), false);
+  assert.ok(fs.existsSync(h.transcript));
+});
+
+test('confirmation still refuses an unverified live descriptor appearing after preview', supported, async t => {
+  const state = require('../cli-session-state');
+  const h = await setup(t, true, { preserveTmpSpelling: true, cliSessionState: state });
+  const dir = path.join(h.projectPath, '.claude', 'sessions');
+  state.init({ dir, platform: 'win32', activeSessions: h.activeSessions, now: h.time.now,
+    isProcessAlive: () => true, readProcessTable: async () => new Map([[42, { ppid: 1, created: '100' }]]) });
+  t.after(() => state.stop());
+  h.load(); await h.main.startRecovery();
+  const p = await h.preview(); assert.ok(p.token, JSON.stringify(p));
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '42.json'), JSON.stringify({ pid: 42, sessionId: 'part', kind: 'interactive' }));
+  const result = await h.execute(p);
+  assert.equal(result.code, 'PREVIEW_CHANGED');
+  assert.equal(h.calls.includes('completeProjectDeletion'), false);
+  assert.ok(fs.existsSync(h.transcript));
+});
 
 for (const delay of [4000, 8000]) test(`preview accepts background CLI after ${delay} ms within the overall deadline`, supported, async t => {
   let entered, answer, timeout;

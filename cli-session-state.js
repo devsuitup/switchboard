@@ -78,12 +78,16 @@ async function readStatusEvidence(id, deadline) {
     })]); } finally { clearTimeout(timer); }
   };
   if (now() >= deadline) return null;
+  const read = () => bounded(() => liveElsewhereV1Checked(id, () => false, () => [], { deadline, requireUnique: true }));
+  let result = await read();
+  if (now() >= deadline) return null;
+  if (result?.known && !result.live && !result.ambiguous) return result;
   if (platform === 'win32') {
     await bounded(() => refreshProcessTable());
     const evidence = readWorkerProcessEvidence();
     if (!evidence.processTableFresh || now() - evidence.observedAt >= PROCESS_TABLE_TTL_MS || now() >= deadline) return null;
+    result = await read();
   }
-  const result = await bounded(() => liveElsewhereV1Checked(id, () => false, () => [], { deadline, requireUnique: true }));
   if (now() >= deadline || platform === 'win32' && (!processTableFresh()
     || now() - processTable.observedAt >= PROCESS_TABLE_TTL_MS)) return null;
   if (result?.ambiguous) return result;
