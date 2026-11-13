@@ -16,6 +16,183 @@ const supported = { skip: !openStore.supported && 'real SQLite requires Node 22 
 const options = { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: true };
 const budget = () => ({ signal: new AbortController().signal, deadline: 10000, limit: 20000 });
 
+function deadlineClock() {
+  let time = 0, id = 0;
+  const timers = new Map();
+  return { now: () => time, schedule(fn, ms) { timers.set(++id, { fn, at: time + ms }); return id; },
+    cancel: key => timers.delete(key), advance(ms) { time += ms; for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); } } };
+}
+
+for (const method of ['discoverOwnership', 'readRuntimeState']) {
+  for (const hangs of [false, true]) test(`${method} bounds concurrent slow liveness reads within one deadline, hangs=${hangs}`, supported, async t => {
+    const time = deadlineClock();
+    let entered, active = 0, maximum = 0;
+    const started = new Promise(resolve => { entered = resolve; });
+    const reads = [];
+    const h = await setup(t, { ...time, readLiveness: (row, b) => {
+      reads.push({ id: row.id, deadline: b.deadline });
+      active++; maximum = Math.max(maximum, active); entered();
+      return new Promise(resolve => {
+        if (!hangs) time.schedule(() => { active--; resolve({ state: 'stopped', source: row.id }); }, 3000);
+      });
+    } });
+    for (let i = 0; i < 4; i++) {
+      const id = 'extra-' + i;
+      h.write(path.join(h.projectsDir, 'local', id + '.jsonl'), JSON.stringify({ type: 'user', sessionId: id, cwd: h.project.projectPath }) + '\n');
+      h.db.upsertCachedSessions([{ sessionId: id, folder: 'local', projectPath: h.project.projectPath, runtime: 'claude' }]);
+    }
+    if (method === 'readRuntimeState') h.db.setSetting('global', { openWorkingSet: Array.from({ length: 8 }, (_, i) =>
+      ({ sessionId: 'tab-' + i, projectPath: h.project.projectPath, runtime: 'terminal' })) });
+    const b = budget(); await h.inventory.readSnapshot(b);
+    let result, error;
+    const pending = h.inventory[method](h.project, b).then(value => { result = value; }, value => { error = value; });
+    try {
+      await started;
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(reads.length, 4, 'four independent liveness reads must start before the first slow answer');
+      if (hangs) {
+        time.advance(10000); await pending;
+        assert.equal(error?.code, 'DISCOVERY_TIMEOUT');
+        assert.equal(error.port, 'readLiveness');
+        assert.equal(reads.length, 4, 'expiry must not start queued liveness reads');
+      } else {
+        time.advance(3000); await new Promise(resolve => setImmediate(resolve));
+        assert.equal(reads.length, 8, 'the second bounded batch must share the original deadline');
+        time.advance(3000); await pending;
+        assert.equal(error, undefined);
+        const rows = result.members || result.tabs;
+        assert.equal(rows.length, 8);
+        for (const row of rows) assert.equal(row.liveness.source, row.id);
+        assert.ok(reads.every(read => read.deadline === 10000));
+      }
+      assert.equal(maximum, 4, 'liveness concurrency must stay capped');
+    } finally { time.advance(10000); await pending; }
+  });
+}
+
+for (const port of ['readJobs', 'readRemoteOwnership', 'readRemoteSchedules', 'memberLiveness', 'tabLiveness']) {
+  for (const hangs of [false, true]) test(`process inventory ${port} ${hangs ? 'hangs until the effective deadline' : 'accepts a four-second answer'}`, supported, async t => {
+    const time = deadlineClock();
+    let entered, answer, receivedBudget, first = true;
+    const started = new Promise(resolve => { entered = resolve; });
+    const value = port === 'readJobs' ? { complete: true, jobs: [] }
+      : port === 'readRemoteOwnership' ? { complete: true, groups: [], members: [], candidates: [] }
+        : port === 'readRemoteSchedules' ? { complete: true, schedules: [], candidates: [] } : { state: 'stopped', source: 'descriptor' };
+    const read = (_row, b) => {
+      if (!first) return Promise.resolve(value);
+      first = false; receivedBudget = b; entered();
+      return new Promise(resolve => { answer = resolve; });
+    };
+    const h = await setup(t, { ...time, timeoutMs: 6000, [port.endsWith('Liveness') ? 'readLiveness' : port]: read });
+    const b = budget(); await h.inventory.readSnapshot(b); time.advance(1000);
+    const method = port === 'readRemoteOwnership' || port === 'memberLiveness' ? 'discoverOwnership'
+      : port === 'readRemoteSchedules' ? 'discoverSchedules' : 'readRuntimeState';
+    const project = port.startsWith('readRemote') ? { alias: 'one', projectPath: '/srv/Repo' } : h.project;
+    let outcome;
+    const pending = h.inventory[method](project, b).then(result => { outcome = { result }; }, error => { outcome = { error }; });
+    await started;
+    if (hangs) {
+      time.advance(4999); await new Promise(resolve => setImmediate(resolve));
+      assert.equal(outcome, undefined, 'process port must remain pending until the effective inventory deadline');
+      time.advance(1); await pending;
+      assert.equal(outcome.error?.code, 'DISCOVERY_TIMEOUT');
+    } else {
+      time.advance(4000); answer(value); await pending;
+      assert.equal(outcome.error, undefined, 'process port must accept a response beyond the short port cap');
+      assert.equal(outcome.result.complete, true);
+    }
+    assert.equal(receivedBudget.deadline, 6000, 'process receives the inventory deadline rather than a fresh or wider budget');
+    assert.equal(receivedBudget.signal, b.signal);
+  });
+}
+
+for (const port of ['writer', 'scheduler', 'file']) test(`in-process inventory ${port} reports its named explicit timeout`, supported, async t => {
+  const time = deadlineClock();
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const read = () => { entered(); return new Promise(() => {}); };
+  const io = Object.create(fs.promises);
+  const h = await setup(t, { ...time, fs: io, portTimeoutMs: 3000 });
+  const b = budget(); await h.inventory.readSnapshot(b);
+  if (port === 'writer') h.writer.readProjectDeletionRevision = read;
+  if (port === 'scheduler') h.deps.getScheduleRunSnapshot = read;
+  if (port === 'file') io.lstat = read;
+  let outcome;
+  const pending = (port === 'writer' ? h.inventory.readRevision(b)
+    : port === 'scheduler' ? h.inventory.readRuntimeState(h.project, b) : h.inventory.inspectRetainedFiles([h.schedule], b))
+    .catch(error => { outcome = error; });
+  await started;
+  time.advance(2999); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(outcome, undefined);
+  time.advance(1); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(outcome?.code, 'DISCOVERY_TIMEOUT', 'ordinary reads still expire at 3000 ms');
+  assert.equal(outcome.port, { writer: 'writer.readProjectDeletionRevision', scheduler: 'getScheduleRunSnapshot', file: 'fs.lstat' }[port], 'timeout must identify the stalled port');
+  assert.equal(outcome.elapsedMs, 3000);
+  assert.equal(outcome.boundMs, 3000);
+  await pending;
+});
+
+test('a short scheduler timeout does not blame a concurrent process port with a longer budget', supported, async t => {
+  const { createDiscoveryBounds } = require('../src/main/projects/project-delete-deadline');
+  const time = deadlineClock(); let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const nested = createDiscoveryBounds(time);
+  const h = await setup(t, { ...time, portTimeoutMs: 3000,
+    getScheduleRunSnapshot: () => new Promise(() => {}),
+    readJobs: async (_project, b) => {
+      await new Promise(resolve => setImmediate(resolve));
+      return nested('runClaude.agents', () => { entered(); return new Promise(() => {}); }, b);
+    } });
+  const b = budget(); await h.inventory.readSnapshot(b);
+  let error;
+  const pending = h.inventory.readRuntimeState(h.project, b).catch(value => { error = value; });
+  await started; time.advance(3000); await pending;
+  assert.equal(error.port, 'getScheduleRunSnapshot', 'a port timeout must not blame an unrelated concurrent port');
+  assert.equal(error.boundMs, 3000);
+  time.advance(7000); await new Promise(resolve => setImmediate(resolve));
+});
+
+test('inventory names and bounds a never-settling file close', supported, async t => {
+  const time = deadlineClock(), io = Object.create(fs.promises);
+  const h = await setup(t, { ...time, fs: io });
+  const b = budget(); await h.inventory.readSnapshot(b);
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  io.open = async (...args) => {
+    const handle = await fs.promises.open(...args), close = handle.close.bind(handle);
+    handle.close = async () => { await close(); entered(); return new Promise(() => {}); };
+    return handle;
+  };
+  let error;
+  const pending = h.inventory.inspectRetainedFiles([h.schedule], b).catch(value => { error = value; });
+  await started; time.advance(10000); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(error?.port, 'fs.file.close', 'a stalled cleanup must identify its close port at the deadline');
+  assert.equal(error.code, 'DISCOVERY_TIMEOUT');
+  await pending;
+});
+
+for (const port of ['writer', 'scheduler', 'file']) test(`in-process inventory ${port} accepts four seconds within the shared deadline`, supported, async t => {
+  const time = deadlineClock(), io = Object.create(fs.promises);
+  const h = await setup(t, { ...time, fs: io });
+  const b = budget(); await h.inventory.readSnapshot(b);
+  let entered, answer;
+  const started = new Promise(resolve => { entered = resolve; });
+  const target = port === 'writer' ? h.writer : port === 'scheduler' ? h.deps : io;
+  const method = port === 'writer' ? 'readProjectDeletionRevision' : port === 'scheduler' ? 'getScheduleRunSnapshot' : 'lstat';
+  const original = target[method].bind(target);
+  target[method] = (...args) => { entered(); return new Promise(resolve => { answer = () => resolve(original(...args)); }); };
+  let outcome;
+  const pending = (port === 'writer' ? h.inventory.readRevision(b)
+    : port === 'scheduler' ? h.inventory.readRuntimeState(h.project, b) : h.inventory.inspectRetainedFiles([h.schedule], b))
+    .then(result => { outcome = { result }; }, error => { outcome = { error }; });
+  await started;
+  time.advance(4000); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(outcome, undefined, 'ordinary ports must not expire before the overall deadline');
+  target[method] = original;
+  answer(); await pending;
+  assert.equal(outcome.error, undefined);
+});
+
 for (const code of ['EACCES', 'EPERM']) test(`A4c2afix denied cwd resolves its readable alternate-spelling ancestor (${code})`, supported, async t => {
   const io = Object.create(fs.promises);
   const h = await setup(t, { fs: io });

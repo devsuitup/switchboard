@@ -977,9 +977,27 @@ function setProjectDeletionWritesBlocked(project, blocked) {
   window.flushDeferredProjectDeletionWrites();
 }
 
-async function projectDeletionCall(method, input, { retryRecovery = false } = {}) {
+async function projectDeletionPreviewWait(port, read, deadline = Date.now() + PROJECT_DELETE_DIALOG_TIMEOUT_MS) {
+  const startedAt = Date.now(), boundMs = Math.max(0, deadline - startedAt);
+  let timer;
+  const expired = () => new Error(`${port} timed out (${Date.now() - startedAt} ms elapsed; ${boundMs} ms bound). Retry preview, or cancel.`);
+  try {
+    if (!boundMs) throw expired();
+    const value = await Promise.race([Promise.resolve().then(read), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(expired()), boundMs);
+    })]);
+    if (Date.now() >= deadline) throw expired();
+    return value;
+  } finally { clearTimeout(timer); }
+}
+
+async function projectDeletionCall(method, input, { retryRecovery = false, deadline } = {}) {
   const revision = projectDeletionRecoveryRevision;
-  const reply = await window.api[method](input);
+  const reply = await (method === 'previewProjectDelete'
+    ? projectDeletionPreviewWait(method, () => window.api[method](input), deadline).catch(error => {
+      if (error.code === 'DISCOVERY_TIMEOUT') throw new Error(projectDeletionPlanReason(error));
+      throw error;
+    }) : window.api[method](input));
   if (reply?.code === 'NOT_READY') {
     projectDeletionRecoveryRevision++;
     projectDeletionUnavailable = PROJECT_DELETION_RECOVERY_REASON;
@@ -991,6 +1009,7 @@ async function projectDeletionCall(method, input, { retryRecovery = false } = {}
 function projectDeletionPlanReason(reply) {
   if (projectDeletionUnavailable) return projectDeletionUnavailable;
   if (reply?.code === 'NOT_READY') return PROJECT_DELETION_RECOVERY_REASON;
+  if (reply?.code === 'DISCOVERY_TIMEOUT') return `${reply.port || 'previewProjectDelete'} timed out (${reply.elapsedMs ?? '?'} ms elapsed; ${reply.boundMs ?? '?'} ms bound). Retry preview, or cancel.`;
   const plan = reply?.plan;
   if (!plan) return reply?.error || 'Project deletion preview is unavailable. Close and reopen Delete to retry.';
   if (plan.jobs?.some(job => !['running', 'stopped'].includes(job.liveness?.state))) {
@@ -1042,7 +1061,7 @@ async function settleProjectDeletion(project, result, { historical = false } = {
   if (result?.operationId && ['unknown', 'partial'].includes(result.state)) {
     projectDeletionOperations.set(key, { operationId: result.operationId, project, historical });
     setProjectDeletionBusy(project, true);
-    projectDeletionNotice(project, `Deletion is ${result.state === 'unknown' ? 'unresolved' : 'partially completed'}. No deletion will be replayed.\n` +
+    projectDeletionNotice(project, `Deletion is ${result.state === 'unknown' ? 'unresolved' : 'partially completed'}. No deletion will be replayed. Reason: ${result.code || 'UNKNOWN'}.\n` +
       JSON.stringify({ completed: result.completed, kept: result.kept, failed: result.failed, skipped: result.skipped,
         stopped: result.stopped, stoppedHistoryUnknown: result.stoppedHistoryUnknown }, null, 2),
     result.state === 'partial' ? { actionLabel: 'Review remaining deletion', onAction: () => {
@@ -1103,11 +1122,12 @@ async function confirmAndDeleteProjectFolder(project, button) {
   }
   setProjectDeletionBusy(project, true);
   let accepted = false, unresolved = false;
+  const deadline = Date.now() + PROJECT_DELETE_DIALOG_TIMEOUT_MS;
   try {
-    await window.flushProjectDeletionWrites?.();
+    await projectDeletionPreviewWait('flushProjectDeletionWrites', () => window.flushProjectDeletionWrites?.(), deadline);
     const request = options => ({ projectPath: project.projectPath, ...(project.folder ? { folderKey: project.folder } : {}),
       options: { sessions: options.sessions, settings: options.settings, schedules: false, transcripts: false, stopBackgroundJobs: false } });
-    const capabilities = await projectDeletionCall('previewProjectDelete', request({ sessions: false, settings: false }), { retryRecovery: true });
+    const capabilities = await projectDeletionCall('previewProjectDelete', request({ sessions: false, settings: false }), { retryRecovery: true, deadline });
     if (!capabilities?.plan) {
       projectDeletionNotice(project, projectDeletionPlanReason(capabilities)); return false;
     }
@@ -1132,7 +1152,7 @@ async function confirmAndDeleteProjectFolder(project, button) {
         }
         return reply;
       },
-      planDetails: projectDeletionDetails, planUnavailable: projectDeletionPlanReason,
+      planDetails: projectDeletionDetails, planUnavailable: projectDeletionPlanReason, planWaitManaged: true,
       confirmLabel: 'Delete project', danger: true, initialFocus: 'cancel', returnFocus: button,
       fallbackFocus: () => document.getElementById('sidebar-content'),
     });
@@ -1141,7 +1161,19 @@ async function confirmAndDeleteProjectFolder(project, button) {
     accepted = true;
     setProjectDeletionWritesBlocked(project, true);
     await window.flushProjectDeletionWrites?.();
-    const result = await projectDeletionCall('deleteProject', { token: answers.plan.token, fingerprint: answers.plan.plan.fingerprint });
+    let result = await projectDeletionCall('deleteProject', { token: answers.plan.token, fingerprint: answers.plan.plan.fingerprint });
+    const stateDeadline = Date.now() + PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS;
+    while (result?.operationId && result.code === 'EXECUTION_PENDING') {
+      const operationId = result.operationId;
+      try {
+        const next = await projectDeletionPreviewWait('projectDeleteState',
+          () => projectDeletionCall('projectDeleteState', { operationId }), stateDeadline);
+        if (next?.operationId && next.operationId !== operationId) throw new Error('Deletion operation identity changed.');
+        result = next?.operationId === operationId && next.state ? next : { ...result, code: next?.code || 'STATE_READ_UNAVAILABLE' };
+      } catch (error) {
+        result = { ...result, code: 'STATE_READ_UNAVAILABLE', error: error.message };
+      }
+    }
     return await settleProjectDeletion(project, result);
   } catch (error) {
     unresolved = accepted;

@@ -114,7 +114,7 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
       })]);
     } finally { clearTimeout(timer); }
   }
-  async function liveElsewhereV1Checked(sessionId, _hasPty, ptyPids = () => [], { deadline = Infinity, requireUnique = false } = {}) {
+  async function liveElsewhereV1Checked(sessionId, _hasPty, ptyPids = () => [], { deadline = Infinity, requireUnique = false, processTable } = {}) {
     const key = String(sessionId).toLowerCase();
     const scheduled = scheduledRuns.get(key);
     if (scheduled) return { known: true, live: scheduled };
@@ -150,12 +150,14 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
           if (candidate.raw.pidDomain !== 'win32:anchor' || !/^\d{15,}$/.test(String(candidate.raw.procStart))) {
             unresolved = true; continue;
           }
-          const first = (await probe([candidate.raw.pid], deadline))?.get(candidate.raw.pid);
+          const cached = processTable !== undefined;
+          if (cached && (!processTable.map || now() >= processTable.expiresAt)) { unresolved = true; continue; }
+          const first = cached ? processTable.map.get(candidate.raw.pid)?.created : (await probe([candidate.raw.pid], deadline))?.get(candidate.raw.pid);
           if (expired(deadline)) return unknown('descriptor deadline');
-          const second = (await probe([candidate.raw.pid], deadline))?.get(candidate.raw.pid);
+          const second = cached ? first : (await probe([candidate.raw.pid], deadline))?.get(candidate.raw.pid);
           if (first != null && second != null && !procStartMatches(first, candidate.raw.procStart)
             && !procStartMatches(second, candidate.raw.procStart)) {
-            if (sameFile(candidate, deadline)) continue;
+            if (!cached && sameFile(candidate, deadline)) continue;
             unresolved = true; continue;
           }
           if (first != null && second != null && procStartMatches(first, candidate.raw.procStart)
@@ -166,7 +168,7 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
               const seen = new Set();
               while (current > 1 && seen.size < 64 && !seen.has(current) && !expired(deadline)) {
                 if (current === anchor) { owned = true; break; }
-                seen.add(current); current = readParentPid(current);
+                seen.add(current); current = cached ? processTable.map.get(current)?.ppid : readParentPid(current);
               }
             }
           }

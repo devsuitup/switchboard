@@ -2868,6 +2868,55 @@ platform injection. This validates a lock scenario, not its frequency in use.
 
 ## Project deletion writer boundary (A4b4)
 
+### Project-list reads after deletion (#1103C)
+
+The deletion reservation is temporary; the durable producer fence remains blocked
+after commit until an explicit re-add. The query worker reads those fences in the
+same transaction as rows and settings. Its cache context supplies a canonical,
+host-scoped write predicate: reconciliation skips fenced folders before preparing
+or refreshing them, and the empty-folder fallback does not emit their folder
+metadata. Known, verified folder metadata avoids another transcript read; otherwise
+the normal bounded cwd derivation resolves ownership. While blocked fences exist,
+unresolved folders also skip reconciliation: the writer cannot admit their unowned
+effects. Unrelated resolved folders before and after a deletion still reconcile.
+An accepted completed reconciliation advances main's projectsReconciledAt, so the
+next request respects the ordinary five-second interval. Explicit re-add enables
+fresh producers again.
+
+On PROJECT_EPOCH_STALE or DELETION_OWNERSHIP from effect publication, the client
+discards that build and requests a fresh read-only snapshot. Progress failures
+mark the build stale until its final reply; further speculative chunks are not
+applied. The fallback skips reconciliation and records no effects, including
+folder markers created during view construction. It preserves the retry budget,
+caller deadline and reconciliation hard deadline. This fallback handles deletion
+concurrent with a build; an already committed snapshot needs only one build.
+Reconcile-bearing pending requests stay queued for their own writable dispatch
+instead of inheriting readOnly. Effect-free replies use the ordinary read rule:
+database-only drift is acceptable before and after apply, but live-input changes
+still require a retry.
+An independent later request starts normally and can bind a reopened epoch.
+No old effect is rebound or replayed, and the writer's per-unit fence is unchanged.
+Unrelated cached projects stay readable; this fallback does not promise to finish
+their interrupted reconciliation. Filesystem watchers and later normal requests
+retain their own indexing paths.
+
+The query worker also excludes deletion-marked hidden identities canonically,
+within their host scope and only while the snapshot's durable fence is blocked.
+An explicit re-add clears that fence even if a differently spelled hide marker
+remains; an obsolete marker must not hide the reopened epoch. Deletion stores a
+canonical path while transcript paths
+may retain Windows case, separators or an 8.3 spelling. Legacy non-deletion hide
+semantics are unchanged. This filter uses the same settings snapshot as the rows.
+
+test/get-projects-after-delete.test.js composes the shipped get-projects handler,
+query worker/cache, client, deletion main/service, writer worker and real SQLite
+fixture through plain Node and unwrapped filename-bearing VMs. It covers repeated
+boolean/paired reads with one build each, reconciliation on both sides of a deleted
+folder, the shipped acceptance timestamp callback, a fresh client, both effect
+publication stages, an interleaved deletion and explicit reopen using the original
+transcript path. Long and short TMP
+spellings are exercised on Windows; no Electron or live UI behavior is claimed.
+
 The internal completeProjectDeletion backend invalidates only manifest-owned
 session rows, metrics, session search/staging and continuation choices. Retained
 conversation metadata is archived with names/pins preserved; selected discard

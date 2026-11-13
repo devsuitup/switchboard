@@ -45,6 +45,7 @@ function openChoiceDialog({
   onChange = null,
   planDetails = null,
   planUnavailable = null,
+  planWaitManaged = false,
 } = {}) {
   return new Promise((resolve) => {
     if (onChange && choices.some(choice => choice.id === 'plan' || choice.id === 'choice')) {
@@ -154,6 +155,7 @@ function openChoiceDialog({
     confirmBtn.type = 'button';
     const planError = onChange ? document.createElement('p') : null;
     const planPending = onChange ? document.createElement('p') : null;
+    const retryPlan = onChange ? document.createElement('button') : null;
     const details = onChange && planDetails ? document.createElement('details') : null;
     const detailText = details ? document.createElement('pre') : null;
     if (details) {
@@ -169,7 +171,12 @@ function openChoiceDialog({
       planPending.setAttribute('role', 'status');
       planPending.textContent = 'Preparing preview…';
       planPending.hidden = true;
-      body.append(planPending, planError);
+      retryPlan.type = 'button';
+      retryPlan.className = 'choice-dialog-retry';
+      retryPlan.textContent = 'Retry preview';
+      retryPlan.hidden = true;
+      retryPlan.addEventListener('click', () => { void refreshPlan(currentValues()); });
+      body.append(planPending, planError, retryPlan);
     }
     let closed = false;
     let plan;
@@ -195,13 +202,14 @@ function openChoiceDialog({
       planValues = null;
       confirmBtn.disabled = true;
       planError.hidden = true;
+      retryPlan.hidden = true;
       planError.textContent = '';
       planPending.hidden = false;
       if (detailText) detailText.textContent = '';
       dialog.setAttribute('aria-busy', 'true');
       let finishWait;
       const deadline = new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('The preview took too long. Change a choice to try again, or cancel.')), 15000);
+        const timer = planWaitManaged ? null : setTimeout(() => reject(new Error('The preview took too long. Retry preview, or cancel.')), 15000);
         finishWait = () => { clearTimeout(timer); resolve(); };
       });
       finishPlanWait = finishWait;
@@ -218,6 +226,7 @@ function openChoiceDialog({
         if (closed || request !== planRequest || !matchesCurrentValues(values)) return;
         planError.textContent = error?.message || (typeof error === 'string' && error) || 'Unable to refresh the plan.';
         planError.hidden = false;
+        retryPlan.hidden = false;
       } finally {
         finishWait();
         if (finishPlanWait === finishWait) finishPlanWait = null;
@@ -256,7 +265,7 @@ function openChoiceDialog({
     dialog.append(header, body, actions);
     overlay.appendChild(dialog);
 
-    const buttons = [closeBtn, cancelBtn, secondaryBtn, confirmBtn].filter(Boolean);
+    const buttons = [closeBtn, cancelBtn, secondaryBtn, confirmBtn, retryPlan].filter(Boolean);
 
     function close(value) {
       if (closed) return;

@@ -9,6 +9,94 @@ const { EventEmitter } = require('node:events');
 const state = require('../cli-session-state');
 
 const ID = '01234567-89ab-cdef-0123-456789abcdef';
+
+test('failed WMI reads preserve bounded stderr, exit and timeout evidence and log once a minute', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-wmi-diagnostic-'));
+  t.after(() => { state.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
+  let time = Date.now(); const logs = [];
+  state.init({ dir, platform: 'win32', activeSessions: new Map(), now: () => time,
+    log: { debug: line => logs.push(line) },
+    readProcessTable: () => state.probeProcessTable('win32', 10, (_file, _args, _opts, done) => {
+      done(Object.assign(new Error('command failed'), { code: 7, killed: true, signal: 'SIGTERM' }), '', 'WMI denied ' + 'x'.repeat(400));
+    }) });
+  await state.readProcessTableSnapshot(time + 20000); time += 3000;
+  await state.readProcessTableSnapshot(time + 20000);
+  assert.equal(logs.length, 1, 'repeated WMI failures must be rate limited to one log per minute');
+  assert.match(logs[0], /exit=7.*timeout=true.*stderr=.*WMI denied/);
+  assert.ok(logs[0].length < 450, 'stderr diagnostics must be truncated to 300 characters');
+  time += 57000; await state.readProcessTableSnapshot(time + 20000);
+  assert.equal(logs.length, 2);
+});
+
+for (const failed of [false, true]) test(`preview snapshot reuses recent table reads including failure=${failed}`, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-table-cache-'));
+  t.after(() => { state.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
+  let time = Date.now();
+  const timeouts = [];
+  state.init({ dir, platform: 'win32', activeSessions: new Map(), now: () => time,
+    readProcessTable: async timeout => { timeouts.push(timeout); if (failed) throw new Error('table unavailable'); return new Map([[42, { ppid: 1, created: '133000000000000000' }]]); } });
+  const first = await state.readProcessTableSnapshot(time + 20000);
+  time += 2000;
+  const cached = await state.readProcessTableSnapshot(time + 20000);
+  assert.equal(cached.expiresAt, first.at + state.PROCESS_TABLE_TTL_MS, 'deletion runtime must know the actual captured table expiry');
+  assert.equal(cached.map, first.map, 'a recent result is shared across previews');
+  assert.deepEqual(timeouts, [15000], 'a recent failed read must not be retried either');
+  time += 1000;
+  await state.readProcessTableSnapshot(time + 1000);
+  assert.deepEqual(timeouts, [15000, 1000], 'expired cache refresh obeys the remaining deadline');
+});
+
+for (const mode of ['fresh', 'failed', 'stale', 'mismatched']) test(`preview table snapshot ${mode} never starts another process probe`, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-preview-table-'));
+  t.after(() => { state.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const time = Date.now(), start = '133000000000000000';
+  fs.writeFileSync(path.join(dir, '42.json'), JSON.stringify({ pid: 42, sessionId: ID, kind: 'interactive',
+    status: 'idle', pidDomain: 'win32:anchor', procStart: start }));
+  let probes = 0;
+  state.init({ dir, platform: 'win32', activeSessions: new Map(), now: () => time, isProcessAlive: () => true,
+    readProcessTable: async () => { probes++; return null; },
+    readProcStartMany: async () => { probes++; return new Map([[42, start]]); } });
+  const processTable = { at: time - (mode === 'stale' ? 4000 : 0), observedAt: time,
+    map: mode === 'failed' ? null : new Map([[42, { ppid: 1, created: mode === 'mismatched' ? '134000000000000000' : start }]]) };
+  const result = await state.readStatusEvidence(ID, time + 20000, { processTable });
+  assert.equal(probes, 0, 'preview must consume its one table result even when unavailable or expired');
+  if (mode === 'fresh') assert.equal(result?.live?.pid, 42);
+  else assert.equal(result, null, 'unavailable or mismatched cached identity stays unknown');
+});
+
+test('default Windows process-table timeout fits the twenty-second preview budget', async () => {
+  let timeout;
+  await state.probeProcessTable('win32', undefined, (_file, _args, options, done) => {
+    timeout = options.timeout; done(null, '42 1 133000000000000000\tclaude.exe');
+  });
+  assert.equal(timeout, 15000, 'table reader needs 15 seconds under load and leaves five seconds for discovery');
+});
+test('fresh HOME absence is authoritative before Windows process-table warmup', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-fresh-home-'));
+  const dir = path.join(home, '.claude', 'sessions');
+  t.after(() => { state.stop(); fs.rmSync(home, { recursive: true, force: true }); });
+  let time = Date.now(), available = false, probes = 0;
+  state.init({ dir, platform: 'win32', activeSessions: new Map(), now: () => time,
+    readProcessTable: async () => { probes++; return available ? new Map([[42, { ppid: 1, created: '100' }]]) : null; } });
+  const first = await state.readStatusEvidence(ID, time + 10000);
+  assert.deepEqual(first, { known: true, live: null }, 'missing descriptor directory must prove absence on the first read');
+  available = true; time += state.PROCESS_TABLE_TTL_MS;
+  assert.deepEqual(await state.readStatusEvidence(ID, time + 10000), first);
+  assert.equal(probes, 0, 'absence needs no global process-table probe');
+  assert.equal(fs.existsSync(dir), false, 'observation does not create the descriptor directory');
+});
+
+for (const mode of ['unreadable', 'malformed', 'unverified-live', 'deadline']) test(`status absence remains unknown for ${mode}`, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-status-unknown-'));
+  t.after(() => { state.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
+  if (mode === 'malformed') fs.writeFileSync(path.join(dir, '42.json'), '{');
+  if (mode === 'unverified-live') fs.writeFileSync(path.join(dir, '42.json'), JSON.stringify({ pid: 42, sessionId: ID }));
+  state.init({ dir, platform: 'win32', activeSessions: new Map(), isProcessAlive: () => true,
+    readProcessTable: async () => new Map([[42, { ppid: 1, created: '100' }]]),
+    v1DescriptorFs: mode === 'unreadable' ? { ...fs, readdirSync() { throw Object.assign(new Error('denied'), { code: 'EACCES' }); } } : fs });
+  assert.equal(await state.readStatusEvidence(ID, mode === 'deadline' ? 0 : Date.now() + 10000), null);
+});
+
 for (const platform of ['win32', 'linux']) {
   test(`1083FIX: ${platform} start identity ignores every non-positive-integer PID`, async t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-pid-guard-'));

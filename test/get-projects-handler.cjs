@@ -16,9 +16,15 @@ module.exports = function loadGetProjectsHandler(context) {
   const helperStart = source.indexOf('async function getProjectsSnapshot(');
   const helperEnd = source.indexOf('\n}', helperStart) + 2;
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
-  vm.runInNewContext(source.slice(helperStart, end), {
+  const sandbox = {
     console, performance, structuredClone, Buffer, cliSessionState, require: createRequire(filename), ...context,
     ipcMain: { handle: (name, callback) => { assert.equal(name, 'get-projects'); handler = callback; } },
-  }, { filename, lineOffset: source.slice(0, helperStart).split('\n').length - 1 });
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(source.slice(helperStart, end), sandbox, { filename, lineOffset: source.slice(0, helperStart).split('\n').length - 1 });
+  const accepted = source.match(/accepted: (result => \{ if \(result\.reconciled\)[^\n]+\}),/);
+  assert.ok(accepted, 'shipped acceptance callback must exist');
+  handler.accepted = vm.runInContext(accepted[1], sandbox, { filename });
+  handler.reconciledAt = () => sandbox.projectsReconciledAt;
   return handler;
 };
