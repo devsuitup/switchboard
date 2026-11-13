@@ -119,7 +119,7 @@ test('PowerShell off Windows keeps the bare claude and plain single-quoted token
   assert.equal(profiles.claudeCommand(PWSH, ['a'], { windows: false, prefix: 'wrap --' }), `wrap -- claude 'a'`);
   assert.deepEqual(profiles.shellArgs(PWSH, 'claude x', [], { windows: false }), ['-NoLogo', '-Command', 'claude x']);
 });
-const helperSource = () => profiles.shellArgs(PWSH, 'x', [], { windows: true })[2].slice(0, -1);
+const helperSource = () => profiles.shellArgs(PWSH, '__switchboard_launch x', [], { windows: true })[2].slice(0, -'__switchboard_launch x'.length);
 test('the PowerShell helper falls back to the command PowerShell resolves and never shadows claude', () => {
   const source = helperSource();
   assert.ok(source.startsWith('function __switchboard_launch{param([string]$n)'), source);
@@ -144,16 +144,33 @@ test('a launch prefix is the helper program and claude one of its tokens', async
   const spawned = await launch('pwsh.exe', { name: 'a b', options: { preLaunchCmd: 'wrap.exe' } });
   assert.ok(spawned.args[2].endsWith(`;${call('wrap.exe', 'claude', '--session-id', ID, '--name', 'a b')}`), spawned.args[2]);
 });
+const { argsToCommandLine } = require('node-pty/lib/windowsPtyAgent');
 test('a large existing argument crosses node-pty once, well under the Windows command line limit', async () => {
-  const { argsToCommandLine } = require('node-pty/lib/windowsPtyAgent');
   const prompt = 'x'.repeat(20000);
   for (const shell of ['pwsh.exe', 'powershell.exe']) {
     const spawned = await launch(shell, { isNew: false, transcript: true, options: { appendSystemPrompt: prompt } });
     const line = argsToCommandLine(shell, spawned.args);
     assert.equal(line.split(prompt).length - 1, 1, 'the prompt appears once');
+    assert.ok(spawned.args[2].startsWith('function __switchboard_launch'), 'the helper form fits and is kept');
     assert.ok(line.length + 1 < 32767, `${line.length}`);
     assert.ok(line.length <= 1.1 * (prompt.length + 'claude --resume --append-system-prompt'.length + ID.length), `${line.length}`);
   }
+});
+test('a launch that fits only without the helper keeps the plain token form and the whole argument', async () => {
+  const prompt = 'word '.repeat(6500).trim();
+  for (const shell of ['pwsh.exe', 'powershell.exe']) {
+    const spawned = await launch(shell, { isNew: false, transcript: true, options: { appendSystemPrompt: prompt } });
+    const line = argsToCommandLine(shell, spawned.args);
+    assert.ok(line.length + 1 <= 32767, `${line.length}`);
+    assert.equal(line.split(prompt).length - 1, 1, 'the prompt appears once, intact');
+    assert.equal(spawned.args[2], `claude '--resume' '${ID}' '--append-system-prompt' '${prompt}'`);
+  }
+});
+test('a launch that fits with the helper keeps it just below the limit', async () => {
+  const prompt = 'y'.repeat(31000);
+  const spawned = await launch('pwsh.exe', { isNew: false, transcript: true, options: { appendSystemPrompt: prompt } });
+  assert.ok(spawned.args[2].startsWith('function __switchboard_launch'));
+  assert.ok(argsToCommandLine('pwsh.exe', spawned.args).length + 1 <= 32767);
 });
 test('IDE emulation adds --ide to the argv before it is serialized, for every shell', async () => {
   const wrapped = shell => launch(shell, { name: 'a b', options: { mcpEmulation: true } });

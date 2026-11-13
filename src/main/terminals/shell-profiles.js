@@ -210,10 +210,20 @@ function powershellLaunch(argv, prefix) {
   return ['__switchboard_launch', target, ...rest, ...argv].map((word, i) => (i ? psLiteral(word) : word)).join(' ');
 }
 
-function claudeCommand(shellPath, argv, { env, cwd, prefix = '', windows = isWindows } = {}) {
-  if (windows && isPowerShellShell(shellPath)) return powershellLaunch(argv, prefix);
+const WINDOWS_COMMAND_LINE_LIMIT = 32767;
+
+function fitsCommandLine(shellPath, command, extraArgs) {
+  const { argsToCommandLine } = require('node-pty/lib/windowsPtyAgent');
+  const args = shellArgs(shellPath, command, extraArgs, { pty: true, windows: true });
+  return argsToCommandLine(shellPath, args).length + 1 <= WINDOWS_COMMAND_LINE_LIMIT;
+}
+
+function claudeCommand(shellPath, argv, { env, cwd, prefix = '', windows = isWindows, extraArgs = [] } = {}) {
   const wrapped = !!prefix.trim();
-  return (wrapped ? prefix + ' ' : '') + 'claude ' + quoteArgvForShell(shellPath, argv, { env, cwd, wrapped });
+  const plain = (wrapped ? prefix + ' ' : '') + 'claude ' + quoteArgvForShell(shellPath, argv, { env, cwd, wrapped });
+  if (!(windows && isPowerShellShell(shellPath))) return plain;
+  const helper = powershellLaunch(argv, prefix);
+  return fitsCommandLine(shellPath, helper, extraArgs) || !fitsCommandLine(shellPath, plain, extraArgs) ? helper : plain;
 }
 
 // Returns spawn args appropriate for the resolved shell
@@ -234,7 +244,7 @@ function shellArgs(shellPath, cmd, extraArgs, { pty = false, windows = isWindows
     if (isBashLike) return ['-l', '-i', '-c', cmd];
     if (isFish) return ['-l', '-c', cmd];
     if (isNushell) return ['-l', '-c', cmd];
-    if (base.includes('powershell') || base.includes('pwsh')) return ['-NoLogo', '-Command', (windows ? PS_PREAMBLE : '') + cmd];
+    if (base.includes('powershell') || base.includes('pwsh')) return ['-NoLogo', '-Command', (windows && cmd.startsWith('__switchboard_launch ') ? PS_PREAMBLE : '') + cmd];
     return pty && isCmdShell(shellPath) ? `/s /c "${cmd}"` : ['/C', cmd];
   }
   if (isBashLike) return ['-l', '-i'];

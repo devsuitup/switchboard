@@ -206,6 +206,15 @@ for (const [shell, available] of shells) {
     assert.deepEqual(read(outputOf('exe')), ['--resume', ID, '--append-system-prompt', prompt]);
   });
 
+  test(`${shell} runs a 32500 character existing argument that only fits without the helper`, options, async () => {
+    cleanOutputs('exe');
+    const env = envFor(['exe']);
+    const prompt = 'word '.repeat(6500).trim();
+    const spawned = await launch(shell, { isNew: false, transcript: true, env, options: { appendSystemPrompt: prompt } });
+    runPlan(shell, spawned.args, env);
+    assert.deepEqual(read(outputOf('exe')), ['--resume', ID, '--append-system-prompt', prompt]);
+  });
+
   test(`${shell} keeps the console, standard input and exit status of claude under a pseudo console`, options, async () => {
     const env = envFor(['pty'], { SB_EXIT: '37' });
     const spawned = await launch(shell, { name: 'say "hi"', env });

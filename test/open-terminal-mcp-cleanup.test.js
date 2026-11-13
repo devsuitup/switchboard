@@ -7,7 +7,7 @@ const { fixture, ID } = require('./fixtures/trigger-main-open.cjs');
 const profiles = require('../src/main/terminals/shell-profiles');
 const { validatePreLaunchCmd } = require('../src/main/terminals/pre-launch-cmd-guard');
 
-function open({ options = {}, overrides = {}, afterValidation } = {}) {
+function open({ options = {}, overrides = {}, afterValidation, permit = 'new', isNew = true } = {}) {
   const mcp = { starts: 0, shutdowns: [] };
   let validations = 0;
   const f = fixture({
@@ -18,8 +18,9 @@ function open({ options = {}, overrides = {}, afterValidation } = {}) {
     validateTriggerOpen: async permit => { validations++; return afterValidation?.(validations, permit) ?? { ok: true, cwd: permit.target?.cwd }; },
     parseAddDirs: () => [], ...overrides,
   });
-  f.permit.mode = 'new'; f.permit.requestedSessionId = null; f.permit.name = 'Task'; f.authorize();
-  return { f, mcp, result: () => f.open('permit', true, { mcpEmulation: true, ...options }) };
+  if (permit === 'new') { f.permit.mode = 'new'; f.permit.requestedSessionId = null; f.permit.name = 'Task'; }
+  if (permit) f.authorize();
+  return { f, mcp, result: () => f.open(permit ? 'permit' : null, isNew, { mcpEmulation: true, ...options }) };
 }
 
 test('a launch that registers its session keeps the MCP server it started', async () => {
@@ -53,4 +54,29 @@ for (const [label, config] of afterStart) {
     assert.equal((await result()).ok, false);
     assert.deepEqual([mcp.starts, mcp.shutdowns, f.map.size, f.spawns.length], [1, [ID], 0, 0]);
   });
+}
+
+const launches = [
+  ['an ordinary new session', { permit: false, isNew: true }],
+  ['an ordinary resume', { permit: false, isNew: false }],
+  ['an ordinary fork', { permit: false, isNew: true, options: { forkFrom: 'source' } }],
+  ['a trigger resume', { permit: 'resume', isNew: false }],
+  ['a trigger new session', { permit: 'new', isNew: true }],
+];
+for (const [label, config] of launches) {
+  test(`${label} keeps the MCP server it started`, async () => {
+    const { f, mcp, result } = open(config);
+    assert.equal((await result()).ok, true);
+    assert.deepEqual([mcp.starts, mcp.shutdowns, f.map.size], [1, [], 1]);
+  });
+  for (const [failure, overrides] of [
+    ['project storage rejects', { scheduleProjects: () => ({ add: async () => { throw new Error('storage'); } }) }],
+    ['the PTY cannot be spawned', { spawnPty: () => { throw new Error('spawn'); } }],
+  ]) {
+    test(`${label} shuts its MCP server down exactly once when ${failure}`, async () => {
+      const { f, mcp, result } = open({ ...config, overrides });
+      assert.equal((await result()).ok, false);
+      assert.deepEqual([mcp.starts, mcp.shutdowns, f.map.size], [1, [ID], 0]);
+    });
+  }
 }

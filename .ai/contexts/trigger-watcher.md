@@ -312,7 +312,10 @@ with `$args` is its own. A launch prefix (letters, digits, spaces and
 `- _ . / \ : =`) is encoded like any other argument for an executable or a batch
 prefix; what the prefix program does when it starts `claude` is its own. The
 payload crosses the process command line once (a 20,000 character system prompt
-stays under the 32,767 limit). `--ide` joins the argv before this serialization.
+stays under the 32,767 limit). The helper's fixed cost is about 700 characters: when the
+helper form serialized by node-pty would exceed 32,767 (NUL counted) while the plain form
+(`claude '<token>'...`, no preamble, as before the helper) fits, `claudeCommand` uses the
+plain form for that launch, so no launch that fit before stops fitting. `--ide` joins the argv before this serialization.
 Off Windows, PowerShell keeps one plain single-quoted literal per token, the bare
 `claude` and no helper. The schedule runner does not use the helper: its
 PowerShell tokens stay single-quoted literals.

@@ -3304,7 +3304,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         }
       }
 
-      let claudeCmd = claudeCommand(shell, claudeArgs, { env: cleanPtyEnv, cwd: spawnCwd, prefix: pre });
+      let claudeCmd = claudeCommand(shell, claudeArgs, { env: cleanPtyEnv, cwd: spawnCwd, prefix: pre, extraArgs: shellExtraArgs });
 
       // Sandbox: run claude inside a bubblewrap sandbox that only exposes the
       // project directory and Claude's own config/state dirs. Linux only —
