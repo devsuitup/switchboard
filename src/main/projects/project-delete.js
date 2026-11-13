@@ -1,6 +1,7 @@
 'use strict';
 
 const { randomUUID, randomBytes } = require('node:crypto');
+const { createDiscoveryBounds, discoveryDetails } = require('./project-delete-deadline');
 const { operationId } = require('./project-delete-progress');
 const { membershipDigest, stable, isRecord, text, fail, OPTION_KEYS } = require('./project-delete-identity');
 
@@ -61,12 +62,14 @@ function createProjectDeleteService(deps) {
     if (!valid(sender)) return failure('UNAUTHORIZED', { token: null });
     if (!ready) return failure('NOT_READY', { token: null });
     prune();
+    const budget = { deadline: now() + 10000, pendingPorts: new Map() };
+    const read = createDiscoveryBounds({ now, schedule, cancel });
     try {
-      const result = await planner.preview(request);
+      const result = await read('planner.preview', () => planner.preview(request, budget), budget);
       if (!result.ok) return { ...result, token: null };
       const plan = structuredClone(result.plan);
       if (plan.refusals.length) return { ...result, token: null };
-      const scope = await bounded(() => writer.readProjectDeletionScope({ project: plan.project }));
+      const scope = await read('writer.readProjectDeletionScope', () => writer.readProjectDeletionScope({ project: plan.project }), budget);
       if (String(scope.writerRevision) !== plan.revision) return failure('SNAPSHOT_STALE', { token: null, refresh: true });
       if (!valid(sender)) return failure('UNAUTHORIZED', { token: null });
       prune();
@@ -75,7 +78,7 @@ function createProjectDeleteService(deps) {
       const options = Object.fromEntries(OPTION_KEYS.map(key => [key, plan.categories[key].selected]));
       tokens.set(token, { sender, boot, plan, options, epoch: scope.projectEpoch, created: now() });
       return { ...result, token };
-    } catch (error) { return failure(error.code || 'DISCOVERY_UNAVAILABLE', { token: null, error: error.message }); }
+    } catch (error) { return failure(error.code || 'DISCOVERY_UNAVAILABLE', { token: null, error: error.message, ...discoveryDetails(error) }); }
   }
   function stopRequest(plan, options) {
     const conversations = new Map(), targets = new Map(), targetMembers = new Map();

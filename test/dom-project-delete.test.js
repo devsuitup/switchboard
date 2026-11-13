@@ -9,6 +9,62 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+for (const stalled of ['flushProjectDeletionWrites', 'previewProjectDelete']) test(`click shows a notice within 11 seconds when ${stalled} never settles`, async t => {
+  const h = setup(t), timers = new Map(); let id = 0, time = 0, release;
+  h.w.Date.now = () => time;
+  h.w.setTimeout = (fn, ms) => { timers.set(++id, { fn, at: time + ms }); return id; };
+  h.w.clearTimeout = key => timers.delete(key);
+  const target = stalled === 'previewProjectDelete' ? h.w.api : h.w;
+  const original = target[stalled];
+  target[stalled] = () => new Promise(resolve => { release = resolve; });
+  const pending = h.start(); await flush();
+  time = 11000;
+  for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); }
+  await flush();
+  const notice = h.document.querySelector('.app-notice[role="alert"]');
+  assert.ok(notice, 'a stalled pre-dialog port must show a notice by the discovery deadline plus 1000 ms');
+  assert.match(notice.textContent, new RegExp(stalled));
+  assert.equal(await pending, false);
+  assert.equal(h.document.querySelector('.project-delete-btn').disabled, false);
+  target[stalled] = original;
+  release(stalled === 'previewProjectDelete' ? await original({ options: {} }) : undefined);
+  await flush();
+  assert.equal(h.document.querySelector('.choice-dialog'), null, 'late completion must not open a stale dialog');
+  assert.equal(h.calls.execute.length, 0);
+});
+
+test('a stalled real persistence chain shows a notice and shares the click budget with capabilities', async t => {
+  const h = setup(t), timers = new Map(); let id = 0, time = 0, release;
+  persistence(h);
+  h.w.Date.now = () => time;
+  h.w.setTimeout = (fn, ms) => { timers.set(++id, { fn, at: time + ms }); return id; };
+  h.w.clearTimeout = key => timers.delete(key);
+  h.w.api.getSetting = () => new Promise(resolve => { release = resolve; });
+  const saving = h.w.saveGlobalSettings({ sidebarWidth: 321 }); await flush();
+  h.w.api.previewProjectDelete = () => new Promise(() => {});
+  const pending = h.start(); await flush();
+  time = 8000; release({}); await saving; await flush();
+  time = 11000;
+  for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); }
+  await flush();
+  assert.match(h.document.querySelector('.app-notice')?.textContent || '', /previewProjectDelete.*timed out/, 'capabilities must receive only the remaining click budget after the writer flush');
+  assert.equal(await pending, false);
+  assert.equal(h.document.querySelector('.choice-dialog'), null);
+});
+
+test('Confirm is disabled while the selected preview loads and becomes enabled on its valid reply', async t => {
+  const h = setup(t), original = h.w.api.previewProjectDelete;
+  let release, calls = 0;
+  h.w.api.previewProjectDelete = request => ++calls === 1 ? original(request)
+    : new Promise(resolve => { release = async () => resolve(await original(request)); });
+  const pending = h.start(); await flush();
+  assert.ok(h.confirm());
+  assert.equal(h.confirm().disabled, true);
+  await release(); await flush();
+  assert.equal(h.confirm().disabled, false, 'loading is not a permanent refusal');
+  h.cancel(); await pending;
+});
+
 function persistence(h) {
   let global = { hiddenProjects: [], sidebarWidth: 100 };
   Object.assign(h.w, { exitingApp: false, skippedWorkingSetEntries: new Map(), dormantWorkingSet: new Map(),

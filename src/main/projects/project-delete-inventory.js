@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs/promises');
+const { createDiscoveryBounds, discoveryTimeout, closeDiscoveryHandle } = require('./project-delete-deadline');
 const path = require('node:path');
 const { parseFolderKey } = require('../remote/remote-hosts');
 const { resolveJsonlPath, subagentSessionId } = require('../../../read-session-file');
@@ -15,15 +16,16 @@ function createProjectDeleteInventory(deps) {
   const cap = (value, fallback, ceiling) => Number.isFinite(value) ? Math.max(1, Math.min(value, ceiling)) : fallback;
   const maxItems = cap(deps.maxItems, 20000, 50000), maxBytes = cap(deps.maxBytes, 32 << 20, 64 << 20);
   const maxFileBytes = cap(deps.maxFileBytes, 8 << 20, 16 << 20);
-  const contexts = new WeakMap();
+  const contexts = new WeakMap(), bound = createDiscoveryBounds(deps);
   function context(budget) {
     let c = contexts.get(budget.signal);
     if (!c) {
       c = { deadline: Math.min(budget.deadline, now() + cap(deps.timeoutMs, 10000, 15000)), items: 0, bytes: 0,
+        signal: budget.signal, pendingPorts: budget.pendingPorts ||= new Map(), startedAt: now(),
         limit: Math.min(budget.limit, maxItems), realpaths: new Map(), spellings: new Map(), checkedPaths: new Set(), snapshot: null };
       contexts.set(budget.signal, c);
     }
-    c.check = () => { if (budget.signal.aborted || now() >= c.deadline) throw fail('DISCOVERY_TIMEOUT', 'Inventory deadline expired.'); };
+    c.check = () => { if (budget.signal.aborted || now() >= c.deadline) throw discoveryTimeout(c, now, { port: 'inventory', startedAt: c.startedAt, boundMs: c.deadline - c.startedAt }); };
     c.check();
     return c;
   }
@@ -31,25 +33,13 @@ function createProjectDeleteInventory(deps) {
     c.check(); c.items += items; c.bytes += bytes;
     if (c.items > c.limit || c.bytes > maxBytes) throw fail('DISCOVERY_LIMIT', 'Inventory exceeds aggregate budget.');
   }
-  async function bounded(c, fn, dispose, timeoutMs = cap(deps.portTimeoutMs, 3000, 15000)) {
-    c.check();
-    let timer, accepted = false;
-    const work = Promise.resolve().then(fn);
-    try {
-      const value = await Promise.race([work, new Promise((_, reject) => {
-        timer = (deps.schedule || setTimeout)(() => reject(fail('DISCOVERY_TIMEOUT', 'Inventory port deadline expired.')),
-          Math.max(1, Math.min(c.deadline - now(), timeoutMs)));
-      })]);
-      c.check(); accepted = true; return value;
-    } finally {
-      (deps.cancel || clearTimeout)(timer);
-      if (dispose && !accepted) void work.then(dispose, () => {}).catch(() => {});
-    }
-  }
-  const processPort = (c, budget, read) => bounded(c, () => read({ ...budget, deadline: c.deadline }), undefined, c.deadline - now());
+  const bounded = (c, port, fn, dispose, timeoutMs = cap(deps.portTimeoutMs, 15000, 15000)) =>
+    bound(port, fn, c, dispose, timeoutMs);
+  const processPort = (c, budget, port, read) => bounded(c, port,
+    () => read({ ...budget, deadline: c.deadline, pendingPorts: c.pendingPorts }), undefined, c.deadline - now());
   const propagate = error => { if (['DISCOVERY_LIMIT', 'DISCOVERY_TIMEOUT', 'SNAPSHOT_STALE'].includes(error.code)) throw error; };
   async function real(c, file) {
-    if (!c.realpaths.has(file)) c.realpaths.set(file, bounded(c, () => io.realpath(file)));
+    if (!c.realpaths.has(file)) c.realpaths.set(file, bounded(c, 'fs.realpath', () => io.realpath(file)));
     return c.realpaths.get(file);
   }
   const lexical = (file, alias = null) => alias === null
@@ -81,7 +71,7 @@ function createProjectDeleteInventory(deps) {
   async function unlinked(c, file) {
     let current = file;
     while (!c.checkedPaths.has(current)) {
-      if ((await bounded(c, () => io.lstat(current))).isSymbolicLink()) throw fail('DISCOVERY_CANDIDATE', 'Linked inventory path.');
+      if ((await bounded(c, 'fs.lstat', () => io.lstat(current))).isSymbolicLink()) throw fail('DISCOVERY_CANDIDATE', 'Linked inventory path.');
       c.checkedPaths.add(current);
       if (c.spellings.has(lexical(current))) break;
       const parent = path.dirname(current);
@@ -95,38 +85,38 @@ function createProjectDeleteInventory(deps) {
     let dir;
     try {
       await unlinked(c, directory);
-      dir = await bounded(c, () => io.opendir(directory), late => late.close());
+      dir = await bounded(c, 'fs.opendir', () => io.opendir(directory), late => late.close());
       for (;;) {
-        const entry = await bounded(c, () => dir.read());
+        const entry = await bounded(c, 'fs.directory.read', () => dir.read());
         if (!entry) break;
         charge(c, 1);
         await visit(entry, path.join(directory, entry.name));
       }
     } catch (error) { if (!(missing && error.code === 'ENOENT')) throw error; }
-    finally { if (dir) await dir.close(); }
+    finally { await closeDiscoveryHandle('fs.directory.close', dir, c, deps); }
   }
   async function inspect(c, file, head = false) {
-    const stat = await bounded(c, () => io.lstat(file));
+    const stat = await bounded(c, 'fs.lstat', () => io.lstat(file));
     if (!stat.isFile() || stat.isSymbolicLink()) throw fail('DISCOVERY_CANDIDATE', 'Linked or non-regular file.');
     await unlinked(c, file);
     if (!head && stat.size > maxFileBytes) throw fail('DISCOVERY_LIMIT', 'File exceeds inventory byte budget.');
-    const handle = await bounded(c, () => io.open(file, 'r'), late => late.close());
+    const handle = await bounded(c, 'fs.open', () => io.open(file, 'r'), late => late.close());
     try {
       const buffer = Buffer.alloc(head ? Math.min(stat.size, 16 << 10) : Math.min(stat.size + 1, maxFileBytes + 1));
       let size = 0;
       while (size < buffer.length) {
-        const read = await bounded(c, () => handle.read(buffer, size, buffer.length - size, null));
+        const read = await bounded(c, 'fs.file.read', () => handle.read(buffer, size, buffer.length - size, null));
         if (!read.bytesRead) break;
         charge(c, 0, read.bytesRead);
         size += read.bytesRead;
       }
-      const after = await bounded(c, () => handle.stat());
+      const after = await bounded(c, 'fs.file.stat', () => handle.stat());
       if ((!head && size !== stat.size) || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ino !== stat.ino) throw fail('DISCOVERY_CANDIDATE', 'File changed during inspection.');
       const prefix = buffer.toString('utf8', 0, size);
       let content = prefix;
       if (head && size < stat.size) content = content.slice(0, content.lastIndexOf('\n') + 1);
       return { path: file, size: stat.size, mtimeMs: stat.mtimeMs, content, ...(head ? { prefix } : {}) };
-    } finally { await handle.close(); }
+    } finally { await closeDiscoveryHandle('fs.file.close', handle, c, deps); }
   }
   async function pages(c, section, revision) {
     const rows = [];
@@ -136,7 +126,7 @@ function createProjectDeleteInventory(deps) {
       let page, pageBytes = Math.min(1048576, ceiling), limit = Math.min(256, Math.max(1, c.limit - c.items));
       for (;;) {
         try {
-          page = await bounded(c, () => deps.writer.readProjectDeletionSnapshot({ section, cursor,
+          page = await bounded(c, 'writer.readProjectDeletionSnapshot', () => deps.writer.readProjectDeletionSnapshot({ section, cursor,
             expectedRevision: revision, limit, maxBytes: pageBytes }));
           break;
         } catch (error) {
@@ -164,7 +154,7 @@ function createProjectDeleteInventory(deps) {
     }
   }
   async function readSnapshotOnce(budget) {
-    const c = context(budget), revision = await bounded(c, () => deps.writer.readProjectDeletionRevision());
+    const c = context(budget), revision = await bounded(c, 'writer.readProjectDeletionRevision', () => deps.writer.readProjectDeletionRevision());
     const snapshot = { complete: true, revision: String(revision), projects: [], declaredHosts: [] };
     for (const section of ['sessions', 'folders', 'metadata', 'fields', 'settings', 'fences']) snapshot[section] = await pages(c, section, revision);
     const settings = Object.fromEntries(snapshot.settings.map(row => {
@@ -194,7 +184,7 @@ function createProjectDeleteInventory(deps) {
     }
     snapshot.projects = [...projects.values()];
     snapshot.savedWorkingSet = settings.global?.openWorkingSet || [];
-    if (await bounded(c, () => deps.writer.readProjectDeletionRevision()) !== revision) throw fail('SNAPSHOT_STALE', 'Writer changed during snapshot.');
+    if (await bounded(c, 'writer.readProjectDeletionRevision', () => deps.writer.readProjectDeletionRevision()) !== revision) throw fail('SNAPSHOT_STALE', 'Writer changed during snapshot.');
     c.snapshot = snapshot;
     return snapshot;
   }
@@ -205,7 +195,7 @@ function createProjectDeleteInventory(deps) {
     const candidate = (file, reason) => { charge(c, 1); candidates.push({ path: file, reason }); };
     if (project.alias !== null) {
       if (!deps.readRemoteOwnership) return { complete: true, groups, members, candidates: [{ path: project.projectPath, reason: 'Remote host discovery unavailable.' }] };
-      const remote = await processPort(c, budget, remaining => deps.readRemoteOwnership(project, remaining));
+      const remote = await processPort(c, budget, 'readRemoteOwnership', remaining => deps.readRemoteOwnership(project, remaining));
       charge(c, (remote.groups?.length || 0) + (remote.members?.length || 0) + (remote.candidates?.length || 0));
       charge(c, 0, Buffer.byteLength(JSON.stringify(remote)));
       return remote;
@@ -303,7 +293,7 @@ function createProjectDeleteInventory(deps) {
         const parentOwned = parentRow?.folder === row.folder && owned(c, { alias: null, projectPath: parentRow.projectPath }, project);
         if (!parentOwned && !await belongs(cwd, subagent)) throw new Error('Transcript ownership unavailable or changed.');
         member.present = true; member.size = inspected.size; member.mtimeMs = inspected.mtimeMs;
-        member.liveness = deps.readLiveness ? await processPort(c, budget, remaining => deps.readLiveness(member, remaining)) : { state: 'unknown' };
+        member.liveness = deps.readLiveness ? await processPort(c, budget, 'readLiveness', remaining => deps.readLiveness(member, remaining)) : { state: 'unknown' };
       } catch (error) { propagate(error); candidate(file, error.message); }
     }
     groups.push(...groupMap.values());
@@ -373,7 +363,7 @@ function createProjectDeleteInventory(deps) {
     const c = context(budget), schedules = [], candidates = [];
     if (project.alias !== null) {
       if (!deps.readRemoteSchedules) return { complete: true, schedules, candidates: [{ path: project.projectPath, reason: 'Remote schedule discovery unavailable.' }] };
-      const remote = await processPort(c, budget, remaining => deps.readRemoteSchedules(project, remaining));
+      const remote = await processPort(c, budget, 'readRemoteSchedules', remaining => deps.readRemoteSchedules(project, remaining));
       charge(c, (remote.schedules?.length || 0) + (remote.candidates?.length || 0) + (remote.retained?.length || 0));
       charge(c, 0, Buffer.byteLength(JSON.stringify(remote)));
       return remote;
@@ -428,13 +418,13 @@ function createProjectDeleteInventory(deps) {
       if (!owned(c, record, project)) continue;
       if (row.fresh && !durable) candidates.push({ id, reason: 'Pending restore lacks acknowledged durable identity.' });
       record.verified = true;
-      record.liveness = deps.readLiveness ? await processPort(c, budget, remaining => deps.readLiveness(record, remaining)) : { state: 'unknown' };
+      record.liveness = deps.readLiveness ? await processPort(c, budget, 'readLiveness', remaining => deps.readLiveness(record, remaining)) : { state: 'unknown' };
       tabs.set(record.id, record);
     }
     if (!deps.readJobs || !deps.getScheduleRunSnapshot) throw fail('SNAPSHOT_INCOMPLETE', 'Authoritative jobs and scheduler evidence are required.');
     const [roster, runs] = await Promise.all([
-      processPort(c, budget, remaining => deps.readJobs(project, remaining)),
-      bounded(c, () => deps.getScheduleRunSnapshot()),
+      processPort(c, budget, 'readJobs', remaining => deps.readJobs(project, remaining)),
+      bounded(c, 'getScheduleRunSnapshot', () => deps.getScheduleRunSnapshot()),
     ]);
     if (roster.complete !== true || !Array.isArray(roster.jobs)) throw fail('SNAPSHOT_INCOMPLETE', 'Background job discovery incomplete.');
     charge(c, roster.jobs.length + (roster.candidates?.length || 0));
@@ -451,9 +441,9 @@ function createProjectDeleteInventory(deps) {
     return { complete: true, tabs: [...tabs.values()], jobs, candidates };
   }
   return {
-    waitForIndex: async budget => { const c = context(budget); if (deps.waitForIndex) await bounded(c, () => deps.waitForIndex(budget)); },
+    waitForIndex: async budget => { const c = context(budget); if (deps.waitForIndex) await bounded(c, 'waitForIndex', () => deps.waitForIndex(budget)); },
     readSnapshot, discoverOwnership, discoverSchedules, readRuntimeState,
-    readRevision: async budget => String(await bounded(context(budget), () => deps.writer.readProjectDeletionRevision())),
+    readRevision: async budget => String(await bounded(context(budget), 'writer.readProjectDeletionRevision', () => deps.writer.readProjectDeletionRevision())),
     inspectRetainedFiles: async (files, budget) => {
       const c = context(budget), result = [];
       for (const file of files) { charge(c, 1); await registerPath(c, path.dirname(file)); const row = await inspect(c, file); delete row.content; result.push(row); }

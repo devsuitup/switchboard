@@ -102,6 +102,45 @@ async function setup(t, populated = false, overrides = {}) {
     replace() { win = windowFixture(); main.attach(win); load(); }, bootstrap() { for (const fn of bootListeners) fn(); } };
 }
 
+for (const port of ['readProjectDeletionRevision', 'readProjectDeletionScope']) test(`preview deadline names and logs stalled writer.${port}`, supported, async t => {
+  const logs = [], h = await setup(t, false, { log: { debug: line => logs.push(line) } });
+  h.load(); await h.main.startRecovery();
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  h.faults[port] = () => { entered(); return new Promise(() => {}); };
+  let result;
+  const pending = h.preview().then(value => { result = value; });
+  await started;
+  h.time.advance(10000); await flush();
+  assert.equal(result?.code, 'DISCOVERY_TIMEOUT', 'all preview reads must share the discovery timeout');
+  assert.equal(result.port, 'writer.' + port, 'outer deadline must retain the active writer port');
+  assert.equal(result.elapsedMs, 10000);
+  assert.equal(result.boundMs, 10000);
+  assert.equal(logs.length, 1, 'main logs one diagnostic per failed preview');
+  assert.match(logs[0], new RegExp('writer\\.' + port));
+  assert.match(logs[0], /10000/);
+  await pending;
+});
+
+test('scope read gets only the remainder after four seconds of planning', supported, async t => {
+  let delay;
+  const h = await setup(t, false, { waitForIndex: () => { delay(); return Promise.resolve(); } });
+  delay = () => h.time.advance(4000);
+  h.load(); await h.main.startRecovery();
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  h.faults.readProjectDeletionScope = () => { entered(); return new Promise(() => {}); };
+  let result;
+  const pending = h.preview().then(value => { result = value; });
+  await started; h.time.advance(5999); await flush();
+  assert.equal(result, undefined);
+  h.time.advance(1); await flush();
+  assert.equal(result?.code, 'DISCOVERY_TIMEOUT', 'scope must not restart a ten-second budget');
+  assert.equal(result.port, 'writer.readProjectDeletionScope');
+  assert.equal(result.boundMs, 6000);
+  await pending;
+});
+
 test('transcript-only project confirms with the original TMP spelling', supported, async t => {
   const h = await setup(t, true, { preserveTmpSpelling: true });
   h.load(); await h.main.startRecovery();
@@ -388,6 +427,29 @@ test('non-Windows PTY stop refuses without completing deletion', supported, asyn
   const result = await h.execute(p);
   assert.equal(result.failed[0].code, 'STOP_UNSUPPORTED');
   assert.equal(h.calls.filter(c => c === 'completeProjectDeletion').length, 0);
+});
+
+for (const port of ['fs.file.read', 'fs.realpath']) test(`runtime preserves ${port} timeout instead of a candidate or later port`, supported, async t => {
+  const h = await setup(t), cwd = path.join(h.projectPath, 'foreign');
+  const directory = path.join(h.ports.jobsDir, 'abcd1234');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'state.json'), JSON.stringify({ state: 'done', cwd,
+    sessionId: '12345678-1234-1234-1234-123456789abc' }));
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const stall = () => { entered(); return new Promise(() => {}); };
+  const io = Object.create(fs.promises);
+  if (port === 'fs.file.read') io.open = async (...args) => {
+    const handle = await fs.promises.open(...args); handle.read = stall; return handle;
+  };
+  else io.realpath = file => file === cwd ? stall() : fs.promises.realpath(file);
+  const runtime = implementation.createProjectDeleteRuntime({ ...h.ports, fs: io });
+  const pending = runtime.readJobs({ alias: null, projectPath: h.projectPath }, { deadline: h.time.now() + 100, limit: 100 })
+    .then(result => ({ result }), error => ({ error }));
+  await started; h.time.advance(100);
+  const result = await pending;
+  assert.equal(result.error?.port, port, 'runtime timeout must retain the original failed port');
+  assert.equal(result.error.code, 'DISCOVERY_TIMEOUT');
 });
 
 for (const code of ['ENOENT', 'EACCES']) test(`foreign job cwd ${code} stays local to that record`, supported, async t => {

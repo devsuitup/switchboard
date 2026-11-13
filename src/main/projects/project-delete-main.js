@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs/promises');
+const { createDiscoveryBounds, closeDiscoveryHandle } = require('./project-delete-deadline');
 const path = require('node:path');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { createProjectDeleteInventory } = require('./project-delete-inventory');
@@ -28,30 +29,16 @@ function createProjectDeleteRuntime(ports) {
     return retain ? work : work.finally(release);
   });
   const normalize = value => (process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value)).replaceAll('\\', '/');
-  async function bounded(fn, budget, dispose) {
-    if (budget.signal?.aborted || now() >= budget.deadline) throw fail('DISCOVERY_TIMEOUT', 'Runtime inventory deadline expired.');
-    let timer, accepted = false;
-    const work = Promise.resolve().then(fn);
-    try {
-      const result = await Promise.race([work, new Promise((_, reject) => {
-        timer = schedule(() => reject(fail('DISCOVERY_TIMEOUT', 'Runtime port deadline expired.')), Math.max(1, budget.deadline - now()));
-      })]);
-      if (budget.signal?.aborted || now() >= budget.deadline) throw fail('DISCOVERY_TIMEOUT', 'Runtime inventory deadline expired.');
-      accepted = true; return result;
-    } finally {
-      cancel(timer);
-      if (dispose && !accepted) void work.then(dispose, () => {}).catch(() => {});
-    }
-  }
+  const bounded = createDiscoveryBounds({ now, schedule, cancel });
   async function readJobs(project, budget) {
     if (project.alias !== null) throw fail('DISCOVERY_UNAVAILABLE', 'Remote background inventory has no exhaustive read port.');
     const jobs = [], candidates = [], records = new Map();
     let directory, count = 0, bytes = 0;
     try {
-      if ((await bounded(() => io.lstat(ports.jobsDir), budget)).isSymbolicLink()) throw fail('DISCOVERY_CANDIDATE', 'Linked job directory.');
-      directory = await bounded(() => io.opendir(ports.jobsDir), budget, late => late.close());
+      if ((await bounded('fs.lstat', () => io.lstat(ports.jobsDir), budget)).isSymbolicLink()) throw fail('DISCOVERY_CANDIDATE', 'Linked job directory.');
+      directory = await bounded('fs.opendir', () => io.opendir(ports.jobsDir), budget, late => late.close());
       for (;;) {
-        const entry = await bounded(() => directory.read(), budget);
+        const entry = await bounded('fs.directory.read', () => directory.read(), budget);
         if (!entry) break;
         if (++count > Math.min(budget.limit, 20000)) throw fail('DISCOVERY_LIMIT', 'Too many background records.');
         if (!JOB_ID_RE.test(entry.name)) { candidates.push({ id: entry.name, reason: 'Unrecognized background record.' }); continue; }
@@ -59,22 +46,25 @@ function createProjectDeleteRuntime(ports) {
         const file = path.join(ports.jobsDir, entry.name, 'state.json');
         let handle;
         try {
-          const stat = await bounded(() => io.lstat(file), budget);
+          const stat = await bounded('fs.lstat', () => io.lstat(file), budget);
           if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1048576 || (bytes += stat.size) > 8 * 1048576) throw fail('DISCOVERY_LIMIT', 'Background record exceeds budget.');
-          handle = await bounded(() => io.open(file, 'r'), budget, late => late.close());
+          handle = await bounded('fs.open', () => io.open(file, 'r'), budget, late => late.close());
           const buffer = Buffer.alloc(stat.size + 1);
-          const read = await bounded(() => handle.read(buffer, 0, buffer.length, 0), budget);
+          const read = await bounded('fs.file.read', () => handle.read(buffer, 0, buffer.length, 0), budget);
           if (read.bytesRead !== stat.size) throw fail('SNAPSHOT_STALE', 'Background record changed.');
           const text = buffer.subarray(0, read.bytesRead).toString('utf8'), parsed = parseJobState(text);
           if (!parsed?.state) throw fail('DISCOVERY_CANDIDATE', 'Unreadable background state.');
           records.set(entry.name, { ...parsed, cwd: JSON.parse(text).cwd });
-        } catch (error) { candidates.push({ id: entry.name, reason: error.message }); }
-        finally { await handle?.close(); }
+        } catch (error) {
+          if (error.code === 'DISCOVERY_TIMEOUT') throw error;
+          candidates.push({ id: entry.name, reason: error.message });
+        }
+        finally { await closeDiscoveryHandle('fs.file.close', handle, budget, { now, schedule, cancel }); }
       }
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
-    } finally { await directory?.close(); }
-    const result = await bounded(() => ports.runClaude(['agents', '--json', '--all'],
+    } finally { await closeDiscoveryHandle('fs.directory.close', directory, budget, { now, schedule, cancel }); }
+    const result = await bounded('runClaude.agents', () => ports.runClaude(['agents', '--json', '--all'],
       { cwd: ports.homeDir, timeout: Math.max(1, budget.deadline - now()), maxOutputBytes: 8 * 1048576 }), budget);
     if (result.code !== 0 || Buffer.byteLength(result.stdout || '') > 8 * 1048576) throw fail('DISCOVERY_UNAVAILABLE', 'Authoritative background list unavailable.');
     const listed = parseCliList(result.stdout);
@@ -86,12 +76,13 @@ function createProjectDeleteRuntime(ports) {
       if (!row.id || !records.has(row.id)) candidates.push({ id: row.id || row.sessionId, reason: 'Background list has no durable job record.' });
       else records.set(row.id, { ...records.get(row.id), cwd: row.cwd || records.get(row.id).cwd });
     }
-    const root = await bounded(() => io.realpath(project.projectPath), budget);
+    const root = await bounded('fs.realpath', () => io.realpath(project.projectPath), budget);
     for (const [id, row] of records) {
       if (!row.cwd || !path.isAbsolute(row.cwd) || !row.sessionId) { candidates.push({ id, reason: 'Background ownership unavailable.' }); continue; }
       let cwd;
-      try { cwd = row.cwd === project.projectPath ? root : await bounded(() => io.realpath(row.cwd), budget); }
+      try { cwd = row.cwd === project.projectPath ? root : await bounded('fs.realpath', () => io.realpath(row.cwd), budget); }
       catch (error) {
+        if (error.code === 'DISCOVERY_TIMEOUT') throw error;
         if (error.code !== 'ENOENT') candidates.push({ id, reason: error.message });
         continue;
       }
@@ -122,19 +113,19 @@ function createProjectDeleteRuntime(ports) {
       pins.set(row.id, pin);
       if (!session.exited && matches.length) {
         if (row.runtime !== 'terminal') {
-          const external = await bounded(() => ports.cliSessionState.liveElsewhereV1Checked(row.sessionId || row.id,
+          const external = await bounded('cliSessionState.liveElsewhereV1Checked', () => ports.cliSessionState.liveElsewhereV1Checked(row.sessionId || row.id,
             () => false, () => [identity.pid], { deadline: budget.deadline, requireUnique: true }), budget);
           if (!external?.known || external.live || ports.cliSessionState.deliveryPtyStart(identity.pid) !== identity.procStart) return { state: 'unknown' };
         }
         return { state: 'running', source: 'pty', targetId: sessionKey, sessionKey, identity };
       }
-      let proof = await bounded(() => session.pty.stopEvidence, budget);
-      if (proof?.ended !== true) proof = await bounded(() => session.pty.statusTreeExit, budget);
+      let proof = await bounded('pty.stopEvidence', () => session.pty.stopEvidence, budget);
+      if (proof?.ended !== true) proof = await bounded('pty.statusTreeExit', () => session.pty.statusTreeExit, budget);
       if (proof?.ended !== true || proof.pid !== undefined && proof.pid !== identity.pid
         || proof.generation !== undefined && proof.generation !== identity.generation) return { state: 'unknown' };
     }
     if (row.runtime === 'terminal') return session ? { state: 'stopped', source: 'pty' } : { state: 'unknown' };
-    const evidence = await bounded(() => ports.cliSessionState.readStatusEvidence(row.sessionId || row.id, budget.deadline), budget);
+    const evidence = await bounded('cliSessionState.readStatusEvidence', () => ports.cliSessionState.readStatusEvidence(row.sessionId || row.id, budget.deadline), budget);
     return evidence?.known && !evidence.live && !evidence.ambiguous
       ? { state: 'stopped', source: 'descriptor' } : { state: 'unknown', source: 'external' };
   }
@@ -206,8 +197,13 @@ function createProjectDeleteMain(deps) {
   let ready = false, disposed = false, recovery = null, pendingAttach = null, cancelRecovery, bootstrap = 0;
   let holds, settleHolds;
   const guarded = { rebind: sender => service.rebind(sender) };
-  for (const method of ['preview', 'execute', 'readState']) guarded[method] = (sender, input) => ready && !disposed
-    ? runtime.withScope(() => service[method](sender, input), method === 'execute') : { ok: false, code: 'NOT_READY', retryable: true, ...(method === 'preview' ? { token: null } : {}) };
+  for (const method of ['preview', 'execute', 'readState']) guarded[method] = async (sender, input) => {
+    const result = ready && !disposed
+      ? await runtime.withScope(() => service[method](sender, input), method === 'execute')
+      : { ok: false, code: 'NOT_READY', retryable: true, ...(method === 'preview' ? { token: null } : {}) };
+    if (result.code === 'DISCOVERY_TIMEOUT') deps.log?.debug(`[project-delete] ${method}: ${result.port} elapsed=${result.elapsedMs}ms bound=${result.boundMs}ms`);
+    return result;
+  };
   const registration = registerProjectDeleteIpc({ ...deps, service: guarded });
   function startRecovery() {
     if (disposed) return Promise.resolve(false);

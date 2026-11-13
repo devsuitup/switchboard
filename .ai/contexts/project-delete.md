@@ -96,9 +96,12 @@ Deletion discovery uses one effective deadline: the earlier of the planner's
 budget and the inventory context's timeout (10 seconds by default, capped at
 15 seconds). Process-backed inventory ports (`readJobs`, both remote readers,
 and member/tab `readLiveness`, which can invoke Windows process probes) receive
-that deadline and may use all its remaining time. They do not get the ordinary
-3-second per-port cap. Filesystem, writer and in-process scheduler reads retain
-the short cap, still bounded by the same overall deadline. `readJobs` forwards
+that deadline and may use all its remaining time. Filesystem, writer and
+in-process scheduler reads also use the remaining deadline: their default cap
+is 15 seconds, matching the maximum supported discovery budget, while the
+effective default remains 10 seconds for the whole preview. This removes the
+independent 3-second refusal under load without extending discovery. An explicit
+`portTimeoutMs` can still impose a shorter cap. `readJobs` forwards
 the remaining budget to `runClaude`; its runner stops the reader on timeout.
 The separate 10-second budget in `readConversation` is post-stop evidence, not
 a fresh preview/job-discovery budget.
@@ -111,8 +114,33 @@ ordered before runtime discovery, preserving path registration and liveness
 pinning. No git process is used by this inventory. Remote discovery ports are
 bounded for process/SSH implementations, but production still does not supply
 them. Fake-clock composition tests cover CLI answers at 4 and 8 seconds and a
-hang at the 10-second deadline; inventory tests cover shortened deadlines and
-the retained short caps without starting real CLI or SSH processes (#1103).
+hang at the 10-second deadline; inventory tests cover shortened deadlines,
+four-second ordinary reads and explicit shorter caps without starting real CLI
+or SSH processes (#1103).
+
+The service starts its 10-second preview budget before planning and passes it
+through to the final writer scope read. A scope read after four seconds of
+planning has six seconds left. Discovery bounds share active port descriptors,
+so even an outer timer reports the pending inner port. `DISCOVERY_TIMEOUT`
+errors and IPC replies carry `port`, `elapsedMs` and `boundMs`; the main
+composition writes one debug line for the failed request using the existing
+logger. Job-record and cwd error handling propagates discovery timeouts instead
+of converting them to candidates or attributing expiry to a later read.
+Directory and file closes are named, bounded reads too. Cleanup after
+expiry still starts but cannot hold up the timeout reply; late-open handles
+retain their disposal callback.
+
+From the Delete click, the renderer allows 11 seconds for the existing write
+chain flush and capabilities request together: the production discovery budget
+plus one second for IPC delivery and rendering. Each later option preview also
+has an 11-second watchdog. A stalled read shows an error notice (or the open
+dialog's error), releases pre-confirm busy state, and cannot open a late dialog.
+These are event-loop deadlines, not guarantees during a blocked renderer or
+main thread. They do not change execute/state readback or the time a human can
+spend choosing options. Confirm initially stays disabled while the selected
+preview loads and becomes enabled after a valid reply; that loading state is
+not itself a refusal. DOM tests exercise the real persistence chain and late
+replies; Electron behavior under workstation load is not measured by them.
 
 Background records remain explicitly blocked on #1090, even when a daemon state
 says done. Current headless schedules retain the inventory's blocking targets.
