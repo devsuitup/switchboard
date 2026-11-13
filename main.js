@@ -3404,8 +3404,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     // see .ai/contexts/trigger-watcher.md, "Session handle"
     host: null, kind: 'local-pty',
   };
-  activeSessions.set(sessionId, session);
   mcpOwnedHere = false;
+  activeSessions.set(sessionId, session);
   if (!isPlainTerminal) revealIfSdkSession(sessionId);
   if (isAttach) notifyRendererProjectsChanged('session-attach');
   if (!isPlainTerminal && !panelOwnerId) activityReporter.sessionStarted({ sessionId, project: projectPath });
