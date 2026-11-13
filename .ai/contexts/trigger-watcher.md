@@ -172,6 +172,7 @@ Main-process modules `trigger-watcher.js` and `trigger-context.js` live in
 | File | LOC | Role |
 |---|---|---|
 | `src/main/triggers/trigger-watcher.js` | ~2170 | The entire module: directory setup, `fs.watch` listener, idle-wait logic, single + chained trigger processing, submit-with-verify busy-rise/fall polling, input validation, PTY write, result file. |
+| `src/main/triggers/trigger-name.js` | ~30 | The new-session name rules: unpaired-surrogate test, `requestedName`/`actualName` result fields, marker naming provenance and its recovery validation (see "Naming a new session"). |
 | `src/main/triggers/trigger-context.js` | ~420 | `createTriggerContext({ activeSessions, log, getCliStatus, projectsDir, getLiveDescriptor, resolveSessionId, remote })` — builds the whole `ctx` object out of `main.js`'s session map, including the pinned per-tab delivery binding (`pinDelivery`) and the descriptor fallback lookup (`lookupDeliveryFallback`). |
 | `transcript-turn.js` | ~230 | Whether a session transcript's main turn is closed, read from its tail; backs `ctx.getTranscriptTurn` (see "Transcript fallback while the descriptor stays busy"). |
 | `src/main/terminals/terminal-input.js` | ~35 | `handleTerminalInput(activeSessions, sessionId, data, now)` — the body of the `terminal-input` IPC handler; feeds `session.composerState`. |
@@ -250,6 +251,7 @@ Preload exposes the three named APIs and a per-subscription cleanup function.
 `launchNewSession` with activation disabled, exact IDs and current ordinary
 defaults. It adds grid cards without focusing them. Main persists only the new
 ID's trimmed name through the writer before delivery. No prompt enters CLI argv.
+The trimmed name does: see "Naming a new session" below.
 `deliverSingle` is shared by legacy commands and v1 prompts. v1 supplies the
 absolute action deadline to verification and every write. A new launch requires
 fresh status at or after `launchStartedAt`, continuous settled idle and a free,
@@ -257,6 +259,120 @@ quiet composer; no-prompt opens need only the verified terminal ACK.
 The FIFO starts before resolution and the tab mutex covers ensure-open,
 delivery and result publication. A timed-out FIFO waiter releases its eventual
 lock. True created/resumed and partial submission evidence survive refusals.
+
+### Naming a new session (issue #1099)
+
+The canonical name (`new.name.trim()`) travels `operation.name` → the broker's
+record → `permitView` (new mode only, frozen) → `open-terminal`, which reads it
+from the consumed permit alone and hands it to `buildLaunchArgs({ name })`.
+Renderer options, defaults and placeholder labels cannot supply it. Only
+`harnesses/claude.js` turns it into `--name <name>`, on a fresh launch; resume
+and fork ignore it. The argv element is passed whole through the shell encoders
+(`quoteArgForShell`: POSIX single quotes, fish single quotes with doubled
+backslashes, nushell double-quoted strings with `\\` and `\"` escapes, PowerShell
+and cmd.exe as described below) and the
+sandbox/prefix wrappers. For cmd.exe the interactive launch gives node-pty one
+command line, `/s /c "<command>"` (`shellArgs(..., { pty: true })`), so node-pty
+adds no quoting of its own; `/d` is not passed, so Command Processor AutoRun
+still runs. The command keeps the bare `claude`. Arguments are escaped once when
+the `claude` that Switchboard's own environment resolves (launch directory first, then
+PATH, in PATHEXT order) is an executable or nothing is found, and twice when it is a
+`.cmd`/`.bat` shim, whose `%*` re-parses them (`cmdEscapePasses`). A launch prefix
+(trimmed; whitespace-only means none) runs the bare `claude` itself and is escaped
+once. The depth is a prediction made before cmd starts: it can be wrong when AutoRun
+changes PATH, when nothing is found and a shim appears at startup, and for a prefix
+whose own program parses the arguments differently. Starting `claude` on Windows
+without the cmd layer is tracked in devsuitup/switchboard#1101.
+
+PowerShell (Windows PowerShell 5.1 and PowerShell 7) cannot pass a native argument
+that holds a double quote and whitespace intact. It re-joins arguments into one
+command line without escaping `"`, drops empty arguments, and wraps an argument
+in quotes when it has whitespace outside a counted quote pair: Windows PowerShell
+5.1 counts every `"`, so `a" b` is wrapped and splits; PowerShell 7 skips a `"`
+preceded by a backslash. On Windows, `shellArgs` therefore prefixes every
+PowerShell `-Command` with a helper, `__switchboard_launch`, and `claudeCommand`
+(`shell-profiles.js`) builds `__switchboard_launch '<program>' '<token>'...`: the
+program (`claude`, or the first word of a launch prefix) and every following token
+(the other prefix words, `claude` behind a prefix, then the argv) are passed once,
+as plain single-quoted PowerShell literals (`'` and the typographic single quotes
+doubled). The helper resolves the program with `Get-Command` (first result,
+PowerShell's own precedence: alias, function, script, application) and branches on
+what it is. An `Application` is started with `ProcessStartInfo`: the helper builds
+the CommandLineToArgvW argument line itself (the rules of `escapeForCmd`: `"`
+escaped with the preceding backslashes doubled, trailing backslashes doubled,
+every token wrapped), and when the resolved `Source` ends in `.cmd` or `.bat`
+(its `%*` re-parses the line) applies the cmd caret escaping a second time, so
+the depth follows the file that will run, not a prediction from PATH. That line
+is the process's `Arguments`, so nothing re-serializes it; `UseShellExecute=$false`
+keeps the console, input is not redirected, and the helper waits and exits with
+the child's status. Anything else (a profile function or alias named `claude`, a
+`claude.ps1` that PowerShell prefers over a neighbouring `.cmd`, a script alone on
+PATH) is run as PowerShell would run it, `& $c @tokens`; what a script then does
+with `$args` is its own. A launch prefix (letters, digits, spaces and
+`- _ . / \ : =`) is encoded like any other argument for an executable or a batch
+prefix; what the prefix program does when it starts `claude` is its own. The
+payload crosses the process command line once (a 20,000 character system prompt
+stays under the 32,767 limit). The helper's fixed cost is about 700 characters: when the
+helper form serialized by node-pty would exceed 32,767 (NUL counted) while the plain form
+(`claude '<token>'...`, no preamble, as before the helper) fits, `claudeCommand` uses the
+plain form for that launch, so no launch that fit before stops fitting. `--ide` joins the argv before this serialization.
+Off Windows, PowerShell keeps one plain single-quoted literal per token, the bare
+`claude` and no helper. The schedule runner does not use the helper: its
+PowerShell tokens stay single-quoted literals.
+
+The MCP server that IDE emulation starts belongs to the `open-terminal` call from
+the moment it starts until the session is registered: a `finally` shuts it down on
+every refusal or error in between (last-guard deadline, revoked permit, command
+construction, project storage, PTY spawn). Refusals decided before the start
+(launch prefix validation, sandbox platform) start none.
+
+Qualification: `test/trigger-name-transport.test.js` runs the real encoders
+through the extracted `open-terminal` handler and an injected PTY edge. On Linux
+and macOS it decodes the command with real `bash` and `sh` and compares argv; fish,
+nushell, PowerShell and cmd.exe are pinned by literal expected strings only (no
+such shell runs there). `test/trigger-name-transport-windows.test.js` runs only
+on Windows (the `windows-2022` leg of the test workflow, selected by
+`scripts/platform-tests.js`): it serializes the real launch arguments with
+node-pty's `argsToCommandLine`, starts `cmd.exe` with that exact command line and
+compares the argv a disposable echo executable and `claude.cmd` / `claude.bat` shims received, including a launch-directory executable shadowing a PATH shim and the reverse, a whitespace-only prefix, and a native wrapper prefix over resume and fork options,
+with the input. `test/trigger-name-transport-powershell-windows.test.js` does the
+same through `powershell.exe` and, when installed, `pwsh.exe`, into an echo
+`claude.exe`, a `claude.cmd` shim, a `claude.ps1` alone and beside a `claude.cmd`, a profile function named `claude`, a native and a batch (`wrap`, `wrap.cmd`, absolute) launch prefix, a 20,000 character argument, with quotes, backslashes, an empty-looking
+quote pair, `$env:PATH`, backticks, `;`, `&`, `%PATH%`, typographic quotes and
+unicode. It also runs the launch plan under node-pty against a probe `claude.exe` that checks it has a console, reads a line from standard input and exits with a chosen status. It also writes Ctrl+C to the pseudo console and asserts that the probe reports it. On Linux, string tests pin the helper source and the launch literals; the encoder inside the helper is exercised only by the Windows file. Neither file is a live Claude Code or ConPTY qualification;
+nushell remains unexecuted.
+
+A name with an unpaired surrogate is schema-valid but cannot survive UTF-8, so
+`executeOpen` refuses it right after the first cancellation/deadline check, before
+project lookup, rate reservation, UUID allocation, renderer dispatch or marker.
+`src/main/triggers/trigger-name.js` holds that test and the marker rules.
+
+Order is unchanged: launch, ordered name save (the requested name, never the
+observed one), startup and prompt delivery, then result construction. The result
+carries `requestedName` and `actualName`. `actualName` comes from one call to
+`pinned.binding.observeName()` (synchronous, no waiting, no retry), made only
+when the accepted launch is still admitted (no cancellation, deadline not
+reached, session/PTY/generation unchanged) and skipped otherwise. The binding
+observes through the same tab-writer observation as delivery (ordinary or Linux
+sandbox) and returns the descriptor `name` only for a certain, unique writer whose
+session ID is the new UUID, whose identity matches any identity delivery already
+pinned, and whose PTY has a real PID. It reports `null` for macOS (unsupported),
+Windows PID 0, uncertain or missing proof, and an absent, empty or non-string
+name. The ordinary reader is followed by one confirmation (`confirmDeliveryWriter`: descriptor
+reread for the same session, name and process start, and the writer's live process
+start; the sandbox reader revalidates internally) and a recheck of the pinned PTY
+start; a change yields `null`, and no confirmation starts once the action is no
+longer admitted. The name is also discarded when the
+deadline passes or the launch is cancelled during the read. It mutates no delivery binding. A different or `null` name changes nothing
+else. Finalization that turns the launch into a refusal, or finds an already refused launch invalidated, drops the name.
+
+Every open-new marker carries `nameVersion: 1` and `requestedName`. Recovery
+accepts them only for an `open`/`new` marker whose version is numeric 1 and whose
+name is nonempty, trimmed, at most 256 code units, free of controls and unpaired
+surrogates, and then adds `requestedName` and `actualName:null` to the interrupted
+result. Older or malformed markers recover without either field and keep their
+recorded effects. Recovery never launches, saves, delivers or reads a descriptor.
+A saved result is immutable: replay and publication retries reuse its snapshot.
 
 ### Versioned stop (issue #1022, slice D)
 

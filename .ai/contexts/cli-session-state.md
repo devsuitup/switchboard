@@ -1,5 +1,12 @@
 # Context: cli-session-state
 
+`readProcessTableSnapshot(deadline, { fresh: true, signal })` isolates deletion
+discovery from the global cached or in-flight process-table read. It starts a
+new probe with the lesser of 15 seconds and the remaining request budget,
+forwards the AbortSignal to execFile, and returns its own snapshot without
+publishing into the shared cache. Aborted, expired and failed probes return an
+unknown table. Calls without `fresh` keep the existing global cache behavior.
+
 ## Bounded status evidence (#380 S1b3)
 
 `deliveryPtyStart` accepts only positive integer PIDs (#1083). A fresh WMI
@@ -8,15 +15,40 @@ pending PID zero must never inherit it. Both delivery and status capture a
 missing start from the first published real PID and reject later changes.
 
 `readStatusEvidence(id, deadline)` is a read-only adapter over the v1 reader,
-not `findLiveProcess` or a PID-only handle. Windows first races the shared
-process-table refresh against the remaining deadline and verifies table age
-under 3000 ms before and after the identity read. The global probe timeout stays
-5000 ms and its table TTL stays 3000 ms. A late refresh can help a later request,
+not `findLiveProcess` or a PID-only handle. It first asks the v1 reader for
+bounded descriptor evidence. A known absence returns directly, including an
+ENOENT descriptor directory in a fresh HOME; no watcher or global process-table
+warmup is required. Malformed/unreadable descriptors, unresolved live identities,
+ambiguity and expired deadlines cannot take this path. Other Windows results
+still require the shared process-table refresh against the remaining deadline,
+then a new identity read with table age under 3000 ms before and after it.
+The process-table probe timeout is 15000 ms, clipped to a supplied deadline;
+individual Get-Process probes keep their 5000 ms cap. The table TTL stays 3000 ms. A late refresh can help a later request,
 but cannot change a consumed result. V1 live observations retain parsed state,
 host/raw PID, start and namespace. Linux namespace/ancestry validation remains
 in the v1 reader. Schedules without that identity do not supply descriptor proof.
 Status requests require a unique verified writer; competing identities project
 ambiguous. Existing action readers keep their refusal on any verified live writer.
+
+Deletion previews call `readProcessTableSnapshot(deadline)` at startup.
+It reuses the shared three-second cache (including null failures) or the in-flight
+read. The returned snapshot is passed explicitly to `readStatusEvidence`,
+`liveElsewhereV1Checked` and `deliveryPtyStart`. Windows V1 reads starts and
+ancestry from it rather than launching Get-Process twice per descriptor. Its
+three-second age is checked when consumed; expired/failed/missing/mismatched
+entries remain unknown. The snapshot exposes `expiresAt`; the deletion runtime
+may share one further deadline-bounded snapshot read if the initial snapshot
+expires before liveness starts. V1 itself never refreshes an explicitly supplied
+snapshot. Cached mismatch cannot prove
+absence because the descriptor may be newer than the table. Descriptor absence
+and two failed PID-alive checks retain their independent evidence. Ordinary
+status/action callers and post-stop reads omit the snapshot and retain fresh
+identity probing.
+
+Failed process-table reads log exit code, timeout flag and the first 300 characters
+of stderr, at most once per minute. The native exec callback preserves stderr
+separately from its generic command-failed message. This diagnostic does not
+change failure caching or turn unavailable WMI data into absence evidence.
 
 The status gatherer shares one absolute now+2000 deadline across head and
 descriptor awaits, pins PTY/generation/start/namespace and rechecks after awaits.
@@ -79,6 +111,19 @@ sandbox flag and launch time immediately before spawn. Fresh startup accepts
 statusUpdatedAt equal to launch time; the legacy strict boundary is unchanged.
 Missing/stale startup proof uses `session readiness unavailable`; a fresh busy,
 waiting, shell or briefly idle descriptor retains its existing delivery refusal.
+
+A new trigger-opened session reports the descriptor's `name` once, through
+`binding.observeName()` in `trigger-context.js` (issue #1099). It reuses the
+observation above (`observeTabWriter` for an ordinary tab, `observeTabWriterV1`
+for a sandbox) and takes the name only from a writer that is certain and unique,
+is not nested or background, carries the new session's ID and matches any writer
+identity already pinned for delivery. It never waits for the descriptor to appear,
+for the process table or for a PID. The result is `null` for macOS, where
+`observeTabWriter` is unsupported, for a Windows PTY whose PID is still 0, and for
+an absent, empty or non-string `name`; a non-null value is the descriptor string
+untouched. Descriptor `name` and `nameSource` are written by Claude Code, so the
+value is a snapshot: Switchboard's saved name is separate display metadata and is
+not rewritten from it.
 
 The reader, startup and delivery portions belong to slice C. Stop's composer
 sampling, final-turn completion, stop backend and exit confirmation belong to D

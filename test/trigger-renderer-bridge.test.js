@@ -367,3 +367,30 @@ test('a joined ordinary exact resume can ACK only after main validates that exis
   assert.equal(checked, 1, 'the broker must verify a joined ordinary open, rather than ignore its ACK');
   const done = await result; assert.equal(done.ok, true); assert.equal(done.resumed, false); r.bridge.dispose();
 });
+
+test('a new-session permit carries the broker-owned name, frozen, whatever the renderer sends back', async () => {
+  const r = rig();
+  r.sessions.clear();
+  r.ready();
+  void r.request({ mode: 'new', requestedSessionId: null, generation: null, entry: undefined, name: 'Task one' });
+  await r.flush();
+  const id = r.payload().requestId;
+  assert.equal(r.payload().name, 'Task one');
+  const args = { sessionId: B, projectPath: project, isNew: true, sessionOptions: { name: 'renderer', sessionName: 'renderer' }, name: 'renderer' };
+  const permit = r.bridge.consumePermit(id, r.event(), args);
+  assert.equal(permit.name, 'Task one');
+  assert.equal(Object.isFrozen(permit), true);
+  assert.equal(r.bridge.checkPermit(id).name, 'Task one');
+  r.bridge.dispose();
+});
+
+test('a permit for an existing session has no launch name', async () => {
+  const r = rig();
+  r.ready();
+  void r.request({ name: 'ignored' });
+  await r.flush();
+  const permit = r.bridge.consumePermit(r.payload().requestId, r.event(), { sessionId: B, projectPath: project, isNew: false, sessionOptions: { reattachOnly: true } });
+  assert.ok(permit);
+  assert.equal(permit.name, undefined);
+  r.bridge.dispose();
+});

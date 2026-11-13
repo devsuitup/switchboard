@@ -37,6 +37,10 @@ const SETTING_DEFAULTS = {
   lastSeenVersion: null, // see docs/changelog.md
 };
 
+const PROJECT_DELETE_PREVIEW_TIMEOUT_MS = 20000;
+const PROJECT_DELETE_DIALOG_TIMEOUT_MS = PROJECT_DELETE_PREVIEW_TIMEOUT_MS + 1000;
+const PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS = 3 * PROJECT_DELETE_PREVIEW_TIMEOUT_MS + 2 * 10000 + 60000 + 60000 + 70000 + 10000 + 3 * 10000 + 15000;
+
 const BROWSER_MODES = Object.freeze([
   Object.freeze({ value: 'off', label: 'Off' }),
   Object.freeze({ value: 'claude-in-chrome', label: 'Claude in Chrome' }),
@@ -58,5 +62,6 @@ function normalizeBrowserSettings(settings, diagnostic = message => console.warn
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { SETTING_DEFAULTS, BROWSER_MODES, normalizeBrowserSettings };
+  module.exports = { SETTING_DEFAULTS, BROWSER_MODES, normalizeBrowserSettings,
+    PROJECT_DELETE_PREVIEW_TIMEOUT_MS, PROJECT_DELETE_DIALOG_TIMEOUT_MS, PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS };
 }

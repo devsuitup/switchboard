@@ -68,3 +68,9 @@ test('the extensionless sh shim npm leaves next to claude.cmd is never picked', 
   const r = resolveWindowsClaude(['agents'], { PATH: NPM }, deps(files));
   assert.equal(r.program, exe);
 });
+
+test('escapeForCmd escapes once for one cmd parse and twice for a shim re-parse', () => {
+  assert.equal(escapeForCmd('a&b', 1), '^"a^&b^"');
+  assert.equal(escapeForCmd('a&b'), '^^^"a^^^&b^^^"');
+  assert.equal(escapeForCmd('a\\'), '^^^"a\\\\^^^"');
+});

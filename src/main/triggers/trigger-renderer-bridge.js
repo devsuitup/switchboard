@@ -95,7 +95,7 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
     return Object.freeze({ requestId: record.requestId, documentEpoch: record.epoch,
       mode: record.mode, requestedSessionId: record.requestedSessionId, tabKey: record.tabKey,
       generation: record.generation, project: record.project, deadline: record.deadline,
-      target: record.target,
+      target: record.target, ...(record.mode === 'new' ? { name: record.name } : {}),
       signal: record.controller.signal });
   }
 

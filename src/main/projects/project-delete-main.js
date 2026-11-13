@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs/promises');
+const { createDiscoveryBounds, closeDiscoveryHandle } = require('./project-delete-deadline');
 const path = require('node:path');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { createProjectDeleteInventory } = require('./project-delete-inventory');
@@ -29,7 +30,7 @@ function createProjectDeleteRuntime(ports) {
   };
   const resolvePath = (value, budget) => {
     const paths = inventoryFor(budget).paths;
-    if (!paths.has(value)) paths.set(value, bounded(() => io.realpath(value), budget));
+    if (!paths.has(value)) paths.set(value, bounded('fs.realpath', () => io.realpath(value), budget));
     return paths.get(value);
   };
   const captureRuntimeRelease = () => {
@@ -41,29 +42,33 @@ function createProjectDeleteRuntime(ports) {
     return retain ? work : work.finally(release);
   });
   const normalize = value => (process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value)).replaceAll('\\', '/');
-  async function bounded(fn, budget, dispose) {
-    if (budget.signal?.aborted || now() >= budget.deadline) throw fail('DISCOVERY_TIMEOUT', 'Runtime inventory deadline expired.');
-    let timer, accepted = false;
-    const work = Promise.resolve().then(fn);
-    try {
-      const result = await Promise.race([work, new Promise((_, reject) => {
-        timer = schedule(() => reject(fail('DISCOVERY_TIMEOUT', 'Runtime port deadline expired.')), Math.max(1, budget.deadline - now()));
-      })]);
-      if (budget.signal?.aborted || now() >= budget.deadline) throw fail('DISCOVERY_TIMEOUT', 'Runtime inventory deadline expired.');
-      accepted = true; return result;
-    } finally {
-      cancel(timer);
-      if (dispose && !accepted) void work.then(dispose, () => {}).catch(() => {});
+  const bounded = createDiscoveryBounds({ now, schedule, cancel });
+  const processReads = new WeakMap();
+  function startProcessReads(request, budget) {
+    if (request.folderKey && parseFolderKey(request.folderKey).alias !== null) return;
+    if (!processReads.has(budget.signal)) {
+      const agents = bounded('runClaude.agents', () => ports.runClaude(['agents', '--json', '--all'],
+        { cwd: ports.homeDir, timeout: Math.max(1, budget.deadline - now()), signal: budget.signal, maxOutputBytes: 8 * 1048576 }), budget);
+      const table = ports.cliSessionState.readProcessTableSnapshot
+        ? bounded('cliSessionState.readProcessTableSnapshot',
+          () => ports.cliSessionState.readProcessTableSnapshot(budget.deadline, { fresh: true, signal: budget.signal }), budget)
+          .catch(() => ({ map: null })) : Promise.resolve(undefined);
+      void agents.catch(() => {});
+      processReads.set(budget.signal, { agents, table });
     }
   }
   async function scanJobs(budget) {
+    const early = processReads.get(budget.signal);
+    const agents = early?.agents || bounded('runClaude.agents', () => ports.runClaude(['agents', '--json', '--all'],
+      { cwd: ports.homeDir, timeout: Math.max(1, budget.deadline - now()), signal: budget.signal, maxOutputBytes: 8 * 1048576 }), budget);
+    void agents.catch(() => {});
     const candidates = [], records = new Map();
     let directory, count = 0, bytes = 0;
     try {
-      if ((await bounded(() => io.lstat(ports.jobsDir), budget)).isSymbolicLink()) throw fail('DISCOVERY_CANDIDATE', 'Linked job directory.');
-      directory = await bounded(() => io.opendir(ports.jobsDir), budget, late => late.close());
+      if ((await bounded('fs.lstat', () => io.lstat(ports.jobsDir), budget)).isSymbolicLink()) throw fail('DISCOVERY_CANDIDATE', 'Linked job directory.');
+      directory = await bounded('fs.opendir', () => io.opendir(ports.jobsDir), budget, late => late.close());
       for (;;) {
-        const entry = await bounded(() => directory.read(), budget);
+        const entry = await bounded('fs.directory.read', () => directory.read(), budget);
         if (!entry) break;
         if (++count > Math.min(budget.limit, 20000)) throw fail('DISCOVERY_LIMIT', 'Too many background records.');
         if (!JOB_ID_RE.test(entry.name)) { candidates.push({ id: entry.name, reason: 'Unrecognized background record.' }); continue; }
@@ -71,23 +76,25 @@ function createProjectDeleteRuntime(ports) {
         const file = path.join(ports.jobsDir, entry.name, 'state.json');
         let handle;
         try {
-          const stat = await bounded(() => io.lstat(file), budget);
+          const stat = await bounded('fs.lstat', () => io.lstat(file), budget);
           if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1048576 || (bytes += stat.size) > 8 * 1048576) throw fail('DISCOVERY_LIMIT', 'Background record exceeds budget.');
-          handle = await bounded(() => io.open(file, 'r'), budget, late => late.close());
+          handle = await bounded('fs.open', () => io.open(file, 'r'), budget, late => late.close());
           const buffer = Buffer.alloc(stat.size + 1);
-          const read = await bounded(() => handle.read(buffer, 0, buffer.length, 0), budget);
+          const read = await bounded('fs.file.read', () => handle.read(buffer, 0, buffer.length, 0), budget);
           if (read.bytesRead !== stat.size) throw fail('SNAPSHOT_STALE', 'Background record changed.');
           const text = buffer.subarray(0, read.bytesRead).toString('utf8'), parsed = parseJobState(text);
           if (!parsed?.state) throw fail('DISCOVERY_CANDIDATE', 'Unreadable background state.');
           records.set(entry.name, { ...parsed, cwd: JSON.parse(text).cwd });
-        } catch (error) { candidates.push({ id: entry.name, reason: error.message }); }
-        finally { await handle?.close(); }
+        } catch (error) {
+          if (error.code === 'DISCOVERY_TIMEOUT') throw error;
+          candidates.push({ id: entry.name, reason: error.message });
+        }
+        finally { await closeDiscoveryHandle('fs.file.close', handle, budget, { now, schedule, cancel }); }
       }
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
-    } finally { await directory?.close(); }
-    const result = await bounded(() => ports.runClaude(['agents', '--json', '--all'],
-      { cwd: ports.homeDir, timeout: Math.max(1, budget.deadline - now()), maxOutputBytes: 8 * 1048576 }), budget);
+    } finally { await closeDiscoveryHandle('fs.directory.close', directory, budget, { now, schedule, cancel }); }
+    const result = await agents;
     if (result.code !== 0 || Buffer.byteLength(result.stdout || '') > 8 * 1048576) throw fail('DISCOVERY_UNAVAILABLE', 'Authoritative background list unavailable.');
     const listed = parseCliList(result.stdout);
     let raw;
@@ -113,6 +120,7 @@ function createProjectDeleteRuntime(ports) {
       let cwd;
       try { cwd = row.cwd === project.projectPath ? root : await resolvePath(row.cwd, budget); }
       catch (error) {
+        if (error.code === 'DISCOVERY_TIMEOUT') throw error;
         if (error.code !== 'ENOENT') globalCandidates.push({ id, cwd: row.cwd, reason: error.message });
         continue;
       }
@@ -132,6 +140,14 @@ function createProjectDeleteRuntime(ports) {
     if (members.size >= 50000 && !members.has(row.id)) throw fail('DISCOVERY_LIMIT', 'Runtime identity limit.');
     members.set(row.id, row);
     if (row.alias !== null || row.runtime === 'codex' || row.jobId) return { state: 'unknown' };
+    const early = processReads.get(budget.signal);
+    let processTable = await early?.table;
+    if (processTable?.expiresAt <= now() && now() < budget.deadline) {
+      early.refreshed ||= bounded('cliSessionState.readProcessTableSnapshot',
+        () => ports.cliSessionState.readProcessTableSnapshot(budget.deadline, { fresh: true, signal: budget.signal }), budget);
+      processTable = await early.refreshed;
+    }
+    const evidenceOptions = processTable === undefined ? {} : { processTable };
     const matches = sessionsFor(row.sessionId || row.id);
     if (matches.length > 1) return { state: 'unknown' };
     const previous = pins.get(row.id);
@@ -143,19 +159,19 @@ function createProjectDeleteRuntime(ports) {
       pins.set(row.id, pin);
       if (!session.exited && matches.length) {
         if (row.runtime !== 'terminal') {
-          const external = await bounded(() => ports.cliSessionState.liveElsewhereV1Checked(row.sessionId || row.id,
-            () => false, () => [identity.pid], { deadline: budget.deadline, requireUnique: true }), budget);
-          if (!external?.known || external.live || ports.cliSessionState.deliveryPtyStart(identity.pid) !== identity.procStart) return { state: 'unknown' };
+          const external = await bounded('cliSessionState.liveElsewhereV1Checked', () => ports.cliSessionState.liveElsewhereV1Checked(row.sessionId || row.id,
+            () => false, () => [identity.pid], { deadline: budget.deadline, requireUnique: true, ...evidenceOptions }), budget);
+          if (!external?.known || external.live || ports.cliSessionState.deliveryPtyStart(identity.pid, evidenceOptions) !== identity.procStart) return { state: 'unknown' };
         }
         return { state: 'running', source: 'pty', targetId: sessionKey, sessionKey, identity };
       }
-      let proof = await bounded(() => session.pty.stopEvidence, budget);
-      if (proof?.ended !== true) proof = await bounded(() => session.pty.statusTreeExit, budget);
+      let proof = await bounded('pty.stopEvidence', () => session.pty.stopEvidence, budget);
+      if (proof?.ended !== true) proof = await bounded('pty.statusTreeExit', () => session.pty.statusTreeExit, budget);
       if (proof?.ended !== true || proof.pid !== undefined && proof.pid !== identity.pid
         || proof.generation !== undefined && proof.generation !== identity.generation) return { state: 'unknown' };
     }
     if (row.runtime === 'terminal') return session ? { state: 'stopped', source: 'pty' } : { state: 'unknown' };
-    const evidence = await bounded(() => ports.cliSessionState.readStatusEvidence(row.sessionId || row.id, budget.deadline), budget);
+    const evidence = await bounded('cliSessionState.readStatusEvidence', () => ports.cliSessionState.readStatusEvidence(row.sessionId || row.id, budget.deadline, evidenceOptions), budget);
     return evidence?.known && !evidence.live && !evidence.ambiguous
       ? { state: 'stopped', source: 'descriptor' } : { state: 'unknown', source: 'external' };
   }
@@ -181,7 +197,7 @@ function createProjectDeleteRuntime(ports) {
   }
   async function readWorktreeActivity(project, budget) {
     if (project.alias !== null) throw fail('DISCOVERY_UNAVAILABLE', 'Remote worktree activity is unavailable.');
-    const descriptors = await bounded(() => ports.cliSessionState.getSidebarDescriptors({ allWriters: true }), budget);
+    const descriptors = await bounded('cliSessionState.getSidebarDescriptors', () => ports.cliSessionState.getSidebarDescriptors({ allWriters: true }), budget);
     const snapshot = budget.snapshot || await ports.readWorktreeSnapshot?.(budget);
     if (!Array.isArray(descriptors) || !Array.isArray(snapshot?.sessions) || !(ports.activeSessions instanceof Map)) {
       throw fail('DISCOVERY_UNAVAILABLE', 'Worktree session inventory is incomplete.');
@@ -189,7 +205,7 @@ function createProjectDeleteRuntime(ports) {
     const rows = [...ports.activeSessions].map(([id, row]) => ({ ...row, sessionId: row.realSessionId || row.sessionId || id, active: !row.exited }));
     rows.push(...descriptors, ...snapshot.sessions);
     if (rows.length > budget.limit) throw fail('DISCOVERY_LIMIT', 'Too many worktree sessions to inspect.');
-    const runs = await bounded(() => ports.cliSessionState.getScheduleRunSnapshot(), budget);
+    const runs = await bounded('cliSessionState.getScheduleRunSnapshot', () => ports.cliSessionState.getScheduleRunSnapshot(), budget);
     if (!Array.isArray(runs) || runs.length + rows.length > budget.limit) throw fail('DISCOVERY_LIMIT', 'Schedule inventory unavailable or oversized.');
     const evidenceById = new Map(), dialogCandidates = new Map();
     const descriptorRows = new Set(descriptors), scheduledRows = new Set(runs);
@@ -214,7 +230,7 @@ function createProjectDeleteRuntime(ports) {
         else if (descriptorRows.has(row)) {
           if (!id || row.runtime === 'codex') unlocatedActivity = true;
           else {
-            if (!evidenceById.has(id)) evidenceById.set(id, bounded(() => ports.cliSessionState.readStatusEvidence(id, budget.deadline), budget));
+            if (!evidenceById.has(id)) evidenceById.set(id, bounded('cliSessionState.readStatusEvidence', () => ports.cliSessionState.readStatusEvidence(id, budget.deadline), budget));
             const evidence = await evidenceById.get(id);
             if (!evidence?.known || evidence.live || evidence.ambiguous) unlocatedActivity = true;
           }
@@ -251,7 +267,7 @@ function createProjectDeleteRuntime(ports) {
         if (!id || row.runtime === 'codex') { candidates.push({ id, reason: 'Worktree runtime liveness unavailable.' }); continue; }
         if (seen.has(id)) continue;
         seen.add(id);
-        if (!evidenceById.has(id)) evidenceById.set(id, bounded(() => ports.cliSessionState.readStatusEvidence(id, budget.deadline), budget));
+        if (!evidenceById.has(id)) evidenceById.set(id, bounded('cliSessionState.readStatusEvidence', () => ports.cliSessionState.readStatusEvidence(id, budget.deadline), budget));
         const evidence = await evidenceById.get(id);
         if (!evidence?.known || evidence.ambiguous) candidates.push({ id, reason: 'Worktree session liveness uncertain.' });
         else if (evidence.live) sessions.push({ sessionId: id, cwd: row.cwd || row.projectPath });
@@ -281,7 +297,7 @@ function createProjectDeleteRuntime(ports) {
     for (const directory of project.worktreePaths) byPath[directory] = await forPath(directory);
     return { byPath, candidates: [...dialogCandidates.values()] };
   }
-  return { readJobs, readLiveness, readTarget, readConversation, readWorktreeActivity, withScope, captureRuntimeRelease,
+  return { startProcessReads, readJobs, readLiveness, readTarget, readConversation, readWorktreeActivity, withScope, captureRuntimeRelease,
     getScheduleRunSnapshot: () => ports.cliSessionState.getScheduleRunSnapshot(),
     bg: ports.bg, remote: ports.remote,
     detach: attachment => detachPty(attachment.session, attachment.sessionKey),
@@ -324,20 +340,28 @@ function createProjectDeleteMain(deps) {
   const worktrees = deps.worktreeGit ? createProjectDeleteWorktrees({ runGit: deps.worktreeGit, readActivity: runtime.readWorktreeActivity, now }) : null;
   const planner = createProjectDeletePlanner({ ...inventory, ...clock, worktrees });
   const stop = createProjectDeleteStop({ ...deps, ...runtime, ...clock });
-  const service = createProjectDeleteService({ ...clock, writer, inventory, planner, stop, worktrees, gate: deps.gate,
+  const service = createProjectDeleteService({ ...clock, writer, inventory, planner, stop, worktrees, gate: deps.gate, log: deps.log,
     captureRuntimeRelease: runtime.captureRuntimeRelease,
     onHoldsInstalled: () => settleHolds?.(!disposed),
     notifyProjects: notify('notifyProjects'), notifySchedules: notify('notifySchedules') });
   let ready = false, disposed = false, recovery = null, pendingAttach = null, cancelRecovery, bootstrap = 0;
   let holds, settleHolds;
   const guarded = { rebind: sender => service.rebind(sender) };
-  for (const method of ['preview', 'execute', 'readState']) guarded[method] = (sender, input) => ready && !disposed
-    ? runtime.withScope(() => service[method](sender, input), method === 'execute') : { ok: false, code: 'NOT_READY', retryable: true, ...(method === 'preview' ? { token: null } : {}) };
+  for (const method of ['preview', 'execute', 'readState']) guarded[method] = async (sender, input) => {
+    const result = ready && !disposed
+      ? await runtime.withScope(() => service[method](sender, input), method === 'execute')
+      : { ok: false, code: 'NOT_READY', retryable: true, ...(method === 'preview' ? { token: null } : {}) };
+    if (method !== 'preview' && result.code === 'DISCOVERY_TIMEOUT') deps.log?.debug?.(`[project-delete] ${method}: ${result.port} elapsed=${result.elapsedMs}ms bound=${result.boundMs}ms`);
+    if (method === 'execute' && result.code === 'NOT_READY') deps.log?.debug?.('[project-delete] execute operation=- state=refused reason=NOT_READY elapsed=0ms');
+    return result;
+  };
   const registration = registerProjectDeleteIpc({ ...deps, service: guarded });
   function startRecovery() {
     if (disposed) return Promise.resolve(false);
     if (recovery) return recovery;
     ready = false;
+    const startedAt = now();
+    let recoveryReason = 'RECOVERY_UNAVAILABLE';
     let holdsOutcome;
     holds = new Promise(resolve => {
       const timer = schedule(() => settleHolds(false, `HOLDS_TIMEOUT: ${HOLDS_TIMEOUT_MS} ms elapsed.`), HOLDS_TIMEOUT_MS);
@@ -360,17 +384,21 @@ function createProjectDeleteMain(deps) {
           }
         };
         const result = await Promise.race([Promise.resolve().then(work), new Promise(resolve => {
-          cancelRecovery = () => resolve(false);
+          cancelRecovery = () => { recoveryReason = disposed ? 'DISPOSED' : 'RECOVERY_TIMEOUT'; resolve(false); };
           timer = schedule(cancelRecovery, RECOVERY_TIMEOUT_MS);
         })]);
-        if (result && !disposed) { ready = true; deps.announce?.(registration.rebind() || []); }
+        if (result && !disposed) { ready = true; recoveryReason = 'READY'; deps.announce?.(registration.rebind() || []); }
         return result;
       } catch (error) {
+        recoveryReason = error.code || 'RECOVERY_UNAVAILABLE';
         if (holdsOutcome === true) deps.log?.warn('[project-delete] recovery unavailable: ' + error.message);
         settleHolds(false, `${error.code || 'RECOVERY_UNAVAILABLE'}: ${error.message}`);
         return false;
       }
-      finally { settleHolds(false); cancel(timer); cancelRecovery = null; recovery = null; }
+      finally {
+        settleHolds(false); cancel(timer); cancelRecovery = null; recovery = null;
+        deps.log?.debug?.(`[project-delete] recovery operation=- state=${ready ? 'ready' : 'unavailable'} reason=${recoveryReason} elapsed=${now() - startedAt}ms`);
+      }
     })();
     return recovery;
   }

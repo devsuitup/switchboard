@@ -18,10 +18,14 @@ function parseAddDirs(value) {
   return String(value).split(',').map(dir => dir.trim()).filter(Boolean);
 }
 
-function buildLaunchArgs({ sessionId, isNew, options }) {
+function launchName(name) {
+  return typeof name === 'string' && name ? ['--name', name] : [];
+}
+
+function buildLaunchArgs({ sessionId, isNew, options, name }) {
   const args = [];
   if (options?.forkFrom) args.push('--resume', String(options.forkFrom), '--fork-session');
-  else if (isNew) args.push('--session-id', String(sessionId));
+  else if (isNew) args.push('--session-id', String(sessionId), ...launchName(name));
   else args.push('--resume', String(sessionId));
   if (options?.dangerouslySkipPermissions) args.push('--dangerously-skip-permissions');
   else if (options?.permissionMode) args.push('--permission-mode', String(options.permissionMode));

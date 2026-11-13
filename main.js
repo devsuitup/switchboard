@@ -86,7 +86,7 @@ function spawnPty(file, args, opts) {
 }
 
 // Shell profiles → shell-profiles.js
-const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./src/main/terminals/shell-profiles');
+const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell, claudeCommand } = require('./src/main/terminals/shell-profiles');
 const { startScheduler, scheduleLaunchRefusal, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./src/main/schedules/schedule-runner');
 const { buildScheduleList } = require('./src/main/schedules/schedule-list');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
@@ -2915,8 +2915,9 @@ function wireSessionPty(session, sessionId, ptyProcess) {
 }
 
 // Run `claude <argv>` to completion through the login shell -- see .ai/contexts/bg-agents.md ("Running the CLI")
-function runClaudeCommand(claudeArgv, { cwd, timeout, maxOutputBytes = Infinity }) {
+function runClaudeCommand(claudeArgv, { cwd, timeout, signal, maxOutputBytes = Infinity }) {
   return new Promise((resolve) => {
+    if (signal?.aborted) { resolve({ code: null, stdout: '', stderr: 'claude command aborted' }); return; }
     const globalSettings = getSetting('global') || {};
     const profile = resolveShell(globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile);
     const shell = profile.path;
@@ -2937,9 +2938,11 @@ function runClaudeCommand(claudeArgv, { cwd, timeout, maxOutputBytes = Infinity 
     let stderr = '';
     let outputBytes = 0;
     let settled = false;
+    let onAbort;
     const finish = (code, err) => {
       if (settled) return;
       settled = true;
+      signal?.removeEventListener('abort', onAbort);
       resolve({ code, stdout, stderr: err ? `${stderr}${err.message}` : stderr });
     };
     let child;
@@ -2982,6 +2985,9 @@ function runClaudeCommand(claudeArgv, { cwd, timeout, maxOutputBytes = Infinity 
       const grace = setTimeout(() => { clearTimeout(timer); finish(code); }, 1000);
       if (typeof grace.unref === 'function') grace.unref();
     });
+    onAbort = () => { clearTimeout(timer); stopCommand(); finish(null, new Error('claude command aborted')); };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
 }
 
@@ -3150,6 +3156,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   const admission = isAttach ? null : projectOperationGate.tryAdmitAll([projectPath, spawnCwd]);
   if (!isAttach && !admission) return { ok: false, error: PROJECT_OPERATION_ERROR,
     ...(triggerPermit ? { reason: PROJECT_OPERATION_ERROR } : {}) };
+  let mcpOwnedHere = false;
   try {
   // Spawn new PTY
   if (!fs.existsSync(spawnCwd)) {
@@ -3268,30 +3275,24 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
           log.warn(`[open-terminal] ${spawnCwd} is not a git repository — launching without --worktree`);
           launchOptions = { ...sessionOptions, worktree: false };
         }
-        claudeArgs.push(...getHarness().buildLaunchArgs({ sessionId, isNew: startsFresh, options: launchOptions }));
+        claudeArgs.push(...getHarness().buildLaunchArgs({ sessionId, isNew: startsFresh, options: launchOptions,
+          name: triggerPermit?.name }));
       }
 
-      let claudeCmd = 'claude ' + quoteArgvForShell(shell, claudeArgs);
-
-      // Sandbox: run claude inside a bubblewrap sandbox that only exposes the
-      // project directory and Claude's own config/state dirs. Linux only —
-      // bwrap has no macOS/Windows equivalent wired up here.
-      if (!isAttach && sessionOptions?.sandbox) {
-        if (process.platform !== 'linux') {
-          return { ok: false, error: 'Sandbox mode requires Linux (bubblewrap)' };
-        }
-        claudeCmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgs);
+      if (!isAttach && sessionOptions?.sandbox && process.platform !== 'linux') {
+        return { ok: false, error: 'Sandbox mode requires Linux (bubblewrap)' };
       }
 
       // preLaunchCmd is raw shell by design (e.g. "aws-vault exec profile --")
       // — see pre-launch-cmd-guard.js for what is and isn't blocked and why.
+      let pre = '';
+      let ideAdded = false;
       if (!isAttach && sessionOptions?.preLaunchCmd) {
-        const pre = String(sessionOptions.preLaunchCmd);
-        const preCheck = validatePreLaunchCmd(pre);
+        const preCheck = validatePreLaunchCmd(String(sessionOptions.preLaunchCmd));
         if (!preCheck.ok) {
           return { ok: false, error: preCheck.error };
         }
-        claudeCmd = pre + ' ' + claudeCmd;
+        if (String(sessionOptions.preLaunchCmd).trim()) pre = String(sessionOptions.preLaunchCmd);
       }
 
       // Start MCP server for this session so Claude CLI sends diffs/file opens to Switchboard
@@ -3299,11 +3300,23 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       if (!isAttach && sessionOptions?.mcpEmulation !== false) {
         try {
           mcpServer = await startMcpServer(sessionId, [spawnCwd], mainWindow, log);
-          claudeCmd += ' --ide';
+          mcpOwnedHere = true;
+          ideAdded = true;
+          claudeArgs.push('--ide');
         } catch (err) {
           mcpError = err.message;
           log.error(`[mcp] Failed to start MCP server for ${sessionId}: ${err.message}`);
         }
+      }
+
+      let claudeCmd = claudeCommand(shell, claudeArgs, { env: cleanPtyEnv, cwd: spawnCwd, prefix: pre, extraArgs: shellExtraArgs, ide: ideAdded });
+
+      // Sandbox: run claude inside a bubblewrap sandbox that only exposes the
+      // project directory and Claude's own config/state dirs. Linux only —
+      // bwrap has no macOS/Windows equivalent wired up here.
+      if (!isAttach && sessionOptions?.sandbox) {
+        claudeCmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgs);
+        if (pre) claudeCmd = pre + ' ' + claudeCmd;
       }
 
       // Anchor the working directory in the command itself. pty.spawn's `cwd`
@@ -3351,14 +3364,13 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       if (triggerPermit) {
         const checked = await validateTriggerOpen(triggerPermit);
         if (!checked.ok || matchingOpenEntries().length > 0 || !triggerRendererBridge.checkPermit(triggerRequestId)) {
-          if (mcpServer) shutdownMcpServer(sessionId);
           return checked.ok ? { ok: false, reason: 'session target changed', error: 'session target changed' } : checked;
         }
       }
       launchStartedAt = Date.now();
       if (triggerPermit && (launchStartedAt >= triggerPermit.deadline || !unsavedGuard.launchAllowed()
         || !triggerRendererBridge.checkPermit(triggerRequestId))) return { ok: false, reason: 'session action timed out', error: 'session action timed out' };
-      ptyProcess = spawnPty(shell, shellArgs(shell, claudeCmd, shellExtraArgs), {
+      ptyProcess = spawnPty(shell, shellArgs(shell, claudeCmd, shellExtraArgs, { pty: true }), {
         name: 'xterm-256color',
         cols: spawnCols,
         rows: spawnRows,
@@ -3397,6 +3409,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     // see .ai/contexts/trigger-watcher.md, "Session handle"
     host: null, kind: 'local-pty',
   };
+  mcpOwnedHere = false;
   activeSessions.set(sessionId, session);
   if (!isPlainTerminal) revealIfSdkSession(sessionId);
   if (isAttach) notifyRendererProjectsChanged('session-attach');
@@ -3421,7 +3434,10 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     mcpError,
     generation: session.generation,
   };
-  } finally { admission?.release(); }
+  } finally {
+    if (mcpOwnedHere) shutdownMcpServer(sessionId);
+    admission?.release();
+  }
   } finally { releaseOpen(); }
 });
 

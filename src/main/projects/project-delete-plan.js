@@ -1,6 +1,8 @@
 'use strict';
 
 const path = require('node:path');
+const { PROJECT_DELETE_PREVIEW_TIMEOUT_MS } = require('../../../public/setting-defaults');
+const { createDiscoveryBounds, discoveryTimeout, discoveryDetails } = require('./project-delete-deadline');
 const { parseFolderKey } = require('../remote/remote-hosts');
 const { worktreeParentPath } = require('../../../public/worktree-nesting');
 const { OPTION_KEYS, isRecord, text, fail, canonicalPath, identity, stable, digest, compare, membershipRecord } = require('./project-delete-identity');
@@ -48,20 +50,23 @@ async function resolveProject(request, snapshot, boundKey, memo, each, ordered) 
 
 function createProjectDeletePlanner(deps) {
   const { now = Date.now, schedule = setTimeout, cancel = clearTimeout } = deps;
-  const timeoutMs = Number.isFinite(deps.timeoutMs) ? Math.max(1, Math.min(deps.timeoutMs, 15000)) : 10000;
+  const timeoutMs = Number.isFinite(deps.timeoutMs) ? Math.max(1, Math.min(deps.timeoutMs, PROJECT_DELETE_PREVIEW_TIMEOUT_MS)) : PROJECT_DELETE_PREVIEW_TIMEOUT_MS;
   const maxItems = Number.isInteger(deps.maxItems) ? Math.max(1, Math.min(deps.maxItems, 50000)) : 20000;
 
-  async function preview(input, boundKey) {
-    let timer;
+  async function preview(input, boundKey, sharedBudget) {
     const controller = new AbortController();
     try {
       let request;
       try { request = structuredClone(input); }
       catch { throw fail('INVALID_REQUEST', 'Request fields must be cloneable data.'); }
       validateRequest(request);
-      const budget = { signal: controller.signal, limit: maxItems, deadline: now() + timeoutMs };
+      const startedAt = now();
+      const budget = { signal: controller.signal, limit: maxItems, pendingPorts: sharedBudget?.pendingPorts || new Map(), portElapsed: sharedBudget?.portElapsed,
+        deadline: Math.min(sharedBudget?.deadline ?? Infinity, startedAt + timeoutMs) };
+      const bound = createDiscoveryBounds({ now, schedule, cancel });
+      const read = (port, fn) => bound(port, fn, budget);
       const expired = () => {
-        if (controller.signal.aborted || now() >= budget.deadline) throw fail('DISCOVERY_TIMEOUT', 'Planning timed out; retry after indexing settles.');
+        if (controller.signal.aborted || now() >= budget.deadline) throw discoveryTimeout(budget, now, { port: 'planner.collect', startedAt, boundMs: budget.deadline - startedAt });
       };
       const memo = new Map();
       let batchCount = 0, batchStart = now();
@@ -95,22 +100,23 @@ function createProjectDeletePlanner(deps) {
         if (!isRecord(value) || value.complete !== true) throw fail('SNAPSHOT_INCOMPLETE', 'Index or discovery is incomplete; retry after indexing.');
       };
       const collect = async () => {
-        await deps.waitForIndex(budget);
+        deps.startProcessReads?.(request, budget);
+        await read('waitForIndex', () => deps.waitForIndex(budget));
         expired();
-        const snapshot = structuredClone(await deps.readSnapshot(budget));
+        const snapshot = structuredClone(await read('readSnapshot', () => deps.readSnapshot(budget)));
         expired();
         complete(snapshot);
         if (snapshot.initialScanComplete !== true || !text(snapshot.revision)) throw fail('SNAPSHOT_INCOMPLETE', 'Wait for the normal initial index and writer fence.');
         items(snapshot.projects); items(snapshot.declaredHosts);
         const { project, known } = await resolveProject(request, snapshot, boundKey, memo, each, ordered);
-        const ownership = structuredClone(await deps.discoverOwnership(project, { ...budget, snapshot, options: request.options }));
+        const ownership = structuredClone(await read('discoverOwnership', () => deps.discoverOwnership(project, { ...budget, snapshot, options: request.options })));
         expired(); complete(ownership);
         const rawGroups = items(ownership.groups), rawMembers = items(ownership.members);
         const ownershipCandidates = items(ownership.candidates);
-        const discovery = structuredClone(await deps.discoverSchedules(project, budget));
+        const discovery = structuredClone(await read('discoverSchedules', () => deps.discoverSchedules(project, budget)));
         expired(); complete(discovery);
         const rawSchedules = items(discovery.schedules), scheduleCandidates = items(discovery.candidates);
-        const runtime = structuredClone(await deps.readRuntimeState(project, budget));
+        const runtime = structuredClone(await read('readRuntimeState', () => deps.readRuntimeState(project, budget)));
         expired(); complete(runtime);
         const rawTabs = items(runtime.tabs), rawJobs = items(runtime.jobs), runtimeCandidates = items(runtime.candidates);
         const refusals = [], warnings = [];
@@ -278,7 +284,7 @@ function createProjectDeletePlanner(deps) {
         const fingerprint = digest({ membershipDigest, groups, members, tabs, jobs, schedules,
           worktrees: worktrees.filter(row => row.selected && !row.main && !row.projectDirectory),
           options: request.options, stops, categories, warnings: warnings.filter(row => row.code !== 'WORKTREE_UNAVAILABLE'), refusals });
-        const revision = await deps.readRevision(budget);
+        const revision = await read('readRevision', () => deps.readRevision(budget));
         expired();
         if (revision !== snapshot.revision) throw fail('SNAPSHOT_STALE', 'Writer changed during discovery; request a fresh preview.');
         return { ok: true, plan: { project, groups, members, tabs, jobs, stops, schedules, categories, worktrees,
@@ -288,16 +294,13 @@ function createProjectDeletePlanner(deps) {
             processes: new Set(stops.map(row => stable([row.alias, row.evidence.source, row.targetId]))).size, schedules: schedules.length },
           warnings, refusals, membershipDigest, fingerprint, revision } };
       };
-      return await Promise.race([collect(), new Promise((_, reject) => {
-        timer = schedule(() => { controller.abort(); reject(fail('DISCOVERY_TIMEOUT', 'Planning timed out; retry after indexing settles.')); }, timeoutMs);
-      })]);
+      return await read('planner.collect', collect);
     } catch (error) {
       return { ok: false, code: error.code || 'DISCOVERY_UNAVAILABLE',
         error: error.code === 'DISCOVERY_TIMEOUT' && input?.worktrees?.length
           ? `${error.message} Use the dedicated "Delete worktree" action in the sidebar.`
-          : error.message || 'Read-only planning unavailable.' };
+          : error.message || 'Read-only planning unavailable.', ...discoveryDetails(error) };
     } finally {
-      cancel(timer);
       controller.abort();
     }
   }
@@ -315,7 +318,7 @@ function createProjectDeletePlanner(deps) {
     }
   }
 
-  return { preview: request => preview(request), revalidate };
+  return { preview: (request, budget) => preview(request, undefined, budget), revalidate };
 }
 
 module.exports = { createProjectDeletePlanner };
