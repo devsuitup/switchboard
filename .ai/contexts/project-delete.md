@@ -59,6 +59,13 @@ The runtime reads all CLI descriptor writers, indexed session evidence, active
 tabs and schedules for each selected/unselected inspection group. Background job
 files/list and path resolutions are cached within the preview inventory, shared
 with the parent runtime inventory; results are partitioned by folder in memory.
+Both located and unattributed descriptor reads consume the process table for
+that inventory's abort signal. They share A4's single deadline-bounded fresh
+re-read if the early table expires; an expired replacement is not retried.
+Missing, stale or mismatched process evidence retains the descriptor reader's
+unknown result and cannot establish absence. Removal preflight and every final
+per-folder guard start independent process reads for their own signals, so they
+never reuse the preview table or the Windows global refresh cache.
 Descendant cwd counts as worktree
 activity. Live or uncertain sessions disable the row; E does not extend A4 stop
 authority to a linked project's sessions. Background records remain refused
@@ -89,6 +96,12 @@ after removal does it reread writer scope and revalidate parent membership/death
 omitting already-consumed physical selections from this final preview. The
 writer's manifest/options remain metadata-only. The operation retains launch
 holds until Git settles, even after an early IPC unknown reply.
+Renderer follow-up keeps the same operation ID and only reads state. With no
+folders selected its ceiling stays 325 seconds. Otherwise it adds the 15-second
+preflight and, per selected folder, the 15-second final inspection from
+`project-delete-worktrees.js` plus the 120-second Git removal timeout from
+`main.js`'s `worktreeGit`. The two named worktree constants beside the base
+renderer timeout encode these bounds; two selections allow 610 seconds.
 
 `worktrees` on operation views records removed/failed/refused/remaining paths.
 A refusal before Git removal has no disk effect and does not make the operation

@@ -1184,7 +1184,10 @@ async function confirmAndDeleteProjectFolder(project, button) {
     setProjectDeletionWritesBlocked(project, true);
     await window.flushProjectDeletionWrites?.();
     let result = await projectDeletionCall('deleteProject', { token: answers.plan.token, fingerprint: answers.plan.plan.fingerprint });
-    const stateDeadline = Date.now() + PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS;
+    const selectedWorktrees = request(answers).worktrees.length;
+    const worktreeTimeout = selectedWorktrees ? PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS
+      + selectedWorktrees * (PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS + PROJECT_DELETE_WORKTREE_REMOVE_TIMEOUT_MS) : 0;
+    const stateDeadline = Date.now() + PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS + worktreeTimeout;
     while (result?.operationId && result.code === 'EXECUTION_PENDING') {
       const operationId = result.operationId;
       try {

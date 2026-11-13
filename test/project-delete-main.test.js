@@ -418,7 +418,15 @@ test('E main composition removes a selected folder before real writer completion
   h.main.dispose();
   const linked = path.join(h.projectPath, 'linked'); fs.mkdirSync(linked);
   fs.writeFileSync(path.join(linked, 'draft'), 'discard only on consent');
-  h.ports.cliSessionState.getSidebarDescriptors = () => [];
+  const activitySignals = [];
+  h.ports.cliSessionState.getSidebarDescriptors = () => [{ sessionId: 'linked-session', cwd: linked }];
+  h.ports.cliSessionState.readProcessTableSnapshot = async (_deadline, opts) => ({
+    signal: opts.signal, map: new Map(), expiresAt: h.time.now() + 3000,
+  });
+  h.ports.cliSessionState.readStatusEvidence = async (id, _deadline, opts) => {
+    if (id === 'linked-session') activitySignals.push(opts?.processTable?.signal);
+    return { known: true, live: null };
+  };
   const removed = [];
   h.ports.worktreeGit = async args => {
     if (args.includes('list')) {
@@ -430,6 +438,8 @@ test('E main composition removes a selected folder before real writer completion
     if (args.includes('ls-files')) return '';
     if (args.includes('status')) return path.resolve(args[1]) === linked ? '?? draft\0' : '';
     if (args.includes('remove')) {
+      assert.ok(activitySignals.slice(-2).every(Boolean), 'main composition must start isolated reads for both disk guards');
+      assert.notEqual(activitySignals.at(-1), activitySignals.at(-2), 'each disk guard needs its own process table');
       assert.equal(h.calls.includes('completeProjectDeletion'), false, 'disk must precede writer submission');
       removed.push(args.at(-1)); fs.rmSync(linked, { recursive: true }); return '';
     }

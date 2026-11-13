@@ -4,7 +4,7 @@ const path = require('node:path');
 const deletion = require('../../../worktree-delete');
 const { canonicalPath, fail } = require('./project-delete-identity');
 
-function createProjectDeleteWorktrees({ runGit, readActivity, now = Date.now }) {
+function createProjectDeleteWorktrees({ runGit, readActivity, startProcessReads = () => {}, now = Date.now }) {
   const check = budget => {
     if (budget.signal.aborted || now() >= budget.deadline) throw fail('DISCOVERY_TIMEOUT', 'Worktree not inspected: inventory time budget exhausted. Reopen Delete to retry.');
   };
@@ -86,6 +86,7 @@ function createProjectDeleteWorktrees({ runGit, readActivity, now = Date.now }) 
   async function remove(project, selected, record) {
     const budget = { signal: new AbortController().signal, deadline: now() + 15000, limit: 20000 };
     try {
+      startProcessReads(project, budget);
       const current = await preview(project, { ...budget, worktreePaths: selected.map(row => row.path), selectedWorktrees: selected.map(row => row.path) });
       for (const row of selected) {
         const fresh = current.find(item => item.path === row.path);
@@ -101,8 +102,10 @@ function createProjectDeleteWorktrees({ runGit, readActivity, now = Date.now }) 
       let result, attempted = false;
       try {
         result = await deletion.removeWorktree(row.path, project.projectPath, row, async () => {
-          const current = await preview(project, { ...budget, signal: new AbortController().signal, deadline: now() + 15000,
-            worktreePaths: [row.path], selectedWorktrees: [row.path] });
+          const removalBudget = { ...budget, signal: new AbortController().signal, deadline: now() + 15000,
+            worktreePaths: [row.path], selectedWorktrees: [row.path] };
+          startProcessReads(project, removalBudget);
+          const current = await preview(project, removalBudget);
           const fresh = current.find(item => item.path === row.path);
           if (!fresh?.removable || fresh.main || fresh.projectDirectory) throw fail('WORKTREE_UNAVAILABLE', fresh?.reason || 'Worktree registration changed.');
           return fresh;

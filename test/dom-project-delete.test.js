@@ -105,8 +105,12 @@ test('selected preview keeps its own watchdog and shows the failed port with an 
   h.cancel(); await pending;
 });
 
-for (const settles of [true, false]) test(`pending execute follows beyond 130 seconds or stops at the shared ceiling, settles=${settles}`, async t => {
-  const h = setup(t), timers = new Map(), applied = [];
+for (const selected of [0, 2]) for (const settles of [true, false]) test(`pending execute respects the ceiling, selected=${selected}, settles=${settles}`, async t => {
+  const worktrees = Array.from({ length: 2 }, (_, i) => ({ path: 'C:/linked-' + i, removable: true, fingerprint: 'stable', sessions: [], dirty: [] }));
+  const h = setup(t, { worktrees }), timers = new Map(), applied = [];
+  const base = 3 * 20000 + 2 * 10000 + 60000 + 60000 + 70000 + 10000 + 3 * 10000 + 15000;
+  const ceiling = base + (selected ? 15000 + selected * (15000 + 120000) : 0);
+  const settleAt = selected ? ceiling - 1000 : 130000;
   let time = 0, id = 0, finished = false;
   h.w.Date.now = () => time;
   h.w.setTimeout = (fn, ms) => { timers.set(++id, { fn, at: time + ms }); return id; };
@@ -118,14 +122,15 @@ for (const settles of [true, false]) test(`pending execute follows beyond 130 se
   };
   h.w.api.projectDeleteState = request => {
     h.calls.state.push(request);
-    return new Promise(resolve => h.w.setTimeout(() => resolve(settles && time >= 130000
+    return new Promise(resolve => h.w.setTimeout(() => resolve(settles && time >= settleAt
       ? { ok: true, state: 'committed', operationId: 'slow', invalidation: { sessionIds: [], restoreTargets: [] } }
-      : pendingReply), 10000));
+      : pendingReply), 1000));
   };
   h.w.applyProjectDeletion = async result => applied.push(result);
   const pending = h.start().then(result => { finished = true; return result; });
-  await flush(); h.confirm().click(); await flush();
-  const ceiling = 3 * 20000 + 2 * 10000 + 60000 + 60000 + 70000 + 10000 + 3 * 10000 + 15000;
+  await flush();
+  for (let i = 0; i < selected; i++) { h.document.querySelector(`[data-choice-id="worktree:${i}"]`).click(); await flush(); }
+  h.confirm().click(); await flush();
   for (; time < ceiling && !finished;) {
     time += 1000;
     for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); }
@@ -137,7 +142,7 @@ for (const settles of [true, false]) test(`pending execute follows beyond 130 se
   assert.ok(h.calls.state.every(request => request.operationId === 'slow'), 'all reads must keep the accepted operation ID');
   if (settles) {
     assert.equal(applied.length, 1, 'a pending execution settling after 130 seconds must apply its committed result');
-    assert.equal(time, 130000);
+    assert.equal(time, settleAt);
     assert.equal(h.document.querySelector('.app-notice'), null);
   } else {
     assert.equal(time, ceiling, 'persistent pending must be followed until the shared ceiling');
@@ -146,7 +151,7 @@ for (const settles of [true, false]) test(`pending execute follows beyond 130 se
     assert.match(h.document.querySelector('.app-notice').textContent, /Check deletion state/);
     assert.equal(h.w.isProjectDeleting(h.p), true);
   }
-  assert.equal(require('../public/setting-defaults').PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS, ceiling);
+  assert.equal(require('../public/setting-defaults').PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS, base);
 });
 
 test('pending follow-up rejects a changed operation identity', async t => {

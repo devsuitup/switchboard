@@ -133,13 +133,7 @@ function createProjectDeleteRuntime(ports) {
   }
   const sessionsFor = id => [...ports.activeSessions].filter(([key, session]) =>
     [key, session.sessionId, session.realSessionId].includes(id));
-  async function readLiveness(row, budget) {
-    const scope = scopes.getStore();
-    if (!scope) throw fail('DISCOVERY_UNAVAILABLE', 'Runtime operation scope unavailable.');
-    const { members, pins } = scope;
-    if (members.size >= 50000 && !members.has(row.id)) throw fail('DISCOVERY_LIMIT', 'Runtime identity limit.');
-    members.set(row.id, row);
-    if (row.alias !== null || row.runtime === 'codex' || row.jobId) return { state: 'unknown' };
+  async function readEvidenceOptions(budget) {
     const early = processReads.get(budget.signal);
     let processTable = await early?.table;
     if (processTable?.expiresAt <= now() && now() < budget.deadline) {
@@ -147,7 +141,16 @@ function createProjectDeleteRuntime(ports) {
         () => ports.cliSessionState.readProcessTableSnapshot(budget.deadline, { fresh: true, signal: budget.signal }), budget);
       processTable = await early.refreshed;
     }
-    const evidenceOptions = processTable === undefined ? {} : { processTable };
+    return processTable === undefined ? {} : { processTable };
+  }
+  async function readLiveness(row, budget) {
+    const scope = scopes.getStore();
+    if (!scope) throw fail('DISCOVERY_UNAVAILABLE', 'Runtime operation scope unavailable.');
+    const { members, pins } = scope;
+    if (members.size >= 50000 && !members.has(row.id)) throw fail('DISCOVERY_LIMIT', 'Runtime identity limit.');
+    members.set(row.id, row);
+    if (row.alias !== null || row.runtime === 'codex' || row.jobId) return { state: 'unknown' };
+    const evidenceOptions = await readEvidenceOptions(budget);
     const matches = sessionsFor(row.sessionId || row.id);
     if (matches.length > 1) return { state: 'unknown' };
     const previous = pins.get(row.id);
@@ -208,6 +211,10 @@ function createProjectDeleteRuntime(ports) {
     const runs = await bounded('cliSessionState.getScheduleRunSnapshot', () => ports.cliSessionState.getScheduleRunSnapshot(), budget);
     if (!Array.isArray(runs) || runs.length + rows.length > budget.limit) throw fail('DISCOVERY_LIMIT', 'Schedule inventory unavailable or oversized.');
     const evidenceById = new Map(), dialogCandidates = new Map();
+    const readEvidence = async id => {
+      const evidenceOptions = await readEvidenceOptions(budget);
+      return bounded('cliSessionState.readStatusEvidence', () => ports.cliSessionState.readStatusEvidence(id, budget.deadline, evidenceOptions), budget);
+    };
     const descriptorRows = new Set(descriptors), scheduledRows = new Set(runs);
     let unlocatedActivity = false;
     const report = candidate => dialogCandidates.set(JSON.stringify([candidate.id, candidate.reason]), candidate);
@@ -230,7 +237,7 @@ function createProjectDeleteRuntime(ports) {
         else if (descriptorRows.has(row)) {
           if (!id || row.runtime === 'codex') unlocatedActivity = true;
           else {
-            if (!evidenceById.has(id)) evidenceById.set(id, bounded('cliSessionState.readStatusEvidence', () => ports.cliSessionState.readStatusEvidence(id, budget.deadline), budget));
+            if (!evidenceById.has(id)) evidenceById.set(id, readEvidence(id));
             const evidence = await evidenceById.get(id);
             if (!evidence?.known || evidence.live || evidence.ambiguous) unlocatedActivity = true;
           }
@@ -267,7 +274,7 @@ function createProjectDeleteRuntime(ports) {
         if (!id || row.runtime === 'codex') { candidates.push({ id, reason: 'Worktree runtime liveness unavailable.' }); continue; }
         if (seen.has(id)) continue;
         seen.add(id);
-        if (!evidenceById.has(id)) evidenceById.set(id, bounded('cliSessionState.readStatusEvidence', () => ports.cliSessionState.readStatusEvidence(id, budget.deadline), budget));
+        if (!evidenceById.has(id)) evidenceById.set(id, readEvidence(id));
         const evidence = await evidenceById.get(id);
         if (!evidence?.known || evidence.ambiguous) candidates.push({ id, reason: 'Worktree session liveness uncertain.' });
         else if (evidence.live) sessions.push({ sessionId: id, cwd: row.cwd || row.projectPath });
@@ -337,7 +344,8 @@ function createProjectDeleteMain(deps) {
   let inventory;
   const runtime = createProjectDeleteRuntime({ ...deps, ...clock, readWorktreeSnapshot: budget => inventory.readSnapshot(budget) });
   inventory = createProjectDeleteInventory({ ...deps, ...runtime, ...clock, writer });
-  const worktrees = deps.worktreeGit ? createProjectDeleteWorktrees({ runGit: deps.worktreeGit, readActivity: runtime.readWorktreeActivity, now }) : null;
+  const worktrees = deps.worktreeGit ? createProjectDeleteWorktrees({ runGit: deps.worktreeGit,
+    readActivity: runtime.readWorktreeActivity, startProcessReads: runtime.startProcessReads, now }) : null;
   const planner = createProjectDeletePlanner({ ...inventory, ...clock, worktrees });
   const stop = createProjectDeleteStop({ ...deps, ...runtime, ...clock });
   const service = createProjectDeleteService({ ...clock, writer, inventory, planner, stop, worktrees, gate: deps.gate, log: deps.log,

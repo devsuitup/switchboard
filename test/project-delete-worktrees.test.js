@@ -13,6 +13,79 @@ try { implementation = require('../src/main/projects/project-delete-worktrees');
 catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; }
 const options = { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false };
 
+for (const located of [true, false]) for (const mode of ['fresh', 'stale', 'missing', 'mismatched']) {
+  test(`E activity consumes isolated ${mode} process evidence, located=${located}`, async t => {
+    const f = gitFixture(t), vm = require('node:vm');
+    const filename = path.join(__dirname, '../cli-session-state.js');
+    const context = vm.createContext({ require: require('node:module').createRequire(filename), module: { exports: {} },
+      process, Buffer, Map, Set, setTimeout, clearTimeout, setInterval, clearInterval });
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), context, { filename });
+    const state = context.module.exports, id = '01234567-89ab-cdef-0123-456789abcdef';
+    const dir = path.join(f.root, 'status'); fs.mkdirSync(dir);
+    const start = '133000000000000000';
+    fs.writeFileSync(path.join(dir, '42.json'), JSON.stringify({ pid: 42, sessionId: id, kind: 'interactive',
+      status: 'idle', pidDomain: 'win32:anchor', procStart: start }));
+    let time = Date.now(), reads = 0;
+    state.init({ dir, platform: 'win32', activeSessions: new Map(), now: () => time, isProcessAlive: () => true,
+      readProcessTable: async () => new Map(), readProcStartMany: async () => new Map([[42, start]]) });
+    t.after(() => state.stop());
+    const refresh = t.mock.method(context, 'refreshProcessTable');
+    const tables = [];
+    const runtime = require('../src/main/projects/project-delete-main').createProjectDeleteRuntime({
+      now: () => time, activeSessions: new Map(), jobsDir: path.join(f.root, 'jobs'), homeDir: f.root,
+      runClaude: async () => ({ code: 0, stdout: '[]' }), cliSessionState: {
+        getSidebarDescriptors: () => [{ sessionId: id, cwd: located ? f.target : null }], getScheduleRunSnapshot: () => [],
+        readProcessTableSnapshot: async (deadline, opts) => {
+          assert.equal(deadline, budget.deadline); assert.equal(opts.signal, budget.signal); assert.equal(opts.fresh, true);
+          reads++;
+          return { at: time, observedAt: time, expiresAt: time + 3000,
+            map: mode === 'missing' ? null : new Map([[42, { ppid: 1, created: mode === 'mismatched' ? '134000000000000000' : start }]]) };
+        },
+        readStatusEvidence: (id, deadline, opts) => { tables.push(opts?.processTable); return state.readStatusEvidence(id, deadline, opts); },
+      },
+    });
+    const budget = { ...f.budget(), snapshot: { sessions: [] }, selectedWorktrees: [f.target] };
+    runtime.startProcessReads({}, budget);
+    await new Promise(resolve => setImmediate(resolve));
+    time += 4000;
+    let result = await runtime.readWorktreeActivity({ ...f.project, worktreePaths: [f.target] }, budget);
+    if (mode === 'stale') {
+      time += 4000;
+      result = await runtime.readWorktreeActivity({ ...f.project, worktreePaths: [f.target] }, budget);
+    }
+    assert.equal(refresh.mock.callCount(), 0, 'E must never fall back to refreshProcessTable');
+    assert.equal(reads, 2, 'E shares one deadline-bounded refresh per inventory signal');
+    assert.ok(tables.every(table => table?.expiresAt), 'every E evidence read receives the isolated table');
+    const row = result.byPath[f.target];
+    if (!located) assert.equal(row.ownershipUncertain, true, 'unlocated live or uncertain evidence blocks removal');
+    else if (mode === 'fresh') assert.equal(row.sessions.length, 1);
+    else assert.equal(row.candidates.length, 1, 'stale, missing or mismatched table leaves activity uncertain');
+  });
+}
+
+test('E removal starts isolated process reads for preflight and every final folder guard', async t => {
+  const f = gitFixture(t), started = [], activities = [], commands = [];
+  const adapter = implementation.createProjectDeleteWorktrees({
+    startProcessReads: (_request, budget) => started.push(budget.signal),
+    readActivity: async (_project, budget) => { activities.push(budget.signal); return { complete: true, sessions: [], jobs: [], candidates: [] }; },
+    runGit: async args => {
+      commands.push(args);
+      if (args.includes('list')) return [f.root, f.target, f.kept].map(dir => `worktree ${dir}\nHEAD abc\n\n`).join('');
+      if (args.includes('rev-parse')) return path.join(f.root, 'absent-lock');
+      return '';
+    },
+  });
+  const budget = f.budget();
+  const rows = (await adapter.preview(f.project, budget)).filter(row => !row.main);
+  activities.length = 0;
+  assert.equal(await adapter.remove(f.project, rows, () => {}), true);
+  assert.equal(started.length, 3, 'preflight and two final guards must each start process reads');
+  assert.equal(new Set(started).size, 3, 'removal budgets must not share process-table snapshots');
+  assert.ok(started.every(signal => signal !== budget.signal));
+  assert.deepEqual(activities, started, 'activity checks consume the signal whose reads were started');
+  assert.equal(commands.filter(args => args.includes('remove')).length, 2);
+});
+
 test('slow unselected status leaves a metadata plan with uninspected rows', async t => {
   const f = gitFixture(t), p = planning([]);
   p.deps.readSnapshot = async () => ({ complete: true, initialScanComplete: true, revision: '1',
