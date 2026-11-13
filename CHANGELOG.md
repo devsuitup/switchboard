@@ -4,7 +4,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
-## v0.0.106 — 2026-11-12
+## v0.0.106 — 2026-11-13
 
 ### New
 - Delete a project from its sidebar header or Project Settings with a full preview and separate choices for session metadata and project settings. Files stay on disk; interrupted deletions show their outcome before you try again. (#474)
