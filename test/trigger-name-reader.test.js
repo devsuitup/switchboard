@@ -27,7 +27,7 @@ function world(t, { during, anchor: anchorMode = 'start' } = {}) {
       if (pid === 100 && anchor.mode === 'undefined') return undefined;
       return starts[pid];
     },
-    readParentPid: pid => { if (reads++ === 0) during?.({ write, starts, descriptor }); return ({ 300: 100, 100: 1 })[pid]; } });
+    readParentPid: pid => { if (reads++ === 0) during?.({ write, starts, descriptor, anchor }); return ({ 300: 100, 100: 1 })[pid]; } });
   const session = { pty: { pid: 100, write() {} }, generation: 7, host: null, cwd: '/p', composerState: { pending: 0, lastInputAt: 0 } };
   const ctx = createTriggerContext({ activeSessions: new Map([[ID, session]]), cliSessionState: cli, isPtyAlive: () => true,
     getCliStatus: () => undefined, lifecycle: { launchAllowed: () => true } });
@@ -102,4 +102,11 @@ test('an anchor start that changes only at the final read yields no name', t => 
   const w = world(t); const real = cli.confirmDeliveryWriter;
   t.mock.method(cli, 'confirmDeliveryWriter', raw => { const confirmed = real(raw); w.anchor.mode = 'flip'; return confirmed; });
   assert.equal(w.pinned.binding.observeName(), null);
+});
+test('a PTY start that is readable only during the ordinary ancestry check still yields no name', t => {
+  const w = world(t, { anchor: 'null', during: ({ anchor }) => { anchor.mode = 'start'; } });
+  const real = cli.confirmDeliveryWriter; const confirmed = [];
+  t.mock.method(cli, 'confirmDeliveryWriter', raw => { const ok = real(raw); confirmed.push(ok); w.anchor.mode = 'null'; return ok; });
+  assert.equal(w.pinned.binding.observeName(), null);
+  assert.deepEqual(confirmed, [true]);
 });
