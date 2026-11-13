@@ -63,4 +63,11 @@ function cmdEscapePasses(env = {}, { cwd, wrapped = false, exists = p => fs.exis
   return /\.(cmd|bat)$/i.test(found || '') ? 2 : 1;
 }
 
-module.exports = { resolveWindowsClaude, escapeForCmd, cmdEscapePasses };
+function applicationEscapePasses(name, env = {}, { exists = p => fs.existsSync(p) } = {}) {
+  const found = /[\\/:]/.test(name) ? name : findOnPath(name, {
+    pathEnv: env.PATH || env.Path, pathExt: env.PATHEXT || '.COM;.EXE;.BAT;.CMD', exists, sep: ';',
+  });
+  return /\.(cmd|bat)$/i.test(found || '') ? 2 : 0;
+}
+
+module.exports = { resolveWindowsClaude, escapeForCmd, cmdEscapePasses, applicationEscapePasses };

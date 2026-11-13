@@ -21,7 +21,7 @@ for (const scenario of ['foreground', 'background', 'exited', 'tree-failed']) {
     const commands = [], timers = [];
     const context = vm.createContext({
       path, isWindows: false, getSetting: () => ({}), SETTING_DEFAULTS: {},
-      resolveShell: () => ({ path: '/bin/sh' }), shellArgs: () => [], quoteArgvForShell: () => '',
+      resolveShell: () => ({ path: '/bin/sh' }), shellArgs: () => [], claudeCommand: () => 'claude ', quoteArgvForShell: () => '',
       cleanPtyEnv: {}, spawnChild: () => child,
       setTimeout: fn => { timers.push(fn); return { unref() {} }; }, clearTimeout() {},
       stopProcessTree: (pid, options) => stopProcessTree(pid, { ...options, platform: 'win32',

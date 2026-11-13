@@ -69,7 +69,7 @@ for (const mode of ['new', 'resume', 'fork', 'schedule']) {
       getSetting: () => ({}), SETTING_DEFAULTS: {}, resolveShell: () => ({ path: '/bin/bash' }),
       sessionTransitions: { snapshotContinuationsBeforeSpawn: async () => null },
       sessionTranscriptExists: () => true, parseAddDirs: () => [], sandboxBindEnv: () => '',
-      quoteArgvForShell: (_shell, args) => args.join(' '), shellArgs: (_shell, command) => ['-c', command],
+      claudeCommand: (_shell, args, o = {}) => (o.prefix ? o.prefix + ' ' : '') + 'claude ' + args.join(' '), quoteArgvForShell: (_shell, args) => args.join(' '), shellArgs: (_shell, command) => ['-c', command],
       sandboxScriptPath: () => '/sandbox.sh', cleanPtyEnv: {},
       scheduleProjects: () => ({ add: async () => {}, list: async () => [] }),
       resolveScheduleSandbox: () => true,

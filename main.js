@@ -86,7 +86,7 @@ function spawnPty(file, args, opts) {
 }
 
 // Shell profiles → shell-profiles.js
-const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./src/main/terminals/shell-profiles');
+const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell, claudeCommand } = require('./src/main/terminals/shell-profiles');
 const { startScheduler, scheduleLaunchRefusal, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./src/main/schedules/schedule-runner');
 const { buildScheduleList } = require('./src/main/schedules/schedule-list');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
@@ -3275,28 +3275,19 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
           name: triggerPermit?.name }));
       }
 
-      let claudeCmd = 'claude ' + quoteArgvForShell(shell, claudeArgs,
-        { env: cleanPtyEnv, cwd: spawnCwd, wrapped: !!String(sessionOptions?.preLaunchCmd ?? '').trim() });
-
-      // Sandbox: run claude inside a bubblewrap sandbox that only exposes the
-      // project directory and Claude's own config/state dirs. Linux only —
-      // bwrap has no macOS/Windows equivalent wired up here.
-      if (!isAttach && sessionOptions?.sandbox) {
-        if (process.platform !== 'linux') {
-          return { ok: false, error: 'Sandbox mode requires Linux (bubblewrap)' };
-        }
-        claudeCmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgs);
+      if (!isAttach && sessionOptions?.sandbox && process.platform !== 'linux') {
+        return { ok: false, error: 'Sandbox mode requires Linux (bubblewrap)' };
       }
 
       // preLaunchCmd is raw shell by design (e.g. "aws-vault exec profile --")
       // — see pre-launch-cmd-guard.js for what is and isn't blocked and why.
+      let pre = '';
       if (!isAttach && sessionOptions?.preLaunchCmd) {
-        const pre = String(sessionOptions.preLaunchCmd);
-        const preCheck = validatePreLaunchCmd(pre);
+        const preCheck = validatePreLaunchCmd(String(sessionOptions.preLaunchCmd));
         if (!preCheck.ok) {
           return { ok: false, error: preCheck.error };
         }
-        if (pre.trim()) claudeCmd = pre + ' ' + claudeCmd;
+        if (String(sessionOptions.preLaunchCmd).trim()) pre = String(sessionOptions.preLaunchCmd);
       }
 
       // Start MCP server for this session so Claude CLI sends diffs/file opens to Switchboard
@@ -3304,11 +3295,21 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       if (!isAttach && sessionOptions?.mcpEmulation !== false) {
         try {
           mcpServer = await startMcpServer(sessionId, [spawnCwd], mainWindow, log);
-          claudeCmd += ' --ide';
+          claudeArgs.push('--ide');
         } catch (err) {
           mcpError = err.message;
           log.error(`[mcp] Failed to start MCP server for ${sessionId}: ${err.message}`);
         }
+      }
+
+      let claudeCmd = claudeCommand(shell, claudeArgs, { env: cleanPtyEnv, cwd: spawnCwd, prefix: pre });
+
+      // Sandbox: run claude inside a bubblewrap sandbox that only exposes the
+      // project directory and Claude's own config/state dirs. Linux only —
+      // bwrap has no macOS/Windows equivalent wired up here.
+      if (!isAttach && sessionOptions?.sandbox) {
+        claudeCmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgs);
+        if (pre) claudeCmd = pre + ' ' + claudeCmd;
       }
 
       // Anchor the working directory in the command itself. pty.spawn's `cwd`

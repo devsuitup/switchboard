@@ -87,7 +87,7 @@ function mainContext() {
     getSetting: () => ({}), SETTING_DEFAULTS: { shellProfile: 'test', sandbox: false },
     resolveShell: () => ({ path: '/bin/bash' }),
     shellArgs: (_shell, command) => command ? ['-c', command] : ['-i'],
-    quoteArgvForShell: (_shell, args) => args.join(' '),
+    claudeCommand: (_shell, args, o = {}) => (o.prefix ? o.prefix + ' ' : '') + 'claude ' + args.join(' '), quoteArgvForShell: (_shell, args) => args.join(' '),
     resolveScheduleSandbox: () => false, isProjectSettingsArchived: () => false,
     activityReporter: { sessionStarted() {} },
     cliSessionState: { trackScheduleRun() {}, ensureWatching: () => true, deliveryPtyStart: () => null },

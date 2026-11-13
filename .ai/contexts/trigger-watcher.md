@@ -290,24 +290,30 @@ command line without escaping `"`, drops empty arguments, and wraps an argument
 in quotes when it has whitespace outside a counted quote pair: Windows PowerShell
 5.1 counts every `"`, so `a" b` is wrapped and splits; PowerShell 7 skips a `"`
 preceded by a backslash. On Windows, `shellArgs` therefore prefixes every
-PowerShell `-Command` with a `claude` function and the interactive launch calls
-`claude '<one literal>'`: a single single-quoted literal (`'` and the typographic
-single quotes doubled) holding the whole CommandLineToArgvW argument line,
-`escapeForCmd(token, 0)` per token joined by spaces. A function argument is not
-serialized, so the function hands the literal untouched as
-`ProcessStartInfo.Arguments` to the first `Application` command named `claude`
-(`Get-Command`, PATH only), with `UseShellExecute=$false` so the child inherits the
-console, and exits with its exit code. When that command is a `.cmd`/`.bat` shim
-(`npm` writes `claude.cmd` and `claude.ps1`; `Application` never selects the
-`.ps1`), CreateProcess goes through `cmd /c` and the shim's `%*` re-parses the
-line, so the tokens are the two-pass `escapeForCmd` form (`cmdEscapePasses`). A
-`claude.ps1` with no `.cmd` or `.exe` beside it is not found by the function.
-A launch prefix runs the bare `claude` as an argument of the prefix program, so
-there is no function call: each token is its own literal, preceded by
-`$PSNativeCommandArgumentPassing='Legacy'`; under Windows PowerShell 5.1 such a
-token that holds whitespace after an odd number of quotes is still split.
-Off Windows, PowerShell keeps one plain single-quoted literal per token and no
-prefix.
+PowerShell `-Command` with a helper, `__switchboard_launch`, and `claudeCommand`
+(`shell-profiles.js`) builds `__switchboard_launch '<program>' '<raw line>' '<token>'...`.
+The helper resolves `<program>` with `Get-Command` (first result, PowerShell's own
+precedence: alias, function, script, application) and branches on what it is.
+An `Application` is started with `ProcessStartInfo`: the raw line, the whole
+CommandLineToArgvW argument line (`escapeForCmd(token, 0)` per token, joined by
+spaces), is its `Arguments`, so nothing re-serializes it; `UseShellExecute=$false`
+keeps the console, input is not redirected, and the helper waits and exits with
+the child's status. When the `claude` found on PATH is a `.cmd`/`.bat` shim,
+CreateProcess goes through `cmd /c` and the shim's `%*` re-parses the line, so the
+tokens are the two-pass `escapeForCmd` form (`cmdEscapePasses`). Anything else (a
+profile function or alias named `claude`, a `claude.ps1` that PowerShell prefers
+over a neighbouring `.cmd`, a script alone on PATH) is run as PowerShell would
+run it, `& $c @tokens`, with the plain tokens as PowerShell strings; what a
+script then does with `$args` is its own. A launch prefix (letters, digits,
+spaces and `- _ . / \ : =`) makes its first word the program and puts the
+remaining prefix words, `claude` and the encoded arguments on the raw line, so
+the prefix program receives them unserialized by PowerShell; the arguments are
+encoded once for an executable and twice for a `.cmd`/`.bat` prefix
+(`applicationEscapePasses`), and what the prefix program does when it starts
+`claude` is its own. `--ide` joins the argv before this serialization. Off
+Windows, PowerShell keeps one plain single-quoted literal per token, the bare
+`claude` and no helper. The schedule runner does not use the helper: its
+PowerShell tokens stay single-quoted literals.
 
 Qualification: `test/trigger-name-transport.test.js` runs the real encoders
 through the extracted `open-terminal` handler and an injected PTY edge. On Linux
@@ -320,9 +326,9 @@ node-pty's `argsToCommandLine`, starts `cmd.exe` with that exact command line an
 compares the argv a disposable echo executable and `claude.cmd` / `claude.bat` shims received, including a launch-directory executable shadowing a PATH shim and the reverse, a whitespace-only prefix, and a native wrapper prefix over resume and fork options,
 with the input. `test/trigger-name-transport-powershell-windows.test.js` does the
 same through `powershell.exe` and, when installed, `pwsh.exe`, into an echo
-`claude.exe`, a `claude.cmd` shim, and a directory holding an npm-shaped `claude.ps1` beside its `claude.cmd`, with quotes, backslashes, an empty-looking
+`claude.exe`, a `claude.cmd` shim, a `claude.ps1` alone and beside a `claude.cmd`, a profile function named `claude`, and a native launch prefix, with quotes, backslashes, an empty-looking
 quote pair, `$env:PATH`, backticks, `;`, `&`, `%PATH%`, typographic quotes and
-unicode. On Linux a CommandLineToArgvW decoder checks the PowerShell literal. Neither file is a live Claude Code or ConPTY qualification;
+unicode. It also runs the launch plan under node-pty against a probe `claude.exe` that checks it has a console, reads a line from standard input and exits with a chosen status. Ctrl+C is not asserted: delivery to the helper and its child under a pseudo console could not be made observable and stable without iterating on a Windows runner. On Linux a CommandLineToArgvW decoder checks the PowerShell literal. Neither file is a live Claude Code or ConPTY qualification;
 nushell remains unexecuted.
 
 A name with an unpaired surrogate is schema-valid but cannot survive UTF-8, so

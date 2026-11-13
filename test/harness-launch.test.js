@@ -34,7 +34,7 @@ for (const [name, isNew, exists, git, options, expected] of cases) {
     const source = fs.readFileSync(filename, 'utf8');
     const start = source.indexOf('const claudeArgs = []', source.indexOf("ipcMain.handle('open-terminal'"));
     assert.ok(start > 0);
-    const end = source.indexOf("let claudeCmd = 'claude '", start);
+    const end = source.indexOf('if (!isAttach && sessionOptions?.sandbox && process.platform', start);
     assert.ok(end > start);
     const context = {
       sessionId: 'session', isNew, sessionOptions: Object.freeze(options), spawnCwd: '/project',

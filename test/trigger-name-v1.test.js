@@ -399,6 +399,34 @@ test('a named result keeps its snapshot through journal publication, a failed re
   assert.equal(nodeFs.readFileSync(resultPath, 'utf8'), bytes);
 });
 
+const persisted = {
+  named: { version: 1, action: 'open', ok: true, requestedName: 'Task', actualName: 'Task-2' },
+  nameless: { version: 1, action: 'open', ok: true },
+};
+for (const [label, result] of Object.entries(persisted)) {
+  test(`an imported ${label} result is restored byte for byte after its output is removed`, async t => {
+    const root = nodeFs.realpathSync(nodeFs.mkdtempSync(nodePath.join(os.tmpdir(), 'sb-name-bytes-')));
+    t.after(() => nodeFs.rmSync(root, { recursive: true, force: true }));
+    const processed = nodePath.join(root, 'processed'); nodeFs.mkdirSync(processed);
+    const input = nodePath.join(root, STEM + '.json');
+    const trigger = { version: 1, action: 'open', new: { project, name: 'Task' }, prompt: 'hello' };
+    nodeFs.writeFileSync(input, JSON.stringify(trigger));
+    const resultPath = nodePath.join(processed, STEM + '.result.json');
+    const bytes = Buffer.from(JSON.stringify(result, null, 4).replace(/\n/g, '\r\n') + '\r\n\r\n');
+    assert.notDeepEqual(bytes, Buffer.from(JSON.stringify(result) + '\n'));
+    nodeFs.writeFileSync(resultPath, bytes);
+    const journal = createJournal();
+    const publisher = createSessionRequestPublication({ fs: nodeFs, renameWithRetry: (from, to) => nodeFs.renameSync(from, to) });
+    const begin = () => createSessionRequestNamespace({ fs: nodeFs, journal, publisher, actions: createTriggerActions(), processedDir: processed }).begin(STEM, input);
+    await begin();
+    assert.deepEqual(nodeFs.readFileSync(resultPath), bytes);
+    nodeFs.rmSync(resultPath);
+    nodeFs.writeFileSync(input, JSON.stringify(trigger));
+    await begin();
+    assert.deepEqual(nodeFs.readFileSync(resultPath), bytes);
+  });
+}
+
 test('the action hands the binding a callback that follows its deadline, cancellation and target', async () => {
   for (const offset of [0, 1]) {
     let clock = Date.now(); const seen = []; let h;
