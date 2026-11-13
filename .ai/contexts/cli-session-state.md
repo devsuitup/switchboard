@@ -112,6 +112,19 @@ statusUpdatedAt equal to launch time; the legacy strict boundary is unchanged.
 Missing/stale startup proof uses `session readiness unavailable`; a fresh busy,
 waiting, shell or briefly idle descriptor retains its existing delivery refusal.
 
+A new trigger-opened session reports the descriptor's `name` once, through
+`binding.observeName()` in `trigger-context.js` (issue #1099). It reuses the
+observation above (`observeTabWriter` for an ordinary tab, `observeTabWriterV1`
+for a sandbox) and takes the name only from a writer that is certain and unique,
+is not nested or background, carries the new session's ID and matches any writer
+identity already pinned for delivery. It never waits for the descriptor to appear,
+for the process table or for a PID. The result is `null` for macOS, where
+`observeTabWriter` is unsupported, for a Windows PTY whose PID is still 0, and for
+an absent, empty or non-string `name`; a non-null value is the descriptor string
+untouched. Descriptor `name` and `nameSource` are written by Claude Code, so the
+value is a snapshot: Switchboard's saved name is separate display metadata and is
+not rewritten from it.
+
 The reader, startup and delivery portions belong to slice C. Stop's composer
 sampling, final-turn completion, stop backend and exit confirmation belong to D
 and remain disabled. Node fixtures qualify these boundaries; real Linux

@@ -5,6 +5,7 @@ const path = require('path');
 const { extractVerifiedCwdFromJsonl, resolveWorktreePath } = require('../../../derive-project-path');
 const { normalizeProjectPath } = require('../shared/normalize-project-path');
 const { projectHiddenMatcher } = require('../../../public/worktree-nesting');
+const naming = require('./trigger-name');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FILENAME_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -260,7 +261,7 @@ function createTriggerActions({ fs = nativeFs, log, now = Date.now } = {}) {
     try {
       const marker = read(markerPath);
       if (!object(marker) || marker.version !== 1) throw new Error('invalid v1 action marker');
-      const result = refusal(marker, 'interrupted by restart', { uncertain: true });
+      const result = refusal(marker, 'interrupted by restart', { uncertain: true, ...naming.recoveredNaming(marker) });
       if (marker.mode === 'new') { delete result.resumed; result.created = marker.created === true; }
       if (marker.mode === 'resume') result.resumed = marker.resumed === true;
       for (const key of ['wrote', 'text_written', 'enter_written', 'created', 'resumed']) if (marker[key] === true) result[key] = true;
@@ -297,7 +298,7 @@ function createTriggerActions({ fs = nativeFs, log, now = Date.now } = {}) {
       if (!invalid && trigger.action === 'stop' && execution?.ctx.lifecycle) {
         return executeStop(trigger, { ...execution, now, evidence, requestId: stem });
       }
-      return refusal(trigger, invalid || UNAVAILABLE, evidence);
+      return refusal(trigger, invalid || UNAVAILABLE, invalid || !own(trigger, 'new') ? evidence : { ...evidence, ...naming.requestedNameFields(trigger) });
     },
   };
 }
@@ -533,7 +534,8 @@ async function executeOpen(trigger, execution) {
   let effects = { ...evidence };
   let releaseSession, releaseTab, reservation, pinned;
   let acceptedCheck = null;
-  const fail = (reason, extra = {}) => refusal(trigger, reason, { ...effects, sessionId: id, ok: false, outcome: 'refused', reason, ...extra });
+  const names = isNew ? naming.requestedNameFields(trigger) : {};
+  const fail = (reason, extra = {}) => refusal(trigger, reason, { ...effects, ...names, sessionId: id, ok: false, outcome: 'refused', reason, ...extra });
   const authority = deps.captureAuthority?.();
   const allowed = () => deps.launchAllowed() && authority?.valid() !== false;
   const expired = () => now() >= deadline;
@@ -592,6 +594,7 @@ async function executeOpen(trigger, execution) {
     check();
     let target;
     if (isNew) {
+      if (naming.hasLoneSurrogate(names.requestedName)) return fail('session name cannot be transported');
       target = await resolveProject(trigger.new.project, { ...deps, now, deadline });
       if (!target.ok) return fail(target.reason, target.error ? { error: target.error } : {});
       reservation = limiter.reserve();
@@ -637,11 +640,11 @@ async function executeOpen(trigger, execution) {
       generation: firstTarget?.generation ?? null, entry: entry?.session,
       project: mode === 'reattach' ? entry.session.projectPath : target.project,
       session: { sessionId: tabKey, headSessionId: tabKey, mergedMemberIds: [], projectPath: mode === 'reattach' ? entry.session.projectPath : target.project },
-      target, name: isNew ? trigger.new.name.trim() : undefined, deadline };
+      target, name: isNew ? names.requestedName : undefined, deadline };
     const marker = () => {
       const saved = { version: 1, action: 'open', requestId: execution.requestId,
         requestedSessionId: isNew ? null : id, sessionId: id, tabKey, deadline,
-        mode: isNew ? 'new' : 'resume', phase: effects.enter_written ? 'submitted' : effects.created || effects.resumed ? 'spawned' : 'claimed' };
+        mode: isNew ? 'new' : 'resume', ...(isNew ? naming.markerNaming(operation.name) : {}), phase: effects.enter_written ? 'submitted' : effects.created || effects.resumed ? 'spawned' : 'claimed' };
       for (const key of ['created', 'resumed', 'wrote', 'text_written', 'enter_written', 'submitted', 'steps_total']) {
         if (effects[key] !== undefined) saved[key] = effects[key];
       }
@@ -714,6 +717,13 @@ async function executeOpen(trigger, execution) {
     const final = targetChanged(); if (final) return final;
     return { ...fail(null), ok: true, outcome: 'opened', reason: null };
   }
+  function observeName() {
+    try {
+      if (!acceptedCheck || !admitted() || acceptedCheck()) return null;
+      const name = pinned?.binding.observeName?.(() => admitted() && !acceptedCheck());
+      return typeof name === 'string' && name && admitted() && !acceptedCheck() ? name : null;
+    } catch { return null; }
+  }
   let result;
   try {
     try { result = await run(); }
@@ -724,10 +734,12 @@ async function executeOpen(trigger, execution) {
         ...(step?.text_written ? { wrote: true, text_written: true, enter_written: !!step.enter_written,
           submitted: step.enter_written ? 'assumed' : 'no', ...(expired() && step.enter_written ? { uncertain: true } : {}) } : {}) });
     }
+    if (isNew) result = { ...result, actualName: observeName() };
     const finalize = pending => {
-      const next = pending.ok && acceptedCheck ? acceptedCheck() || pending : pending;
+      const invalid = acceptedCheck?.();
+      const next = pending.ok ? invalid || pending : invalid && isNew ? { ...pending, actualName: null } : pending;
       result = !allowed() && next.reason !== 'Switchboard is closing.'
-        ? { ...next, ok: false, outcome: 'refused', reason: 'Switchboard is closing.', error: 'Switchboard is closing.' } : next;
+        ? { ...next, ok: false, outcome: 'refused', reason: 'Switchboard is closing.', error: 'Switchboard is closing.', ...(isNew ? { actualName: null } : {}) } : next;
       return result;
     };
     await execution.publish(finalize(result), finalize);
