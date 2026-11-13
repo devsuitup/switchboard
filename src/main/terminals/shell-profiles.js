@@ -1,8 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { escapeForCmd, cmdEscapePasses, powershellEscapePasses } = require('../../../claude-binary');
-
-const PS_QUOTE_VAR = 'SWITCHBOARD_Q';
+const { escapeForCmd, cmdEscapePasses } = require('../../../claude-binary');
 
 // --- Cross-platform shell resolution ---
 const isWindows = process.platform === 'win32';
@@ -164,9 +162,11 @@ function isWslShell(shellPath) {
 }
 
 // see .ai/contexts/trigger-watcher.md ("Naming a new session")
-const PS_PREAMBLE = `$PSNativeCommandArgumentPassing='Legacy';$env:${PS_QUOTE_VAR}='^^^"';`;
+const PS_PREAMBLE = "$PSNativeCommandArgumentPassing='Legacy';function claude{param([string]$l)"
+  + '$e=(Get-Command claude -CommandType Application -ErrorAction Stop|Select-Object -First 1).Source;'
+  + '$i=New-Object Diagnostics.ProcessStartInfo $e,$l;$i.UseShellExecute=$false;'
+  + '$p=[Diagnostics.Process]::Start($i);$p.WaitForExit();exit $p.ExitCode};';
 const psLiteral = text => "'" + text.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&') + "'";
-const psShimToken = s => `^^^"${escapeForCmd(s, 2).slice(4, -4).replace(/\^\^\^"/g, `%${PS_QUOTE_VAR}%`)}^^^"`;
 
 // Shell-quote one argv token per shell family
 function quoteArgForShell(shellPath, value, cmdPasses = 1) {
@@ -181,7 +181,7 @@ function quoteArgForShell(shellPath, value, cmdPasses = 1) {
     // POSIX: wrap in single quotes, escape embedded single quotes as '\''
     return "'" + s.replace(/'/g, "'\\''") + "'";
   }
-  if (isPowerShell) return psLiteral(cmdPasses === 2 ? psShimToken(s) : escapeForCmd(s, 0));
+  if (isPowerShell) return psLiteral(s);
   return escapeForCmd(s, cmdPasses);
 }
 
@@ -195,15 +195,18 @@ function isPowerShellShell(shellPath) {
   return base.includes('powershell') || base.includes('pwsh');
 }
 
-function quoteArgvForShell(shellPath, argv, { env, cwd, wrapped } = {}) {
-  const passes = !env ? 1
-    : isCmdShell(shellPath) ? cmdEscapePasses(env, { cwd, wrapped })
-      : isPowerShellShell(shellPath) ? powershellEscapePasses(env, { wrapped }) : 1;
+function quoteArgvForShell(shellPath, argv, { env, cwd, wrapped, windows = isWindows } = {}) {
+  if (windows && isPowerShellShell(shellPath)) {
+    if (wrapped) return argv.map(a => psLiteral(escapeForCmd(a, 0))).join(' ');
+    const passes = env && cmdEscapePasses(env) === 2 ? 2 : 0;
+    return psLiteral(argv.map(a => escapeForCmd(a, passes)).join(' '));
+  }
+  const passes = env && isCmdShell(shellPath) ? cmdEscapePasses(env, { cwd, wrapped }) : 1;
   return argv.map(a => quoteArgForShell(shellPath, a, passes)).join(' ');
 }
 
 // Returns spawn args appropriate for the resolved shell
-function shellArgs(shellPath, cmd, extraArgs, { pty = false } = {}) {
+function shellArgs(shellPath, cmd, extraArgs, { pty = false, windows = isWindows } = {}) {
   const base = path.basename(shellPath).toLowerCase();
   const isBashLike = base.includes('bash') || base.includes('zsh') || base === 'sh';
   const isFish = base === 'fish';
@@ -220,7 +223,7 @@ function shellArgs(shellPath, cmd, extraArgs, { pty = false } = {}) {
     if (isBashLike) return ['-l', '-i', '-c', cmd];
     if (isFish) return ['-l', '-c', cmd];
     if (isNushell) return ['-l', '-c', cmd];
-    if (base.includes('powershell') || base.includes('pwsh')) return ['-NoLogo', '-Command', PS_PREAMBLE + cmd];
+    if (base.includes('powershell') || base.includes('pwsh')) return ['-NoLogo', '-Command', (windows ? PS_PREAMBLE : '') + cmd];
     return pty && isCmdShell(shellPath) ? `/s /c "${cmd}"` : ['/C', cmd];
   }
   if (isBashLike) return ['-l', '-i'];

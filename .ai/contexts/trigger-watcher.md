@@ -284,33 +284,30 @@ changes PATH, when nothing is found and a shim appears at startup, and for a pre
 whose own program parses the arguments differently. Starting `claude` on Windows
 without the cmd layer is tracked in devsuitup/switchboard#1101.
 
-PowerShell (Windows PowerShell 5.1 and PowerShell 7) re-joins native arguments
-into one command line without escaping embedded `"` and drops empty arguments
-(5.1 and `Legacy` mode; 7.3+ defaults to `Windows` mode, which escapes
-differently and falls back to the legacy rules for `.cmd`/`.bat` targets).
-`shellArgs` therefore starts every PowerShell `-Command` with
-`$PSNativeCommandArgumentPassing='Legacy'` (a plain variable on 5.1), ahead of
-any launch prefix, so one rule applies everywhere. Legacy wraps an argument in
-quotes only when it holds whitespace outside a counted quote pair (a `"` not
-preceded by a backslash toggles the count) and never escapes. Each token is
-therefore emitted as a PowerShell single-quoted literal (`'` and the typographic
-single quotes doubled) holding the complete CommandLineToArgvW token
-(`escapeForCmd(token, 0)`: `"` escaped with doubled preceding backslashes,
-trailing backslashes doubled, always wrapped, so an empty argument is `""`).
-Every embedded `"` is backslash-preceded, so the count never reaches an even
-value before the closing quote and PowerShell adds nothing. When the `claude`
-found on PATH (not the launch directory, which PowerShell does not search) is a
-`.cmd`/`.bat` shim, PowerShell's `CreateProcess` goes through `cmd /c` and the
-shim's `%*` re-parses the line, so the token is the two-pass `escapeForCmd` form.
-Its inner `^^^"` is written `%SWITCHBOARD_Q%` and the pin also sets
-`$env:SWITCHBOARD_Q='^^^"'`: cmd expands the variable before parsing, and
-PowerShell never sees the inner quotes whose parity would make it wrap a token
-that holds a space. Only the outer pair stays literal, which keeps the count odd
-over the whole token. A launch prefix runs the bare `claude` itself and gets the
-plain token. A `claude.ps1` (npm writes one beside `claude.cmd`) is resolved first
-by PowerShell, in the first PATH directory holding any `claude`
-(`powershellEscapePasses`); its `& node ... $args` is a second native call under the
-same pinned Legacy rule and receives the plain token, so no cmd layer applies.
+PowerShell (Windows PowerShell 5.1 and PowerShell 7) cannot pass a native argument
+that holds a double quote and whitespace intact. It re-joins arguments into one
+command line without escaping `"`, drops empty arguments, and wraps an argument
+in quotes when it has whitespace outside a counted quote pair: Windows PowerShell
+5.1 counts every `"`, so `a" b` is wrapped and splits; PowerShell 7 skips a `"`
+preceded by a backslash. On Windows, `shellArgs` therefore prefixes every
+PowerShell `-Command` with a `claude` function and the interactive launch calls
+`claude '<one literal>'`: a single single-quoted literal (`'` and the typographic
+single quotes doubled) holding the whole CommandLineToArgvW argument line,
+`escapeForCmd(token, 0)` per token joined by spaces. A function argument is not
+serialized, so the function hands the literal untouched as
+`ProcessStartInfo.Arguments` to the first `Application` command named `claude`
+(`Get-Command`, PATH only), with `UseShellExecute=$false` so the child inherits the
+console, and exits with its exit code. When that command is a `.cmd`/`.bat` shim
+(`npm` writes `claude.cmd` and `claude.ps1`; `Application` never selects the
+`.ps1`), CreateProcess goes through `cmd /c` and the shim's `%*` re-parses the
+line, so the tokens are the two-pass `escapeForCmd` form (`cmdEscapePasses`). A
+`claude.ps1` with no `.cmd` or `.exe` beside it is not found by the function.
+A launch prefix runs the bare `claude` as an argument of the prefix program, so
+there is no function call: each token is its own literal, preceded by
+`$PSNativeCommandArgumentPassing='Legacy'`; under Windows PowerShell 5.1 such a
+token that holds whitespace after an odd number of quotes is still split.
+Off Windows, PowerShell keeps one plain single-quoted literal per token and no
+prefix.
 
 Qualification: `test/trigger-name-transport.test.js` runs the real encoders
 through the extracted `open-terminal` handler and an injected PTY edge. On Linux
@@ -323,10 +320,9 @@ node-pty's `argsToCommandLine`, starts `cmd.exe` with that exact command line an
 compares the argv a disposable echo executable and `claude.cmd` / `claude.bat` shims received, including a launch-directory executable shadowing a PATH shim and the reverse, a whitespace-only prefix, and a native wrapper prefix over resume and fork options,
 with the input. `test/trigger-name-transport-powershell-windows.test.js` does the
 same through `powershell.exe` and, when installed, `pwsh.exe`, into an echo
-`claude.exe`, a `claude.cmd` shim, an npm-shaped `claude.ps1`, and a directory holding both, with quotes, backslashes, an empty-looking
+`claude.exe`, a `claude.cmd` shim, and a directory holding an npm-shaped `claude.ps1` beside its `claude.cmd`, with quotes, backslashes, an empty-looking
 quote pair, `$env:PATH`, backticks, `;`, `&`, `%PATH%`, typographic quotes and
-unicode. On Linux a model of Legacy quoting plus CommandLineToArgvW checks the
-PowerShell literals. Neither file is a live Claude Code or ConPTY qualification;
+unicode. On Linux a CommandLineToArgvW decoder checks the PowerShell literal. Neither file is a live Claude Code or ConPTY qualification;
 nushell remains unexecuted.
 
 A name with an unpaired surrogate is schema-valid but cannot survive UTF-8, so

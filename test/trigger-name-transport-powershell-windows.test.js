@@ -37,7 +37,7 @@ $ret=0
 $ret=$LASTEXITCODE
 exit $ret
 `;
-const KINDS = ['exe', 'cmd', 'ps1', 'ps1cmd'];
+const KINDS = ['exe', 'cmd', 'ps1cmd'];
 const bins = {};
 function makeBin(kind) {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), `sb-ps-argv-${kind}-`)));
