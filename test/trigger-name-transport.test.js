@@ -101,53 +101,64 @@ for (const [name, expected] of nuCases) {
 }
 const PWSH = 'C:\\Program Files\\PowerShell\\7\\pwsh.exe';
 const launchOf = (argv, o = {}) => profiles.claudeCommand(PWSH, argv, { windows: true, prefix: '', ...o });
-const call = (target, line, ...tokens) => ['__switchboard_launch', target, line, ...tokens].map((t, i) => (i === 0 ? t : `'${t.replace(/['\u2018\u2019]/g, '$&$&')}'`)).join(' ');
-test('PowerShell on Windows calls one helper with the raw CommandLineToArgvW line, then the plain tokens', () => {
-  assert.equal(launchOf(['--name', 'say "hi"']), call('claude', '"--name" "say \\"hi\\""', '--name', 'say "hi"'));
-  assert.equal(launchOf(['--name', 'a" b', '']), call('claude', '"--name" "a\\" b" ""', '--name', 'a" b', ''));
-  assert.equal(launchOf(['a\\', "it's \u2019x\u2019"]), call('claude', `"a\\\\" "it's \u2019x\u2019"`, 'a\\', "it's \u2019x\u2019"));
-  assert.equal(launchOf(['$env:PATH `x` ; & %PATH%']), call('claude', '"$env:PATH `x` ; & %PATH%"', '$env:PATH `x` ; & %PATH%'));
+const lit = t => `'${t.replace(/['\u2018\u2019]/g, '$&$&')}'`;
+const call = (target, ...tokens) => ['__switchboard_launch', ...[target, ...tokens].map(lit)].join(' ');
+test('PowerShell on Windows passes the program and every token once, as plain PowerShell literals', () => {
+  assert.equal(launchOf(['--name', 'say "hi"']), call('claude', '--name', 'say "hi"'));
+  assert.equal(launchOf(['--name', 'a" b', '']), call('claude', '--name', 'a" b', ''));
+  assert.equal(launchOf(['a\\', "it's \u2019x\u2019"]), call('claude', 'a\\', "it's \u2019x\u2019"));
+  assert.equal(launchOf(['$env:PATH `x` ; & %PATH%']), call('claude', '$env:PATH `x` ; & %PATH%'));
 });
-test('PowerShell on Windows escapes the raw line twice when the first Application claude is a .cmd shim', t => {
-  claudeOnDisk(t, 'C:\\bin\\claude.cmd');
-  const env = { PATH: 'C:\\bin' };
-  assert.equal(launchOf(['a b', 'c"d'], { env }), call('claude', '^^^"a^^^ b^^^" ^^^"c\\^^^"d^^^"', 'a b', 'c"d'));
-  assert.equal(launchOf(['a b'], { env: { PATH: 'C:\\none' } }), call('claude', '"a b"', 'a b'));
-});
-test('PowerShell on Windows resolves a launch prefix as the program and routes it through the same helper', () => {
-  assert.equal(launchOf(['--name', 'say "hi"'], { prefix: 'wrap.exe --flag -- ' }),
-    call('wrap.exe', '--flag -- claude "--name" "say \\"hi\\""', '--flag', '--', 'claude', '--name', 'say "hi"'));
-  assert.equal(launchOf(['a'], { prefix: 'C:\\tools\\w.cmd x', env: { PATH: 'C:\\none' } }),
-    call('C:\\tools\\w.cmd', 'x claude ^^^"a^^^"', 'x', 'claude', 'a'));
-  assert.equal(launchOf(['a'], { prefix: 'C:\\tools\\w.exe x', env: { PATH: 'C:\\none' } }), call('C:\\tools\\w.exe', 'x claude "a"', 'x', 'claude', 'a'));
+test('PowerShell on Windows resolves a launch prefix as the program and passes its words and claude as tokens', () => {
+  assert.equal(launchOf(['--name', 'say "hi"'], { prefix: 'wrap.exe --flag -- ' }), call('wrap.exe', '--flag', '--', 'claude', '--name', 'say "hi"'));
+  assert.equal(launchOf(['a'], { prefix: 'C:\\tools\\w.cmd x' }), call('C:\\tools\\w.cmd', 'x', 'claude', 'a'));
+  assert.equal(launchOf(['a'], { prefix: 'wrap' }), call('wrap', 'claude', 'a'));
 });
 test('PowerShell off Windows keeps the bare claude and plain single-quoted tokens, with no preamble', () => {
   assert.equal(profiles.claudeCommand(PWSH, ['--name', `it's "x"`], { windows: false }), `claude '--name' 'it''s "x"'`);
   assert.equal(profiles.claudeCommand(PWSH, ['a'], { windows: false, prefix: 'wrap --' }), `wrap -- claude 'a'`);
   assert.deepEqual(profiles.shellArgs(PWSH, 'claude x', [], { windows: false }), ['-NoLogo', '-Command', 'claude x']);
 });
-test('the PowerShell preamble defines a distinct helper that falls back to the command PowerShell resolves', () => {
-  const [, , preamble] = profiles.shellArgs(PWSH, 'x', [], { windows: true });
-  assert.ok(preamble.startsWith('function __switchboard_launch{param([string]$n,[string]$l)'), preamble);
-  assert.doesNotMatch(preamble, /function claude/);
-  assert.match(preamble, /Get-Command \$n -ErrorAction Stop\|Select-Object -First 1;if\(\$c\.CommandType -ne 'Application'\)\{& \$c @args;return\}/);
-  assert.match(preamble, /UseShellExecute=\$false;.*WaitForExit\(\);exit \$p\.ExitCode\};x$/);
+const helperSource = () => profiles.shellArgs(PWSH, 'x', [], { windows: true })[2].slice(0, -1);
+test('the PowerShell helper falls back to the command PowerShell resolves and never shadows claude', () => {
+  const source = helperSource();
+  assert.ok(source.startsWith('function __switchboard_launch{param([string]$n)'), source);
+  assert.ok(!source.includes('function claude'));
+  assert.ok(source.includes("Get-Command $n -ErrorAction Stop|Select-Object -First 1;if($c.CommandType -ne 'Application'){& $c @args;return};"), source);
+  assert.ok(source.endsWith('$p=[Diagnostics.Process]::Start($i);$p.WaitForExit();exit $p.ExitCode};'), source);
 });
-test('the PowerShell launch is the preamble followed by the helper call', async () => {
+test('the PowerShell helper chooses the cmd escape depth from the resolved Source extension', () => {
+  const source = helperSource();
+  assert.ok(source.includes("$d=if($c.Source -match '\\.(cmd|bat)$'){2}else{0};"), source);
+  assert.ok(source.includes("for($k=0;$k -lt $d;$k++){$s=[regex]::Replace($s,'([()\\]\\[%!^\"`<>&|;, *?])','^$1')}"), source);
+  assert.ok(source.includes("[regex]::Replace([regex]::Replace($_,'(\\\\*)\"','$1$1\\\"'),'(\\\\*)\\z','$1$1')"), source);
+});
+test('the PowerShell launch is the preamble followed by one helper call', async () => {
   for (const shell of ['pwsh.exe', 'powershell.exe']) {
     const spawned = await launch(shell, { name: `say "hi"` });
     assert.deepEqual(spawned.args.slice(0, 2), ['-NoLogo', '-Command']);
-    assert.ok(spawned.args[2].endsWith(`;${call('claude', `"--session-id" "${ID}" "--name" "say \\"hi\\""`, '--session-id', ID, '--name', 'say "hi"')}`), spawned.args[2]);
+    assert.ok(spawned.args[2].endsWith(`;${call('claude', '--session-id', ID, '--name', 'say "hi"')}`), spawned.args[2]);
   }
 });
-test('a launch prefix is the helper program, so the prefix program receives the raw line', async () => {
+test('a launch prefix is the helper program and claude one of its tokens', async () => {
   const spawned = await launch('pwsh.exe', { name: 'a b', options: { preLaunchCmd: 'wrap.exe' } });
-  assert.ok(spawned.args[2].endsWith(`;${call('wrap.exe', `claude "--session-id" "${ID}" "--name" "a b"`, 'claude', '--session-id', ID, '--name', 'a b')}`), spawned.args[2]);
+  assert.ok(spawned.args[2].endsWith(`;${call('wrap.exe', 'claude', '--session-id', ID, '--name', 'a b')}`), spawned.args[2]);
+});
+test('a large existing argument crosses node-pty once, well under the Windows command line limit', async () => {
+  const { argsToCommandLine } = require('node-pty/lib/windowsPtyAgent');
+  const prompt = 'x'.repeat(20000);
+  for (const shell of ['pwsh.exe', 'powershell.exe']) {
+    const spawned = await launch(shell, { isNew: false, transcript: true, options: { appendSystemPrompt: prompt } });
+    const line = argsToCommandLine(shell, spawned.args);
+    assert.equal(line.split(prompt).length - 1, 1, 'the prompt appears once');
+    assert.ok(line.length + 1 < 32767, `${line.length}`);
+    assert.ok(line.length <= 1.1 * (prompt.length + 'claude --resume --append-system-prompt'.length + ID.length), `${line.length}`);
+  }
 });
 test('IDE emulation adds --ide to the argv before it is serialized, for every shell', async () => {
   const wrapped = shell => launch(shell, { name: 'a b', options: { mcpEmulation: true } });
   const pwsh = await wrapped('pwsh.exe');
-  assert.ok(pwsh.args[2].endsWith(`"--name" "a b" "--ide"' '--session-id' '${ID}' '--name' 'a b' '--ide'`), pwsh.args[2]);
+  assert.ok(pwsh.args[2].endsWith(`;${call('claude', '--session-id', ID, '--name', 'a b', '--ide')}`), pwsh.args[2]);
   assert.match((await wrapped('cmd.exe')).args, /\^"--name\^" \^"a\^ b\^" \^"--ide\^"/);
   assert.match((await wrapped('/bin/bash')).args[3], /'--name' 'a b' '--ide'$/);
   if (process.platform === 'linux') {
@@ -157,34 +168,6 @@ test('IDE emulation adds --ide to the argv before it is serialized, for every sh
   assert.ok(!(await launch('pwsh.exe', { name: 'a b' })).args[2].includes('--ide'));
 });
 
-function commandLineToArgv(line) {
-  const argv = []; let i = 0;
-  while (i < line.length) {
-    while (line[i] === ' ') i++;
-    if (i >= line.length) break;
-    let cur = ''; let inQuotes = false;
-    while (i < line.length && (inQuotes || line[i] !== ' ')) {
-      let bs = 0;
-      while (line[i] === '\\') { bs++; i++; }
-      if (line[i] === '"') {
-        cur += '\\'.repeat(bs >> 1);
-        if (bs & 1) cur += '"'; else inQuotes = !inQuotes;
-        i++;
-      } else cur += '\\'.repeat(bs) + (i < line.length ? line[i++] : '');
-    }
-    argv.push(cur);
-  }
-  return argv;
-}
-const MODEL_INPUTS = ['smithy hardening', 'say "hi"', 'a" b', 'a\\', 'C:\\dir\\', 'a\\b c', 'say "hi\\"', '\\"', 'a b\\\\', '', "it's",
-  '$env:PATH', '`x`', 'a;b', 'a&b', '%PATH%', 'cafe\u0301 \u{1F600}', '"', '""', ' "a" "b" ', 'it\u2019s'];
-test('the raw line handed to the helper decodes to the exact argv', async () => {
-  for (const name of MODEL_INPUTS.filter(Boolean)) {
-    const spawned = await launch('pwsh.exe', { name });
-    const line = /launch 'claude' '((?:[^']|'')*)'/.exec(spawned.args[2])[1].replace(/''/g, "'").replace(/\u2019\u2019/g, '\u2019');
-    assert.deepEqual(commandLineToArgv(line), ['--session-id', ID, '--name', name], JSON.stringify(name));
-  }
-});
 const cmdCases = [
   ['smithy hardening', '^"smithy^ hardening^"'],
   [`it's "quoted"`, '^"it\'s^ \\^"quoted\\^"^"'],
@@ -204,7 +187,7 @@ test('the cmd.exe launch hands node-pty one command line and PowerShell an argum
   assert.equal(cmd.args, `/s /c "claude ^"--session-id^" ^"${ID}^" ^"--name^" ^"a^&b^""`);
   const pwsh = await launch('pwsh.exe', { name: "it's" });
   assert.deepEqual(pwsh.args.slice(0, 2), ['-NoLogo', '-Command']);
-  assert.ok(pwsh.args[2].endsWith(`__switchboard_launch 'claude' '"--session-id" "${ID}" "--name" "it''s"' '--session-id' '${ID}' '--name' 'it''s'`), pwsh.args[2]);
+  assert.ok(pwsh.args[2].endsWith(`;${call('claude', '--session-id', ID, '--name', "it's")}`), pwsh.args[2]);
 });
 test('the cmd.exe launch does not disable the Command Processor AutoRun commands', async () => {
   const cmd = await launch('cmd.exe', { isNew: false, transcript: true });

@@ -3153,6 +3153,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   const admission = isAttach ? null : projectOperationGate.tryAdmitAll([projectPath, spawnCwd]);
   if (!isAttach && !admission) return { ok: false, error: PROJECT_OPERATION_ERROR,
     ...(triggerPermit ? { reason: PROJECT_OPERATION_ERROR } : {}) };
+  let mcpOwnedHere = false;
   try {
   // Spawn new PTY
   if (!fs.existsSync(spawnCwd)) {
@@ -3295,6 +3296,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       if (!isAttach && sessionOptions?.mcpEmulation !== false) {
         try {
           mcpServer = await startMcpServer(sessionId, [spawnCwd], mainWindow, log);
+          mcpOwnedHere = true;
           claudeArgs.push('--ide');
         } catch (err) {
           mcpError = err.message;
@@ -3357,7 +3359,6 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       if (triggerPermit) {
         const checked = await validateTriggerOpen(triggerPermit);
         if (!checked.ok || matchingOpenEntries().length > 0 || !triggerRendererBridge.checkPermit(triggerRequestId)) {
-          if (mcpServer) shutdownMcpServer(sessionId);
           return checked.ok ? { ok: false, reason: 'session target changed', error: 'session target changed' } : checked;
         }
       }
@@ -3404,6 +3405,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     host: null, kind: 'local-pty',
   };
   activeSessions.set(sessionId, session);
+  mcpOwnedHere = false;
   if (!isPlainTerminal) revealIfSdkSession(sessionId);
   if (isAttach) notifyRendererProjectsChanged('session-attach');
   if (!isPlainTerminal && !panelOwnerId) activityReporter.sessionStarted({ sessionId, project: projectPath });
@@ -3427,7 +3429,10 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     mcpError,
     generation: session.generation,
   };
-  } finally { admission?.release(); }
+  } finally {
+    if (mcpOwnedHere) shutdownMcpServer(sessionId);
+    admission?.release();
+  }
   } finally { releaseOpen(); }
 });
 

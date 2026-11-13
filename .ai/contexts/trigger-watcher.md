@@ -291,29 +291,37 @@ in quotes when it has whitespace outside a counted quote pair: Windows PowerShel
 5.1 counts every `"`, so `a" b` is wrapped and splits; PowerShell 7 skips a `"`
 preceded by a backslash. On Windows, `shellArgs` therefore prefixes every
 PowerShell `-Command` with a helper, `__switchboard_launch`, and `claudeCommand`
-(`shell-profiles.js`) builds `__switchboard_launch '<program>' '<raw line>' '<token>'...`.
-The helper resolves `<program>` with `Get-Command` (first result, PowerShell's own
-precedence: alias, function, script, application) and branches on what it is.
-An `Application` is started with `ProcessStartInfo`: the raw line, the whole
-CommandLineToArgvW argument line (`escapeForCmd(token, 0)` per token, joined by
-spaces), is its `Arguments`, so nothing re-serializes it; `UseShellExecute=$false`
+(`shell-profiles.js`) builds `__switchboard_launch '<program>' '<token>'...`: the
+program (`claude`, or the first word of a launch prefix) and every following token
+(the other prefix words, `claude` behind a prefix, then the argv) are passed once,
+as plain single-quoted PowerShell literals (`'` and the typographic single quotes
+doubled). The helper resolves the program with `Get-Command` (first result,
+PowerShell's own precedence: alias, function, script, application) and branches on
+what it is. An `Application` is started with `ProcessStartInfo`: the helper builds
+the CommandLineToArgvW argument line itself (the rules of `escapeForCmd`: `"`
+escaped with the preceding backslashes doubled, trailing backslashes doubled,
+every token wrapped), and when the resolved `Source` ends in `.cmd` or `.bat`
+(its `%*` re-parses the line) applies the cmd caret escaping a second time, so
+the depth follows the file that will run, not a prediction from PATH. That line
+is the process's `Arguments`, so nothing re-serializes it; `UseShellExecute=$false`
 keeps the console, input is not redirected, and the helper waits and exits with
-the child's status. When the `claude` found on PATH is a `.cmd`/`.bat` shim,
-CreateProcess goes through `cmd /c` and the shim's `%*` re-parses the line, so the
-tokens are the two-pass `escapeForCmd` form (`cmdEscapePasses`). Anything else (a
-profile function or alias named `claude`, a `claude.ps1` that PowerShell prefers
-over a neighbouring `.cmd`, a script alone on PATH) is run as PowerShell would
-run it, `& $c @tokens`, with the plain tokens as PowerShell strings; what a
-script then does with `$args` is its own. A launch prefix (letters, digits,
-spaces and `- _ . / \ : =`) makes its first word the program and puts the
-remaining prefix words, `claude` and the encoded arguments on the raw line, so
-the prefix program receives them unserialized by PowerShell; the arguments are
-encoded once for an executable and twice for a `.cmd`/`.bat` prefix
-(`applicationEscapePasses`), and what the prefix program does when it starts
-`claude` is its own. `--ide` joins the argv before this serialization. Off
-Windows, PowerShell keeps one plain single-quoted literal per token, the bare
+the child's status. Anything else (a profile function or alias named `claude`, a
+`claude.ps1` that PowerShell prefers over a neighbouring `.cmd`, a script alone on
+PATH) is run as PowerShell would run it, `& $c @tokens`; what a script then does
+with `$args` is its own. A launch prefix (letters, digits, spaces and
+`- _ . / \ : =`) is encoded like any other argument for an executable or a batch
+prefix; what the prefix program does when it starts `claude` is its own. The
+payload crosses the process command line once (a 20,000 character system prompt
+stays under the 32,767 limit). `--ide` joins the argv before this serialization.
+Off Windows, PowerShell keeps one plain single-quoted literal per token, the bare
 `claude` and no helper. The schedule runner does not use the helper: its
 PowerShell tokens stay single-quoted literals.
+
+The MCP server that IDE emulation starts belongs to the `open-terminal` call from
+the moment it starts until the session is registered: a `finally` shuts it down on
+every refusal or error in between (last-guard deadline, revoked permit, command
+construction, project storage, PTY spawn). Refusals decided before the start
+(launch prefix validation, sandbox platform) start none.
 
 Qualification: `test/trigger-name-transport.test.js` runs the real encoders
 through the extracted `open-terminal` handler and an injected PTY edge. On Linux
@@ -326,9 +334,9 @@ node-pty's `argsToCommandLine`, starts `cmd.exe` with that exact command line an
 compares the argv a disposable echo executable and `claude.cmd` / `claude.bat` shims received, including a launch-directory executable shadowing a PATH shim and the reverse, a whitespace-only prefix, and a native wrapper prefix over resume and fork options,
 with the input. `test/trigger-name-transport-powershell-windows.test.js` does the
 same through `powershell.exe` and, when installed, `pwsh.exe`, into an echo
-`claude.exe`, a `claude.cmd` shim, a `claude.ps1` alone and beside a `claude.cmd`, a profile function named `claude`, and a native launch prefix, with quotes, backslashes, an empty-looking
+`claude.exe`, a `claude.cmd` shim, a `claude.ps1` alone and beside a `claude.cmd`, a profile function named `claude`, a native and a batch (`wrap`, `wrap.cmd`, absolute) launch prefix, a 20,000 character argument, with quotes, backslashes, an empty-looking
 quote pair, `$env:PATH`, backticks, `;`, `&`, `%PATH%`, typographic quotes and
-unicode. It also runs the launch plan under node-pty against a probe `claude.exe` that checks it has a console, reads a line from standard input and exits with a chosen status. Ctrl+C is not asserted: delivery to the helper and its child under a pseudo console could not be made observable and stable without iterating on a Windows runner. On Linux a CommandLineToArgvW decoder checks the PowerShell literal. Neither file is a live Claude Code or ConPTY qualification;
+unicode. It also runs the launch plan under node-pty against a probe `claude.exe` that checks it has a console, reads a line from standard input and exits with a chosen status. It also writes Ctrl+C to the pseudo console and asserts that the probe reports it. On Linux, string tests pin the helper source and the launch literals; the encoder inside the helper is exercised only by the Windows file. Neither file is a live Claude Code or ConPTY qualification;
 nushell remains unexecuted.
 
 A name with an unpaired surrogate is schema-valid but cannot survive UTF-8, so

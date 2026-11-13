@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { escapeForCmd, cmdEscapePasses, applicationEscapePasses } = require('../../../claude-binary');
+const { escapeForCmd, cmdEscapePasses } = require('../../../claude-binary');
 
 // --- Cross-platform shell resolution ---
 const isWindows = process.platform === 'win32';
@@ -162,12 +162,14 @@ function isWslShell(shellPath) {
 }
 
 // see .ai/contexts/trigger-watcher.md ("Naming a new session")
-const PS_LAUNCH = '__switchboard_launch';
-const PS_PREAMBLE = `function ${PS_LAUNCH}{param([string]$n,[string]$l)`
-  + '$c=Get-Command $n -ErrorAction Stop|Select-Object -First 1;'
+const PS_PREAMBLE = "function __switchboard_launch{param([string]$n)"
+  + "$c=Get-Command $n -ErrorAction Stop|Select-Object -First 1;"
   + "if($c.CommandType -ne 'Application'){& $c @args;return};"
-  + '$i=New-Object Diagnostics.ProcessStartInfo $c.Source,$l;$i.UseShellExecute=$false;'
-  + '$p=[Diagnostics.Process]::Start($i);$p.WaitForExit();exit $p.ExitCode};';
+  + "$d=if($c.Source -match '\\.(cmd|bat)$'){2}else{0};"
+  + "$l=($args|ForEach-Object{$s='\"'+[regex]::Replace([regex]::Replace($_,'(\\\\*)\"','$1$1\\\"'),'(\\\\*)\\z','$1$1')+'\"';"
+  + "for($k=0;$k -lt $d;$k++){$s=[regex]::Replace($s,'([()\\]\\[%!^\"`<>&|;, *?])','^$1')};$s}) -join ' ';"
+  + "$i=New-Object Diagnostics.ProcessStartInfo $c.Source,$l;$i.UseShellExecute=$false;"
+  + "$p=[Diagnostics.Process]::Start($i);$p.WaitForExit();exit $p.ExitCode};";
 const psLiteral = text => "'" + text.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&') + "'";
 
 // Shell-quote one argv token per shell family
@@ -202,18 +204,14 @@ function quoteArgvForShell(shellPath, argv, { env, cwd, wrapped } = {}) {
   return argv.map(a => quoteArgForShell(shellPath, a, passes)).join(' ');
 }
 
-function powershellLaunch(argv, { env, prefix }) {
+function powershellLaunch(argv, prefix) {
   const words = prefix.trim().split(/\s+/).filter(Boolean);
-  const target = words.shift() || 'claude';
-  const rest = prefix.trim() ? [...words, 'claude'] : [];
-  const passes = !env ? 0 : prefix.trim() ? applicationEscapePasses(target, env) : cmdEscapePasses(env) === 2 ? 2 : 0;
-  const line = [...rest, ...argv.map(a => escapeForCmd(a, passes))].join(' ');
-  return [PS_LAUNCH, psLiteral(target), psLiteral(line), ...[...rest, ...argv].map(psLiteral)].join(' ');
+  const [target, ...rest] = words.length ? [...words, 'claude'] : ['claude'];
+  return ['__switchboard_launch', target, ...rest, ...argv].map((word, i) => (i ? psLiteral(word) : word)).join(' ');
 }
 
-// The command that starts claude: the bare name for most shells, a helper for Windows PowerShell
 function claudeCommand(shellPath, argv, { env, cwd, prefix = '', windows = isWindows } = {}) {
-  if (windows && isPowerShellShell(shellPath)) return powershellLaunch(argv, { env, prefix });
+  if (windows && isPowerShellShell(shellPath)) return powershellLaunch(argv, prefix);
   const wrapped = !!prefix.trim();
   return (wrapped ? prefix + ' ' : '') + 'claude ' + quoteArgvForShell(shellPath, argv, { env, cwd, wrapped });
 }

@@ -30,6 +30,7 @@ class P { static int Main(string[] a) {
 } }`;
 const PROBE_CS = `using System;
 class P { static int Main(string[] a) {
+  Console.CancelKeyPress += (sender, e) => { e.Cancel = true; Console.WriteLine("CTRLC"); Environment.Exit(130); };
   Console.WriteLine("ATTACHED=" + (!Console.IsInputRedirected && !Console.IsOutputRedirected));
   Console.WriteLine("READY");
   string line = Console.ReadLine();
@@ -71,6 +72,7 @@ function makeBin(kind) {
   if (kind === 'exe') compile(dir, CS, 'claude');
   if (kind === 'pty') compile(dir, PROBE_CS, 'claude');
   if (kind === 'wrapper') compile(dir, WRAPPER_CS, 'wrapper');
+  if (kind === 'wrapcmd') fs.writeFileSync(path.join(dir, 'wrap.cmd'), '@echo off\r\n%*\r\n');
   if (kind === 'cmd' || kind === 'ps1cmd') {
     fs.writeFileSync(path.join(dir, 'echo.js'), ECHO_JS);
     fs.writeFileSync(path.join(dir, 'claude.cmd'), `@echo off\r\n"${process.execPath}" "%~dp0echo.js" %*\r\n`);
@@ -78,7 +80,7 @@ function makeBin(kind) {
   if (kind === 'ps1' || kind === 'ps1cmd') fs.writeFileSync(path.join(dir, 'claude.ps1'), RECORD('ps1') + '\r\n');
   return dir;
 }
-const KINDS = ['exe', 'cmd', 'ps1', 'ps1cmd', 'pty', 'wrapper'];
+const KINDS = ['exe', 'cmd', 'ps1', 'ps1cmd', 'pty', 'wrapper', 'wrapcmd'];
 const present = exe => win && spawnSync(exe, ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], { encoding: 'utf8' }).status === 0;
 const shells = [['powershell.exe', win], ['pwsh.exe', present('pwsh.exe')]];
 before(() => { if (!skip) for (const kind of KINDS) bins[kind] = makeBin(kind); });
@@ -184,6 +186,26 @@ for (const [shell, available] of shells) {
     }
   });
 
+  const batch = () => path.join(bins.wrapcmd, 'wrap.cmd');
+  for (const spelling of ['wrap', 'wrap.cmd', 'absolute']) {
+    test(`${shell} gives a batch launch prefix spelled ${spelling} awkward arguments and an empty argument exactly`, options, async () => {
+      cleanOutputs('exe');
+      const env = envFor(['exe', 'wrapcmd']);
+      const argv = ['--x', '', 'a" b', '%PATH%', '^', '&', 'a\\', 'a b\\', 'say "hi"', '$env:PATH', "it's"];
+      const cmd = profiles.claudeCommand(shell, argv, { env, windows: true, prefix: spelling === 'absolute' ? batch() : spelling });
+      runPlan(shell, profiles.shellArgs(shell, cmd, [], { pty: true, windows: true }), env);
+      assert.deepEqual(read(outputOf('exe')), argv);
+    });
+  }
+  test(`${shell} runs a 20000 character existing argument without exceeding the command line limit`, options, async () => {
+    cleanOutputs('exe');
+    const env = envFor(['exe']);
+    const prompt = 'long "prompt" \\ '.repeat(1200).slice(0, 20000);
+    const spawned = await launch(shell, { isNew: false, transcript: true, env, options: { appendSystemPrompt: prompt } });
+    runPlan(shell, spawned.args, env);
+    assert.deepEqual(read(outputOf('exe')), ['--resume', ID, '--append-system-prompt', prompt]);
+  });
+
   test(`${shell} keeps the console, standard input and exit status of claude under a pseudo console`, options, async () => {
     const env = envFor(['pty'], { SB_EXIT: '37' });
     const spawned = await launch(shell, { name: 'say "hi"', env });
@@ -204,5 +226,24 @@ for (const [shell, available] of shells) {
     assert.match(plain(), /ATTACHED=True/);
     assert.match(plain(), /ECHOED=round-trip/);
     assert.equal(exitCode, 37);
+  });
+
+  test(`${shell} delivers Ctrl+C under a pseudo console to claude through the helper`, options, async () => {
+    const env = envFor(['pty'], { SB_EXIT: '0' });
+    const spawned = await launch(shell, { name: 'a b', env });
+    const term = require('node-pty').spawn(shell, spawned.args, { name: 'xterm-256color', cols: 100, rows: 30, cwd: process.cwd(), env });
+    let output = '';
+    const exited = new Promise(resolve => term.onExit(resolve));
+    term.onData(chunk => { output += chunk; });
+    const wait = async (done, label) => {
+      for (let waited = 0; !done(); waited += 100) {
+        if (waited > 45000) { term.kill(); assert.fail(`${label}; output so far: ${JSON.stringify(output)}`); }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    };
+    await wait(() => output.includes('READY'), 'claude never reported ready');
+    term.write('\x03');
+    await wait(() => output.includes('CTRLC'), 'claude never saw Ctrl+C');
+    await Promise.race([exited, wait(() => false, 'the terminal never closed')]);
   });
 }
