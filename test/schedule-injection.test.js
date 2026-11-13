@@ -130,8 +130,8 @@ test('quoteArgForShell: zsh behaves like bash (POSIX single-quote)', () => {
 test('quoteArgForShell: PowerShell — escapes internal single quotes as \'\'', () => {
   const evil = "'; Remove-Item -Recurse /";
   const quoted = quoteArgForShell('/usr/bin/pwsh', evil);
-  // ' → '' inside single-quoted PS string
-  assert.equal(quoted, "'''; Remove-Item -Recurse /'");
+  // ' → '' inside a single-quoted PS string holding the CommandLineToArgvW-quoted token
+  assert.equal(quoted, "'\"''; Remove-Item -Recurse /\"'");
 });
 
 test('quoteArgvForShell: joins tokens with spaces, each safely quoted', () => {

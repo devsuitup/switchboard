@@ -99,8 +99,90 @@ for (const [name, expected] of nuCases) {
     assert.equal(q('/usr/bin/nu', name), `"--name" ${expected}`);
   });
 }
-test('PowerShell encoding doubles single quotes inside a single-quoted string', () => {
-  assert.equal(q('C:\\Program Files\\PowerShell\\7\\pwsh.exe', `it's "x" & $y`), `'--name' 'it''s "x" & $y'`);
+const PWSH = 'C:\\Program Files\\PowerShell\\7\\pwsh.exe';
+const psCases = [
+  ['smithy hardening', `'"smithy hardening"'`],
+  [`say "hi"`, `'"say \\"hi\\""'`],
+  ['a" b', `'"a\\" b"'`],
+  ['a\\', `'"a\\\\"'`],
+  ['say "hi\\"', `'"say \\"hi\\\\\\""'`],
+  ['', `'""'`],
+  ["it's \u2019x\u2019", `'"it''s \u2019\u2019x\u2019\u2019"'`],
+  ['$env:PATH `x` ; & %PATH%', `'"$env:PATH \`x\` ; & %PATH%"'`],
+];
+for (const [name, expected] of psCases) {
+  test(`PowerShell encoding of ${JSON.stringify(name)} is a single-quoted literal holding one CommandLineToArgvW token`, () => {
+    assert.equal(profiles.quoteArgForShell(PWSH, name), expected);
+  });
+}
+test('PowerShell encoding for a .cmd shim keeps one counted quote pair around the token and caret-escapes every metacharacter', () => {
+  const env = { PATH: 'C:\\bin' };
+  assert.equal(profiles.quoteArgForShell(PWSH, 'a" b&c', 2), `'^^^"a\\%SWITCHBOARD_Q%^^^ b^^^&c^^^"'`);
+  assert.equal(profiles.quoteArgForShell(PWSH, '', 2), `'^^^"^^^"'`);
+  assert.equal(profiles.quoteArgvForShell(PWSH, ['a b'], { env }), `'"a b"'`);
+});
+test('PowerShell escaping depth follows the claude PowerShell resolves, which ignores the launch directory and a launch prefix', t => {
+  const env = { PATH: 'C:\\bin' };
+  claudeOnDisk(t, 'C:\\bin\\claude.cmd', path.win32.join('C:\\project', 'claude.exe'));
+  assert.match(profiles.quoteArgvForShell(PWSH, ['a b'], { env, cwd: 'C:\\project' }), /^'\^\^\^"a\^\^\^ b\^\^\^"'$/);
+  assert.equal(profiles.quoteArgvForShell(PWSH, ['a b'], { env, wrapped: true }), `'"a b"'`);
+});
+test('the PowerShell launch pins legacy native argument passing and the cmd quote variable before the command', async () => {
+  for (const shell of ['pwsh.exe', 'powershell.exe']) {
+    const spawned = await launch(shell, { name: `say "hi"` });
+    assert.deepEqual(spawned.args, ['-NoLogo', '-Command',
+      `$PSNativeCommandArgumentPassing='Legacy';$env:SWITCHBOARD_Q='^^^"';claude '"--session-id"' '"${ID}"' '"--name"' '"say \\"hi\\""'`]);
+  }
+});
+test('a launch prefix follows the pinned PowerShell argument passing', async () => {
+  const spawned = await launch('pwsh.exe', { name: 'a b', options: { preLaunchCmd: 'wrap.exe' } });
+  assert.match(spawned.args[2], /^\$PSNativeCommandArgumentPassing='Legacy';\$env:SWITCHBOARD_Q='\^\^\^"';wrap\.exe claude /);
+});
+
+// Model of Legacy native argument passing: NeedQuotes wraps in quotes, nothing is escaped, then CommandLineToArgvW splits.
+function legacyNeedsQuotes(arg) {
+  let quotes = 0; let afterBackslash = false; let need = false;
+  for (const c of arg) {
+    if (c === '"' && !afterBackslash) quotes++;
+    else if (/\s/.test(c) && quotes % 2 === 0) need = true;
+    afterBackslash = c === '\\';
+  }
+  return need;
+}
+function commandLineToArgv(line) {
+  const argv = []; let i = 0;
+  while (i < line.length) {
+    while (line[i] === ' ') i++;
+    if (i >= line.length) break;
+    let cur = ''; let inQuotes = false;
+    while (i < line.length && (inQuotes || line[i] !== ' ')) {
+      let bs = 0;
+      while (line[i] === '\\') { bs++; i++; }
+      if (line[i] === '"') {
+        cur += '\\'.repeat(bs >> 1);
+        if (bs & 1) cur += '"'; else inQuotes = !inQuotes;
+        i++;
+      } else cur += '\\'.repeat(bs) + (i < line.length ? line[i++] : '');
+    }
+    argv.push(cur);
+  }
+  return argv;
+}
+const psLiterals = command => [...command.matchAll(/'((?:[^']|'')*)'/g)].map(m => m[1].replace(/''/g, "'"));
+const MODEL_INPUTS = ['smithy hardening', 'say "hi"', 'a" b', 'a\\', 'C:\\dir\\', 'a\\b c', 'say "hi\\"', '\\"', 'a b\\\\', '', "it's",
+  '$env:PATH', '`x`', 'a;b', 'a&b', '%PATH%', 'cafe\u0301 \u{1F600}', '"', '""', ' "a" "b" '];
+test('the PowerShell launch decodes to the exact argv under legacy native argument passing', async () => {
+  for (const name of MODEL_INPUTS.filter(Boolean)) {
+    const spawned = await launch('pwsh.exe', { name });
+    const wire = psLiterals(spawned.args[2].replace(/^[^;]*;[^;]*;/, '').replace(/^claude /, '')).map(s => (legacyNeedsQuotes(s) ? `"${s}"` : s)).join(' ');
+    assert.deepEqual(commandLineToArgv(wire), ['--session-id', ID, '--name', name], JSON.stringify(name));
+  }
+});
+test('a PowerShell argument that keeps its argv token whole is never wrapped again by legacy quoting', () => {
+  for (const name of MODEL_INPUTS) {
+    assert.equal(legacyNeedsQuotes(psLiterals(profiles.quoteArgForShell(PWSH, name))[0]), false, JSON.stringify(name));
+    assert.equal(legacyNeedsQuotes(psLiterals(profiles.quoteArgForShell(PWSH, name, 2))[0]), false, JSON.stringify(name));
+  }
 });
 const cmdCases = [
   ['smithy hardening', '^"smithy^ hardening^"'],
@@ -120,7 +202,8 @@ test('the cmd.exe launch hands node-pty one command line and PowerShell an argum
   const cmd = await launch('cmd.exe', { name: 'a&b' });
   assert.equal(cmd.args, `/s /c "claude ^"--session-id^" ^"${ID}^" ^"--name^" ^"a^&b^""`);
   const pwsh = await launch('pwsh.exe', { name: "it's" });
-  assert.deepEqual(pwsh.args, ['-NoLogo', '-Command', `claude '--session-id' '${ID}' '--name' 'it''s'`]);
+  assert.deepEqual(pwsh.args, ['-NoLogo', '-Command',
+    `$PSNativeCommandArgumentPassing='Legacy';$env:SWITCHBOARD_Q='^^^"';claude '"--session-id"' '"${ID}"' '"--name"' '"it''s"'`]);
 });
 test('the cmd.exe launch does not disable the Command Processor AutoRun commands', async () => {
   const cmd = await launch('cmd.exe', { isNew: false, transcript: true });

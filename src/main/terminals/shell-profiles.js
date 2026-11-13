@@ -2,6 +2,8 @@ const path = require('path');
 const fs = require('fs');
 const { escapeForCmd, cmdEscapePasses } = require('../../../claude-binary');
 
+const PS_QUOTE_VAR = 'SWITCHBOARD_Q';
+
 // --- Cross-platform shell resolution ---
 const isWindows = process.platform === 'win32';
 
@@ -161,6 +163,11 @@ function isWslShell(shellPath) {
   return base === 'wsl.exe' || base === 'wsl';
 }
 
+// see .ai/contexts/trigger-watcher.md ("Naming a new session")
+const PS_PREAMBLE = `$PSNativeCommandArgumentPassing='Legacy';$env:${PS_QUOTE_VAR}='^^^"';`;
+const psLiteral = text => "'" + text.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&') + "'";
+const psShimToken = s => `^^^"${escapeForCmd(s, 2).slice(4, -4).replace(/\^\^\^"/g, `%${PS_QUOTE_VAR}%`)}^^^"`;
+
 // Shell-quote one argv token per shell family
 function quoteArgForShell(shellPath, value, cmdPasses = 1) {
   const s = value == null ? '' : String(value);
@@ -174,10 +181,7 @@ function quoteArgForShell(shellPath, value, cmdPasses = 1) {
     // POSIX: wrap in single quotes, escape embedded single quotes as '\''
     return "'" + s.replace(/'/g, "'\\''") + "'";
   }
-  if (isPowerShell) {
-    // PowerShell: single-quoted string, escape ' as ''
-    return "'" + s.replace(/'/g, "''") + "'";
-  }
+  if (isPowerShell) return psLiteral(cmdPasses === 2 ? psShimToken(s) : escapeForCmd(s, 0));
   return escapeForCmd(s, cmdPasses);
 }
 
@@ -186,8 +190,15 @@ function isCmdShell(shellPath) {
   return base === 'cmd.exe' || base === 'cmd';
 }
 
+function isPowerShellShell(shellPath) {
+  const base = path.basename(shellPath).toLowerCase();
+  return base.includes('powershell') || base.includes('pwsh');
+}
+
 function quoteArgvForShell(shellPath, argv, { env, cwd, wrapped } = {}) {
-  const passes = env && isCmdShell(shellPath) ? cmdEscapePasses(env, { cwd, wrapped }) : 1;
+  const passes = !env ? 1
+    : isCmdShell(shellPath) ? cmdEscapePasses(env, { cwd, wrapped })
+      : isPowerShellShell(shellPath) ? cmdEscapePasses(env, { wrapped }) : 1;
   return argv.map(a => quoteArgForShell(shellPath, a, passes)).join(' ');
 }
 
@@ -209,7 +220,7 @@ function shellArgs(shellPath, cmd, extraArgs, { pty = false } = {}) {
     if (isBashLike) return ['-l', '-i', '-c', cmd];
     if (isFish) return ['-l', '-c', cmd];
     if (isNushell) return ['-l', '-c', cmd];
-    if (base.includes('powershell') || base.includes('pwsh')) return ['-NoLogo', '-Command', cmd];
+    if (base.includes('powershell') || base.includes('pwsh')) return ['-NoLogo', '-Command', PS_PREAMBLE + cmd];
     return pty && isCmdShell(shellPath) ? `/s /c "${cmd}"` : ['/C', cmd];
   }
   if (isBashLike) return ['-l', '-i'];
