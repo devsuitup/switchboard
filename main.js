@@ -3283,6 +3283,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       // preLaunchCmd is raw shell by design (e.g. "aws-vault exec profile --")
       // — see pre-launch-cmd-guard.js for what is and isn't blocked and why.
       let pre = '';
+      let ideAdded = false;
       if (!isAttach && sessionOptions?.preLaunchCmd) {
         const preCheck = validatePreLaunchCmd(String(sessionOptions.preLaunchCmd));
         if (!preCheck.ok) {
@@ -3297,6 +3298,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         try {
           mcpServer = await startMcpServer(sessionId, [spawnCwd], mainWindow, log);
           mcpOwnedHere = true;
+          ideAdded = true;
           claudeArgs.push('--ide');
         } catch (err) {
           mcpError = err.message;
@@ -3304,7 +3306,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         }
       }
 
-      let claudeCmd = claudeCommand(shell, claudeArgs, { env: cleanPtyEnv, cwd: spawnCwd, prefix: pre, extraArgs: shellExtraArgs });
+      let claudeCmd = claudeCommand(shell, claudeArgs, { env: cleanPtyEnv, cwd: spawnCwd, prefix: pre, extraArgs: shellExtraArgs, ide: ideAdded });
 
       // Sandbox: run claude inside a bubblewrap sandbox that only exposes the
       // project directory and Claude's own config/state dirs. Linux only —

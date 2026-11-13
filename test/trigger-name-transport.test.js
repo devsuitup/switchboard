@@ -172,6 +172,31 @@ test('a launch that fits with the helper keeps it just below the limit', async (
   assert.ok(spawned.args[2].startsWith('function __switchboard_launch'));
   assert.ok(argsToCommandLine('pwsh.exe', spawned.args).length + 1 <= 32767);
 });
+const resumeWith = (shell, prompt, options = {}) => launch(shell, { isNew: false, transcript: true, options: { appendSystemPrompt: prompt, ...options } });
+for (const [label, ide] of [['without', false], ['with', true]]) {
+  test(`the plain fallback ${label} IDE emulation is the pre-helper command string`, async () => {
+    const prompt = 'x'.repeat(32300);
+    for (const shell of ['pwsh.exe', 'powershell.exe']) {
+      const spawned = await resumeWith(shell, prompt, { mcpEmulation: ide });
+      assert.equal(spawned.args[2], `claude '--resume' '${ID}' '--append-system-prompt' '${prompt}'${ide ? ' --ide' : ''}`);
+    }
+  });
+}
+const LIMIT = 32767;
+const boundaryShells = ['powershell.exe', 'pwsh.exe', 'C:\\Program Files\\PowerShell\\7\\pwsh.exe'];
+for (const shell of boundaryShells) {
+  test(`${shell} switches from the helper to the plain form exactly at the command line limit`, async () => {
+    const small = await resumeWith(shell, 'x'.repeat(100));
+    const fixed = argsToCommandLine(shell, small.args).length + 1 - 100;
+    assert.ok(small.args[2].startsWith('function __switchboard_launch'));
+    for (const [offset, helper] of [[-1, true], [0, true], [1, false]]) {
+      const spawned = await resumeWith(shell, 'x'.repeat(LIMIT + offset - fixed));
+      assert.equal(spawned.args[2].startsWith('function __switchboard_launch'), helper, `limit${offset >= 0 ? '+' : ''}${offset}`);
+      if (helper) assert.equal(argsToCommandLine(shell, spawned.args).length + 1, LIMIT + offset);
+      else assert.ok(argsToCommandLine(shell, spawned.args).length + 1 <= LIMIT);
+    }
+  });
+}
 test('IDE emulation adds --ide to the argv before it is serialized, for every shell', async () => {
   const wrapped = shell => launch(shell, { name: 'a b', options: { mcpEmulation: true } });
   const pwsh = await wrapped('pwsh.exe');

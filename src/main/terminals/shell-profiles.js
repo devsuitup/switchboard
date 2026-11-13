@@ -218,12 +218,14 @@ function fitsCommandLine(shellPath, command, extraArgs) {
   return argsToCommandLine(shellPath, args).length + 1 <= WINDOWS_COMMAND_LINE_LIMIT;
 }
 
-function claudeCommand(shellPath, argv, { env, cwd, prefix = '', windows = isWindows, extraArgs = [] } = {}) {
+function claudeCommand(shellPath, argv, { env, cwd, prefix = '', windows = isWindows, extraArgs = [], ide = false } = {}) {
   const wrapped = !!prefix.trim();
-  const plain = (wrapped ? prefix + ' ' : '') + 'claude ' + quoteArgvForShell(shellPath, argv, { env, cwd, wrapped });
+  const quoted = quoteArgvForShell(shellPath, argv, { env, cwd, wrapped });
+  const plain = (wrapped ? prefix + ' ' : '') + 'claude ' + quoted;
   if (!(windows && isPowerShellShell(shellPath))) return plain;
   const helper = powershellLaunch(argv, prefix);
-  return fitsCommandLine(shellPath, helper, extraArgs) || !fitsCommandLine(shellPath, plain, extraArgs) ? helper : plain;
+  const baseline = ide ? (wrapped ? prefix + ' ' : '') + 'claude ' + quoteArgvForShell(shellPath, argv.slice(0, -1), { env, cwd, wrapped }) + ' --ide' : plain;
+  return fitsCommandLine(shellPath, helper, extraArgs) || !fitsCommandLine(shellPath, baseline, extraArgs) ? helper : baseline;
 }
 
 // Returns spawn args appropriate for the resolved shell

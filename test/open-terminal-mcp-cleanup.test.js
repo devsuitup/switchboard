@@ -14,7 +14,7 @@ function open({ options = {}, overrides = {}, afterValidation, permit = 'new', i
     resolveShell: () => ({ path: '/bin/bash' }), quoteArgvForShell: profiles.quoteArgvForShell, claudeCommand: profiles.claudeCommand,
     shellArgs: profiles.shellArgs, validatePreLaunchCmd, os: require('node:os'),
     sandboxScriptPath: () => '/opt/switchboard/claude-sandbox.sh', sandboxBindEnv: () => null,
-    startMcpServer: async () => { mcp.starts++; return { port: 4242 }; }, shutdownMcpServer: id => { mcp.shutdowns.push(id); },
+    startMcpServer: async () => { mcp.starts++; mcp.server = { port: 4242 }; return mcp.server; }, shutdownMcpServer: id => { mcp.shutdowns.push(id); },
     validateTriggerOpen: async permit => { validations++; return afterValidation?.(validations, permit) ?? { ok: true, cwd: permit.target?.cwd }; },
     parseAddDirs: () => [], ...overrides,
   });
@@ -57,24 +57,28 @@ for (const [label, config] of afterStart) {
 }
 
 const launches = [
-  ['an ordinary new session', { permit: false, isNew: true }],
-  ['an ordinary resume', { permit: false, isNew: false }],
-  ['an ordinary fork', { permit: false, isNew: true, options: { forkFrom: 'source' } }],
-  ['a trigger resume', { permit: 'resume', isNew: false }],
-  ['a trigger new session', { permit: 'new', isNew: true }],
+  ['an ordinary new session', { permit: false, isNew: true }, 'new', '--session-id'],
+  ['an ordinary resume', { permit: false, isNew: false, overrides: { sessionTranscriptExists: () => true } }, 'resume', '--resume'],
+  ['an ordinary fork', { permit: false, isNew: true, options: { forkFrom: 'source' } }, 'fork', '--fork-session'],
+  ['a trigger resume', { permit: 'resume', isNew: false, overrides: { sessionTranscriptExists: () => true } }, 'resume', '--resume'],
+  ['a trigger new session', { permit: 'new', isNew: true }, 'new', '--session-id'],
 ];
-for (const [label, config] of launches) {
+for (const [label, config, mode, flag] of launches) {
   test(`${label} keeps the MCP server it started`, async () => {
     const { f, mcp, result } = open(config);
     assert.equal((await result()).ok, true);
     assert.deepEqual([mcp.starts, mcp.shutdowns, f.map.size], [1, [], 1]);
+    const session = f.map.get(ID);
+    assert.equal(session.launchMode, mode);
+    assert.ok(f.spawns[0].args.join(' ').includes(flag), f.spawns[0].args.join(' '));
+    assert.equal(session.mcpServer, mcp.server);
   });
-  for (const [failure, overrides] of [
+  for (const [failure, failing] of [
     ['project storage rejects', { scheduleProjects: () => ({ add: async () => { throw new Error('storage'); } }) }],
     ['the PTY cannot be spawned', { spawnPty: () => { throw new Error('spawn'); } }],
   ]) {
     test(`${label} shuts its MCP server down exactly once when ${failure}`, async () => {
-      const { f, mcp, result } = open({ ...config, overrides });
+      const { f, mcp, result } = open({ ...config, overrides: { ...config.overrides, ...failing } });
       assert.equal((await result()).ok, false);
       assert.deepEqual([mcp.starts, mcp.shutdowns, f.map.size], [1, [ID], 0]);
     });
