@@ -150,8 +150,10 @@ test('IDE emulation adds --ide to the argv before it is serialized, for every sh
   assert.ok(pwsh.args[2].endsWith(`"--name" "a b" "--ide"' '--session-id' '${ID}' '--name' 'a b' '--ide'`), pwsh.args[2]);
   assert.match((await wrapped('cmd.exe')).args, /\^"--name\^" \^"a\^ b\^" \^"--ide\^"/);
   assert.match((await wrapped('/bin/bash')).args[3], /'--name' 'a b' '--ide'$/);
-  const sandboxed = await launch('/bin/bash', { name: 'a b', options: { mcpEmulation: true, preLaunchCmd: 'FOO=1', sandbox: true } });
-  if (process.platform === 'linux') assert.match(strip(sandboxed.args[3]), /^FOO=1 'bash' .*'--name' 'a b' '--ide'$/);
+  if (process.platform === 'linux') {
+    const sandboxed = await launch('/bin/bash', { name: 'a b', options: { mcpEmulation: true, preLaunchCmd: 'FOO=1', sandbox: true } });
+    assert.match(strip(sandboxed.args[3]), /^FOO=1 'bash' .*'--name' 'a b' '--ide'$/);
+  }
   assert.ok(!(await launch('pwsh.exe', { name: 'a b' })).args[2].includes('--ide'));
 });
 

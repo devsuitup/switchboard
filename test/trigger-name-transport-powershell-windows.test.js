@@ -84,8 +84,11 @@ const shells = [['powershell.exe', win], ['pwsh.exe', present('pwsh.exe')]];
 before(() => { if (!skip) for (const kind of KINDS) bins[kind] = makeBin(kind); });
 after(() => { for (const dir of Object.values(bins)) fs.rmSync(dir, { recursive: true, force: true }); });
 
-const envFor = (kinds, extra = {}) => ({ ...process.env, PATH: `${kinds.map(k => bins[k]).join(';')};${process.env.PATH}`,
-  SB_ARGV_OUT: path.join(bins[kinds[0]], 'argv.json'), ...extra });
+const envFor = (kinds, extra = {}) => {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^path$/i.test(key)));
+  return { ...env, PATH: `${kinds.map(k => bins[k]).join(';')};${process.env.PATH ?? process.env.Path}`,
+    SB_ARGV_OUT: path.join(bins[kinds[0]], 'argv.json'), ...extra };
+};
 const cleanOutputs = kind => { for (const name of ['argv.json', 'argv.json.ps1', 'argv.json.fn']) fs.rmSync(path.join(bins[kind], name), { force: true }); };
 function runPlan(shell, args, env, mutate = a => a) {
   const { argsToCommandLine } = require('node-pty/lib/windowsPtyAgent');
