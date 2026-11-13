@@ -797,7 +797,7 @@ module.exports = [
 
   {
     files: ['public/sidebar.js'],
-    languageOptions: { globals: { PROJECT_DELETE_DIALOG_TIMEOUT_MS: 'readonly' } },
+    languageOptions: { globals: { PROJECT_DELETE_DIALOG_TIMEOUT_MS: 'readonly', PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS: 'readonly' } },
   },
 
   // CodeMirror setup file uses ESM-style imports/closure that don't lint well

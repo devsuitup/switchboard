@@ -182,7 +182,7 @@ function createProjectDeleteService(deps) {
           catch { Object.assign(op.result ||= {}, await retained(op), { code: 'FENCE_UNAVAILABLE' }); return view(op); }
         }
         if (state) return await acceptState(op, state);
-        Object.assign(op.result ||= {}, await retained(op), { refresh: true, readbackWarning: readError?.message || 'Fresh observation unavailable.' });
+        Object.assign(op.result ||= {}, await retained(op), { code: 'READBACK_UNAVAILABLE', refresh: true, readbackWarning: readError?.message || 'Fresh observation unavailable.' });
         return view(op);
       } catch (error) { op.result = { ...failure(error.code || 'RECOVERY_UNAVAILABLE'), error: error.message, state: 'unknown' }; return view(op); }
       finally { op.reconciling = null; logOutcome('recovery', view(op), startedAt); }
@@ -217,7 +217,7 @@ function createProjectDeleteService(deps) {
         membershipDigest: op.plan.membershipDigest, inventory: manifestInventory, groups: manifestInventory.groups, members: manifestInventory.members, options: op.options };
       op.submitted = true;
       try { return await acceptState(op, await bounded(() => writer.completeProjectDeletion(manifest), 60000)); }
-      catch { return await reconcile(op); }
+      catch { op.result ||= failure('RECEIPT_UNRESOLVED'); return await reconcile(op); }
     } catch (error) {
       op.result = { ...failure(error.code || 'DELETE_UNAVAILABLE'), error: error.message, state: 'notStarted', refresh: true };
       return view(op);

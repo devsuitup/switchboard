@@ -1,17 +1,33 @@
 # Project deletion (#474 A4a–A4d)
 
-## Slow execution and diagnostics (#1103G)
+## Slow execution and diagnostics (#1103G, #1103H)
 
 The service's 15-second reply budget is shorter than execution, which can perform
 three 20-second revalidations. An operation still running at reply time returns
 `EXECUTION_PENDING`, its operation ID and its current effect lists. This does not
-mean the command was lost. The renderer follows that same ID through at most
-eight read-only state requests within a 120-second deadline. A state request for
+mean the command was lost. The renderer follows that same ID while the code is
+`EXECUTION_PENDING`, within `PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS` from the first
+execute reply. This shared setting-defaults constant is 245 seconds: three
+20-second revalidations, two 10-second scope reads, the 60-second stop/verify
+batch budget, 60 seconds for completion, two 10-second notifications and a
+10-second retained-file read, plus 15 seconds of margin. This conservatively
+adds overlapping stop/revalidation budgets. Admission and recovery with ongoing
+progress can outlive this UI ceiling; it bounds automatic following, not backend
+ownership. A state request for
 a running operation waits on its existing work, with the same 15-second reply
 cap. No read resubmits deletion. Terminal refusal releases the UI lock; committed
 readback uses the existing ACK path. Unavailable reads preserve the operation ID
 and Check deletion state. Persistent pending/unknown outcomes remain explicit and
-their notice includes the reason code.
+their notice includes the reason code. Deadline expiry reports
+`STATE_READ_UNAVAILABLE` and retains Check deletion state. Any other reply code
+ends automatic following immediately; a changed operation ID is rejected.
+
+Once completion falls back to receipt recovery, the service explicitly sets
+`RECEIPT_UNRESOLVED` if it has no result yet. Reconciliation without a fresh
+observation sets `READBACK_UNAVAILABLE` alongside its retained-file evidence and
+warning. Neither branch inherits `EXECUTION_PENDING` from the still-running
+outer promise. Existing terminal receipts and specific fence/recovery failures
+keep their own result codes.
 
 Main logs execute replies, eventual execution completion and recovery outcomes
 with operation ID, state, reason and elapsed milliseconds, without project paths.

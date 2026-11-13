@@ -9,6 +9,65 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+for (const settles of [true, false]) test(`pending execute follows beyond 130 seconds or stops at the shared ceiling, settles=${settles}`, async t => {
+  const h = setup(t), timers = new Map(), applied = [];
+  let time = 0, id = 0, finished = false;
+  h.w.Date.now = () => time;
+  h.w.setTimeout = (fn, ms) => { timers.set(++id, { fn, at: time + ms }); return id; };
+  h.w.clearTimeout = key => timers.delete(key);
+  const pendingReply = { state: 'unknown', operationId: 'slow', code: 'EXECUTION_PENDING' };
+  h.w.api.deleteProject = async request => {
+    h.calls.execute.push(request);
+    return h.calls.execute.length === 1 ? pendingReply : { state: 'notStarted', code: 'INVALID_TOKEN', operationId: 'slow' };
+  };
+  h.w.api.projectDeleteState = request => {
+    h.calls.state.push(request);
+    return new Promise(resolve => h.w.setTimeout(() => resolve(settles && time >= 130000
+      ? { ok: true, state: 'committed', operationId: 'slow', invalidation: { sessionIds: [], restoreTargets: [] } }
+      : pendingReply), 10000));
+  };
+  h.w.applyProjectDeletion = async result => applied.push(result);
+  const pending = h.start().then(result => { finished = true; return result; });
+  await flush(); h.confirm().click(); await flush();
+  const ceiling = 3 * 20000 + 2 * 10000 + 60000 + 60000 + 3 * 10000 + 15000;
+  for (; time < ceiling && !finished;) {
+    time += 1000;
+    for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); }
+    await flush();
+  }
+  assert.equal(finished, true, 'follow-up must finish by its shared ceiling');
+  await pending;
+  assert.equal(h.calls.execute.length, 1, 'following state must never submit deletion again');
+  assert.ok(h.calls.state.every(request => request.operationId === 'slow'), 'all reads must keep the accepted operation ID');
+  if (settles) {
+    assert.equal(applied.length, 1, 'a pending execution settling after 130 seconds must apply its committed result');
+    assert.equal(time, 130000);
+    assert.equal(h.document.querySelector('.app-notice'), null);
+  } else {
+    assert.equal(time, ceiling, 'persistent pending must be followed until the shared ceiling');
+    assert.equal(applied.length, 0);
+    assert.match(h.document.querySelector('.app-notice').textContent, /unresolved.*STATE_READ_UNAVAILABLE/s);
+    assert.match(h.document.querySelector('.app-notice').textContent, /Check deletion state/);
+    assert.equal(h.w.isProjectDeleting(h.p), true);
+  }
+  assert.equal(require('../public/setting-defaults').PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS, ceiling);
+});
+
+test('pending follow-up rejects a changed operation identity', async t => {
+  const h = setup(t);
+  const settle = h.w.settleProjectDeletion;
+  let settled;
+  h.w.settleProjectDeletion = (project, result) => { settled = result; return settle(project, result); };
+  h.w.api.deleteProject = async request => { h.calls.execute.push(request); return { state: 'unknown', operationId: 'slow', code: 'EXECUTION_PENDING' }; };
+  h.w.api.projectDeleteState = async request => { h.calls.state.push(request); return { state: 'committed', operationId: 'different' }; };
+  const pending = h.start(); await flush(); h.confirm().click(); await pending;
+  assert.equal(h.calls.execute.length, 1);
+  assert.equal(h.calls.state.length, 1);
+  assert.match(settled.error, /Deletion operation identity changed/);
+  assert.match(h.document.querySelector('.app-notice').textContent, /STATE_READ_UNAVAILABLE/);
+  assert.equal(h.w.isProjectDeleting(h.p), true);
+});
+
 test('Cancel then reopen follows a pending execute to its terminal refusal without resubmission', async t => {
   const h = setup(t);
   const first = h.start(); await flush(); h.cancel(); await first;
