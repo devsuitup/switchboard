@@ -91,7 +91,8 @@ const { startScheduler, scheduleLaunchRefusal, resolveScheduleSandbox, initialSc
 const { buildScheduleList } = require('./src/main/schedules/schedule-list');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
-const { SETTING_DEFAULTS, normalizeBrowserSettings } = require('./public/setting-defaults');
+const { SETTING_DEFAULTS, normalizeBrowserSettings,
+  PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS, PROJECT_DELETE_WORKTREE_REMOVE_TIMEOUT_MS } = require('./public/setting-defaults');
 const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./src/main/shared/ipc-path-validator');
 const { validatePreLaunchCmd } = require('./src/main/terminals/pre-launch-cmd-guard');
 const { normalizePtySize } = require('./src/main/terminals/pty-size');
@@ -1150,8 +1151,11 @@ ipcMain.handle('check-delete-worktree', (_event, worktreePath) => {
 
 function worktreeGit(args, consume) {
   if (consume) return worktreeDelete.streamGit(args, consume, { spawn: spawnChild, env: localGitEnv() });
+  let command = 0;
+  while (args[command] === '-C' || args[command] === '-c') command += 2;
+  const removing = args[command] === 'worktree' && args[command + 1] === 'remove';
   return new Promise((resolve, reject) => {
-    execFile('git', args, { env: localGitEnv(), timeout: args.includes('remove') ? 120000 : 15000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile('git', args, { env: localGitEnv(), timeout: removing ? PROJECT_DELETE_WORKTREE_REMOVE_TIMEOUT_MS : PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) reject(Object.assign(new Error((stderr || err.message || String(err)).trim()), { code: err.code, killed: err.killed, signal: err.signal }));
       else resolve(stdout);
     });
@@ -3836,7 +3840,7 @@ const unsubscribeBgAgents = require('./src/main/bg-agents/bg-agents-ipc').init({
   activeSessions, cliSessionState, sessionHasPty, ptyPids, getSetting: key => getSetting(key) });
 const { createProjectDeleteMain } = require('./src/main/projects/project-delete-main');
 const projectDeleteMain = createProjectDeleteMain({
-  writer, ipcMain, activeSessions, cliSessionState, log, homeDir: os.homedir(),
+  writer, ipcMain, activeSessions, cliSessionState, log, homeDir: os.homedir(), worktreeGit,
   projectsDir: PROJECTS_DIR, dataDir: path.dirname(DB_PATH), jobsDir: path.join(CLAUDE_DIR, 'jobs'),
   bg: unsubscribeBgAgents, remote: remoteStopAdapter, runClaude: runClaudeCommand,
   gate: require('./src/main/shared/project-operation-gate').projectOperationGate,

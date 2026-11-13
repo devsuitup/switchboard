@@ -1,4 +1,131 @@
-# Project deletion (#474 A4a–A4d)
+# Project deletion (#474 A4a–A4d, E)
+
+## Linked worktree folders (E)
+
+Preview accepts optional `worktrees: string[]` alongside the unchanged five
+boolean writer options. These are exact paths from the main-owned Git inventory,
+not arbitrary filesystem targets. Missing means empty; duplicates and more than
+128 selections refuse. Every registered checkout has a row with its path, branch,
+main/project-directory identity and availability reason. Eligible linked rows
+also report inspected dirty/untracked status, sessions and jobs; always-kept
+main/project-directory rows read none of those details. Status/activity failures are explicit, never rendered as
+clean/idle. The main checkout, the selected project directory and its ancestors
+are never removable. Remote selection refuses because no authoritative remote
+filesystem/removal port exists. Local discovery uses newline-delimited Git
+`worktree list --porcelain`, with the shared parser decoding Git-quoted paths,
+compatible with Git 2.24. Inventory failures have a visible dialog reason.
+Always-kept main/project-directory rows do not read status, scan activity or hash content. Removable labels
+show the ignored-entry count and at most five dirty entries plus the remainder.
+
+Worktree discovery stays inside the single 20-second preview deadline shared
+with metadata planning and the writer scope read; selecting folders never starts
+a second preview budget. Unselected discovery receives at most two seconds and
+half the remaining planner budget. Selected folders are inspected first, with the remaining planner
+budget minus a 500 ms metadata finish margin, both after checkbox changes and on
+confirmation rechecks. This reserves time for the writer revision fence and final
+deadline check; an exhausted selected inspection returns a refused, "not inspected"
+row while metadata planning can still complete. Unselected
+folders then retain their bounded share of the remaining time. Git listing,
+activity and each status read are deadline-bounded; status traversal and hashing
+also check the deadline/signal. Exhausted rows say "not inspected" and cannot be
+removed. An unchecked row adds no refusal and the metadata plan still completes.
+A selected inspection failure directs the user to the dedicated "Delete worktree"
+action in the sidebar. Exhausting the overall planner deadline still fails the
+preview, with that same fallback; selecting a folder never extends the deadline.
+
+Missing session cwd is a folder candidate only when an absolute project path or
+the snapshot's local folder-key mapping ties the record to that subtree. Without
+such a tie its reason is reported once at dialog level. Unlocated active tabs/PTYs,
+scheduled runs (live by definition, even without active or liveness fields),
+live or uncertain CLI descriptors, and rows carrying running/unknown liveness
+evidence block every selected folder; dormant historical rows without that evidence
+only produce the dialog reason. The single conservative rule for unattributed
+activity is: live/uncertain sessions and global background-job candidates block
+selected folders when their location cannot be resolved or belongs to the selected
+subtree, and their reason is reported once at dialog level. A resolvable cwd outside
+the selected subtree does not block it. This rule also applies during removal preflight
+and the final per-folder guard. The parent metadata runtime retains its own
+existing background ownership checks.
+
+`project-delete-worktrees.js` calls the existing `worktree-delete` readStatus and
+removeWorktree functions. Clean removal uses no force; dirty content is hashed
+and rechecked. Locked/submodule rows are disabled here and direct users to the
+dedicated dialog for its extra confirmations. Directory-link refusal is shared:
+remove a node_modules junction with nonrecursive `rmdir` before reopening. E
+does not unlink automatically, traverse junctions, delete branches or invoke
+cleanupWorktree. Linked histories remain outside the parent's metadata manifest.
+
+The runtime reads all CLI descriptor writers, indexed session evidence, active
+tabs and schedules for each selected/unselected inspection group. Background job
+files/list and path resolutions are cached within the preview inventory, shared
+with the parent runtime inventory; results are partitioned by folder in memory.
+Both located and unattributed descriptor reads consume the process table for
+that inventory's abort signal. They share A4's single deadline-bounded fresh
+re-read if the early table expires; an expired replacement is not retried.
+Missing, stale or mismatched process evidence retains the descriptor reader's
+unknown result and cannot establish absence. Removal preflight and every final
+per-folder guard start independent process reads for their own signals, so they
+never reuse the preview table or the Windows global refresh cache.
+Descendant cwd counts as worktree
+activity. Live or uncertain sessions disable the row; E does not extend A4 stop
+authority to a linked project's sessions. Background records remain refused
+under #1090 even when done. Local subtree launch holds cover selected directories
+and wait for previously admitted descendant launches; archive reservations include
+the selected linked identities as well as the parent. External processes and
+filesystem writers are not locked by these holds.
+
+Only selected removable rows enter the planner fingerprint, retained in the single-use
+document-bound token. Renderer boxes are individually unchecked on every open
+with no rememberKey. A changed selected row fingerprint requires reopening:
+a newer hidden detail panel cannot silently authorize newly dirty bytes.
+Unselected physical content is kept. Selecting a directory necessarily removes
+all its contents, including ignored files and any schedules/memory/work-files
+inside it; category `kept` applies to the parent's data, not files inside selected
+linked directories.
+
+The dialog keeps the explicit `Kept on disk:` project-folder notice alongside
+the selected linked-folder removal warning. Kept rows carry no ignored-file
+removal warning. Unselected dirty content does not invalidate project consent.
+
+Execution drains holds, revalidates, stops/verifies parent targets, preflights all
+selected rows, then removes sequentially through the shared path with fresh
+per-removal activity/status checks. Confirm inventories inspect only selected
+folders; each inspection starts process reads only after Git identifies eligible
+rows. Preflight and each final check (including a post-failure re-read) own an
+AbortController and abort it in finally, so refusal and error exits cancel the
+Claude roster and process-table reads. The final metadata preview skips physical inventory. A failed removal
+stops the sequence. Only
+after removal does it reread writer scope and revalidate parent membership/death,
+omitting already-consumed physical selections from this final preview. The
+writer's manifest/options remain metadata-only. The operation retains launch
+holds until Git settles, even after an early IPC unknown reply.
+Renderer follow-up keeps the same operation ID and only reads state. With no
+folders selected its ceiling stays 325 seconds. Otherwise it adds the 15-second
+preflight and, per selected folder, the 15-second final inspection from
+`project-delete-worktrees.js`, the 5-second directory-link scan, the 120-second
+Git removal timeout from `main.js`'s `worktreeGit`, and one additional 15-second
+inspection after a Git failure. Main and renderer import the inspection, removal,
+and `DIRECTORY_SCAN_MS` constants from `public/setting-defaults.js`; two selections
+allow 650 seconds. This bounds automatic following, not filesystem completion.
+
+`worktrees` on operation views records removed/failed/refused/remaining paths.
+A refusal before Git removal has no disk effect and does not make the operation
+partial. An inventory-wide refusal has no individual path. An attempted
+disk effect followed by failure remains partial even when the metadata receipt
+proves notStarted. The renderer's persistent notice lists these paths and offers
+fresh review, never replay. A metadata commit still publishes only its own exact
+invalidation targets. Filesystem and SQLite effects are not an atomic transaction.
+Physical progress is process-local: recovered writer receipts explicitly set
+worktreeHistoryUnknown; a crash before writer submission leaves no disk receipt.
+Fresh Git/disk inspection and user consent establish remaining work. Recovery
+never repeats disk removal or treats a metadata receipt as proof of disk success.
+
+Plain-Node tests cover the production planner, service, activity reader, subtree
+gate and shared removal with controlled Git replies and real disposable files.
+The composition witness includes the real writer/SQLite fixture. Separate real
+Git worktree tests exercise the installed Git version.
+Native UI, full process restart, live process death and
+filesystem races after the shared last scan remain unverified locally.
 
 ## Slow execution and diagnostics (#1103G, #1103H)
 
@@ -63,7 +190,7 @@ the strict backend STOP_UNSUPPORTED behavior remains unchanged.
 R6: a bounded read-only capabilities preview precedes the dialog. Only session
 metadata (initial false) and available project settings (initial true) are
 remembered on acceptance. Disabled remembered choices become unchecked without
-a write. Physical categories stay kept. The literal expandable full plan is
+a write. E adds separately unremembered physical worktree choices above. The literal expandable full plan is
 installed only after latest-response/answer matching; failures cannot enable
 Confirm. Changed membership requires a new dialog/confirmation.
 
@@ -154,7 +281,11 @@ still validate the combined roster; early rejection is handled until consumed.
 Each new preview/revalidation gets a new signal and an isolated process-table
 read, bypassing the global cache and another request's in-flight probe.
 Ownership, schedule and runtime assembly retain
-their order for path registration and PTY pinning. No git process is used.
+their order for path registration and PTY pinning. Metadata discovery uses no Git
+process; E's linked-worktree inventory uses bounded Git reads within that same
+preview deadline. The job roster and resolved paths are cached per preview and
+shared with E's folder activity checks. These reads use the named discovery bounds
+so deadlines and timing diagnostics survive their composition.
 Remote readers remain bounded but production still supplies no exhaustive port.
 
 Outside deletion, the process table reuses a cached result, including a failed
@@ -304,8 +435,9 @@ The service, inventory and planner share optional `now/schedule/cancel` clock po
 allow expiry, deadlines and retention to share one clock. Tokens are 32 random
 bytes, five-minute, boot/document-bound, with 32 outstanding globally. Preview
 rechecks document authority after discovery/scope reads before minting. Input
-options remain the five booleans; extra fields and physical/worktree choices
-refuse. Reply timeout is separate from accepted main-owned work. The operation
+options remain the five booleans; E's optional worktrees path array belongs to
+preview only and never enters writer options. Other extra fields refuse.
+Reply timeout is separate from accepted main-owned work. The operation
 ID and registry entry precede the first await, and readState cannot fence work
 still admitting or stopping. Reuse/foreign tokens never submit or stop twice.
 
@@ -342,8 +474,9 @@ deduplicate by operation/revision and reject stale epochs when reusing cached
 project state; process-local deduplication cannot promise once across restarts.
 Late async callbacks remain responsible for that identity check as well.
 Notification/file observation failure preserves a proven
-commit with a separate warning. Detailed outcomes are always receipt-derived;
-purged receipts stay unknown. `whenIdle()` is an internal drain for tests and
+commit with a separate warning. Detailed metadata outcomes are receipt-derived;
+E's disk outcomes are retained separately in process memory, and purged receipts
+stay unknown. `whenIdle()` is an internal drain for tests and
 shutdown coordination, not a reason to discard unresolved holds.
 
 Once a terminal/noLateCommit result and its bounded notification/file inspection

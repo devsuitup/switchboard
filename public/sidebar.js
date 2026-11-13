@@ -1030,7 +1030,7 @@ function projectDeletionDetails(reply) {
   const plan = reply.plan;
   return JSON.stringify({ project: plan.project, counts: plan.counts, categories: plan.categories,
     groups: plan.groups, members: plan.members, tabs: plan.tabs, stops: plan.stops, jobs: plan.jobs,
-    schedules: plan.schedules, warnings: plan.warnings, refusals: plan.refusals }, null, 2);
+    schedules: plan.schedules, worktrees: plan.worktrees, warnings: plan.warnings, refusals: plan.refusals }, null, 2);
 }
 
 function projectDeletionNotice(project, message, action) {
@@ -1063,7 +1063,8 @@ async function settleProjectDeletion(project, result, { historical = false } = {
     setProjectDeletionBusy(project, true);
     projectDeletionNotice(project, `Deletion is ${result.state === 'unknown' ? 'unresolved' : 'partially completed'}. No deletion will be replayed. Reason: ${result.code || 'UNKNOWN'}.\n` +
       JSON.stringify({ completed: result.completed, kept: result.kept, failed: result.failed, skipped: result.skipped,
-        stopped: result.stopped, stoppedHistoryUnknown: result.stoppedHistoryUnknown }, null, 2),
+        stopped: result.stopped, stoppedHistoryUnknown: result.stoppedHistoryUnknown,
+        worktrees: result.worktrees, worktreeHistoryUnknown: result.worktreeHistoryUnknown }, null, 2),
     result.state === 'partial' ? { actionLabel: 'Review remaining deletion', onAction: () => {
       projectDeletionOperations.delete(key); setProjectDeletionBusy(project, false);
       const current = cachedAllProjects.find(row => projectDeletionKey(row) === key) || project;
@@ -1081,7 +1082,8 @@ async function settleProjectDeletion(project, result, { historical = false } = {
     const operation = projectDeletionOperations.get(key);
     projectDeletionNotice(project, (result?.error || result?.code || 'Deletion could not be completed.') +
       (result?.refresh ? ' Review a fresh preview before confirming again.' : ' Check the project, then retry.') + '\n' +
-      JSON.stringify({ completed: result?.completed, kept: result?.kept, failed: result?.failed, skipped: result?.skipped, stopped: result?.stopped }, null, 2),
+      JSON.stringify({ completed: result?.completed, kept: result?.kept, failed: result?.failed, skipped: result?.skipped, stopped: result?.stopped,
+        worktrees: result?.worktrees, worktreeHistoryUnknown: result?.worktreeHistoryUnknown }, null, 2),
     operation ? { actionLabel: 'Check deletion state', onAction: () => reconcileProjectDeletions({ operations: [
       { operationId: operation.operationId, host: project.remoteAlias ?? project.host ?? null, projectPath: project.projectPath },
     ] }) } : { actionLabel: 'Review deletion', onAction: () => confirmAndDeleteProjectFolder(project) });
@@ -1125,30 +1127,50 @@ async function confirmAndDeleteProjectFolder(project, button) {
   const deadline = Date.now() + PROJECT_DELETE_DIALOG_TIMEOUT_MS;
   try {
     await projectDeletionPreviewWait('flushProjectDeletionWrites', () => window.flushProjectDeletionWrites?.(), deadline);
+    let worktreeChoices = [];
     const request = options => ({ projectPath: project.projectPath, ...(project.folder ? { folderKey: project.folder } : {}),
+      worktrees: worktreeChoices.filter((row, i) => options['worktree:' + i]).map(row => row.path),
       options: { sessions: options.sessions, settings: options.settings, schedules: false, transcripts: false, stopBackgroundJobs: false } });
     const capabilities = await projectDeletionCall('previewProjectDelete', request({ sessions: false, settings: false }), { retryRecovery: true, deadline });
     if (!capabilities?.plan) {
       projectDeletionNotice(project, projectDeletionPlanReason(capabilities)); return false;
     }
     const categories = capabilities.plan.categories;
+    worktreeChoices = (capabilities.plan.worktrees || []).map(row => ({ ...row }));
     const answers = await showChoiceDialog({
       title: 'Delete project from Switchboard?',
       message: [`${project.remoteAlias || 'Local'} — ${capabilities.plan.project.projectPath}`,
         'Choose which app data to discard. Retained session metadata is archived.',
-        'Kept on disk: project folder, transcripts, schedules, memory, .work-files and nested worktrees. All remote server files are kept.',
-        'Kept schedules may reactivate when you add the project again. Retained transcripts may restore their titles.'],
+        'Kept on disk: the project folder. Only individually selected linked worktree folders are removed, including their ignored files. All remote server files are kept.',
+        'Other transcripts, schedules, memory and .work-files stay on disk. Linked worktree history is kept in Switchboard.',
+        'Kept schedules may reactivate when you add the project again. Retained transcripts may restore their titles.',
+        ...(capabilities.plan.warnings || []).filter(row => row.code === 'WORKTREE_UNAVAILABLE').map(row => 'Worktree inventory unavailable: ' + row.error)],
       choices: [
         { id: 'sessions', label: 'Discard session names, pins and app metadata', checked: false, rememberKey: 'deleteProject.sessions',
           disabled: categories.sessions?.available !== true, disabledReason: categories.sessions?.reason || 'Session metadata is unavailable' },
         { id: 'settings', label: 'Delete project settings', checked: true, rememberKey: 'deleteProject.settings',
           disabled: categories.settings?.available !== true, disabledReason: categories.settings?.reason || 'Project settings are unavailable' },
+        ...worktreeChoices.map((row, i) => {
+          const sessionLabel = row.sessionsKnown === false ? 'uncertain' : (row.sessions || []).map(session => session.sessionId || session.id).join(', ') || 'none';
+          const kept = row.main || row.projectDirectory;
+          const dirty = row.dirty?.slice(0, 5).join('; ') + (row.dirty?.length > 5 ? `; and ${row.dirty.length - 5} more` : '');
+          const status = kept ? '' : ` ${row.statusKnown === false ? 'Status unavailable' : row.dirty?.length ? dirty : 'Clean'}. Sessions: ${sessionLabel}.`;
+          const ignored = row.removable ? ` ${row.ignoredCount || 0} ignored entries. Ignored files are removed too.` : '';
+          return { id: 'worktree:' + i,
+            label: `${row.main ? 'Main checkout (kept)' : kept ? 'Project directory (kept)' : 'Remove worktree from disk'}: ${row.path} — ${row.branch}.${status}${ignored}`,
+            checked: false, disabled: row.removable !== true || row.main || row.projectDirectory,
+            disabledReason: row.reason ? row.reason : 'This worktree cannot be removed.' };
+        }),
       ],
       onChange: async values => {
         const reply = await projectDeletionCall('previewProjectDelete', request(values));
         if (!reply?.plan) throw new Error(projectDeletionPlanReason(reply));
         for (const id of ['sessions', 'settings']) if (values[id] && reply.plan.categories[id]?.available !== true) {
           throw new Error(reply.plan.categories[id]?.reason || 'This choice is no longer available. Close and reopen Delete.');
+        }
+        for (const [i, row] of worktreeChoices.entries()) if (values['worktree:' + i]) {
+          const fresh = reply.plan.worktrees?.find(item => item.path === row.path);
+          if (!fresh?.removable || fresh.main || fresh.projectDirectory || fresh.fingerprint !== row.fingerprint) throw new Error(fresh?.reason || 'Worktree changed. Close and reopen Delete.');
         }
         return reply;
       },
@@ -1162,7 +1184,10 @@ async function confirmAndDeleteProjectFolder(project, button) {
     setProjectDeletionWritesBlocked(project, true);
     await window.flushProjectDeletionWrites?.();
     let result = await projectDeletionCall('deleteProject', { token: answers.plan.token, fingerprint: answers.plan.plan.fingerprint });
-    const stateDeadline = Date.now() + PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS;
+    const selectedWorktrees = request(answers).worktrees.length;
+    const worktreeTimeout = selectedWorktrees ? PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS
+      + selectedWorktrees * (2 * PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS + DIRECTORY_SCAN_MS + PROJECT_DELETE_WORKTREE_REMOVE_TIMEOUT_MS) : 0;
+    const stateDeadline = Date.now() + PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS + worktreeTimeout;
     while (result?.operationId && result.code === 'EXECUTION_PENDING') {
       const operationId = result.operationId;
       try {

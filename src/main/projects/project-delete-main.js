@@ -12,6 +12,7 @@ const { registerProjectDeleteIpc } = require('./project-delete-ipc');
 const { parseJobState, parseCliList, JOB_ID_RE } = require('../bg-agents/bg-agents-roster');
 const { stopPtyWithEvidence, detachPty } = require('../terminals/pty-ops');
 const { fail } = require('./project-delete-identity');
+const { createProjectDeleteWorktrees } = require('./project-delete-worktrees');
 const { parseFolderKey } = require('../remote/remote-hosts');
 
 const RECOVERY_TIMEOUT_MS = 4096 * 30000 + 65 * 10000 + 32 * 80000;
@@ -21,6 +22,17 @@ function createProjectDeleteRuntime(ports) {
   const io = ports.fs || fs, now = ports.now || Date.now;
   const schedule = ports.schedule || setTimeout, cancel = ports.cancel || clearTimeout;
   const scopes = new AsyncLocalStorage();
+  const inventories = new WeakMap();
+  const inventoryFor = budget => {
+    const key = budget.signal || budget;
+    if (!inventories.has(key)) inventories.set(key, { paths: new Map() });
+    return inventories.get(key);
+  };
+  const resolvePath = (value, budget) => {
+    const paths = inventoryFor(budget).paths;
+    if (!paths.has(value)) paths.set(value, bounded('fs.realpath', () => io.realpath(value), budget));
+    return paths.get(value);
+  };
   const captureRuntimeRelease = () => {
     const scope = scopes.getStore();
     return () => { scope?.members.clear(); scope?.pins.clear(); };
@@ -45,13 +57,12 @@ function createProjectDeleteRuntime(ports) {
       processReads.set(budget.signal, { agents, table });
     }
   }
-  async function readJobs(project, budget) {
-    if (project.alias !== null) throw fail('DISCOVERY_UNAVAILABLE', 'Remote background inventory has no exhaustive read port.');
+  async function scanJobs(budget) {
     const early = processReads.get(budget.signal);
     const agents = early?.agents || bounded('runClaude.agents', () => ports.runClaude(['agents', '--json', '--all'],
       { cwd: ports.homeDir, timeout: Math.max(1, budget.deadline - now()), signal: budget.signal, maxOutputBytes: 8 * 1048576 }), budget);
     void agents.catch(() => {});
-    const jobs = [], candidates = [], records = new Map();
+    const candidates = [], records = new Map();
     let directory, count = 0, bytes = 0;
     try {
       if ((await bounded('fs.lstat', () => io.lstat(ports.jobsDir), budget)).isSymbolicLink()) throw fail('DISCOVERY_CANDIDATE', 'Linked job directory.');
@@ -91,35 +102,38 @@ function createProjectDeleteRuntime(ports) {
     if (!Array.isArray(raw) || !listed || listed.length !== raw.length
       || listed.length + count > Math.min(budget.limit, 20000)) throw fail('DISCOVERY_LIMIT', 'Background list invalid or oversized.');
     for (const row of listed.filter(row => row.kind === 'background')) {
-      if (!row.id || !records.has(row.id)) candidates.push({ id: row.id || row.sessionId, reason: 'Background list has no durable job record.' });
+      if (!row.id || !records.has(row.id)) candidates.push({ id: row.id || row.sessionId, cwd: row.cwd, reason: 'Background list has no durable job record.' });
       else records.set(row.id, { ...records.get(row.id), cwd: row.cwd || records.get(row.id).cwd });
     }
-    const root = await bounded('fs.realpath', () => io.realpath(project.projectPath), budget);
+    return { candidates, records };
+  }
+  async function readJobs(project, budget) {
+    if (project.alias !== null) throw fail('DISCOVERY_UNAVAILABLE', 'Remote background inventory has no exhaustive read port.');
+    const inventory = inventoryFor(budget);
+    inventory.jobs ||= scanJobs(budget);
+    const scanned = await inventory.jobs;
+    const globalCandidates = [...scanned.candidates], candidates = [], jobs = [];
+    const root = await resolvePath(project.projectPath, budget);
+    const records = scanned.records;
     for (const [id, row] of records) {
-      if (!row.cwd || !path.isAbsolute(row.cwd) || !row.sessionId) { candidates.push({ id, reason: 'Background ownership unavailable.' }); continue; }
+      if (!row.cwd || !path.isAbsolute(row.cwd) || !row.sessionId) { globalCandidates.push({ id, cwd: row.cwd, reason: 'Background ownership unavailable.' }); continue; }
       let cwd;
-      try { cwd = row.cwd === project.projectPath ? root : await bounded('fs.realpath', () => io.realpath(row.cwd), budget); }
+      try { cwd = row.cwd === project.projectPath ? root : await resolvePath(row.cwd, budget); }
       catch (error) {
         if (error.code === 'DISCOVERY_TIMEOUT') throw error;
-        if (error.code !== 'ENOENT') candidates.push({ id, reason: error.message });
+        if (error.code !== 'ENOENT') globalCandidates.push({ id, cwd: row.cwd, reason: error.message });
         continue;
       }
-      if (normalize(cwd) !== normalize(root)) continue;
+      if (normalize(cwd) !== normalize(root) && !(project.includeDescendants && normalize(cwd).startsWith(normalize(root) + '/'))) continue;
       jobs.push({ id, jobId: id, alias: null, projectPath: root, runtime: 'claude', verified: true,
         conversationId: row.sessionId, sessionIds: [row.sessionId], liveness: { state: 'unknown', source: 'job' } });
       candidates.push({ id, reason: 'Background deletion awaits worker-incarnation control (#1090).' });
     }
-    return { complete: true, jobs, candidates };
+    return { complete: true, jobs, candidates: project.worktreeInventory ? candidates : [...globalCandidates, ...candidates], globalCandidates };
   }
   const sessionsFor = id => [...ports.activeSessions].filter(([key, session]) =>
     [key, session.sessionId, session.realSessionId].includes(id));
-  async function readLiveness(row, budget) {
-    const scope = scopes.getStore();
-    if (!scope) throw fail('DISCOVERY_UNAVAILABLE', 'Runtime operation scope unavailable.');
-    const { members, pins } = scope;
-    if (members.size >= 50000 && !members.has(row.id)) throw fail('DISCOVERY_LIMIT', 'Runtime identity limit.');
-    members.set(row.id, row);
-    if (row.alias !== null || row.runtime === 'codex' || row.jobId) return { state: 'unknown' };
+  async function readEvidenceOptions(budget) {
     const early = processReads.get(budget.signal);
     let processTable = await early?.table;
     if (processTable?.expiresAt <= now() && now() < budget.deadline) {
@@ -127,7 +141,16 @@ function createProjectDeleteRuntime(ports) {
         () => ports.cliSessionState.readProcessTableSnapshot(budget.deadline, { fresh: true, signal: budget.signal }), budget);
       processTable = await early.refreshed;
     }
-    const evidenceOptions = processTable === undefined ? {} : { processTable };
+    return processTable === undefined ? {} : { processTable };
+  }
+  async function readLiveness(row, budget) {
+    const scope = scopes.getStore();
+    if (!scope) throw fail('DISCOVERY_UNAVAILABLE', 'Runtime operation scope unavailable.');
+    const { members, pins } = scope;
+    if (members.size >= 50000 && !members.has(row.id)) throw fail('DISCOVERY_LIMIT', 'Runtime identity limit.');
+    members.set(row.id, row);
+    if (row.alias !== null || row.runtime === 'codex' || row.jobId) return { state: 'unknown' };
+    const evidenceOptions = await readEvidenceOptions(budget);
     const matches = sessionsFor(row.sessionId || row.id);
     if (matches.length > 1) return { state: 'unknown' };
     const previous = pins.get(row.id);
@@ -175,7 +198,113 @@ function createProjectDeleteRuntime(ports) {
     }
     return { known: true, complete: true, owners };
   }
-  return { startProcessReads, readJobs, readLiveness, readTarget, readConversation, withScope, captureRuntimeRelease,
+  async function readWorktreeActivity(project, budget) {
+    if (project.alias !== null) throw fail('DISCOVERY_UNAVAILABLE', 'Remote worktree activity is unavailable.');
+    const descriptors = await bounded('cliSessionState.getSidebarDescriptors', () => ports.cliSessionState.getSidebarDescriptors({ allWriters: true }), budget);
+    const snapshot = budget.snapshot || await ports.readWorktreeSnapshot?.(budget);
+    if (!Array.isArray(descriptors) || !Array.isArray(snapshot?.sessions) || !(ports.activeSessions instanceof Map)) {
+      throw fail('DISCOVERY_UNAVAILABLE', 'Worktree session inventory is incomplete.');
+    }
+    const rows = [...ports.activeSessions].map(([id, row]) => ({ ...row, sessionId: row.realSessionId || row.sessionId || id, active: !row.exited }));
+    rows.push(...descriptors, ...snapshot.sessions);
+    if (rows.length > budget.limit) throw fail('DISCOVERY_LIMIT', 'Too many worktree sessions to inspect.');
+    const runs = await bounded('cliSessionState.getScheduleRunSnapshot', () => ports.cliSessionState.getScheduleRunSnapshot(), budget);
+    if (!Array.isArray(runs) || runs.length + rows.length > budget.limit) throw fail('DISCOVERY_LIMIT', 'Schedule inventory unavailable or oversized.');
+    const evidenceById = new Map(), dialogCandidates = new Map();
+    const readEvidence = async id => {
+      const evidenceOptions = await readEvidenceOptions(budget);
+      return bounded('cliSessionState.readStatusEvidence', () => ports.cliSessionState.readStatusEvidence(id, budget.deadline, evidenceOptions), budget);
+    };
+    const descriptorRows = new Set(descriptors), scheduledRows = new Set(runs);
+    let unlocatedActivity = false;
+    const report = candidate => dialogCandidates.set(JSON.stringify([candidate.id, candidate.reason]), candidate);
+    const local = row => !(row.host || row.remoteAlias || row.alias || parseFolderKey(row.folder || row.folderKey).alias !== null);
+    const associatedPaths = row => {
+      const paths = [];
+      if (typeof row.projectPath === 'string' && path.isAbsolute(row.projectPath)) paths.push(row.projectPath);
+      const folder = row.folder || row.folderKey;
+      if (folder) for (const project of snapshot.projects || []) {
+        if (project.alias === null && project.folderKeys?.includes(folder)) paths.push(project.projectPath);
+      }
+      return paths;
+    };
+    for (const row of [...rows, ...runs]) {
+      const value = row.cwd;
+      if (local(row) && (typeof value !== 'string' || !path.isAbsolute(value)) && !associatedPaths(row).length) {
+        const id = row.sessionId || row.id;
+        report({ id, reason: 'Session cwd unavailable.' });
+        if (row.active || scheduledRows.has(row) || row.liveness && row.liveness.state !== 'stopped') unlocatedActivity = true;
+        else if (descriptorRows.has(row)) {
+          if (!id || row.runtime === 'codex') unlocatedActivity = true;
+          else {
+            if (!evidenceById.has(id)) evidenceById.set(id, readEvidence(id));
+            const evidence = await evidenceById.get(id);
+            if (!evidence?.known || evidence.live || evidence.ambiguous) unlocatedActivity = true;
+          }
+        }
+      }
+    }
+    async function forPath(projectPath) {
+      const root = normalize(await resolvePath(projectPath, budget));
+      const sessions = [], jobs = [], candidates = [], seen = new Set();
+      const within = async row => {
+        if (!local(row)) return false;
+        const value = row.cwd;
+        if (typeof value !== 'string' || !path.isAbsolute(value)) {
+          for (const value of associatedPaths(row)) {
+            const owner = normalize(await resolvePath(value, budget));
+            if (owner === root || owner.startsWith(root + '/')) {
+              candidates.push({ id: row.sessionId || row.id, reason: 'Session cwd unavailable.' }); break;
+            }
+          }
+          return false;
+        }
+        let cwd;
+        try { cwd = normalize(await resolvePath(value, budget)); }
+        catch (error) {
+          if (error.code !== 'ENOENT') candidates.push({ id: row.sessionId, reason: 'Session cwd unreadable.' });
+          return false;
+        }
+        return cwd === root || cwd.startsWith(root + '/');
+      };
+      for (const row of rows) {
+        if (!await within(row)) continue;
+        const id = row.sessionId || row.id;
+        if (row.active) { sessions.push({ sessionId: id, cwd: row.cwd || row.projectPath }); continue; }
+        if (!id || row.runtime === 'codex') { candidates.push({ id, reason: 'Worktree runtime liveness unavailable.' }); continue; }
+        if (seen.has(id)) continue;
+        seen.add(id);
+        if (!evidenceById.has(id)) evidenceById.set(id, readEvidence(id));
+        const evidence = await evidenceById.get(id);
+        if (!evidence?.known || evidence.ambiguous) candidates.push({ id, reason: 'Worktree session liveness uncertain.' });
+        else if (evidence.live) sessions.push({ sessionId: id, cwd: row.cwd || row.projectPath });
+      }
+      const roster = await readJobs({ ...project, projectPath, includeDescendants: true, worktreeInventory: true }, budget);
+      jobs.push(...roster.jobs); candidates.push(...roster.candidates);
+      let ownershipUncertain = unlocatedActivity
+        && (budget.selectedWorktrees || budget.worktreePaths || []).some(value => normalize(value) === normalize(projectPath));
+      for (const candidate of roster.globalCandidates) {
+        report(candidate);
+        if (!(budget.selectedWorktrees || budget.worktreePaths || []).some(value => normalize(value) === normalize(projectPath))) continue;
+        let owner;
+        if (typeof candidate.cwd === 'string' && path.isAbsolute(candidate.cwd)) {
+          try { owner = normalize(await resolvePath(candidate.cwd, budget)); } catch {}
+        }
+        if (!owner || owner === root || owner.startsWith(root + '/')) ownershipUncertain = true;
+      }
+      if (runs.length + rows.length + jobs.length > budget.limit) throw fail('DISCOVERY_LIMIT', 'Schedule inventory unavailable or oversized.');
+      for (const run of runs) if (await within(run)) jobs.push(run);
+      return { complete: true, sessions, jobs, candidates, ownershipUncertain };
+    }
+    if (!project.worktreePaths) {
+      const result = await forPath(project.projectPath);
+      return { ...result, candidates: [...result.candidates, ...dialogCandidates.values()] };
+    }
+    const byPath = Object.create(null);
+    for (const directory of project.worktreePaths) byPath[directory] = await forPath(directory);
+    return { byPath, candidates: [...dialogCandidates.values()] };
+  }
+  return { startProcessReads, readJobs, readLiveness, readTarget, readConversation, readWorktreeActivity, withScope, captureRuntimeRelease,
     getScheduleRunSnapshot: () => ports.cliSessionState.getScheduleRunSnapshot(),
     bg: ports.bg, remote: ports.remote,
     detach: attachment => detachPty(attachment.session, attachment.sessionKey),
@@ -212,11 +341,14 @@ function createProjectDeleteMain(deps) {
     catch (error) { delivered.delete(key); throw error; }
     for (const [old, at] of delivered) if (now() - at >= 86400000) delivered.delete(old);
   };
-  const runtime = createProjectDeleteRuntime({ ...deps, ...clock });
-  const inventory = createProjectDeleteInventory({ ...deps, ...runtime, ...clock, writer });
-  const planner = createProjectDeletePlanner({ ...inventory, ...clock });
+  let inventory;
+  const runtime = createProjectDeleteRuntime({ ...deps, ...clock, readWorktreeSnapshot: budget => inventory.readSnapshot(budget) });
+  inventory = createProjectDeleteInventory({ ...deps, ...runtime, ...clock, writer });
+  const worktrees = deps.worktreeGit ? createProjectDeleteWorktrees({ runGit: deps.worktreeGit,
+    readActivity: runtime.readWorktreeActivity, startProcessReads: runtime.startProcessReads, now }) : null;
+  const planner = createProjectDeletePlanner({ ...inventory, ...clock, worktrees });
   const stop = createProjectDeleteStop({ ...deps, ...runtime, ...clock });
-  const service = createProjectDeleteService({ ...clock, writer, inventory, planner, stop, gate: deps.gate, log: deps.log,
+  const service = createProjectDeleteService({ ...clock, writer, inventory, planner, stop, worktrees, gate: deps.gate, log: deps.log,
     captureRuntimeRelease: runtime.captureRuntimeRelease,
     onHoldsInstalled: () => settleHolds?.(!disposed),
     notifyProjects: notify('notifyProjects'), notifySchedules: notify('notifySchedules') });

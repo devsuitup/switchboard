@@ -413,6 +413,53 @@ for (const populated of [false, true]) test(`real composition previews and commi
   if (populated) assert.ok(fs.existsSync(h.transcript));
 });
 
+test('E main composition removes a selected folder before real writer completion and keeps external transcripts', supported, async t => {
+  const h = await setup(t, true);
+  h.main.dispose();
+  const linked = path.join(h.projectPath, 'linked'); fs.mkdirSync(linked);
+  fs.writeFileSync(path.join(linked, 'draft'), 'discard only on consent');
+  const activitySignals = [];
+  h.ports.cliSessionState.getSidebarDescriptors = () => [{ sessionId: 'linked-session', cwd: linked }];
+  h.ports.cliSessionState.readProcessTableSnapshot = async (_deadline, opts) => ({
+    signal: opts.signal, map: new Map(), expiresAt: h.time.now() + 3000,
+  });
+  h.ports.cliSessionState.readStatusEvidence = async (id, _deadline, opts) => {
+    if (id === 'linked-session') activitySignals.push(opts?.processTable?.signal);
+    return { known: true, live: null };
+  };
+  const removed = [];
+  h.ports.worktreeGit = async args => {
+    if (args.includes('list')) {
+      const separator = args.includes('-z') ? '\0' : '\n';
+      return [h.projectPath, linked].filter(p => fs.existsSync(p)).map(p =>
+        ['worktree ' + p.replaceAll('\\', '/'), 'HEAD abc', 'branch refs/heads/topic', ''].join(separator) + separator).join('');
+    }
+    if (args.includes('rev-parse')) return path.join(h.projectPath, 'no-lock') + '\n';
+    if (args.includes('ls-files')) return '';
+    if (args.includes('status')) return path.resolve(args[1]) === linked ? '?? draft\0' : '';
+    if (args.includes('remove')) {
+      assert.ok(activitySignals.slice(-2).every(Boolean), 'main composition must start isolated reads for both disk guards');
+      assert.notEqual(activitySignals.at(-1), activitySignals.at(-2), 'each disk guard needs its own process table');
+      assert.equal(h.calls.includes('completeProjectDeletion'), false, 'disk must precede writer submission');
+      removed.push(args.at(-1)); fs.rmSync(linked, { recursive: true }); return '';
+    }
+    throw new Error('Unexpected git call');
+  };
+  const main = h.compose(); main.attach(h.ports.getMainWindow()); h.load(); await main.startRecovery();
+  const capability = await h.preview();
+  const selected = capability.plan.worktrees.find(row => path.resolve(row.path) === linked);
+  assert.equal(selected.removable, true, JSON.stringify(selected));
+  const preview = await h.invoke('preview-project-delete', { projectPath: h.projectPath, options, worktrees: [selected.path] });
+  assert.ok(preview.token, JSON.stringify(preview));
+  assert.equal(fs.existsSync(linked), true, 'preview must have no filesystem effects');
+  const result = await h.execute(preview);
+  assert.equal(result.state, 'committed', JSON.stringify(result));
+  assert.deepEqual(removed, [selected.path]);
+  assert.equal(result.worktrees[0].state, 'removed');
+  assert.ok(fs.existsSync(h.transcript));
+  assert.equal(fs.existsSync(linked), false);
+});
+
 test('early attach binds first loaded document and reload revokes old token', supported, async t => {
   const h = await setup(t); await h.main.startRecovery();
   assert.equal((await h.preview()).code, 'UNAUTHORIZED');

@@ -49,7 +49,7 @@ Buttons on a project header:
 | Create scheduled task | Opens a Claude session that writes a schedule file — see [Automation](automation.md#creating-a-schedule) |
 | Project settings | Per-project overrides — see [Settings reference](settings.md#project-settings) |
 | Archive folder | Opens a dialog that archives the folder's sessions and disables its schedules, each optional, and hides the folder — see [Archive a folder](#archive-a-folder) |
-| Delete | Previews removal from Switchboard with separate session metadata and project settings choices. Files and nested worktrees stay on disk — see [Settings reference](settings.md#project-settings). |
+| Delete | Previews removal from Switchboard with separate session metadata, project settings and individual linked worktree folder choices. Worktree removal starts unchecked; the main checkout stays — see [Worktree cleanup](worktrees.md#cleaning-up). |
 | New session (`+`) | The launch menu — see [Launching sessions](launching-sessions.md) |
 
 A project on a [remote host](remote-hosts.md) carries a host status dot and a
@@ -66,8 +66,14 @@ project from the sidebar without asking. A notice offers **Undo** for about
 their files. **Unarchive** in Settings → **Archived projects**, or **Add Project**
 on the same local folder, restores it and resumes scheduling. Unlike **Archive
 folder**, a new session does not restore it automatically. **Delete Project**
-separately removes settings, cache, search entries and schedule registration;
-its confirmation names these losses. It deletes no folder or transcript.
+offers separate choices for app metadata and project settings, and optionally
+removes individually selected linked worktree folders from disk. Each folder's
+path, branch, changed files and live sessions are previewed; its checkbox is
+never remembered. The project directory, main checkout, unselected worktrees
+and external transcripts are kept. Contents inside a selected worktree, including
+ignored files, are removed. Busy, uncertain, locked or remote worktrees cannot
+be selected here. A partial deletion lists disk outcomes and requires a fresh
+preview before retrying; see [Worktree cleanup](worktrees.md#cleaning-up).
 
 Sessions run in a git worktree are listed in their repository's project — see
 [Worktree sessions](worktrees.md). A worktree folder is nested under its

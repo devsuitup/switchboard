@@ -106,6 +106,7 @@ test('worktree removal has a longer timeout than preview Git calls', async () =>
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
   const options = [];
   const context = vm.createContext({ localGitEnv: () => ({}),
+    ...require('../public/setting-defaults'),
     execFile: (_exe, _args, opts, callback) => { options.push(opts); callback(null, '', ''); } });
   vm.runInContext(source.slice(source.indexOf('function worktreeGit('),
     source.indexOf('async function worktreeDeletionStatus(')), context, { filename: path.join(__dirname, '../main.js') });
