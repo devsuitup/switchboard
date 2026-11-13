@@ -93,54 +93,54 @@ ENOENT for a job cwd means it no longer belongs to this project, while other
 cwd read errors produce an unreadable candidate for that record.
 
 Deletion discovery uses one effective deadline: the earlier of the planner's
-budget and the inventory context's timeout (10 seconds by default, capped at
-15 seconds). Process-backed inventory ports (`readJobs`, both remote readers,
-and member/tab `readLiveness`, which can invoke Windows process probes) receive
-that deadline and may use all its remaining time. Filesystem, writer and
-in-process scheduler reads also use the remaining deadline: their default cap
-is 15 seconds, matching the maximum supported discovery budget, while the
-effective default remains 10 seconds for the whole preview. This removes the
-independent 3-second refusal under load without extending discovery. An explicit
-`portTimeoutMs` can still impose a shorter cap. `readJobs` forwards
-the remaining budget to `runClaude`; its runner stops the reader on timeout.
-The separate 10-second budget in `readConversation` is post-stop evidence, not
-a fresh preview/job-discovery budget.
+budget and the inventory context's timeout (20 seconds by default and maximum).
+`PROJECT_DELETE_PREVIEW_TIMEOUT_MS` in `public/setting-defaults.js` supplies the
+service, planner and inventory budgets. An explicit shorter timeout or port cap
+still applies. The separate 10-second `readConversation` budget is post-stop
+evidence, not a fresh preview budget.
 
-The background roster and scheduler run snapshot start together with
-`Promise.all`: both are read-only and neither consumes the other's output.
-Their results are validated and charged against the shared budget before use;
-either failure still refuses discovery. Ownership and schedule discovery remain
-ordered before runtime discovery, preserving path registration and liveness
-pinning. No git process is used by this inventory. Remote discovery ports are
-bounded for process/SSH implementations, but production still does not supply
-them. Fake-clock composition tests cover CLI answers at 4 and 8 seconds and a
-hang at the 10-second deadline; inventory tests cover shortened deadlines,
-four-second ordinary reads and explicit shorter caps without starting real CLI
-or SSH processes (#1103).
+Immediately after validating a planner request, before indexing or snapshot
+reads, `startProcessReads` starts the local `claude agents --json --all` and
+process-table reads. The scheduler snapshot also starts then. CLI and table
+promises are keyed by the preview's AbortSignal and shared across ownership,
+member/tab liveness and runtime discovery. CLI parsing and durable job scanning
+still validate the combined roster; early rejection is handled until consumed.
+Each new preview/revalidation gets a new signal and fresh admission to the
+shared process-table cache. Ownership, schedule and runtime assembly retain
+their order for path registration and PTY pinning. No git process is used.
+Remote readers remain bounded but production still supplies no exhaustive port.
 
-The service starts its 10-second preview budget before planning and passes it
-through to the final writer scope read. A scope read after four seconds of
-planning has six seconds left. Discovery bounds share active port descriptors,
-so even an outer timer reports the pending inner port. `DISCOVERY_TIMEOUT`
-errors and IPC replies carry `port`, `elapsedMs` and `boundMs`; the main
-composition writes one debug line for the failed request using the existing
-logger. Job-record and cwd error handling propagates discovery timeouts instead
-of converting them to candidates or attributing expiry to a later read.
-Directory and file closes are named, bounded reads too. Cleanup after
-expiry still starts but cannot hold up the timeout reply; late-open handles
-retain their disposal callback.
+The process table reuses a cached result, including a failed result, for 3 seconds,
+or joins an in-flight read. PowerShell has a 15-second timeout clipped to the
+remaining deadline. The captured table is reused for Windows start/ancestry
+checks, avoiding per-descriptor Get-Process launches during preview. Expired,
+missing or mismatched captured identity is unknown, with no retry within that
+preview. A table cached before descriptor creation cannot prove a mismatched
+descriptor dead. Descriptor absence still proves no writer without table
+availability. Post-stop evidence retains the fresh reader behavior.
 
-From the Delete click, the renderer allows 11 seconds for the existing write
-chain flush and capabilities request together: the production discovery budget
-plus one second for IPC delivery and rendering. Each later option preview also
-has an 11-second watchdog. A stalled read shows an error notice (or the open
-dialog's error), releases pre-confirm busy state, and cannot open a late dialog.
-These are event-loop deadlines, not guarantees during a blocked renderer or
-main thread. They do not change execute/state readback or the time a human can
-spend choosing options. Confirm initially stays disabled while the selected
-preview loads and becomes enabled after a valid reply; that loading state is
-not itself a refusal. DOM tests exercise the real persistence chain and late
-replies; Electron behavior under workstation load is not measured by them.
+The service starts its 20-second preview budget before planning and passes it
+through to the final writer scope read. Four seconds of planning leave sixteen
+seconds for that scope. Discovery bounds share active port descriptors.
+`DISCOVERY_TIMEOUT` errors and IPC replies carry `port`, `elapsedMs` and
+`boundMs`; main writes one debug line per failed request. File and cwd errors
+propagate timeouts without turning them into candidates. Directory/file closes
+are named bounded reads; late-open handles retain disposal callbacks.
+
+From the Delete click, the renderer allows 21 seconds for the write-chain flush
+and capabilities request together. `PROJECT_DELETE_DIALOG_TIMEOUT_MS` derives
+this from the main deadline plus one second. Later option previews have the same
+watchdog. Returned and rejected timeout payloads name the port in the error
+notice or open dialog. Pre-dialog failures release busy state; an open dialog
+retains its project lock until Cancel. Busy state is per host/path, not global;
+NOT_READY recovery availability is a separate global condition. Two-row DOM
+tests check identity rather than button order and verify both rows after failure
+or Cancel. Late pre-dialog replies cannot open a stale dialog.
+
+These are event-loop deadlines, not guarantees during a blocked renderer/main
+thread. Fake-clock composition tests cover a 15-second CLI, shared remaining
+budgets, startup before indexing and the 20-second deadline. Node/jsdom tests
+cannot measure real Electron behavior under workstation load.
 
 Background records remain explicitly blocked on #1090, even when a daemon state
 says done. Current headless schedules retain the inventory's blocking targets.

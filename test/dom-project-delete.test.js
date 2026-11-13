@@ -9,7 +9,49 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-for (const stalled of ['flushProjectDeletionWrites', 'previewProjectDelete']) test(`click shows a notice within 11 seconds when ${stalled} never settles`, async t => {
+test('a selected preview rejection names its port in the open dialog and Cancel releases both rows', async t => {
+  const h = setup(t), original = h.w.api.previewProjectDelete;
+  const other = { ...h.p, projectPath: '/other', sessions: [] };
+  h.w.cachedAllProjects = h.w.cachedProjects = [h.p, other];
+  h.w.renderProjects([h.p, other]);
+  let reject, calls = 0;
+  h.w.api.previewProjectDelete = request => ++calls === 1 ? original(request) : new Promise((_resolve, fail) => { reject = fail; });
+  const pending = h.start(); await flush();
+  assert.ok(h.confirm());
+  reject(Object.assign(new Error('Discovery failed'), { code: 'DISCOVERY_TIMEOUT', port: 'runClaude.agents', elapsedMs: 20000, boundMs: 20000 }));
+  await flush();
+  const message = h.document.querySelector('.choice-dialog').textContent;
+  assert.equal(h.confirm().disabled, true);
+  h.cancel(); await pending;
+  assert.ok([...h.document.querySelectorAll('.project-delete-btn')].every(button => !button.disabled));
+  assert.match(message, /runClaude\.agents/, 'open dialog must identify the failed port');
+  assert.equal(h.calls.execute.length, 0);
+});
+
+for (const rejected of [true, false]) test(`capabilities DISCOVERY_TIMEOUT rejection=${rejected} names the port and releases both project rows`, async t => {
+  const h = setup(t);
+  const other = { ...h.p, folder: 'other', projectPath: '/other', sessions: [] };
+  h.w.cachedAllProjects = h.w.cachedProjects = [h.p, other];
+  h.w.renderProjects([h.p, other]);
+  let finish;
+  h.w.api.previewProjectDelete = () => new Promise((resolve, reject) => { finish = rejected ? reject : resolve; });
+  const pending = h.start(); await flush();
+  const buttons = [...h.document.querySelectorAll('.project-delete-btn')];
+  assert.equal(buttons.length, 2);
+  const ownHeader = h.document.getElementById('ph-' + h.w.folderId(h.p.projectPath, h.p.remoteAlias));
+  const otherHeader = h.document.getElementById('ph-' + h.w.folderId(other.projectPath, other.remoteAlias));
+  assert.equal(ownHeader.querySelector('.project-delete-btn').disabled, true, 'pending preview blocks its project');
+  assert.equal(otherHeader.querySelector('.project-delete-btn').disabled, false, 'busy state is per project');
+  const failure = { code: 'DISCOVERY_TIMEOUT', port: 'runClaude.agents', elapsedMs: 20000, boundMs: 20000 };
+  finish(rejected ? Object.assign(new Error('Discovery failed'), failure) : { ok: false, ...failure });
+  assert.equal(await pending, false);
+  assert.match(h.document.querySelector('.app-notice[role="alert"]')?.textContent || '', /runClaude\.agents/, 'timeout notice must name the failed process port');
+  assert.ok([...h.document.querySelectorAll('.project-delete-btn')].every(button => !button.disabled), 'failure releases every project row');
+  assert.equal(h.document.querySelector('.choice-dialog'), null);
+  assert.equal(h.calls.execute.length, 0);
+});
+
+for (const stalled of ['flushProjectDeletionWrites', 'previewProjectDelete']) test(`click shows a notice within 21 seconds when ${stalled} never settles`, async t => {
   const h = setup(t), timers = new Map(); let id = 0, time = 0, release;
   h.w.Date.now = () => time;
   h.w.setTimeout = (fn, ms) => { timers.set(++id, { fn, at: time + ms }); return id; };
@@ -18,7 +60,11 @@ for (const stalled of ['flushProjectDeletionWrites', 'previewProjectDelete']) te
   const original = target[stalled];
   target[stalled] = () => new Promise(resolve => { release = resolve; });
   const pending = h.start(); await flush();
-  time = 11000;
+  time = 20000;
+  for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); }
+  await flush();
+  assert.equal(h.document.querySelector('.app-notice'), null, 'renderer must leave the main-side twenty-second budget intact');
+  time = 21000;
   for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); }
   await flush();
   const notice = h.document.querySelector('.app-notice[role="alert"]');
@@ -44,7 +90,7 @@ test('a stalled real persistence chain shows a notice and shares the click budge
   h.w.api.previewProjectDelete = () => new Promise(() => {});
   const pending = h.start(); await flush();
   time = 8000; release({}); await saving; await flush();
-  time = 11000;
+  time = 21000;
   for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); }
   await flush();
   assert.match(h.document.querySelector('.app-notice')?.textContent || '', /previewProjectDelete.*timed out/, 'capabilities must receive only the remaining click budget after the writer flush');
@@ -211,7 +257,7 @@ async function settings(h, scope = 'project') {
     if (!h.document.getElementById(id)) { const el = h.document.createElement('div'); el.id = id; h.document.body.append(el); }
   }
   h.w.api.getSetting = async () => ({}); h.w.api.getShellProfiles = async () => [];
-  for (const file of ['setting-defaults.js', 'shortcuts.js', 'terminal-themes.js', 'remote-enrol-panel.js', 'settings-panel.js']) {
+  for (const file of ['shortcuts.js', 'terminal-themes.js', 'remote-enrol-panel.js', 'settings-panel.js']) {
     const filename = path.join(__dirname, '../public', file);
     vm.runInContext(fs.readFileSync(filename, 'utf8'), h.context, { filename });
   }
@@ -283,6 +329,8 @@ test('remote Project Settings refuses Save while its deletion dialog is open', a
 });
 function setup(t, extra = {}) {
   const ctx = setupSidebarDom(); t.after(() => ctx.destroy());
+  const defaults = path.join(__dirname, '../public/setting-defaults.js');
+  vm.runInContext(fs.readFileSync(defaults, 'utf8'), ctx.context, { filename: defaults });
   const w = ctx.window, p = makeSampleProject();
   const calls = { preview: [], execute: [], state: [], writes: [] };
   w.cachedAllProjects = w.cachedProjects = [p];

@@ -15,13 +15,25 @@ warmup is required. Malformed/unreadable descriptors, unresolved live identities
 ambiguity and expired deadlines cannot take this path. Other Windows results
 still require the shared process-table refresh against the remaining deadline,
 then a new identity read with table age under 3000 ms before and after it.
-The global probe timeout stays
-5000 ms and its table TTL stays 3000 ms. A late refresh can help a later request,
+The process-table probe timeout is 15000 ms, clipped to a supplied deadline;
+individual Get-Process probes keep their 5000 ms cap. The table TTL stays 3000 ms. A late refresh can help a later request,
 but cannot change a consumed result. V1 live observations retain parsed state,
 host/raw PID, start and namespace. Linux namespace/ancestry validation remains
 in the v1 reader. Schedules without that identity do not supply descriptor proof.
 Status requests require a unique verified writer; competing identities project
 ambiguous. Existing action readers keep their refusal on any verified live writer.
+
+Deletion previews call `readProcessTableSnapshot(deadline)` once at startup.
+It reuses the shared three-second cache (including null failures) or the in-flight
+read. The returned snapshot is passed explicitly to `readStatusEvidence`,
+`liveElsewhereV1Checked` and `deliveryPtyStart`. Windows V1 reads starts and
+ancestry from it rather than launching Get-Process twice per descriptor. Its
+three-second age is checked when consumed; expired/failed/missing/mismatched
+entries remain unknown without another refresh. Cached mismatch cannot prove
+absence because the descriptor may be newer than the table. Descriptor absence
+and two failed PID-alive checks retain their independent evidence. Ordinary
+status/action callers and post-stop reads omit the snapshot and retain fresh
+identity probing.
 
 The status gatherer shares one absolute now+2000 deadline across head and
 descriptor awaits, pins PTY/generation/start/namespace and rechecks after awaits.

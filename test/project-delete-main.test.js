@@ -16,6 +16,33 @@ catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; }
 const supported = { skip: !openStore.supported && 'SQLite needs Node 22 or a matching native ABI' };
 const options = { sessions: true, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false };
 const flush = () => new Promise(resolve => setImmediate(resolve));
+
+test('process readers start before indexing and are reused across member and tab discovery', supported, async t => {
+  let releaseIndex, cliCalls = 0, tableCalls = 0;
+  const h = await setup(t, true, {
+    waitForIndex: () => new Promise(resolve => { releaseIndex = resolve; }),
+    runClaude: async () => { cliCalls++; return { code: 0, stdout: '[]' }; },
+  });
+  h.ports.cliSessionState.readProcessTableSnapshot = async () => { tableCalls++; return { map: null }; };
+  h.activeSessions.set('part', { projectPath: h.projectPath, sessionId: 'part' });
+  h.load(); await h.main.startRecovery();
+  const pending = h.preview(); await flush();
+  const early = [cliCalls, tableCalls];
+  releaseIndex(); await pending;
+  assert.deepEqual(early, [1, 1], 'both process readers must start before indexing completes');
+  assert.deepEqual([cliCalls, tableCalls], [1, 1], 'each process reader runs at most once per preview');
+});
+
+test('a fifteen-second background CLI still produces a small-project preview', supported, async t => {
+  let answer, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const h = await setup(t, false, { runClaude: () => { entered(); return new Promise(resolve => { answer = resolve; }); } });
+  h.load(); await h.main.startRecovery();
+  const pending = h.preview(); await started;
+  h.time.advance(15000); answer({ code: 0, stdout: '[]' });
+  const result = await pending;
+  assert.ok(result.token, 'preview must allow a 15-second CLI within the 20-second shared budget: ' + JSON.stringify(result));
+});
 function startupFixture(projectDeleteHolds, overrides = {}) {
   const filename = path.join(__dirname, '..', 'main.js'), source = fs.readFileSync(filename, 'utf8');
   const start = source.lastIndexOf('    try {', source.indexOf('scheduleIpc.init(log, runScheduleCommand'));
@@ -111,14 +138,14 @@ for (const port of ['readProjectDeletionRevision', 'readProjectDeletionScope']) 
   let result;
   const pending = h.preview().then(value => { result = value; });
   await started;
-  h.time.advance(10000); await flush();
+  h.time.advance(20000); await flush();
   assert.equal(result?.code, 'DISCOVERY_TIMEOUT', 'all preview reads must share the discovery timeout');
   assert.equal(result.port, 'writer.' + port, 'outer deadline must retain the active writer port');
-  assert.equal(result.elapsedMs, 10000);
-  assert.equal(result.boundMs, 10000);
+  assert.equal(result.elapsedMs, 20000);
+  assert.equal(result.boundMs, 20000);
   assert.equal(logs.length, 1, 'main logs one diagnostic per failed preview');
   assert.match(logs[0], new RegExp('writer\\.' + port));
-  assert.match(logs[0], /10000/);
+  assert.match(logs[0], /20000/);
   await pending;
 });
 
@@ -132,12 +159,12 @@ test('scope read gets only the remainder after four seconds of planning', suppor
   h.faults.readProjectDeletionScope = () => { entered(); return new Promise(() => {}); };
   let result;
   const pending = h.preview().then(value => { result = value; });
-  await started; h.time.advance(5999); await flush();
+  await started; h.time.advance(15999); await flush();
   assert.equal(result, undefined);
   h.time.advance(1); await flush();
-  assert.equal(result?.code, 'DISCOVERY_TIMEOUT', 'scope must not restart a ten-second budget');
+  assert.equal(result?.code, 'DISCOVERY_TIMEOUT', 'scope must not restart a twenty-second budget');
   assert.equal(result.port, 'writer.readProjectDeletionScope');
-  assert.equal(result.boundMs, 6000);
+  assert.equal(result.boundMs, 16000);
   await pending;
 });
 
@@ -198,7 +225,7 @@ for (const delay of [4000, 8000]) test(`preview accepts background CLI after ${d
   } });
   h.load(); await h.main.startRecovery();
   const pending = h.preview(); await started;
-  assert.equal(timeout, 10000, 'CLI receives the remaining overall deadline');
+  assert.equal(timeout, 20000, 'CLI receives the remaining overall deadline');
   h.time.advance(delay); answer({ code: 0, stdout: '[]' });
   const result = await pending;
   assert.equal(result.ok, true, 'slow CLI must not expire at the short port cap: ' + JSON.stringify(result));
@@ -212,7 +239,7 @@ test('hung background CLI expires at the overall preview deadline, not the short
   h.load(); await h.main.startRecovery();
   let result;
   const pending = h.preview().then(value => { result = value; }); await started;
-  h.time.advance(9999); await flush();
+  h.time.advance(19999); await flush();
   assert.equal(result, undefined, 'hung CLI must remain pending until the overall deadline');
   h.time.advance(1); await pending;
   assert.equal(result.code, 'DISCOVERY_TIMEOUT');

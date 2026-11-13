@@ -9,6 +9,49 @@ const { EventEmitter } = require('node:events');
 const state = require('../cli-session-state');
 
 const ID = '01234567-89ab-cdef-0123-456789abcdef';
+
+for (const failed of [false, true]) test(`preview snapshot reuses recent table reads including failure=${failed}`, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-table-cache-'));
+  t.after(() => { state.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
+  let time = Date.now();
+  const timeouts = [];
+  state.init({ dir, platform: 'win32', activeSessions: new Map(), now: () => time,
+    readProcessTable: async timeout => { timeouts.push(timeout); if (failed) throw new Error('table unavailable'); return new Map([[42, { ppid: 1, created: '133000000000000000' }]]); } });
+  const first = await state.readProcessTableSnapshot(time + 20000);
+  time += 2000;
+  const cached = await state.readProcessTableSnapshot(time + 20000);
+  assert.equal(cached.map, first.map, 'a recent result is shared across previews');
+  assert.deepEqual(timeouts, [15000], 'a recent failed read must not be retried either');
+  time += 1000;
+  await state.readProcessTableSnapshot(time + 1000);
+  assert.deepEqual(timeouts, [15000, 1000], 'expired cache refresh obeys the remaining deadline');
+});
+
+for (const mode of ['fresh', 'failed', 'stale', 'mismatched']) test(`preview table snapshot ${mode} never starts another process probe`, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-preview-table-'));
+  t.after(() => { state.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const time = Date.now(), start = '133000000000000000';
+  fs.writeFileSync(path.join(dir, '42.json'), JSON.stringify({ pid: 42, sessionId: ID, kind: 'interactive',
+    status: 'idle', pidDomain: 'win32:anchor', procStart: start }));
+  let probes = 0;
+  state.init({ dir, platform: 'win32', activeSessions: new Map(), now: () => time, isProcessAlive: () => true,
+    readProcessTable: async () => { probes++; return null; },
+    readProcStartMany: async () => { probes++; return new Map([[42, start]]); } });
+  const processTable = { at: time - (mode === 'stale' ? 4000 : 0), observedAt: time,
+    map: mode === 'failed' ? null : new Map([[42, { ppid: 1, created: mode === 'mismatched' ? '134000000000000000' : start }]]) };
+  const result = await state.readStatusEvidence(ID, time + 20000, { processTable });
+  assert.equal(probes, 0, 'preview must consume its one table result even when unavailable or expired');
+  if (mode === 'fresh') assert.equal(result?.live?.pid, 42);
+  else assert.equal(result, null, 'unavailable or mismatched cached identity stays unknown');
+});
+
+test('default Windows process-table timeout fits the twenty-second preview budget', async () => {
+  let timeout;
+  await state.probeProcessTable('win32', undefined, (_file, _args, options, done) => {
+    timeout = options.timeout; done(null, '42 1 133000000000000000\tclaude.exe');
+  });
+  assert.equal(timeout, 15000, 'table reader needs 15 seconds under load and leaves five seconds for discovery');
+});
 test('fresh HOME absence is authoritative before Windows process-table warmup', async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-fresh-home-'));
   const dir = path.join(home, '.claude', 'sessions');

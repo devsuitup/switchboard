@@ -12,6 +12,7 @@ const { registerProjectDeleteIpc } = require('./project-delete-ipc');
 const { parseJobState, parseCliList, JOB_ID_RE } = require('../bg-agents/bg-agents-roster');
 const { stopPtyWithEvidence, detachPty } = require('../terminals/pty-ops');
 const { fail } = require('./project-delete-identity');
+const { parseFolderKey } = require('../remote/remote-hosts');
 
 const RECOVERY_TIMEOUT_MS = 4096 * 30000 + 65 * 10000 + 32 * 80000;
 const HOLDS_TIMEOUT_MS = 120000;
@@ -30,8 +31,25 @@ function createProjectDeleteRuntime(ports) {
   });
   const normalize = value => (process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value)).replaceAll('\\', '/');
   const bounded = createDiscoveryBounds({ now, schedule, cancel });
+  const processReads = new WeakMap();
+  function startProcessReads(request, budget) {
+    if (request.folderKey && parseFolderKey(request.folderKey).alias !== null) return;
+    if (!processReads.has(budget.signal)) {
+      const agents = bounded('runClaude.agents', () => ports.runClaude(['agents', '--json', '--all'],
+        { cwd: ports.homeDir, timeout: Math.max(1, budget.deadline - now()), maxOutputBytes: 8 * 1048576 }), budget);
+      const table = ports.cliSessionState.readProcessTableSnapshot
+        ? Promise.resolve().then(() => ports.cliSessionState.readProcessTableSnapshot(budget.deadline))
+          .catch(() => ({ map: null })) : Promise.resolve(undefined);
+      void agents.catch(() => {});
+      processReads.set(budget.signal, { agents, table });
+    }
+  }
   async function readJobs(project, budget) {
     if (project.alias !== null) throw fail('DISCOVERY_UNAVAILABLE', 'Remote background inventory has no exhaustive read port.');
+    const early = processReads.get(budget.signal);
+    const agents = early?.agents || bounded('runClaude.agents', () => ports.runClaude(['agents', '--json', '--all'],
+      { cwd: ports.homeDir, timeout: Math.max(1, budget.deadline - now()), maxOutputBytes: 8 * 1048576 }), budget);
+    void agents.catch(() => {});
     const jobs = [], candidates = [], records = new Map();
     let directory, count = 0, bytes = 0;
     try {
@@ -64,8 +82,7 @@ function createProjectDeleteRuntime(ports) {
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     } finally { await closeDiscoveryHandle('fs.directory.close', directory, budget, { now, schedule, cancel }); }
-    const result = await bounded('runClaude.agents', () => ports.runClaude(['agents', '--json', '--all'],
-      { cwd: ports.homeDir, timeout: Math.max(1, budget.deadline - now()), maxOutputBytes: 8 * 1048576 }), budget);
+    const result = await agents;
     if (result.code !== 0 || Buffer.byteLength(result.stdout || '') > 8 * 1048576) throw fail('DISCOVERY_UNAVAILABLE', 'Authoritative background list unavailable.');
     const listed = parseCliList(result.stdout);
     let raw;
@@ -102,6 +119,8 @@ function createProjectDeleteRuntime(ports) {
     if (members.size >= 50000 && !members.has(row.id)) throw fail('DISCOVERY_LIMIT', 'Runtime identity limit.');
     members.set(row.id, row);
     if (row.alias !== null || row.runtime === 'codex' || row.jobId) return { state: 'unknown' };
+    const processTable = await processReads.get(budget.signal)?.table;
+    const evidenceOptions = processTable === undefined ? {} : { processTable };
     const matches = sessionsFor(row.sessionId || row.id);
     if (matches.length > 1) return { state: 'unknown' };
     const previous = pins.get(row.id);
@@ -114,8 +133,8 @@ function createProjectDeleteRuntime(ports) {
       if (!session.exited && matches.length) {
         if (row.runtime !== 'terminal') {
           const external = await bounded('cliSessionState.liveElsewhereV1Checked', () => ports.cliSessionState.liveElsewhereV1Checked(row.sessionId || row.id,
-            () => false, () => [identity.pid], { deadline: budget.deadline, requireUnique: true }), budget);
-          if (!external?.known || external.live || ports.cliSessionState.deliveryPtyStart(identity.pid) !== identity.procStart) return { state: 'unknown' };
+            () => false, () => [identity.pid], { deadline: budget.deadline, requireUnique: true, ...evidenceOptions }), budget);
+          if (!external?.known || external.live || ports.cliSessionState.deliveryPtyStart(identity.pid, evidenceOptions) !== identity.procStart) return { state: 'unknown' };
         }
         return { state: 'running', source: 'pty', targetId: sessionKey, sessionKey, identity };
       }
@@ -125,7 +144,7 @@ function createProjectDeleteRuntime(ports) {
         || proof.generation !== undefined && proof.generation !== identity.generation) return { state: 'unknown' };
     }
     if (row.runtime === 'terminal') return session ? { state: 'stopped', source: 'pty' } : { state: 'unknown' };
-    const evidence = await bounded('cliSessionState.readStatusEvidence', () => ports.cliSessionState.readStatusEvidence(row.sessionId || row.id, budget.deadline), budget);
+    const evidence = await bounded('cliSessionState.readStatusEvidence', () => ports.cliSessionState.readStatusEvidence(row.sessionId || row.id, budget.deadline, evidenceOptions), budget);
     return evidence?.known && !evidence.live && !evidence.ambiguous
       ? { state: 'stopped', source: 'descriptor' } : { state: 'unknown', source: 'external' };
   }
@@ -149,7 +168,7 @@ function createProjectDeleteRuntime(ports) {
     }
     return { known: true, complete: true, owners };
   }
-  return { readJobs, readLiveness, readTarget, readConversation, withScope, captureRuntimeRelease,
+  return { startProcessReads, readJobs, readLiveness, readTarget, readConversation, withScope, captureRuntimeRelease,
     getScheduleRunSnapshot: () => ports.cliSessionState.getScheduleRunSnapshot(),
     bg: ports.bg, remote: ports.remote,
     detach: attachment => detachPty(attachment.session, attachment.sessionKey),

@@ -1,6 +1,7 @@
 'use strict';
 
 const { randomUUID, randomBytes } = require('node:crypto');
+const { PROJECT_DELETE_PREVIEW_TIMEOUT_MS } = require('../../../public/setting-defaults');
 const { createDiscoveryBounds, discoveryDetails } = require('./project-delete-deadline');
 const { operationId } = require('./project-delete-progress');
 const { membershipDigest, stable, isRecord, text, fail, OPTION_KEYS } = require('./project-delete-identity');
@@ -62,7 +63,7 @@ function createProjectDeleteService(deps) {
     if (!valid(sender)) return failure('UNAUTHORIZED', { token: null });
     if (!ready) return failure('NOT_READY', { token: null });
     prune();
-    const budget = { deadline: now() + 10000, pendingPorts: new Map() };
+    const budget = { deadline: now() + PROJECT_DELETE_PREVIEW_TIMEOUT_MS, pendingPorts: new Map() };
     const read = createDiscoveryBounds({ now, schedule, cancel });
     try {
       const result = await read('planner.preview', () => planner.preview(request, budget), budget);

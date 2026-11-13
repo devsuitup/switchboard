@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs/promises');
+const { PROJECT_DELETE_PREVIEW_TIMEOUT_MS } = require('../../../public/setting-defaults');
 const { createDiscoveryBounds, discoveryTimeout, closeDiscoveryHandle } = require('./project-delete-deadline');
 const path = require('node:path');
 const { parseFolderKey } = require('../remote/remote-hosts');
@@ -20,7 +21,7 @@ function createProjectDeleteInventory(deps) {
   function context(budget) {
     let c = contexts.get(budget.signal);
     if (!c) {
-      c = { deadline: Math.min(budget.deadline, now() + cap(deps.timeoutMs, 10000, 15000)), items: 0, bytes: 0,
+      c = { deadline: Math.min(budget.deadline, now() + cap(deps.timeoutMs, PROJECT_DELETE_PREVIEW_TIMEOUT_MS, PROJECT_DELETE_PREVIEW_TIMEOUT_MS)), items: 0, bytes: 0,
         signal: budget.signal, pendingPorts: budget.pendingPorts ||= new Map(), startedAt: now(),
         limit: Math.min(budget.limit, maxItems), realpaths: new Map(), spellings: new Map(), checkedPaths: new Set(), snapshot: null };
       contexts.set(budget.signal, c);
@@ -33,7 +34,7 @@ function createProjectDeleteInventory(deps) {
     c.check(); c.items += items; c.bytes += bytes;
     if (c.items > c.limit || c.bytes > maxBytes) throw fail('DISCOVERY_LIMIT', 'Inventory exceeds aggregate budget.');
   }
-  const bounded = (c, port, fn, dispose, timeoutMs = cap(deps.portTimeoutMs, 15000, 15000)) =>
+  const bounded = (c, port, fn, dispose, timeoutMs = cap(deps.portTimeoutMs, PROJECT_DELETE_PREVIEW_TIMEOUT_MS, PROJECT_DELETE_PREVIEW_TIMEOUT_MS)) =>
     bound(port, fn, c, dispose, timeoutMs);
   const processPort = (c, budget, port, read) => bounded(c, port,
     () => read({ ...budget, deadline: c.deadline, pendingPorts: c.pendingPorts }), undefined, c.deadline - now());
@@ -441,7 +442,7 @@ function createProjectDeleteInventory(deps) {
     if (!deps.readJobs || !deps.getScheduleRunSnapshot) throw fail('SNAPSHOT_INCOMPLETE', 'Authoritative jobs and scheduler evidence are required.');
     const [roster, runs] = await Promise.all([
       processPort(c, budget, 'readJobs', remaining => deps.readJobs(project, remaining)),
-      bounded(c, 'getScheduleRunSnapshot', () => deps.getScheduleRunSnapshot()),
+      c.runs || bounded(c, 'getScheduleRunSnapshot', () => deps.getScheduleRunSnapshot()),
     ]);
     if (roster.complete !== true || !Array.isArray(roster.jobs)) throw fail('SNAPSHOT_INCOMPLETE', 'Background job discovery incomplete.');
     charge(c, roster.jobs.length + (roster.candidates?.length || 0));
@@ -458,6 +459,14 @@ function createProjectDeleteInventory(deps) {
     return { complete: true, tabs: [...tabs.values()], jobs, candidates };
   }
   return {
+    startProcessReads: (request, budget) => {
+      const c = context(budget);
+      deps.startProcessReads?.(request, { ...budget, deadline: c.deadline, pendingPorts: c.pendingPorts });
+      if (deps.getScheduleRunSnapshot && !c.runs) {
+        c.runs = bounded(c, 'getScheduleRunSnapshot', () => deps.getScheduleRunSnapshot());
+        void c.runs.catch(() => {});
+      }
+    },
     waitForIndex: async budget => { const c = context(budget); if (deps.waitForIndex) await bounded(c, 'waitForIndex', () => deps.waitForIndex(budget)); },
     readSnapshot, discoverOwnership, discoverSchedules, readRuntimeState,
     readRevision: async budget => String(await bounded(context(budget), 'writer.readProjectDeletionRevision', () => deps.writer.readProjectDeletionRevision())),

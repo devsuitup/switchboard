@@ -977,7 +977,7 @@ function setProjectDeletionWritesBlocked(project, blocked) {
   window.flushDeferredProjectDeletionWrites();
 }
 
-async function projectDeletionPreviewWait(port, read, deadline = Date.now() + 11000) {
+async function projectDeletionPreviewWait(port, read, deadline = Date.now() + PROJECT_DELETE_DIALOG_TIMEOUT_MS) {
   const startedAt = Date.now(), boundMs = Math.max(0, deadline - startedAt);
   let timer;
   const expired = () => new Error(`${port} timed out (${Date.now() - startedAt} ms elapsed; ${boundMs} ms bound).`);
@@ -994,7 +994,10 @@ async function projectDeletionPreviewWait(port, read, deadline = Date.now() + 11
 async function projectDeletionCall(method, input, { retryRecovery = false, deadline } = {}) {
   const revision = projectDeletionRecoveryRevision;
   const reply = await (method === 'previewProjectDelete'
-    ? projectDeletionPreviewWait(method, () => window.api[method](input), deadline) : window.api[method](input));
+    ? projectDeletionPreviewWait(method, () => window.api[method](input), deadline).catch(error => {
+      if (error.code === 'DISCOVERY_TIMEOUT') throw new Error(projectDeletionPlanReason(error));
+      throw error;
+    }) : window.api[method](input));
   if (reply?.code === 'NOT_READY') {
     projectDeletionRecoveryRevision++;
     projectDeletionUnavailable = PROJECT_DELETION_RECOVERY_REASON;
@@ -1006,6 +1009,7 @@ async function projectDeletionCall(method, input, { retryRecovery = false, deadl
 function projectDeletionPlanReason(reply) {
   if (projectDeletionUnavailable) return projectDeletionUnavailable;
   if (reply?.code === 'NOT_READY') return PROJECT_DELETION_RECOVERY_REASON;
+  if (reply?.code === 'DISCOVERY_TIMEOUT') return `${reply.port || 'previewProjectDelete'} timed out (${reply.elapsedMs ?? '?'} ms elapsed; ${reply.boundMs ?? '?'} ms bound).`;
   const plan = reply?.plan;
   if (!plan) return reply?.error || 'Project deletion preview is unavailable. Close and reopen Delete to retry.';
   if (plan.jobs?.some(job => !['running', 'stopped'].includes(job.liveness?.state))) {
@@ -1118,7 +1122,7 @@ async function confirmAndDeleteProjectFolder(project, button) {
   }
   setProjectDeletionBusy(project, true);
   let accepted = false, unresolved = false;
-  const deadline = Date.now() + 11000;
+  const deadline = Date.now() + PROJECT_DELETE_DIALOG_TIMEOUT_MS;
   try {
     await projectDeletionPreviewWait('flushProjectDeletionWrites', () => window.flushProjectDeletionWrites?.(), deadline);
     const request = options => ({ projectPath: project.projectPath, ...(project.folder ? { folderKey: project.folder } : {}),

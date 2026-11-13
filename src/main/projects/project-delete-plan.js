@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('node:path');
+const { PROJECT_DELETE_PREVIEW_TIMEOUT_MS } = require('../../../public/setting-defaults');
 const { createDiscoveryBounds, discoveryTimeout, discoveryDetails } = require('./project-delete-deadline');
 const { parseFolderKey } = require('../remote/remote-hosts');
 const { worktreeParentPath } = require('../../../public/worktree-nesting');
@@ -42,7 +43,7 @@ async function resolveProject(request, snapshot, boundKey, memo, each, ordered) 
 
 function createProjectDeletePlanner(deps) {
   const { now = Date.now, schedule = setTimeout, cancel = clearTimeout } = deps;
-  const timeoutMs = Number.isFinite(deps.timeoutMs) ? Math.max(1, Math.min(deps.timeoutMs, 15000)) : 10000;
+  const timeoutMs = Number.isFinite(deps.timeoutMs) ? Math.max(1, Math.min(deps.timeoutMs, PROJECT_DELETE_PREVIEW_TIMEOUT_MS)) : PROJECT_DELETE_PREVIEW_TIMEOUT_MS;
   const maxItems = Number.isInteger(deps.maxItems) ? Math.max(1, Math.min(deps.maxItems, 50000)) : 20000;
 
   async function preview(input, boundKey, sharedBudget) {
@@ -92,6 +93,7 @@ function createProjectDeletePlanner(deps) {
         if (!isRecord(value) || value.complete !== true) throw fail('SNAPSHOT_INCOMPLETE', 'Index or discovery is incomplete; retry after indexing.');
       };
       const collect = async () => {
+        deps.startProcessReads?.(request, budget);
         await read('waitForIndex', () => deps.waitForIndex(budget));
         expired();
         const snapshot = structuredClone(await read('readSnapshot', () => deps.readSnapshot(budget)));

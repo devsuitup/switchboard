@@ -17,6 +17,30 @@ const { encodeProjectPath } = require('../encode-project-path');
 const loadGetProjectsHandler = require('./get-projects-handler.cjs');
 const supported = { skip: !openStore.supported && 'SQLite needs Node 22 or a matching native ABI' };
 
+test('worker suppresses deleted transcript writes across short cwd and long fence spellings', {
+  skip: !openStore.supported ? 'SQLite needs Node 22 or a matching native ABI' : process.platform !== 'win32' && 'Windows 8.3 spelling',
+}, async t => {
+  const h = await setup(t);
+  const project = h.projects[0];
+  const long = fs.realpathSync.native(project.projectPath);
+  const short = require('node:child_process').execFileSync('cmd.exe', ['/d', '/c', `for %I in ("${long}") do @echo %~sI`], { encoding: 'utf8', windowsHide: true, windowsVerbatimArguments: true }).trim();
+  if (short.toLowerCase() === long.toLowerCase()) { t.skip('8.3 aliases are disabled on this Windows volume'); return; }
+  assert.equal(fs.realpathSync.native(short), long, 'fixture must address the same real directory');
+  assert.notEqual(short.toLowerCase(), long.toLowerCase(), 'fixture must exercise genuinely different spellings');
+  await h.remove();
+  const record = JSON.parse(fs.readFileSync(project.transcript, 'utf8'));
+  record.cwd = short;
+  fs.writeFileSync(project.transcript, JSON.stringify(record) + '\n');
+  const shortFolder = path.join(path.dirname(path.dirname(project.transcript)), encodeProjectPath(short));
+  fs.renameSync(path.dirname(project.transcript), shortFolder);
+  const fence = h.db.connection.prepare('SELECT projectKey FROM project_delete_fences WHERE blocked = 1').get();
+  assert.equal(JSON.parse(fence.projectKey)[1], long.replaceAll('\\', '/').toLowerCase(), 'deletion fence must retain the long canonical spelling');
+  await h.makeList()('both');
+  assert.deepEqual(h.errors, [], 'worker must suppress blocked writes before writer admission across path spellings');
+  assert.equal(h.db.getCachedSession(project.sessionId), null);
+  assert.equal(h.requests.length, 1, 'spelling differences must not cause worker conflict retries');
+});
+
 function freshCache() {
   const filename = require.resolve('../session-cache');
   const module = { exports: {} };
