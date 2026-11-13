@@ -170,9 +170,9 @@ function parseProcessTable(text) {
   return out;
 }
 
-function probeProcessTable(plat = process.platform, timeoutMs = PROCESS_TABLE_TIMEOUT_MS, exec = execFile) {
+function probeProcessTable(plat = process.platform, timeoutMs = PROCESS_TABLE_TIMEOUT_MS, exec = execFile, signal) {
   return new Promise((resolve, reject) => {
-    const opts = { timeout: timeoutMs, windowsHide: true, maxBuffer: PROCESS_TABLE_MAX_BUFFER };
+    const opts = { timeout: timeoutMs, windowsHide: true, maxBuffer: PROCESS_TABLE_MAX_BUFFER, ...(signal ? { signal } : {}) };
     const done = (err, stdout, stderr) => {
       if (err) { err.stderr = String(stderr || '').slice(0, 300); err.timedOut = err.killed === true && err.signal === 'SIGTERM'; reject(err); return; }
       resolve(parseProcessTable(stdout));
@@ -189,8 +189,8 @@ function probeProcessTable(plat = process.platform, timeoutMs = PROCESS_TABLE_TI
   });
 }
 
-function defaultReadProcessTable(timeoutMs) {
-  return probeProcessTable(process.platform, timeoutMs);
+function defaultReadProcessTable(timeoutMs, { signal } = {}) {
+  return probeProcessTable(process.platform, timeoutMs, execFile, signal);
 }
 
 function processTableFresh() {
@@ -245,8 +245,19 @@ function refreshProcessTable({ force = false, deadline = Infinity } = {}) {
   return inFlight;
 }
 
-async function readProcessTableSnapshot(deadline) {
+async function readProcessTableSnapshot(deadline, { fresh = false, signal } = {}) {
   if (!processTableEnabled) return undefined;
+  if (fresh) {
+    const observedAt = now();
+    let map = null;
+    if (!signal?.aborted && observedAt < deadline) {
+      try { map = normaliseProcessTable(await readProcessTable(Math.min(PROCESS_TABLE_TIMEOUT_MS, deadline - observedAt), { signal })); }
+      catch {}
+    }
+    if (signal?.aborted || now() >= deadline) map = null;
+    const at = now();
+    return { at, observedAt, map, expiresAt: at + PROCESS_TABLE_TTL_MS };
+  }
   await refreshProcessTable({ deadline });
   return processTable ? { ...processTable, expiresAt: processTable.at + PROCESS_TABLE_TTL_MS } : { map: null };
 }

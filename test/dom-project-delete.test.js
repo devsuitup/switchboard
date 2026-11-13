@@ -9,6 +9,34 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+test('selected preview keeps its own watchdog and shows the failed port with an in-dialog retry', async t => {
+  const h = setup(t), original = h.w.api.previewProjectDelete, timers = new Map();
+  let id = 0, time = 0, finish, calls = 0;
+  h.w.Date.now = () => time;
+  h.w.setTimeout = (fn, ms) => { timers.set(++id, { fn, at: time + ms }); return id; };
+  h.w.clearTimeout = key => timers.delete(key);
+  h.w.api.previewProjectDelete = request => ++calls === 2 ? new Promise(resolve => { finish = resolve; }) : original(request);
+  const pending = h.start(); await flush();
+  t.after(() => h.cancel());
+  time = 16000;
+  for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); }
+  await flush();
+  assert.equal(h.document.querySelector('[role="alert"]')?.hidden ?? true, true,
+    'the generic dialog timer must not preempt the project preview watchdog');
+  finish({ ok: false, code: 'DISCOVERY_TIMEOUT', port: 'readJobs', elapsedMs: 4500, boundMs: 4500 });
+  await flush();
+  const alert = h.document.querySelector('.choice-dialog [role="alert"]');
+  assert.match(alert.textContent, /readJobs.*retry/is);
+  assert.equal(h.confirm().disabled, true);
+  const retry = h.document.querySelector('.choice-dialog-retry');
+  assert.ok(retry && !retry.hidden, 'failed preview offers Retry inside the open dialog');
+  retry.click(); await flush();
+  assert.equal(h.confirm().disabled, false);
+  assert.equal(calls, 3);
+  assert.equal(h.calls.execute.length, 0);
+  h.cancel(); await pending;
+});
+
 for (const settles of [true, false]) test(`pending execute follows beyond 130 seconds or stops at the shared ceiling, settles=${settles}`, async t => {
   const h = setup(t), timers = new Map(), applied = [];
   let time = 0, id = 0, finished = false;
@@ -29,7 +57,7 @@ for (const settles of [true, false]) test(`pending execute follows beyond 130 se
   h.w.applyProjectDeletion = async result => applied.push(result);
   const pending = h.start().then(result => { finished = true; return result; });
   await flush(); h.confirm().click(); await flush();
-  const ceiling = 3 * 20000 + 2 * 10000 + 60000 + 60000 + 3 * 10000 + 15000;
+  const ceiling = 3 * 20000 + 2 * 10000 + 60000 + 60000 + 70000 + 10000 + 3 * 10000 + 15000;
   for (; time < ceiling && !finished;) {
     time += 1000;
     for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); }

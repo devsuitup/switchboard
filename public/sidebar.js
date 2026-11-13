@@ -980,7 +980,7 @@ function setProjectDeletionWritesBlocked(project, blocked) {
 async function projectDeletionPreviewWait(port, read, deadline = Date.now() + PROJECT_DELETE_DIALOG_TIMEOUT_MS) {
   const startedAt = Date.now(), boundMs = Math.max(0, deadline - startedAt);
   let timer;
-  const expired = () => new Error(`${port} timed out (${Date.now() - startedAt} ms elapsed; ${boundMs} ms bound).`);
+  const expired = () => new Error(`${port} timed out (${Date.now() - startedAt} ms elapsed; ${boundMs} ms bound). Retry preview, or cancel.`);
   try {
     if (!boundMs) throw expired();
     const value = await Promise.race([Promise.resolve().then(read), new Promise((_, reject) => {
@@ -1009,7 +1009,7 @@ async function projectDeletionCall(method, input, { retryRecovery = false, deadl
 function projectDeletionPlanReason(reply) {
   if (projectDeletionUnavailable) return projectDeletionUnavailable;
   if (reply?.code === 'NOT_READY') return PROJECT_DELETION_RECOVERY_REASON;
-  if (reply?.code === 'DISCOVERY_TIMEOUT') return `${reply.port || 'previewProjectDelete'} timed out (${reply.elapsedMs ?? '?'} ms elapsed; ${reply.boundMs ?? '?'} ms bound).`;
+  if (reply?.code === 'DISCOVERY_TIMEOUT') return `${reply.port || 'previewProjectDelete'} timed out (${reply.elapsedMs ?? '?'} ms elapsed; ${reply.boundMs ?? '?'} ms bound). Retry preview, or cancel.`;
   const plan = reply?.plan;
   if (!plan) return reply?.error || 'Project deletion preview is unavailable. Close and reopen Delete to retry.';
   if (plan.jobs?.some(job => !['running', 'stopped'].includes(job.liveness?.state))) {
@@ -1152,7 +1152,7 @@ async function confirmAndDeleteProjectFolder(project, button) {
         }
         return reply;
       },
-      planDetails: projectDeletionDetails, planUnavailable: projectDeletionPlanReason,
+      planDetails: projectDeletionDetails, planUnavailable: projectDeletionPlanReason, planWaitManaged: true,
       confirmLabel: 'Delete project', danger: true, initialFocus: 'cancel', returnFocus: button,
       fallbackFocus: () => document.getElementById('sidebar-content'),
     });

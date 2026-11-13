@@ -17,6 +17,49 @@ const supported = { skip: !openStore.supported && 'SQLite needs Node 22 or a mat
 const options = { sessions: true, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false };
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+test('a new preview starts fresh process reads while the previous preview table is pending', supported, async t => {
+  const state = require('../cli-session-state');
+  const h = await setup(t, true, { cliSessionState: state });
+  let finishOld, reads = 0;
+  const signals = [];
+  state.init({ dir: path.join(h.projectPath, 'status'), platform: 'win32', activeSessions: h.activeSessions,
+    now: h.time.now, readProcessTable: (_timeout, opts) => {
+      signals.push(opts?.signal);
+      if (++reads === 1) return new Promise(resolve => { finishOld = resolve; });
+      return Promise.resolve(new Map([[42, { ppid: 1, created: '100' }]]));
+    } });
+  t.after(() => { finishOld?.(null); state.stop(); });
+  h.load(); await h.main.startRecovery();
+  const first = h.preview();
+  await flush();
+  assert.equal(reads, 1);
+  h.time.advance(15000);
+  const second = h.preview();
+  await flush();
+  const independentReads = reads;
+  finishOld(null);
+  await first;
+  assert.ok((await second).token);
+  assert.equal(independentReads, 2, 'new preview must not join a previous preview process-table promise');
+  assert.notEqual(signals[0], signals[1]);
+  assert.equal(signals[0].aborted, true);
+});
+
+test('every completed preview logs total duration and the three slowest ports without paths', supported, async t => {
+  const logs = [];
+  let tick;
+  const h = await setup(t, false, { log: { debug: line => logs.push(line) }, waitForIndex: async () => tick() });
+  tick = () => h.time.advance(100);
+  h.load(); await h.main.startRecovery();
+  assert.ok((await h.preview()).token);
+  const lines = logs.filter(line => line.includes('preview:'));
+  assert.equal(lines.length, 1, 'successful preview must also emit one diagnostic');
+  assert.match(lines[0], /total=100ms/);
+  assert.match(lines[0], /slowest=\S+=\d+ms,\S+=\d+ms,\S+=\d+ms/);
+  assert.match(lines[0], /waitForIndex=100ms/);
+  assert.equal(lines[0].includes(h.projectPath), false);
+});
+
 for (const known of [false, true]) test(`slow execute returns a pending reason and state read waits for its real outcome, known=${known}`, supported, async t => {
   const logs = [], h = await setup(t, true, { log: { debug: line => logs.push(line) } });
   h.load(); await h.main.startRecovery();

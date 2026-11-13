@@ -64,7 +64,8 @@ function createProjectDeleteService(deps) {
     if (!valid(sender)) return failure('UNAUTHORIZED', { token: null });
     if (!ready) return failure('NOT_READY', { token: null });
     prune();
-    const budget = { deadline: now() + PROJECT_DELETE_PREVIEW_TIMEOUT_MS, pendingPorts: new Map() };
+    const startedAt = now();
+    const budget = { deadline: startedAt + PROJECT_DELETE_PREVIEW_TIMEOUT_MS, pendingPorts: new Map(), portElapsed: new Map() };
     const read = createDiscoveryBounds({ now, schedule, cancel });
     try {
       const result = await read('planner.preview', () => planner.preview(request, budget), budget);
@@ -81,6 +82,15 @@ function createProjectDeleteService(deps) {
       tokens.set(token, { sender, boot, plan, options, epoch: scope.projectEpoch, created: now() });
       return { ...result, token };
     } catch (error) { return failure(error.code || 'DISCOVERY_UNAVAILABLE', { token: null, error: error.message, ...discoveryDetails(error) }); }
+    finally {
+      for (const detail of budget.pendingPorts.values()) {
+        budget.portElapsed.set(detail.port, Math.max(budget.portElapsed.get(detail.port) || 0, now() - detail.startedAt));
+      }
+      const slowest = [...budget.portElapsed].filter(([port]) => !port.startsWith('planner.'))
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 3)
+        .map(([port, elapsed]) => `${port}=${elapsed}ms`).join(',');
+      deps.log?.debug?.(`[project-delete] preview: total=${now() - startedAt}ms slowest=${slowest || '-'}`);
+    }
   }
   function stopRequest(plan, options) {
     const conversations = new Map(), targets = new Map(), targetMembers = new Map();

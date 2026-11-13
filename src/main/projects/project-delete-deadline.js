@@ -42,6 +42,7 @@ function createDiscoveryBounds({ now = Date.now, schedule = setTimeout, cancel =
       return value;
     } finally {
       cancel(timer);
+      if (budget.portElapsed) budget.portElapsed.set(port, Math.max(budget.portElapsed.get(port) || 0, now() - startedAt));
       pending.delete(key);
       if (dispose && work && !accepted) void work.then(dispose, () => {}).catch(() => {});
     }

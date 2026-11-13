@@ -1,5 +1,12 @@
 # Context: cli-session-state
 
+`readProcessTableSnapshot(deadline, { fresh: true, signal })` isolates deletion
+discovery from the global cached or in-flight process-table read. It starts a
+new probe with the lesser of 15 seconds and the remaining request budget,
+forwards the AbortSignal to execFile, and returns its own snapshot without
+publishing into the shared cache. Aborted, expired and failed probes return an
+unknown table. Calls without `fresh` keep the existing global cache behavior.
+
 ## Bounded status evidence (#380 S1b3)
 
 `deliveryPtyStart` accepts only positive integer PIDs (#1083). A fresh WMI

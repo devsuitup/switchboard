@@ -22,7 +22,7 @@ function createProjectDeleteInventory(deps) {
     let c = contexts.get(budget.signal);
     if (!c) {
       c = { deadline: Math.min(budget.deadline, now() + cap(deps.timeoutMs, PROJECT_DELETE_PREVIEW_TIMEOUT_MS, PROJECT_DELETE_PREVIEW_TIMEOUT_MS)), items: 0, bytes: 0,
-        signal: budget.signal, pendingPorts: budget.pendingPorts ||= new Map(), startedAt: now(),
+        signal: budget.signal, pendingPorts: budget.pendingPorts ||= new Map(), portElapsed: budget.portElapsed, startedAt: now(),
         limit: Math.min(budget.limit, maxItems), realpaths: new Map(), spellings: new Map(), checkedPaths: new Set(), snapshot: null };
       contexts.set(budget.signal, c);
     }

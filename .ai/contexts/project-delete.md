@@ -7,9 +7,11 @@ three 20-second revalidations. An operation still running at reply time returns
 `EXECUTION_PENDING`, its operation ID and its current effect lists. This does not
 mean the command was lost. The renderer follows that same ID while the code is
 `EXECUTION_PENDING`, within `PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS` from the first
-execute reply. This shared setting-defaults constant is 245 seconds: three
+execute reply. This shared setting-defaults constant is 325 seconds: three
 20-second revalidations, two 10-second scope reads, the 60-second stop/verify
-batch budget, 60 seconds for completion, two 10-second notifications and a
+batch budget, 60 seconds for completion, the receipt-recovery observation
+window after a completion timeout (60 seconds without progress, each read
+capped at 10 seconds) and its 10-second fence, two 10-second notifications and a
 10-second retained-file read, plus 15 seconds of margin. This conservatively
 adds overlapping stop/revalidation budgets. Admission and recovery with ongoing
 progress can outlive this UI ceiling; it bounds automatic following, not backend
@@ -149,13 +151,17 @@ process-table reads. The scheduler snapshot also starts then. CLI and table
 promises are keyed by the preview's AbortSignal and shared across ownership,
 member/tab liveness and runtime discovery. CLI parsing and durable job scanning
 still validate the combined roster; early rejection is handled until consumed.
-Each new preview/revalidation gets a new signal and fresh admission to the
-shared process-table cache. Ownership, schedule and runtime assembly retain
+Each new preview/revalidation gets a new signal and an isolated process-table
+read, bypassing the global cache and another request's in-flight probe.
+Ownership, schedule and runtime assembly retain
 their order for path registration and PTY pinning. No git process is used.
 Remote readers remain bounded but production still supplies no exhaustive port.
 
-The process table reuses a cached result, including a failed result, for 3 seconds,
-or joins an in-flight read. PowerShell has a 15-second timeout clipped to the
+Outside deletion, the process table reuses a cached result, including a failed
+result, for 3 seconds, or joins an in-flight read. Deletion requests a fresh
+snapshot with its AbortSignal and never publishes into the global cache.
+The signal reaches execFile so planner completion aborts its probe.
+PowerShell has a 15-second timeout clipped to the
 remaining deadline. The captured table is reused for Windows start/ancestry
 checks, avoiding per-descriptor Get-Process launches during preview. Expired,
 missing or mismatched captured identity is unknown. Expiry before liveness permits
@@ -168,15 +174,21 @@ The service starts its 20-second preview budget before planning and passes it
 through to the final writer scope read. Four seconds of planning leave sixteen
 seconds for that scope. Discovery bounds share active port descriptors.
 `DISCOVERY_TIMEOUT` errors and IPC replies carry `port`, `elapsedMs` and
-`boundMs`; main writes one debug line per failed request. File and cwd errors
+`boundMs`. Each completed service preview writes one debug line with total
+elapsed time and up to three slowest named ports (maximum elapsed per port,
+including outstanding reads at completion, excluding planner wrappers). Nested
+ports overlap; durations are not additive. Logs contain no paths. File and cwd errors
 propagate timeouts without turning them into candidates. Directory/file closes
 are named bounded reads; late-open handles retain disposal callbacks.
 
 From the Delete click, the renderer allows 21 seconds for the write-chain flush
 and capabilities request together. `PROJECT_DELETE_DIALOG_TIMEOUT_MS` derives
 this from the main deadline plus one second. Later option previews have the same
-watchdog. Returned and rejected timeout payloads name the port in the error
-notice or open dialog. Pre-dialog failures release busy state; an open dialog
+watchdog. The choice dialog delegates its wait to this existing watchdog rather
+than racing it with its generic 15-second timer. No main or sidebar budget is
+increased. Returned and rejected timeout payloads name the port and tell the
+user to retry; the open dialog offers Retry preview without closing or changing
+choices. Pre-dialog failures release busy state; an open dialog
 retains its project lock until Cancel. Busy state is per host/path, not global;
 NOT_READY recovery availability is a separate global condition. Two-row DOM
 tests check identity rather than button order and verify both rows after failure
@@ -186,6 +198,12 @@ These are event-loop deadlines, not guarantees during a blocked renderer/main
 thread. Fake-clock composition tests cover a 15-second CLI, shared remaining
 budgets, startup before indexing and the 20-second deadline. Node/jsdom tests
 cannot measure real Electron behavior under workstation load.
+
+The service deadline is created per call: capabilities, selected-options and
+later dialogs do not share it. A readJobs bound near 4.5 seconds means preceding
+work in that same request spent about 15.5 seconds. The old global process-table
+in-flight promise could delay that work; aggregate readJobs logs alone cannot
+attribute the elapsed time. The per-port summary resolves that ambiguity.
 
 Background records remain explicitly blocked on #1090, even when a daemon state
 says done. Current headless schedules retain the inventory's blocking targets.

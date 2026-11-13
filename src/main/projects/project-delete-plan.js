@@ -54,7 +54,7 @@ function createProjectDeletePlanner(deps) {
       catch { throw fail('INVALID_REQUEST', 'Request fields must be cloneable data.'); }
       validateRequest(request);
       const startedAt = now();
-      const budget = { signal: controller.signal, limit: maxItems, pendingPorts: sharedBudget?.pendingPorts || new Map(),
+      const budget = { signal: controller.signal, limit: maxItems, pendingPorts: sharedBudget?.pendingPorts || new Map(), portElapsed: sharedBudget?.portElapsed,
         deadline: Math.min(sharedBudget?.deadline ?? Infinity, startedAt + timeoutMs) };
       const bound = createDiscoveryBounds({ now, schedule, cancel });
       const read = (port, fn) => bound(port, fn, budget);

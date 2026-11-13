@@ -38,7 +38,8 @@ function createProjectDeleteRuntime(ports) {
       const agents = bounded('runClaude.agents', () => ports.runClaude(['agents', '--json', '--all'],
         { cwd: ports.homeDir, timeout: Math.max(1, budget.deadline - now()), signal: budget.signal, maxOutputBytes: 8 * 1048576 }), budget);
       const table = ports.cliSessionState.readProcessTableSnapshot
-        ? Promise.resolve().then(() => ports.cliSessionState.readProcessTableSnapshot(budget.deadline))
+        ? bounded('cliSessionState.readProcessTableSnapshot',
+          () => ports.cliSessionState.readProcessTableSnapshot(budget.deadline, { fresh: true, signal: budget.signal }), budget)
           .catch(() => ({ map: null })) : Promise.resolve(undefined);
       void agents.catch(() => {});
       processReads.set(budget.signal, { agents, table });
@@ -123,7 +124,7 @@ function createProjectDeleteRuntime(ports) {
     let processTable = await early?.table;
     if (processTable?.expiresAt <= now() && now() < budget.deadline) {
       early.refreshed ||= bounded('cliSessionState.readProcessTableSnapshot',
-        () => ports.cliSessionState.readProcessTableSnapshot(budget.deadline), budget);
+        () => ports.cliSessionState.readProcessTableSnapshot(budget.deadline, { fresh: true, signal: budget.signal }), budget);
       processTable = await early.refreshed;
     }
     const evidenceOptions = processTable === undefined ? {} : { processTable };
@@ -226,7 +227,7 @@ function createProjectDeleteMain(deps) {
     const result = ready && !disposed
       ? await runtime.withScope(() => service[method](sender, input), method === 'execute')
       : { ok: false, code: 'NOT_READY', retryable: true, ...(method === 'preview' ? { token: null } : {}) };
-    if (result.code === 'DISCOVERY_TIMEOUT') deps.log?.debug?.(`[project-delete] ${method}: ${result.port} elapsed=${result.elapsedMs}ms bound=${result.boundMs}ms`);
+    if (method !== 'preview' && result.code === 'DISCOVERY_TIMEOUT') deps.log?.debug?.(`[project-delete] ${method}: ${result.port} elapsed=${result.elapsedMs}ms bound=${result.boundMs}ms`);
     if (method === 'execute' && result.code === 'NOT_READY') deps.log?.debug?.('[project-delete] execute operation=- state=refused reason=NOT_READY elapsed=0ms');
     return result;
   };
