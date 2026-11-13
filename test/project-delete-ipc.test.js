@@ -224,6 +224,38 @@ test('lost committed reply reconciles without replay and publishes exact targets
   assert.ok(h.calls.includes('getProjectDeletionState')); assert.equal(h.notifications.length, 2);
 });
 
+test('lost completion reports unresolved receipt while reconciliation is waiting, never pending execution', supported, async t => {
+  const h = await setup(t); h.transport.mode = 'lost';
+  const original = h.writer.getProjectDeletionState;
+  let release, entered;
+  const reading = new Promise(resolve => { entered = resolve; });
+  h.writer.getProjectDeletionState = async input => {
+    entered(); await new Promise(resolve => { release = resolve; }); return original(input);
+  };
+  const pending = h.execute(await h.preview()); await reading; h.time.advance(1000);
+  const result = await pending;
+  release(); await h.service.whenIdle();
+  assert.equal(result.code, 'RECEIPT_UNRESOLVED', 'lost completion must identify receipt recovery instead of EXECUTION_PENDING');
+  const final = await h.invoke('project-delete-state', { operationId: result.operationId });
+  assert.equal(final.state, 'committed');
+  assert.equal(h.count(), 1);
+});
+
+test('finished reconciliation with no readback reports its failure instead of pending execution', supported, async t => {
+  const h = await setup(t); h.transport.mode = 'lost';
+  h.writer.getProjectDeletionState = async () => { throw new Error('readback offline'); };
+  h.writer.fenceProjectDeletion = async () => undefined;
+  const result = await h.execute(await h.preview());
+  await h.service.whenIdle();
+  assert.equal(result.code, 'READBACK_UNAVAILABLE', 'finished retained-file readback must not report EXECUTION_PENDING');
+  assert.equal(result.state, 'unknown');
+  assert.equal(result.readbackWarning, 'readback offline');
+  assert.deepEqual(result.retainedFiles.map(row => row.path), [h.transcript]);
+  assert.equal((await h.invoke('project-delete-state', { operationId: result.operationId })).code, 'READBACK_UNAVAILABLE');
+  assert.equal(h.count(), 1);
+  assert.equal(h.gate.tryAdmit(h.projectPath), null);
+});
+
 test('read and fence failures retain both holds; queued command is fenced before release', supported, async t => {
   const h = await setup(t); h.transport.mode = 'queued'; h.transport.readFail = h.transport.fenceFail = true;
   const result = await h.execute(await h.preview());
@@ -243,7 +275,9 @@ test('reply timeout before admission leaves work owned and state cannot fence it
   const h = await setup(t), admission = h.gate.tryAdmit(h.projectPath), p = await h.preview();
   const pending = h.execute(p); await flush(); h.time.advance(1000);
   const result = await pending; assert.equal(result.state, 'unknown'); assert.ok(result.operationId); assert.equal(h.count(), 0);
-  assert.equal((await h.invoke('project-delete-state', { operationId: result.operationId })).state, 'unknown');
+  const stateRead = h.invoke('project-delete-state', { operationId: result.operationId });
+  await flush(); h.time.advance(1000);
+  assert.equal((await stateRead).state, 'unknown');
   assert.equal(h.calls.includes('fenceProjectDeletion'), false);
   admission.release();
   await h.service.whenIdle();

@@ -12,7 +12,8 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
   let nextId = 0;
   const waiters = new Set();
   let receiving = null;
-  const mergeOptions = (a, b) => ({ ...a, ...b, reconcile: !!(a?.reconcile || b?.reconcile), measureBytes: !!(a?.measureBytes || b?.measureBytes) });
+  const mergeOptions = (a, b) => ({ ...a, ...b, reconcile: !!(a?.reconcile || b?.reconcile),
+    readOnly: !!(a?.readOnly || b?.readOnly), measureBytes: !!(a?.measureBytes || b?.measureBytes) });
 
   function settle(waiter, error, result) {
     if (!waiters.delete(waiter)) return;
@@ -49,9 +50,11 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
     if (active !== job) return;
     clearTimeout(job.timer);
     if (++job.discards < maxDiscards && job.waiters.some(waiter => waiters.has(waiter))) {
-      job.options = mergeOptions(job.options, pending?.options);
-      job.waiters.push(...(pending?.waiters || []));
-      pending = null;
+      if (!(job.options.readOnly && pending?.options.reconcile)) {
+        job.options = mergeOptions(job.options, pending?.options);
+        job.waiters.push(...(pending?.waiters || []));
+        pending = null;
+      }
       dispatch(job);
       return;
     }
@@ -80,22 +83,25 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
         };
         if (applied?.then) return applied.then(finish).catch(error => {
           if (active !== job) return;
-          if (error.code === 'WRITER_STALE') job.stale = true;
+          if (error.code === 'PROJECT_EPOCH_STALE' || error.code === 'DELETION_OWNERSHIP') {
+            job.options = { ...job.options, readOnly: true };
+            job.stale = true;
+          } else if (error.code === 'WRITER_STALE') job.stale = true;
           else fail(error);
         });
         return finish();
       }
       const job = active;
       const result = message.result;
-      const readOnly = result.effects?.length === 0 && result.keptLiveRows?.length === 0 && !result.reconciled;
-      const stale = job.stale || state.liveVersion !== job.liveVersion || (!readOnly && state.version !== job.version);
+      const allowDbChange = result.effects?.length === 0 && result.keptLiveRows?.length === 0 && !result.reconciled;
+      const stale = job.stale || state.liveVersion !== job.liveVersion || (!allowDbChange && state.version !== job.version);
       if (stale) return conflict(job);
       const finish = acknowledgment => {
         if (active !== job) return;
         const current = snapshot();
         const dbChanged = acknowledgment?.committedRevision !== undefined
           ? current.writerRevision !== acknowledgment.committedRevision : current.version !== (acknowledgment?.version ?? job.version);
-        if (current.liveVersion !== job.liveVersion || (!readOnly && dbChanged)) return conflict(job);
+        if (current.liveVersion !== job.liveVersion || (!allowDbChange && dbChanged)) return conflict(job);
         clearTimeout(job.timer);
         accepted(result);
         active = null;
@@ -105,6 +111,10 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
       const applied = apply(result);
       if (applied?.then) return applied.then(finish).catch(error => {
         if (active !== job) return;
+        if (error.code === 'PROJECT_EPOCH_STALE' || error.code === 'DELETION_OWNERSHIP') {
+          job.options = { ...job.options, readOnly: true };
+          return conflict(job);
+        }
         if (error.code === 'WRITER_STALE') {
           return conflict(job);
         }
@@ -132,7 +142,7 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
       }
       const state = snapshot();
       active = { ...job, id: ++nextId, version: state.version, liveVersion: state.liveVersion, stale: false };
-      if (job.options.reconcile) {
+      if (job.options.reconcile || active.hardDeadline) {
         active.hardDeadline ||= Date.now() + reconcileTimeoutMs;
         active.timer = setTimeout(() => fail(new Error('projects worker reconcile timed out')), Math.max(0, active.hardDeadline - Date.now()));
       }

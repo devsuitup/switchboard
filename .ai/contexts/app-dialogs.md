@@ -52,7 +52,10 @@ the snapshot, so changing a control programmatically without its `change` event
 cannot accept a mismatched plan; dispatch `change` to refresh it. Cancellation,
 replacement and other closure paths make late responses inert. Requests are
 ignored rather than aborted, so the hook owns any external request cleanup.
-The dialog bounds each preview wait to 15 seconds. A timeout leaves Confirm
+The dialog bounds each preview wait to 15 seconds unless `planWaitManaged: true`
+delegates the deadline to the hook. Project deletion uses that option because
+its hook already has a 21-second watchdog around the 20-second main request.
+A timeout leaves Confirm
 disabled with an inline recovery message; a later response from that request
 cannot install a plan. Changing an answer requests a fresh preview with a new
 deadline. The deadline timer is cleared on settlement, choice changes and every
@@ -63,7 +66,10 @@ status and clears the busy state; obsolete responses cannot clear a newer wait.
 
 A synchronous throw or rejected refresh shows its message as literal inline
 `role=alert` text, leaves Confirm disabled and keeps Cancel available. Changing
-an answer clears the error and retries. During initial planning, focus falls
+an answer clears the error and retries. The inline Retry preview button also
+requests a fresh plan for the current answers, without closing the dialog or
+persisting choices. It hides while pending and after success; Enter on the
+focused retry button activates it. During initial planning, focus falls
 back to visible Cancel when Confirm would otherwise receive focus. All-disabled
 radio options stay unconfirmable even after a plan resolves. Secondary actions
 and `closeWith` retain their explicit independent result contracts; the hook
