@@ -192,6 +192,8 @@ function createProjectDeleteRuntime(ports) {
     const runs = await bounded(() => ports.cliSessionState.getScheduleRunSnapshot(), budget);
     if (!Array.isArray(runs) || runs.length + rows.length > budget.limit) throw fail('DISCOVERY_LIMIT', 'Schedule inventory unavailable or oversized.');
     const evidenceById = new Map(), dialogCandidates = new Map();
+    const descriptorRows = new Set(descriptors);
+    let unlocatedActivity = false;
     const report = candidate => dialogCandidates.set(JSON.stringify([candidate.id, candidate.reason]), candidate);
     const local = row => !(row.host || row.remoteAlias || row.alias || parseFolderKey(row.folder || row.folderKey).alias !== null);
     const associatedPaths = row => {
@@ -206,7 +208,17 @@ function createProjectDeleteRuntime(ports) {
     for (const row of [...rows, ...runs]) {
       const value = row.cwd;
       if (local(row) && (typeof value !== 'string' || !path.isAbsolute(value)) && !associatedPaths(row).length) {
-        report({ id: row.sessionId || row.id, reason: 'Session cwd unavailable.' });
+        const id = row.sessionId || row.id;
+        report({ id, reason: 'Session cwd unavailable.' });
+        if (row.active || row.liveness && row.liveness.state !== 'stopped') unlocatedActivity = true;
+        else if (descriptorRows.has(row)) {
+          if (!id || row.runtime === 'codex') unlocatedActivity = true;
+          else {
+            if (!evidenceById.has(id)) evidenceById.set(id, bounded(() => ports.cliSessionState.readStatusEvidence(id, budget.deadline), budget));
+            const evidence = await evidenceById.get(id);
+            if (!evidence?.known || evidence.live || evidence.ambiguous) unlocatedActivity = true;
+          }
+        }
       }
     }
     async function forPath(projectPath) {
@@ -246,7 +258,8 @@ function createProjectDeleteRuntime(ports) {
       }
       const roster = await readJobs({ ...project, projectPath, includeDescendants: true, worktreeInventory: true }, budget);
       jobs.push(...roster.jobs); candidates.push(...roster.candidates);
-      let ownershipUncertain = false;
+      let ownershipUncertain = unlocatedActivity
+        && (budget.selectedWorktrees || budget.worktreePaths || []).some(value => normalize(value) === normalize(projectPath));
       for (const candidate of roster.globalCandidates) {
         report(candidate);
         if (!(budget.selectedWorktrees || budget.worktreePaths || []).some(value => normalize(value) === normalize(projectPath))) continue;

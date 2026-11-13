@@ -119,7 +119,8 @@ function createProjectDeletePlanner(deps) {
           if (project.alias !== null && selectedWorktrees.length) throw fail('WORKTREE_UNAVAILABLE', 'Remote worktree removal is unavailable.');
           if (deps.worktrees && project.alias === null && (boundKey === undefined || selectedWorktrees.length)) {
             worktrees = items(await deps.worktrees.preview(project, { ...budget, snapshot, selectedWorktrees,
-              deadline: now() + Math.min(2000, Math.max(0, (budget.deadline - now()) / 2)),
+              deadline: selectedWorktrees.length ? budget.deadline
+                : now() + Math.min(2000, Math.max(0, (budget.deadline - now()) / 2)),
               reportCandidate: candidate => {
                 if (!warnings.some(row => row.code === 'WORKTREE_UNAVAILABLE' && row.target === candidate.id && row.error === candidate.reason)) {
                   warnings.push({ code: 'WORKTREE_UNAVAILABLE', target: candidate.id, error: candidate.reason });
@@ -135,7 +136,8 @@ function createProjectDeletePlanner(deps) {
             }
           }
         } catch (error) {
-          if (selectedWorktrees.length) refuse('WORKTREE_UNAVAILABLE', project.projectPath, error.message);
+          if (selectedWorktrees.length) refuse('WORKTREE_UNAVAILABLE', project.projectPath,
+            `${error.message} Use the dedicated "Delete worktree" action in the sidebar.`);
           else warnings.push({ code: 'WORKTREE_UNAVAILABLE', error: error.message });
         }
         const rowPath = (row, key, code) => {
@@ -288,7 +290,10 @@ function createProjectDeletePlanner(deps) {
         timer = schedule(() => { controller.abort(); reject(fail('DISCOVERY_TIMEOUT', 'Planning timed out; retry after indexing settles.')); }, timeoutMs);
       })]);
     } catch (error) {
-      return { ok: false, code: error.code || 'DISCOVERY_UNAVAILABLE', error: error.message || 'Read-only planning unavailable.' };
+      return { ok: false, code: error.code || 'DISCOVERY_UNAVAILABLE',
+        error: error.code === 'DISCOVERY_TIMEOUT' && input?.worktrees?.length
+          ? `${error.message} Use the dedicated "Delete worktree" action in the sidebar.`
+          : error.message || 'Read-only planning unavailable.' };
     } finally {
       cancel(timer);
       controller.abort();

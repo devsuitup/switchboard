@@ -46,33 +46,41 @@ function createProjectDeleteWorktrees({ runGit, readActivity, now = Date.now }) 
       rows.push(row);
     }
     const eligible = rows.filter(row => !row.main && !row.projectDirectory);
-    let activities, activityError;
-    if (eligible.length) {
-      try {
-        activities = await bounded(() => readActivity({ ...project, worktreePaths: eligible.map(row => row.path) }, budget), budget);
-        for (const candidate of activities.candidates || []) budget.reportCandidate?.(candidate);
+    const selected = eligible.filter(row => budget.selectedWorktrees?.includes(row.path));
+    async function inspect(group, inspectionBudget) {
+      let activities, activityError;
+      if (group.length) {
+        try {
+          activities = await bounded(() => readActivity({ ...project, worktreePaths: group.map(row => row.path) }, inspectionBudget), inspectionBudget);
+          for (const candidate of activities.candidates || []) budget.reportCandidate?.(candidate);
+        }
+        catch (error) { activityError = error; }
       }
-      catch (error) { activityError = error; }
+      for (const row of group) {
+        try {
+          if (activityError) throw activityError;
+          const status = await bounded(() => deletion.readStatus(row.path, project.projectPath, runGit, undefined, inventory,
+            { ...inspectionBudget, now }), inspectionBudget);
+          check(inspectionBudget);
+          const activity = activities.byPath ? activities.byPath[row.path] : activities;
+          check(inspectionBudget);
+          Object.assign(row, status, { statusKnown: true, sessions: activity.sessions || [], jobs: activity.jobs || [],
+            sessionsKnown: activity.complete === true && !activity.candidates?.length });
+          if (activity.ownershipUncertain) row.reason = 'Removal blocked by unattributed activity. Review the dialog-level inventory reasons.';
+          else if (activity.complete !== true || !Array.isArray(activity.sessions) || !Array.isArray(activity.jobs)
+            || !Array.isArray(activity.candidates) || activity.candidates.length) row.reason = 'Worktree activity is uncertain. Check its sessions and Agents, then reopen Delete.';
+          else if (activity.jobs.length) row.reason = 'Background jobs prevent worktree removal (#1090). Check the Agents view.';
+          else if (activity.sessions.length) row.reason = 'Stop the sessions in this worktree first, then reopen Delete.';
+          else if (status.locked || status.submodules?.length) row.reason = 'Locked worktrees and submodules require the dedicated Delete worktree dialog.';
+          else row.removable = true;
+        } catch (error) {
+          row.reason = error.message + (selected.includes(row) ? ' Use the dedicated "Delete worktree" action in the sidebar.' : '');
+        }
+      }
     }
-    for (const row of eligible) {
-      try {
-        if (activityError) throw activityError;
-        const status = await bounded(() => deletion.readStatus(row.path, project.projectPath, runGit, undefined, inventory,
-          { ...budget, now }), budget);
-        check(budget);
-        const activity = activities.byPath ? activities.byPath[row.path] : activities;
-        check(budget);
-        Object.assign(row, status, { statusKnown: true, sessions: activity.sessions || [], jobs: activity.jobs || [],
-          sessionsKnown: activity.complete === true && !activity.candidates?.length });
-        if (activity.ownershipUncertain) row.reason = 'Removal blocked by unattributed activity. Review the dialog-level inventory reasons.';
-        else if (activity.complete !== true || !Array.isArray(activity.sessions) || !Array.isArray(activity.jobs)
-          || !Array.isArray(activity.candidates) || activity.candidates.length) row.reason = 'Worktree activity is uncertain. Check its sessions and Agents, then reopen Delete.';
-        else if (activity.jobs.length) row.reason = 'Background jobs prevent worktree removal (#1090). Check the Agents view.';
-        else if (activity.sessions.length) row.reason = 'Stop the sessions in this worktree first, then reopen Delete.';
-        else if (status.locked || status.submodules?.length) row.reason = 'Locked worktrees and submodules require the dedicated Delete worktree dialog.';
-        else row.removable = true;
-      } catch (error) { row.reason = error.message; }
-    }
+    await inspect(selected, budget);
+    await inspect(eligible.filter(row => !selected.includes(row)), selected.length
+      ? { ...budget, deadline: now() + Math.min(2000, Math.max(0, (budget.deadline - now()) / 2)) } : budget);
     return rows;
   }
   async function remove(project, selected, record) {

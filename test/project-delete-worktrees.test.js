@@ -13,7 +13,7 @@ try { implementation = require('../src/main/projects/project-delete-worktrees');
 catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; }
 const options = { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false };
 
-for (const selected of [false, true]) test(`slow status leaves a metadata plan with ${selected ? 'selected' : 'unselected'} uninspected rows`, async t => {
+test('slow unselected status leaves a metadata plan with uninspected rows', async t => {
   const f = gitFixture(t), p = planning([]);
   p.deps.readSnapshot = async () => ({ complete: true, initialScanComplete: true, revision: '1',
     projects: [{ alias: null, projectPath: f.root, folderKeys: [] }], declaredHosts: [] });
@@ -28,7 +28,7 @@ for (const selected of [false, true]) test(`slow status leaves a metadata plan w
   });
   const started = Date.now();
   const result = await createProjectDeletePlanner({ ...p.deps, timeoutMs: 1000 }).preview({
-    projectPath: f.root, options, worktrees: selected ? [f.target] : [],
+    projectPath: f.root, options, worktrees: [],
   });
   assert.equal(result.ok, true, 'slow worktree status must not time out metadata planning');
   assert.ok(Date.now() - started < 1000, 'inventory must reserve time for metadata planning');
@@ -38,8 +38,68 @@ for (const selected of [false, true]) test(`slow status leaves a metadata plan w
     assert.match(row.reason, /not inspected/i);
   }
   assert.equal(calls.filter(args => args.includes('status')).length, 1, 'expired inventory starts no further status calls');
-  assert.equal(result.plan.refusals.length, selected ? 1 : 0);
-  if (selected) assert.match(result.plan.refusals[0].error, /not inspected/i);
+  assert.equal(result.plan.refusals.length, 0);
+});
+
+for (const selected of [false, true]) test(`three-second status gets the ${selected ? 'selected' : 'unselected'} inspection budget`, async t => {
+  const f = gitFixture(t), p = planning([]), deletion = require('../worktree-delete');
+  let time = 0;
+  const deadlines = [];
+  t.mock.method(deletion, 'readStatus', async (directory, _root, _git, _unused, _inventory, budget) => {
+    deadlines.push({ directory, remaining: budget.deadline - time });
+    time += 3000;
+    return { dirty: [], fingerprint: directory };
+  });
+  p.deps.readSnapshot = async () => ({ complete: true, initialScanComplete: true, revision: '1',
+    projects: [{ alias: null, projectPath: f.root, folderKeys: [] }], declaredHosts: [] });
+  p.deps.worktrees = implementation.createProjectDeleteWorktrees({ now: () => time,
+    runGit: async () => [f.root, f.kept, f.target].map(dir => `worktree ${dir}\nHEAD abc\n\n`).join(''),
+    readActivity: async () => ({ complete: true, sessions: [], jobs: [], candidates: [] }),
+  });
+  const planner = createProjectDeletePlanner({ ...p.deps, now: () => time, timeoutMs: 6500 });
+  const result = await planner.preview({ projectPath: f.root, options, worktrees: selected ? [f.target] : [] });
+  assert.equal(result.ok, true, 'slow physical inspection must leave a complete metadata plan');
+  assert.deepEqual(result.plan.refusals, [], 'a three-second selected inspection must be allowed');
+  const chosen = result.plan.worktrees.find(row => row.path === f.target);
+  assert.equal(chosen.removable, selected, 'selected rows must have enough time for a three-second status');
+  assert.equal(chosen.statusKnown, selected);
+  const unselected = result.plan.worktrees.find(row => row.path === f.kept);
+  assert.equal(unselected.removable, false);
+  assert.match(unselected.reason, /not inspected/i);
+  for (const read of deadlines.filter(row => !selected || row.directory !== f.target)) {
+    assert.ok(read.remaining <= 2000, 'unselected reads retain the two-second cap even with a selection');
+    assert.ok(read.remaining <= (selected ? 1750 : 3250), 'unselected reads take at most half the remaining planner budget');
+  }
+  if (selected) {
+    assert.equal(deadlines[0].directory, f.target, 'unselected inventory cannot starve a selected row');
+    assert.equal((await planner.revalidate(result.plan)).same, true, 'confirm must allow the same slow selected row');
+  }
+});
+
+test('selected status cannot exceed the overall planner deadline and offers the sidebar fallback', async t => {
+  const f = gitFixture(t), p = planning([]), deletion = require('../worktree-delete');
+  t.mock.method(deletion, 'readStatus', () => new Promise(() => {}));
+  p.deps.readSnapshot = async () => ({ complete: true, initialScanComplete: true, revision: '1',
+    projects: [{ alias: null, projectPath: f.root, folderKeys: [] }], declaredHosts: [] });
+  p.deps.worktrees = implementation.createProjectDeleteWorktrees({
+    runGit: async () => [f.root, f.target].map(dir => `worktree ${dir}\nHEAD abc\n\n`).join(''),
+    readActivity: async () => ({ complete: true, sessions: [], jobs: [], candidates: [] }),
+  });
+  const result = await createProjectDeletePlanner({ ...p.deps, timeoutMs: 100 }).preview({
+    projectPath: f.root, options, worktrees: [f.target],
+  });
+  assert.equal(result.ok, false, 'the overall deadline remains authoritative for a hung selected inspection');
+  assert.equal(result.code, 'DISCOVERY_TIMEOUT');
+  assert.match(result.error, /Delete worktree.*sidebar/i);
+});
+
+test('selected inspection failure directs the user to Delete worktree in the sidebar', async t => {
+  const f = gitFixture(t), deletion = require('../worktree-delete');
+  t.mock.method(deletion, 'readStatus', async () => { throw new Error('Worktree not inspected: status unavailable.'); });
+  const rows = await f.adapter.preview(f.project, { ...f.budget(), selectedWorktrees: [f.target.replaceAll('\\', '/')] });
+  const selected = rows.find(row => path.resolve(row.path) === f.target);
+  assert.equal(selected.removable, false);
+  assert.match(selected.reason, /Delete worktree.*sidebar/i, 'uninspectable selection must offer the dedicated sidebar action');
 });
 
 for (const cwd of ['relative', null]) for (const binding of [null, 'folder', 'projectPath']) test(`session cwd ${cwd} is scoped by ${binding || 'dialog-level ownership'}`, async t => {
@@ -57,6 +117,43 @@ for (const cwd of ['relative', null]) for (const binding of [null, 'folder', 'pr
   assert.equal(result.byPath[f.target].candidates.length, binding ? 1 : 0);
   assert.equal(result.candidates.length, binding ? 0 : 1, 'unattributed session reason is shown once at dialog level');
 });
+
+for (const kind of ['active', 'live descriptor', 'unknown descriptor', 'ambiguous descriptor', 'stopped descriptor', 'dormant']) {
+  test(`unlocated ${kind} only blocks selected folders when activity is live or uncertain`, async t => {
+    const f = gitFixture(t), { createProjectDeleteRuntime } = require('../src/main/projects/project-delete-main');
+    const row = { sessionId: 'unlocated', cwd: null };
+    const blocking = !['stopped descriptor', 'dormant'].includes(kind);
+    const runtime = createProjectDeleteRuntime({
+      activeSessions: new Map(kind === 'active' ? [[row.sessionId, row]] : []),
+      jobsDir: path.join(f.root, 'jobs'), homeDir: f.root, runClaude: async () => ({ code: 0, stdout: '[]' }),
+      cliSessionState: {
+        getSidebarDescriptors: () => kind.includes('descriptor') ? [row] : [], getScheduleRunSnapshot: () => [],
+        readStatusEvidence: async () => ({ known: kind !== 'unknown descriptor',
+          live: kind === 'live descriptor' ? { pid: 123 } : null, ambiguous: kind === 'ambiguous descriptor' }),
+      },
+    });
+    const p = planning([]);
+    p.deps.readSnapshot = async () => ({ complete: true, initialScanComplete: true, revision: '1', sessions: [row],
+      projects: [{ alias: null, projectPath: f.root, folderKeys: [] }], declaredHosts: [] });
+    p.deps.worktrees = implementation.createProjectDeleteWorktrees({ readActivity: runtime.readWorktreeActivity,
+      runGit: async args => args.includes('list') ? [f.root, f.target, f.kept].map(dir => `worktree ${dir}\nHEAD abc\n\n`).join('')
+        : args.includes('rev-parse') ? path.join(f.root, 'absent-lock') : '' });
+    const planner = createProjectDeletePlanner(p.deps);
+    for (const selected of [[], [f.target], [f.target, f.kept]]) {
+      const preview = await planner.preview({ projectPath: f.root, options, worktrees: selected });
+      assert.equal(preview.ok, true, 'unlocated activity must not prevent the metadata plan');
+      assert.equal(preview.plan.warnings.filter(row => /Session cwd unavailable/.test(row.error)).length, 1,
+        'duplicate session sources must produce one dialog reason');
+      assert.equal(preview.plan.refusals.length, blocking ? selected.length : 0,
+        'unlocated live or uncertain session must refuse every selected folder');
+      for (const row of preview.plan.worktrees.filter(row => !row.main)) {
+        const refused = blocking && selected.includes(row.path);
+        assert.equal(row.removable, !refused);
+        if (refused) assert.match(row.reason, /unattributed activity/i);
+      }
+    }
+  });
+}
 
 test('global unknown job is shown once and blocks selected folders only', async t => {
   const f = gitFixture(t), { createProjectDeleteRuntime } = require('../src/main/projects/project-delete-main');

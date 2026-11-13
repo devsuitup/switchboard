@@ -17,20 +17,27 @@ compatible with Git 2.24. Inventory failures have a visible dialog reason.
 Always-kept main/project-directory rows do not read status, scan activity or hash content. Removable labels
 show the ignored-entry count and at most five dirty entries plus the remainder.
 
-Preview worktree discovery receives at most two seconds and half the remaining
-planner budget. Git listing, activity and each status read are deadline-bounded;
-status traversal and hashing also check the deadline/signal. Exhausted rows say
-"not inspected" and cannot be removed. The metadata plan still completes: an
-unchecked row adds no refusal; selecting an uninspected row refuses that physical
-selection until it is unchecked or a fresh inspection succeeds.
+Unselected worktree discovery receives at most two seconds and half the remaining
+planner budget. Selected folders are inspected first, with the remaining planner
+budget, both after checkbox changes and on confirmation rechecks. Unselected
+folders then retain their bounded share of the remaining time. Git listing,
+activity and each status read are deadline-bounded; status traversal and hashing
+also check the deadline/signal. Exhausted rows say "not inspected" and cannot be
+removed. An unchecked row adds no refusal and the metadata plan still completes.
+A selected inspection failure directs the user to the dedicated "Delete worktree"
+action in the sidebar. Exhausting the overall planner deadline still fails the
+preview, with that same fallback; selecting a folder never extends the deadline.
 
 Missing session cwd is a folder candidate only when an absolute project path or
 the snapshot's local folder-key mapping ties the record to that subtree. Without
-such a tie its reason is reported once at dialog level. Global background-job
-candidates are likewise reported once, never copied into every row. A selected
-folder is blocked when a global job has no resolvable absolute cwd, or its cwd
-is that folder or a descendant. A resolvable cwd outside the selected subtree
-does not block it. This conservative rule also applies during removal preflight
+such a tie its reason is reported once at dialog level. Unlocated active tabs/PTYs,
+live or uncertain CLI descriptors, and rows carrying running/unknown liveness
+evidence block every selected folder; dormant historical rows without that evidence
+only produce the dialog reason. The single conservative rule for unattributed
+activity is: live/uncertain sessions and global background-job candidates block
+selected folders when their location cannot be resolved or belongs to the selected
+subtree, and their reason is reported once at dialog level. A resolvable cwd outside
+the selected subtree does not block it. This rule also applies during removal preflight
 and the final per-folder guard. The parent metadata runtime retains its own
 existing background ownership checks.
 
@@ -43,9 +50,9 @@ does not unlink automatically, traverse junctions, delete branches or invoke
 cleanupWorktree. Linked histories remain outside the parent's metadata manifest.
 
 The runtime reads all CLI descriptor writers, indexed session evidence, active
-tabs, schedules and background job files/list once per preview, shared with the
-parent runtime inventory. Path resolutions and background records are cached only
-within that inventory; the results are partitioned by folder in memory.
+tabs and schedules for each selected/unselected inspection group. Background job
+files/list and path resolutions are cached within the preview inventory, shared
+with the parent runtime inventory; results are partitioned by folder in memory.
 Descendant cwd counts as worktree
 activity. Live or uncertain sessions disable the row; E does not extend A4 stop
 authority to a linked project's sessions. Background records remain refused
