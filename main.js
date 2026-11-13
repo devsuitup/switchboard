@@ -1150,8 +1150,11 @@ ipcMain.handle('check-delete-worktree', (_event, worktreePath) => {
 
 function worktreeGit(args, consume) {
   if (consume) return worktreeDelete.streamGit(args, consume, { spawn: spawnChild, env: localGitEnv() });
+  let command = 0;
+  while (args[command] === '-C' || args[command] === '-c') command += 2;
+  const removing = args[command] === 'worktree' && args[command + 1] === 'remove';
   return new Promise((resolve, reject) => {
-    execFile('git', args, { env: localGitEnv(), timeout: args.includes('remove') ? 120000 : 15000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile('git', args, { env: localGitEnv(), timeout: removing ? 120000 : 15000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) reject(Object.assign(new Error((stderr || err.message || String(err)).trim()), { code: err.code, killed: err.killed, signal: err.signal }));
       else resolve(stdout);
     });

@@ -1123,7 +1123,8 @@ async function confirmAndDeleteProjectFolder(project, button) {
         'Choose which app data to discard. Retained session metadata is archived.',
         'Kept on disk: the project folder. Only individually selected linked worktree folders are removed, including their ignored files. All remote server files are kept.',
         'Other transcripts, schedules, memory and .work-files stay on disk. Linked worktree history is kept in Switchboard.',
-        'Kept schedules may reactivate when you add the project again. Retained transcripts may restore their titles.'],
+        'Kept schedules may reactivate when you add the project again. Retained transcripts may restore their titles.',
+        ...(capabilities.plan.warnings || []).filter(row => row.code === 'WORKTREE_UNAVAILABLE').map(row => 'Worktree inventory unavailable: ' + row.error)],
       choices: [
         { id: 'sessions', label: 'Discard session names, pins and app metadata', checked: false, rememberKey: 'deleteProject.sessions',
           disabled: categories.sessions?.available !== true, disabledReason: categories.sessions?.reason || 'Session metadata is unavailable' },
@@ -1131,8 +1132,12 @@ async function confirmAndDeleteProjectFolder(project, button) {
           disabled: categories.settings?.available !== true, disabledReason: categories.settings?.reason || 'Project settings are unavailable' },
         ...worktreeChoices.map((row, i) => {
           const sessionLabel = row.sessionsKnown === false ? 'uncertain' : (row.sessions || []).map(session => session.sessionId || session.id).join(', ') || 'none';
+          const kept = row.main || row.projectDirectory;
+          const dirty = row.dirty?.slice(0, 5).join('; ') + (row.dirty?.length > 5 ? `; and ${row.dirty.length - 5} more` : '');
+          const status = kept ? '' : ` ${row.statusKnown === false ? 'Status unavailable' : row.dirty?.length ? dirty : 'Clean'}. Sessions: ${sessionLabel}.`;
+          const ignored = row.removable ? ` ${row.ignoredCount || 0} ignored entries. Ignored files are removed too.` : '';
           return { id: 'worktree:' + i,
-            label: `${row.main ? 'Main checkout (kept)' : 'Remove worktree from disk'}: ${row.path} — ${row.branch}. ${row.statusKnown === false ? 'Status unavailable' : row.dirty?.length ? row.dirty.join('; ') : 'Clean'}. Sessions: ${sessionLabel}. Ignored files are removed too.`,
+            label: `${row.main ? 'Main checkout (kept)' : kept ? 'Project directory (kept)' : 'Remove worktree from disk'}: ${row.path} — ${row.branch}.${status}${ignored}`,
             checked: false, disabled: row.removable !== true || row.main || row.projectDirectory,
             disabledReason: row.reason ? row.reason : 'This worktree cannot be removed.' };
         }),

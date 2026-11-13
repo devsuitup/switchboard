@@ -141,10 +141,11 @@ async function canonicalPath(value) {
   return comparablePath(await fs.promises.realpath(value).catch(() => value));
 }
 
-async function registeredPath(value) {
+async function registeredPath(value, memo = new Map()) {
   const absolute = path.resolve(value);
   const parent = path.dirname(absolute);
-  return comparablePath(path.join(await fs.promises.realpath(parent).catch(() => parent), path.basename(absolute)));
+  if (!memo.has(parent)) memo.set(parent, fs.promises.realpath(parent).catch(() => parent));
+  return comparablePath(path.join(await memo.get(parent), path.basename(absolute)));
 }
 
 async function runningSessions(worktreePath, activeSessions, descriptors) {
@@ -182,6 +183,14 @@ function unquote(value) {
   return Buffer.from(bytes).toString('utf8');
 }
 
+function parseWorktreeList(list) {
+  return list.split(/\r?\n\r?\n/).filter(record => record.trim()).map(record => {
+    const fields = record.split(/\r?\n/);
+    if (!fields[0].startsWith('worktree ')) throw new Error('Git returned invalid worktree registration.');
+    return { path: unquote(fields[0].slice(9)), fields };
+  });
+}
+
 async function fileFingerprint(root, name, submodules, runGit, depth, budget) {
   const absolute = path.resolve(root, name);
   const relative = path.relative(path.resolve(root), absolute);
@@ -191,8 +200,13 @@ async function fileFingerprint(root, name, submodules, runGit, depth, budget) {
   let stat;
   try { stat = await fs.promises.lstat(absolute); }
   catch (error) { if (error.code === 'ENOENT') return ['missing']; throw error; }
-  const realRoot = resolveOnDisk(root);
-  const candidate = resolveOnDisk(stat.isSymbolicLink() ? path.dirname(absolute) : absolute);
+  const resolve = value => {
+    budget.resolutions ||= new Map();
+    if (!budget.resolutions.has(value)) budget.resolutions.set(value, resolveOnDisk(value));
+    return budget.resolutions.get(value);
+  };
+  const realRoot = resolve(root);
+  const candidate = resolve(stat.isSymbolicLink() ? path.dirname(absolute) : absolute);
   if (!realRoot || !candidate || (candidate !== realRoot && !within(realRoot, candidate))) {
     throw new Error('A file resolves outside the worktree. Review its directory links before deleting.');
   }
@@ -265,7 +279,7 @@ async function statusSnapshot(worktreePath, runGit, depth = 0, budget = { used: 
   return { dirty, ignored, submodules, index, records: recordsForFingerprint.sort() };
 }
 
-async function readStatus(worktreePath, parentRepo, runGit, readFile = fs.promises.readFile) {
+async function readStatus(worktreePath, parentRepo, runGit, readFile = fs.promises.readFile, inventory = {}) {
   const rawGit = runGit;
   runGit = async (...args) => {
     try { return await rawGit(...args); }
@@ -277,12 +291,11 @@ async function readStatus(worktreePath, parentRepo, runGit, readFile = fs.promis
       throw error;
     }
   };
-  const list = await runGit(['-C', parentRepo, 'worktree', 'list', '--porcelain']);
-  const records = list.split(/\r?\n\r?\n/).map(record => record.split(/\r?\n/));
-  const registered = records.filter(record => record[0]?.startsWith('worktree '));
-  const requestedPath = await registeredPath(worktreePath);
-  const registeredPaths = await Promise.all(registered.map(record => registeredPath(unquote(record[0].slice(9)))));
-  const fields = registered[registeredPaths.indexOf(requestedPath)];
+  const registered = inventory.records || parseWorktreeList(await runGit(['-C', parentRepo, 'worktree', 'list', '--porcelain']));
+  const memo = inventory.resolutions ||= new Map();
+  const requestedPath = await registeredPath(worktreePath, memo);
+  const registeredPaths = inventory.registeredPaths ||= await Promise.all(registered.map(record => registeredPath(record.path, memo)));
+  const fields = registered[registeredPaths.indexOf(requestedPath)]?.fields;
   if (!fields) throw new Error('This path is no longer a registered worktree. Refresh the project list before trying Delete again.');
   if (requestedPath === registeredPaths[0]) throw new Error('The main worktree cannot be deleted. Select a linked worktree instead.');
   const branch = fields.find(line => line.startsWith('branch '))?.slice(7).replace(/^refs\/heads\//, '') || '(detached HEAD)';
@@ -339,4 +352,4 @@ async function removeWorktree(worktreePath, parentRepo, shown, read, runGit) {
   }
 }
 
-module.exports = { readStatus, removeWorktree, runningSessions, streamGit };
+module.exports = { readStatus, removeWorktree, runningSessions, streamGit, parseWorktreeList };

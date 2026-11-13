@@ -34,7 +34,8 @@ function gitFixture(t) {
 test('E real Git discovery lists main, branch, dirty/untracked bytes; removes exactly the reviewed linked directory', async t => {
   const f = gitFixture(t);
   fs.writeFileSync(path.join(f.target, 'untracked'), 'discard');
-  const rows = await f.adapter.preview(f.project, f.budget());
+  let rows;
+  await assert.doesNotReject(async () => { rows = await f.adapter.preview(f.project, f.budget()); }, 'installed Git must support worktree inventory');
   assert.equal(rows.find(row => row.main).removable, false);
   const selected = rows.find(row => path.resolve(row.path) === f.target);
   assert.equal(selected.branch, 'topic'); assert.equal(selected.removable, true);

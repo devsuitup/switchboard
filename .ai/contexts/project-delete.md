@@ -10,8 +10,11 @@ main/project-directory identity, dirty/untracked status, sessions, jobs and an
 availability reason. Status/activity failures are explicit, never rendered as
 clean/idle. The main checkout, the selected project directory and its ancestors
 are never removable. Remote selection refuses because no authoritative remote
-filesystem/removal port exists. Local discovery uses NUL-delimited Git porcelain;
-Git versions without that list format leave physical deletion unavailable.
+filesystem/removal port exists. Local discovery uses newline-delimited Git
+`worktree list --porcelain`, with the shared parser decoding Git-quoted paths,
+compatible with Git 2.24. Inventory failures have a visible dialog reason.
+Kept rows do not read status, scan activity or hash content. Removable labels
+show the ignored-entry count and at most five dirty entries plus the remainder.
 
 `project-delete-worktrees.js` calls the existing `worktree-delete` readStatus and
 removeWorktree functions. Clean removal uses no force; dirty content is hashed
@@ -22,7 +25,10 @@ does not unlink automatically, traverse junctions, delete branches or invoke
 cleanupWorktree. Linked histories remain outside the parent's metadata manifest.
 
 The runtime reads all CLI descriptor writers, indexed session evidence, active
-tabs, schedules and background job files/list. Descendant cwd counts as worktree
+tabs, schedules and background job files/list once per preview, shared with the
+parent runtime inventory. Path resolutions and background records are cached only
+within that inventory; the results are partitioned by folder in memory.
+Descendant cwd counts as worktree
 activity. Live or uncertain sessions disable the row; E does not extend A4 stop
 authority to a linked project's sessions. Background records remain refused
 under #1090 even when done. Local subtree launch holds cover selected directories
@@ -30,7 +36,7 @@ and wait for previously admitted descendant launches; archive reservations inclu
 the selected linked identities as well as the parent. External processes and
 filesystem writers are not locked by these holds.
 
-Rows and selection enter the planner fingerprint, retained in the single-use
+Only selected removable rows enter the planner fingerprint, retained in the single-use
 document-bound token. Renderer boxes are individually unchecked on every open
 with no rememberKey. A changed selected row fingerprint requires reopening:
 a newer hidden detail panel cannot silently authorize newly dirty bytes.
@@ -40,21 +46,22 @@ inside it; category `kept` applies to the parent's data, not files inside select
 linked directories.
 
 The dialog keeps the explicit `Kept on disk:` project-folder notice alongside
-the selected linked-folder removal warning. Row session fallbacks are computed
-before formatting the worktree label, and the unavailable reason uses an
-explicit conditional: these are display text, not `SETTING_DEFAULTS` overrides.
-The renderer settings-default scanner remains unchanged; the Settings deletion
-regression retains its disk-retention, cancellation and in-app-dialog assertions.
+the selected linked-folder removal warning. Kept rows carry no ignored-file
+removal warning. Unselected dirty content does not invalidate project consent.
 
 Execution drains holds, revalidates, stops/verifies parent targets, preflights all
 selected rows, then removes sequentially through the shared path with fresh
-per-removal activity/status checks. A failed removal stops the sequence. Only
+per-removal activity/status checks. Confirm inventories inspect only selected
+folders; the final metadata preview skips physical inventory. A failed removal
+stops the sequence. Only
 after removal does it reread writer scope and revalidate parent membership/death,
 omitting already-consumed physical selections from this final preview. The
 writer's manifest/options remain metadata-only. The operation retains launch
 holds until Git settles, even after an early IPC unknown reply.
 
-`worktrees` on operation views records removed/failed/remaining paths. An attempted
+`worktrees` on operation views records removed/failed/refused/remaining paths.
+A refusal before Git removal has no disk effect and does not make the operation
+partial. An inventory-wide refusal has no individual path. An attempted
 disk effect followed by failure remains partial even when the metadata receipt
 proves notStarted. The renderer's persistent notice lists these paths and offers
 fresh review, never replay. A metadata commit still publishes only its own exact
@@ -67,8 +74,9 @@ never repeats disk removal or treats a metadata receipt as proof of disk success
 Plain-Node tests cover the production planner, service, activity reader, subtree
 gate and shared removal with controlled Git replies and real disposable files.
 The composition witness includes the real writer/SQLite fixture. Separate real
-Git worktree tests are retained for CI; the local sandbox refuses their temporary
-linked `.git` creation. Native UI, full process restart, live process death and
+Git worktree tests exercise the installed Git version. The former `list -z`
+command required Git 2.36 and failed on Git 2.24 before inventory could complete.
+Native UI, full process restart, live process death and
 filesystem races after the shared last scan remain unverified locally.
 
 ## Renderer boundary (A4d)

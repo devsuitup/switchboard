@@ -9,6 +9,21 @@ const deletion = require('../worktree-delete');
 
 const target = '/home/jb/repo/.claude/worktrees/task';
 
+test('Git removal timeout follows the subcommand after leading options, never a path called remove', async () => {
+  const fs = require('node:fs'), vm = require('node:vm');
+  const filename = path.join(__dirname, '../main.js');
+  const source = fs.readFileSync(filename, 'utf8');
+  const timeouts = [];
+  const context = vm.createContext({ localGitEnv: () => ({}), execFile: (_exe, _args, options, cb) => {
+    timeouts.push(options.timeout); cb(null, '', '');
+  } });
+  vm.runInContext(require('./app-source').extractFunction(source, 'worktreeGit'), context, { filename });
+  await context.worktreeGit(['-C', 'remove', 'status']);
+  await context.worktreeGit(['-c', 'x=y', '-C', '/repo', 'worktree', 'remove', '--', '/linked']);
+  await context.worktreeGit(['-C', '/repo', 'worktree', 'list', 'remove']);
+  assert.deepEqual(timeouts, [15000, 120000, 15000]);
+});
+
 function fixture() {
   const state = { dirty: '', lock: null, removes: [], cleaned: 0, failRemove: false };
   const handlers = loadProjectActionHandlers({

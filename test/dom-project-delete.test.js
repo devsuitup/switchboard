@@ -9,6 +9,30 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+test('E unavailable worktree inventory has a visible reason outside JSON details', async t => {
+  const h = setup(t, { warnings: [{ code: 'WORKTREE_UNAVAILABLE', error: 'Git inventory unavailable' }] });
+  const pending = h.start(); await flush();
+  const dialog = h.document.querySelector('.choice-dialog').cloneNode(true);
+  dialog.querySelectorAll('details').forEach(node => node.remove());
+  assert.match(dialog.textContent, /Git inventory unavailable/);
+  h.cancel(); await pending;
+});
+
+test('E kept labels omit removal warnings and removable labels bound dirty entries and count ignored files', async t => {
+  const h = setup(t, { worktrees: [
+    { path: 'C:/repo', main: true, removable: false, dirty: [], sessions: [] },
+    { path: 'C:/linked', removable: true, dirty: Array.from({ length: 8 }, (_, i) => '?? file-' + i), ignoredCount: 3, sessions: [] },
+  ] });
+  const pending = h.start(); await flush();
+  const kept = h.document.querySelector('[data-choice-id="worktree:0"]').closest('label').textContent;
+  const linked = h.document.querySelector('[data-choice-id="worktree:1"]').closest('label').textContent;
+  assert.doesNotMatch(kept, /Ignored files are removed/);
+  assert.match(linked, /3 ignored/);
+  assert.match(linked, /and 3 more/);
+  assert.doesNotMatch(linked, /file-5/);
+  h.cancel(); await pending;
+});
+
 test('E worktree choices are individually previewed, never remembered, and main remains disabled', async t => {
   const rows = [
     { path: 'C:/repo', branch: 'main', main: true, removable: false, reason: 'Main checkout is kept', sessions: [], dirty: [] },

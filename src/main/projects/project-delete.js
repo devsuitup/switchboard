@@ -135,7 +135,7 @@ function createProjectDeleteService(deps) {
   async function acceptState(op, state) {
     const committed = state.state === 'committed' && state.receiptAvailable === true && state.terminal === true && state.invalidation;
     const known = state.receiptAvailable === true && state.terminal === true && ['partial', 'notStarted'].includes(state.state);
-    const partial = known && (state.state === 'partial' || op.worktreeResults?.some(row => row.state !== 'remaining'));
+    const partial = known && (state.state === 'partial' || op.worktreeResults?.some(row => ['removed', 'failed'].includes(row.state)));
     op.result = { ...failure('UNKNOWN'), operationId: op.id, state: committed ? 'committed' : partial ? 'partial' : known ? state.state : 'unknown',
       ok: !!committed, partial: !!partial, retryable: false,
       completed: state.completed || [], kept: state.kept || [], failed: state.failed || [], skipped: state.remaining || [],
@@ -231,7 +231,7 @@ function createProjectDeleteService(deps) {
       try { return await acceptState(op, await bounded(() => writer.completeProjectDeletion(manifest), 60000)); }
       catch { return await reconcile(op); }
     } catch (error) {
-      const partial = op.worktreeResults?.some(row => row.state !== 'remaining');
+      const partial = op.worktreeResults?.some(row => ['removed', 'failed'].includes(row.state));
       op.result = { ...failure(error.code || 'DELETE_UNAVAILABLE'), error: error.message, state: partial ? 'partial' : 'notStarted', partial: !!partial, refresh: true };
       return view(op);
     } finally {

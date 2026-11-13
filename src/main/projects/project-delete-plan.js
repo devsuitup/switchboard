@@ -117,7 +117,10 @@ function createProjectDeletePlanner(deps) {
         let worktrees = [];
         try {
           if (project.alias !== null && selectedWorktrees.length) throw fail('WORKTREE_UNAVAILABLE', 'Remote worktree removal is unavailable.');
-          if (deps.worktrees && project.alias === null) worktrees = items(await deps.worktrees.preview(project, { ...budget, snapshot }));
+          if (deps.worktrees && project.alias === null && (boundKey === undefined || selectedWorktrees.length)) {
+            worktrees = items(await deps.worktrees.preview(project, { ...budget, snapshot,
+              ...(boundKey === undefined ? {} : { worktreePaths: selectedWorktrees }) }));
+          }
           worktrees = worktrees.map(row => ({ ...row, selected: selectedWorktrees.includes(row.path) }));
           for (const target of selectedWorktrees) {
             const row = worktrees.find(row => row.path === target);
@@ -262,7 +265,9 @@ function createProjectDeletePlanner(deps) {
         }
         await ordered(refusals);
         const membershipDigest = digest({ project: { alias: project.alias, projectPath: project.projectPath }, ...membership });
-        const fingerprint = digest({ membershipDigest, groups, members, tabs, jobs, schedules, worktrees, options: request.options, stops, categories, warnings, refusals });
+        const fingerprint = digest({ membershipDigest, groups, members, tabs, jobs, schedules,
+          worktrees: worktrees.filter(row => row.selected && !row.main && !row.projectDirectory),
+          options: request.options, stops, categories, warnings: warnings.filter(row => row.code !== 'WORKTREE_UNAVAILABLE'), refusals });
         const revision = await deps.readRevision(budget);
         expired();
         if (revision !== snapshot.revision) throw fail('SNAPSHOT_STALE', 'Writer changed during discovery; request a fresh preview.');

@@ -204,7 +204,7 @@ test('E shared removal with a controlled Git port discovery lists main, branch, 
   fs.writeFileSync(path.join(f.target, 'untracked'), 'discard');
   const rows = await f.adapter.preview(f.project, f.budget());
   assert.equal(rows.find(row => row.main).removable, false);
-  assert.equal(rows.find(row => row.main).statusKnown, true, 'main checkout status must be previewed even though it is never removable');
+  assert.equal(rows.find(row => row.main).statusKnown, false, 'kept checkout must not be scanned');
   const selected = rows.find(row => path.resolve(row.path) === f.target);
   assert.equal(selected.branch, 'topic'); assert.equal(selected.removable, true);
   assert.ok(selected.dirty.some(line => line.includes('untracked')));
@@ -240,4 +240,90 @@ test('E shared removal with a controlled Git port changed contents and new live 
   assert.equal(f.commands.some(args => args.includes('remove')), false, 'late activity must prevent Git removal');
   const blocked = (await f.adapter.preview(f.project, f.budget())).find(row => path.resolve(row.path) === f.target);
   assert.equal(blocked.removable, false); assert.equal(blocked.sessions[0].sessionId, 'live');
+});
+
+test('E inventory supports Git 2.24 newline porcelain and scans only removable rows', async t => {
+  const f = gitFixture(t);
+  await f.adapter.preview(f.project, f.budget());
+  assert.equal(f.commands.some(args => args.includes('list') && args.includes('-z')), false, 'Git 2.24 rejects list -z');
+  assert.equal(f.commands.filter(args => args.includes('list')).length, 1, 'registration is read once per inventory');
+  assert.equal(f.commands.some(args => args.includes('status') && path.resolve(args[1]) === f.root), false, 'main checkout must not be scanned');
+});
+
+test('E no selection ignores dirty changes while selected bytes invalidate consent', async t => {
+  const f = await serviceFixture(t);
+  const preview = await f.service.preview(f.sender, f.request([]));
+  f.state.rows[0].dirty.push('?? new.txt'); f.state.rows[0].fingerprint = 'new';
+  const result = await f.service.execute(f.sender, { token: preview.token, fingerprint: preview.plan.fingerprint });
+  assert.equal(result.state, 'committed', 'unselected dirty bytes must not invalidate project consent');
+  const g = await serviceFixture(t);
+  const selected = await g.service.preview(g.sender, g.request([g.a]));
+  g.state.rows[0].fingerprint = 'new';
+  const changed = await g.service.execute(g.sender, { token: selected.token, fingerprint: selected.plan.fingerprint });
+  assert.equal(changed.code, 'PREVIEW_CHANGED');
+  assert.equal(g.state.removed.length, 0);
+});
+
+test('E precheck refusal has no partial disk effect or invented failed path', async t => {
+  const f = gitFixture(t), results = [];
+  const rows = await f.adapter.preview(f.project, f.budget());
+  const selected = rows.find(row => path.resolve(row.path) === f.target);
+  fs.writeFileSync(path.join(f.target, 'untracked'), 'late');
+  await f.adapter.remove(f.project, [selected], row => results.push(row));
+  assert.equal(results[0].state, 'refused', 'no Git remove was attempted');
+});
+
+test('E whole-inventory failure refuses without blaming the first selected path', async t => {
+  const f = gitFixture(t);
+  const selected = (await f.adapter.preview(f.project, f.budget())).find(row => path.resolve(row.path) === f.target);
+  const adapter = implementation.createProjectDeleteWorktrees({ runGit: async () => { throw new Error('inventory offline'); }, readActivity: async () => ({ complete: true }) });
+  const failures = [];
+  await adapter.remove(f.project, [selected], row => failures.push(row));
+  assert.equal(failures[0].state, 'refused');
+  assert.equal(failures[0].path, undefined, 'whole inventory failure has no individual path');
+});
+
+test('E service reports precheck refusal without partially completed deletion', async t => {
+  const f = await serviceFixture(t);
+  f.worktrees.remove = async (_project, _selected, record) => { record({ state: 'refused', error: 'inventory offline' }); return false; };
+  const preview = await f.service.preview(f.sender, f.request([f.a]));
+  const result = await f.service.execute(f.sender, { token: preview.token, fingerprint: preview.plan.fingerprint });
+  assert.equal(result.partial, false, 'refusal is not a disk effect');
+  assert.equal(result.state, 'notStarted');
+  assert.equal(f.state.events.includes('metadata'), false);
+});
+
+test('E confirm only inspects selected worktrees and retains the last removal guard', async t => {
+  const f = gitFixture(t);
+  const selected = (await f.adapter.preview(f.project, f.budget())).find(row => path.resolve(row.path) === f.target);
+  f.commands.length = 0;
+  assert.equal(await f.adapter.remove(f.project, [selected], () => {}), true);
+  assert.equal(f.commands.some(args => args.includes('status') && path.resolve(args[1]) !== f.target), false, 'confirm must not inspect unselected folders');
+  assert.equal(f.commands.filter(args => args.includes('status') && !args.includes('--ignored')).length, 2, 'preflight and immediately before removal');
+});
+
+test('E preview shares one Claude roster and path resolution across sibling worktree rows', async t => {
+  const f = gitFixture(t), { createProjectDeleteRuntime } = require('../src/main/projects/project-delete-main');
+  let spawns = 0, descriptors = 0;
+  const resolutions = new Map();
+  const runtime = createProjectDeleteRuntime({ fs: { ...fs.promises, realpath: async value => {
+    resolutions.set(value, (resolutions.get(value) || 0) + 1); return fs.promises.realpath(value);
+  } }, activeSessions: new Map(), jobsDir: path.join(f.root, 'jobs'), homeDir: f.root,
+  runClaude: async () => { spawns++; return { code: 0, stdout: '[]' }; }, cliSessionState: {
+    getSidebarDescriptors: () => { descriptors++; return [{ sessionId: 'one', cwd: f.target }, { sessionId: 'two', cwd: f.target }]; },
+    readStatusEvidence: async () => ({ known: true, live: null }), getScheduleRunSnapshot: () => [],
+  } });
+  const adapter = implementation.createProjectDeleteWorktrees({ runGit: async args => {
+    f.commands.push(args);
+    if (args.includes('list')) return [f.root, f.target, f.kept].map(p => `worktree ${p.replaceAll('\\', '/')}\nHEAD abc\n\n`).join('').replaceAll('\n', args.includes('-z') ? '\0' : '\n');
+    if (args.includes('rev-parse')) return path.join(f.root, 'absent-lock');
+    return '';
+  }, readActivity: runtime.readWorktreeActivity });
+  const budget = { ...f.budget(), snapshot: { sessions: [] } };
+  await runtime.readJobs(f.project, budget);
+  const rows = await adapter.preview(f.project, budget);
+  assert.equal(rows.length, 3);
+  assert.equal(spawns, 1, 'one claude agents spawn per preview, including parent inventory');
+  assert.equal(descriptors, 1, 'session inventory is read once');
+  assert.equal(Math.max(...resolutions.values()), 1, 'paths resolve once per inventory');
 });
