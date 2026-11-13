@@ -9,7 +9,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { launch, ID } = require('./fixtures/trigger-name-launch.cjs');
 const profiles = require('../src/main/terminals/shell-profiles');
-const { resolveWindowsClaude, cmdEscapePasses } = require('../claude-binary');
+const { resolveWindowsClaude, cmdEscapePasses, powershellEscapePasses } = require('../claude-binary');
 
 const NAMES = ['smithy hardening', `it's "quoted"`, 'a\\', 'C:\\dir\\', 'say "hi\\"', '$HOME `id` $(id) ${x} %PATH% !x ^y',
   'a&b|c>d<e (f) ; g', '--dangerously-skip-permissions', '-n', 'cafe\u0301 \u{1F600}', "'; touch pwned; '", '"; touch pwned; "'];
@@ -126,6 +126,15 @@ test('PowerShell escaping depth follows the claude PowerShell resolves, which ig
   claudeOnDisk(t, 'C:\\bin\\claude.cmd', path.win32.join('C:\\project', 'claude.exe'));
   assert.match(profiles.quoteArgvForShell(PWSH, ['a b'], { env, cwd: 'C:\\project' }), /^'\^\^\^"a\^\^\^ b\^\^\^"'$/);
   assert.equal(profiles.quoteArgvForShell(PWSH, ['a b'], { env, wrapped: true }), `'"a b"'`);
+});
+test('PowerShell resolves a claude.ps1 before a claude.cmd in the same directory, and the first directory with any claude wins', () => {
+  const env = { PATH: 'C:\\a;C:\\b' };
+  assert.equal(powershellEscapePasses(env, { exists: exists('C:\\a\\claude.cmd') }), 2);
+  assert.equal(powershellEscapePasses(env, { exists: exists('C:\\a\\claude.cmd', 'C:\\a\\claude.ps1') }), 1);
+  assert.equal(powershellEscapePasses(env, { exists: exists('C:\\a\\claude.cmd', 'C:\\b\\claude.ps1') }), 2);
+  assert.equal(powershellEscapePasses(env, { exists: exists('C:\\a\\claude.exe', 'C:\\b\\claude.ps1') }), 1);
+  assert.equal(powershellEscapePasses(env, { wrapped: true, exists: exists('C:\\a\\claude.cmd') }), 1);
+  assert.equal(powershellEscapePasses({ PATH: 'C:\\a' }, { exists: exists() }), 1);
 });
 test('the PowerShell launch pins legacy native argument passing and the cmd quote variable before the command', async () => {
   for (const shell of ['pwsh.exe', 'powershell.exe']) {

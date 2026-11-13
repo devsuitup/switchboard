@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { escapeForCmd, cmdEscapePasses } = require('../../../claude-binary');
+const { escapeForCmd, cmdEscapePasses, powershellEscapePasses } = require('../../../claude-binary');
 
 const PS_QUOTE_VAR = 'SWITCHBOARD_Q';
 
@@ -198,7 +198,7 @@ function isPowerShellShell(shellPath) {
 function quoteArgvForShell(shellPath, argv, { env, cwd, wrapped } = {}) {
   const passes = !env ? 1
     : isCmdShell(shellPath) ? cmdEscapePasses(env, { cwd, wrapped })
-      : isPowerShellShell(shellPath) ? cmdEscapePasses(env, { wrapped }) : 1;
+      : isPowerShellShell(shellPath) ? powershellEscapePasses(env, { wrapped }) : 1;
   return argv.map(a => quoteArgForShell(shellPath, a, passes)).join(' ');
 }
 

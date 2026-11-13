@@ -307,8 +307,10 @@ Its inner `^^^"` is written `%SWITCHBOARD_Q%` and the pin also sets
 PowerShell never sees the inner quotes whose parity would make it wrap a token
 that holds a space. Only the outer pair stays literal, which keeps the count odd
 over the whole token. A launch prefix runs the bare `claude` itself and gets the
-plain token. A `claude.ps1` shim earlier on PATH is not modelled: PowerShell runs
-it as a script, not a native command.
+plain token. A `claude.ps1` (npm writes one beside `claude.cmd`) is resolved first
+by PowerShell, in the first PATH directory holding any `claude`
+(`powershellEscapePasses`); its `& node ... $args` is a second native call under the
+same pinned Legacy rule and receives the plain token, so no cmd layer applies.
 
 Qualification: `test/trigger-name-transport.test.js` runs the real encoders
 through the extracted `open-terminal` handler and an injected PTY edge. On Linux
@@ -321,7 +323,7 @@ node-pty's `argsToCommandLine`, starts `cmd.exe` with that exact command line an
 compares the argv a disposable echo executable and `claude.cmd` / `claude.bat` shims received, including a launch-directory executable shadowing a PATH shim and the reverse, a whitespace-only prefix, and a native wrapper prefix over resume and fork options,
 with the input. `test/trigger-name-transport-powershell-windows.test.js` does the
 same through `powershell.exe` and, when installed, `pwsh.exe`, into an echo
-`claude.exe` and a `claude.cmd` shim, with quotes, backslashes, an empty-looking
+`claude.exe`, a `claude.cmd` shim, an npm-shaped `claude.ps1`, and a directory holding both, with quotes, backslashes, an empty-looking
 quote pair, `$env:PATH`, backticks, `;`, `&`, `%PATH%`, typographic quotes and
 unicode. On Linux a model of Legacy quoting plus CommandLineToArgvW checks the
 PowerShell literals. Neither file is a live Claude Code or ConPTY qualification;

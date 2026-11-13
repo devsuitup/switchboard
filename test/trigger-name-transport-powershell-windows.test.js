@@ -29,13 +29,25 @@ class P { static int Main(string[] a) {
 } }`;
 const ECHO_JS = 'require("fs").writeFileSync(process.env.SB_ARGV_OUT, JSON.stringify(process.argv.slice(2)));';
 
+// the shape npm's cmd-shim generates for a bin script
+const PS1_SHIM = `#!/usr/bin/env pwsh
+$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent
+$ret=0
+& "NODE" "$basedir/echo.js" $args
+$ret=$LASTEXITCODE
+exit $ret
+`;
+const KINDS = ['exe', 'cmd', 'ps1', 'ps1cmd'];
 const bins = {};
 function makeBin(kind) {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), `sb-ps-argv-${kind}-`)));
-  if (kind === 'cmd') {
+  if (kind !== 'exe') {
     fs.writeFileSync(path.join(dir, 'echo.js'), ECHO_JS);
+    if (kind !== 'cmd') fs.writeFileSync(path.join(dir, 'claude.ps1'), PS1_SHIM.replace('NODE', process.execPath));
+  }
+  if (kind === 'cmd' || kind === 'ps1cmd') {
     fs.writeFileSync(path.join(dir, 'claude.cmd'), `@echo off\r\n"${process.execPath}" "%~dp0echo.js" %*\r\n`);
-  } else {
+  } else if (kind === 'exe') {
     fs.writeFileSync(path.join(dir, 'echo.cs'), CS);
     const built = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
       'Add-Type -TypeDefinition (Get-Content -Raw -LiteralPath $env:SB_CS) -OutputType ConsoleApplication -OutputAssembly $env:SB_EXE'],
@@ -46,7 +58,7 @@ function makeBin(kind) {
 }
 const present = exe => win && spawnSync(exe, ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], { encoding: 'utf8' }).status === 0;
 const shells = [['powershell.exe', win], ['pwsh.exe', present('pwsh.exe')]];
-before(() => { if (!skip) for (const kind of ['exe', 'cmd']) bins[kind] = makeBin(kind); });
+before(() => { if (!skip) for (const kind of KINDS) bins[kind] = makeBin(kind); });
 after(() => { for (const dir of Object.values(bins)) fs.rmSync(dir, { recursive: true, force: true }); });
 
 async function run(shell, kind, request) {
@@ -75,15 +87,15 @@ const EXISTING = [
 ];
 
 for (const [shell, available] of shells) {
-  for (const kind of ['exe', 'cmd']) {
+  for (const kind of KINDS) {
     const options = { skip: skip || (!available && `${shell} is not installed`), timeout: 90000 };
     for (const name of NAMES) {
-      test(`${shell} hands a claude.${kind} the exact name ${JSON.stringify(name)}`, options, async () => {
+      test(`${shell} hands a claude (${kind}) the exact name ${JSON.stringify(name)}`, options, async () => {
         assert.deepEqual(await run(shell, kind, { name }), ['--session-id', ID, '--name', name]);
       });
     }
     for (const [label, request, expected] of EXISTING) {
-      test(`${shell} hands a claude.${kind} ${label} its exact arguments`, options, async () => {
+      test(`${shell} hands a claude (${kind}) ${label} its exact arguments`, options, async () => {
         assert.deepEqual(await run(shell, kind, request), expected);
       });
     }
