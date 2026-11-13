@@ -5,10 +5,10 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { StringDecoder } = require('node:string_decoder');
 const { resolveOnDisk } = require('./src/main/shared/resolve-path-on-disk');
+const { DIRECTORY_SCAN_MS } = require('./public/setting-defaults');
 
 const HASH_LIMIT = 512 * 1024 * 1024;
 const DIRECTORY_LIMIT = 200000;
-const DIRECTORY_SCAN_MS = 5000;
 
 function within(root, candidate) {
   const relative = path.relative(root, candidate);

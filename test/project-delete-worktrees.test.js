@@ -489,7 +489,64 @@ function gitFixture(t) {
   const project = { alias: null, projectPath: root.replaceAll('\\', '/').toLowerCase() };
   if (process.platform !== 'win32') project.projectPath = root;
   const budget = () => ({ signal: new AbortController().signal, deadline: Date.now() + 15000, limit: 20000 });
-  return { root, target, kept, state, commands, adapter, project, budget };
+  return { root, target, kept, state, commands, adapter, project, budget, runGit };
+}
+
+for (const stage of ['preflight', 'final', 'reread']) {
+  test(`E ${stage} inspection aborts both process reads before returning`, async t => {
+    const f = gitFixture(t);
+    const selected = (await f.adapter.preview(f.project, f.budget())).find(row => path.resolve(row.path) === f.target);
+    const signals = [], pending = new Set();
+    const hold = signal => new Promise(resolve => {
+      pending.add(resolve);
+      signal.addEventListener('abort', () => { pending.delete(resolve); resolve({ code: 0, stdout: '[]', map: null }); }, { once: true });
+    });
+    const runtime = require('../src/main/projects/project-delete-main').createProjectDeleteRuntime({
+      homeDir: f.root, runClaude: (_args, opts) => hold(opts.signal),
+      cliSessionState: { readProcessTableSnapshot: (_deadline, opts) => hold(opts.signal) },
+    });
+    let inspections = 0;
+    const adapter = implementation.createProjectDeleteWorktrees({
+      runGit: async args => {
+        if (stage === 'reread' && args.includes('remove')) throw new Error('Git refused');
+        return f.runGit(args);
+      },
+      startProcessReads: (project, budget) => {
+        signals.push(budget.signal);
+        runtime.startProcessReads(project, budget);
+      },
+      readActivity: async () => ({ complete: ++inspections < ({ preflight: 1, final: 2, reread: 3 })[stage], ...f.state }),
+    });
+    t.after(() => {
+      for (const resolve of pending) resolve({ code: 0, stdout: '[]', map: null });
+    });
+    assert.equal(await adapter.remove(f.project, [selected], () => {}), false);
+    assert.equal(signals.length, ({ preflight: 1, final: 2, reread: 3 })[stage]);
+    assert.ok(signals.every(signal => signal.aborted), 'every completed inspection must abort its process-read signal');
+    assert.equal(pending.size, 0, 'neither Claude nor process-table reads may remain pending');
+  });
+}
+
+for (const stage of ['preflight', 'final']) for (const reason of ['list error', 'ineligible']) {
+  test(`E ${stage} ${reason} does not start unnecessary process reads`, async t => {
+    const f = gitFixture(t);
+    const selected = (await f.adapter.preview(f.project, f.budget())).find(row => path.resolve(row.path) === f.target);
+    let lists = 0, reads = 0;
+    const adapter = implementation.createProjectDeleteWorktrees({
+      runGit: async args => {
+        if (args.includes('list') && ++lists === (stage === 'preflight' ? 1 : 2)) {
+          if (reason === 'list error') throw new Error('Git list unavailable');
+          return `worktree ${selected.path}\nHEAD abc\n\n`;
+        }
+        return f.runGit(args);
+      },
+      startProcessReads: () => { reads++; },
+      readActivity: async () => ({ complete: true, ...f.state }),
+    });
+    assert.equal(await adapter.remove(f.project, [selected], () => {}), false);
+    assert.equal(reads, stage === 'preflight' ? 0 : 1, 'ineligible or unreadable registration must not start Claude or table reads');
+    assert.equal(f.commands.some(args => args.includes('remove')), false);
+  });
 }
 
 test('E shared removal with a controlled Git port discovery lists main, branch, dirty/untracked bytes; removes exactly the reviewed linked directory', async t => {

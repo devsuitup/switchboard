@@ -91,7 +91,8 @@ const { startScheduler, scheduleLaunchRefusal, resolveScheduleSandbox, initialSc
 const { buildScheduleList } = require('./src/main/schedules/schedule-list');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
-const { SETTING_DEFAULTS, normalizeBrowserSettings } = require('./public/setting-defaults');
+const { SETTING_DEFAULTS, normalizeBrowserSettings,
+  PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS, PROJECT_DELETE_WORKTREE_REMOVE_TIMEOUT_MS } = require('./public/setting-defaults');
 const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./src/main/shared/ipc-path-validator');
 const { validatePreLaunchCmd } = require('./src/main/terminals/pre-launch-cmd-guard');
 const { normalizePtySize } = require('./src/main/terminals/pty-size');
@@ -1154,7 +1155,7 @@ function worktreeGit(args, consume) {
   while (args[command] === '-C' || args[command] === '-c') command += 2;
   const removing = args[command] === 'worktree' && args[command + 1] === 'remove';
   return new Promise((resolve, reject) => {
-    execFile('git', args, { env: localGitEnv(), timeout: removing ? 120000 : 15000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile('git', args, { env: localGitEnv(), timeout: removing ? PROJECT_DELETE_WORKTREE_REMOVE_TIMEOUT_MS : PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) reject(Object.assign(new Error((stderr || err.message || String(err)).trim()), { code: err.code, killed: err.killed, signal: err.signal }));
       else resolve(stdout);
     });

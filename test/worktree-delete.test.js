@@ -14,7 +14,8 @@ test('Git removal timeout follows the subcommand after leading options, never a 
   const filename = path.join(__dirname, '../main.js');
   const source = fs.readFileSync(filename, 'utf8');
   const timeouts = [];
-  const context = vm.createContext({ localGitEnv: () => ({}), execFile: (_exe, _args, options, cb) => {
+  const defaults = require('../public/setting-defaults');
+  const context = vm.createContext({ ...defaults, localGitEnv: () => ({}), execFile: (_exe, _args, options, cb) => {
     timeouts.push(options.timeout); cb(null, '', '');
   } });
   vm.runInContext(require('./app-source').extractFunction(source, 'worktreeGit'), context, { filename });
@@ -22,6 +23,11 @@ test('Git removal timeout follows the subcommand after leading options, never a 
   await context.worktreeGit(['-c', 'x=y', '-C', '/repo', 'worktree', 'remove', '--', '/linked']);
   await context.worktreeGit(['-C', '/repo', 'worktree', 'list', 'remove']);
   assert.deepEqual(timeouts, [15000, 120000, 15000]);
+  context.PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS = 17000;
+  context.PROJECT_DELETE_WORKTREE_REMOVE_TIMEOUT_MS = 125000;
+  await context.worktreeGit(['worktree', 'list', '--porcelain']);
+  await context.worktreeGit(['worktree', 'remove', '--', '/linked']);
+  assert.deepEqual(timeouts.slice(3), [17000, 125000], 'Git must use the shared timeout bindings');
 });
 
 function fixture() {

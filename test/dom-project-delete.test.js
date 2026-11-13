@@ -109,7 +109,7 @@ for (const selected of [0, 2]) for (const settles of [true, false]) test(`pendin
   const worktrees = Array.from({ length: 2 }, (_, i) => ({ path: 'C:/linked-' + i, removable: true, fingerprint: 'stable', sessions: [], dirty: [] }));
   const h = setup(t, { worktrees }), timers = new Map(), applied = [];
   const base = 3 * 20000 + 2 * 10000 + 60000 + 60000 + 70000 + 10000 + 3 * 10000 + 15000;
-  const ceiling = base + (selected ? 15000 + selected * (15000 + 120000) : 0);
+  const ceiling = base + (selected ? 15000 + selected * (15000 + 5000 + 120000 + 15000) : 0);
   const settleAt = selected ? ceiling - 1000 : 130000;
   let time = 0, id = 0, finished = false;
   h.w.Date.now = () => time;

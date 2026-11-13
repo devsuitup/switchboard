@@ -2,6 +2,7 @@
 
 const path = require('node:path');
 const deletion = require('../../../worktree-delete');
+const { PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS } = require('../../../public/setting-defaults');
 const { canonicalPath, fail } = require('./project-delete-identity');
 
 function createProjectDeleteWorktrees({ runGit, readActivity, startProcessReads = () => {}, now = Date.now }) {
@@ -20,7 +21,7 @@ function createProjectDeleteWorktrees({ runGit, readActivity, startProcessReads 
       return result;
     } finally { clearTimeout(timer); }
   }
-  async function preview(project, budget) {
+  async function preview(project, budget, prepareProcessReads = () => {}) {
     if (project.alias !== null) throw fail('WORKTREE_UNAVAILABLE', 'Remote worktree removal is unavailable.');
     check(budget);
     if (budget.worktreePaths?.length === 0) return [];
@@ -51,6 +52,7 @@ function createProjectDeleteWorktrees({ runGit, readActivity, startProcessReads 
       let activities, activityError;
       if (group.length) {
         try {
+          prepareProcessReads(project, inspectionBudget);
           activities = await bounded(() => readActivity({ ...project, worktreePaths: group.map(row => row.path) }, inspectionBudget), inspectionBudget);
           for (const candidate of activities.candidates || []) budget.reportCandidate?.(candidate);
         }
@@ -84,10 +86,10 @@ function createProjectDeleteWorktrees({ runGit, readActivity, startProcessReads 
     return rows;
   }
   async function remove(project, selected, record) {
-    const budget = { signal: new AbortController().signal, deadline: now() + 15000, limit: 20000 };
+    const controller = new AbortController();
+    const budget = { signal: controller.signal, deadline: now() + PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS, limit: 20000 };
     try {
-      startProcessReads(project, budget);
-      const current = await preview(project, { ...budget, worktreePaths: selected.map(row => row.path), selectedWorktrees: selected.map(row => row.path) });
+      const current = await preview(project, { ...budget, worktreePaths: selected.map(row => row.path), selectedWorktrees: selected.map(row => row.path) }, startProcessReads);
       for (const row of selected) {
         const fresh = current.find(item => item.path === row.path);
         if (!fresh?.removable || fresh.main || fresh.projectDirectory || fresh.fingerprint !== row.fingerprint) {
@@ -97,18 +99,20 @@ function createProjectDeleteWorktrees({ runGit, readActivity, startProcessReads 
       }
     } catch (error) {
       record({ state: 'refused', error: error.message }); return false;
-    }
+    } finally { controller.abort(); }
     for (const row of selected) {
       let result, attempted = false;
       try {
         result = await deletion.removeWorktree(row.path, project.projectPath, row, async () => {
-          const removalBudget = { ...budget, signal: new AbortController().signal, deadline: now() + 15000,
+          const removalController = new AbortController();
+          const removalBudget = { ...budget, signal: removalController.signal, deadline: now() + PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS,
             worktreePaths: [row.path], selectedWorktrees: [row.path] };
-          startProcessReads(project, removalBudget);
-          const current = await preview(project, removalBudget);
-          const fresh = current.find(item => item.path === row.path);
-          if (!fresh?.removable || fresh.main || fresh.projectDirectory) throw fail('WORKTREE_UNAVAILABLE', fresh?.reason || 'Worktree registration changed.');
-          return fresh;
+          try {
+            const current = await preview(project, removalBudget, startProcessReads);
+            const fresh = current.find(item => item.path === row.path);
+            if (!fresh?.removable || fresh.main || fresh.projectDirectory) throw fail('WORKTREE_UNAVAILABLE', fresh?.reason || 'Worktree registration changed.');
+            return fresh;
+          } finally { removalController.abort(); }
         }, async args => { attempted = true; return runGit(args); });
       } catch (error) { result = { ok: false, error: error.message }; }
       record({ path: row.path, state: result.ok ? 'removed' : attempted ? 'failed' : 'refused', error: result.error });

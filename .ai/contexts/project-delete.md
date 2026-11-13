@@ -90,7 +90,10 @@ removal warning. Unselected dirty content does not invalidate project consent.
 Execution drains holds, revalidates, stops/verifies parent targets, preflights all
 selected rows, then removes sequentially through the shared path with fresh
 per-removal activity/status checks. Confirm inventories inspect only selected
-folders; the final metadata preview skips physical inventory. A failed removal
+folders; each inspection starts process reads only after Git identifies eligible
+rows. Preflight and each final check (including a post-failure re-read) own an
+AbortController and abort it in finally, so refusal and error exits cancel the
+Claude roster and process-table reads. The final metadata preview skips physical inventory. A failed removal
 stops the sequence. Only
 after removal does it reread writer scope and revalidate parent membership/death,
 omitting already-consumed physical selections from this final preview. The
@@ -99,9 +102,11 @@ holds until Git settles, even after an early IPC unknown reply.
 Renderer follow-up keeps the same operation ID and only reads state. With no
 folders selected its ceiling stays 325 seconds. Otherwise it adds the 15-second
 preflight and, per selected folder, the 15-second final inspection from
-`project-delete-worktrees.js` plus the 120-second Git removal timeout from
-`main.js`'s `worktreeGit`. The two named worktree constants beside the base
-renderer timeout encode these bounds; two selections allow 610 seconds.
+`project-delete-worktrees.js`, the 5-second directory-link scan, the 120-second
+Git removal timeout from `main.js`'s `worktreeGit`, and one additional 15-second
+inspection after a Git failure. Main and renderer import the inspection, removal,
+and `DIRECTORY_SCAN_MS` constants from `public/setting-defaults.js`; two selections
+allow 650 seconds. This bounds automatic following, not filesystem completion.
 
 `worktrees` on operation views records removed/failed/refused/remaining paths.
 A refusal before Git removal has no disk effect and does not make the operation
