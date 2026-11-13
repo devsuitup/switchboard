@@ -9,6 +9,38 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+test('Cancel then reopen follows a pending execute to its terminal refusal without resubmission', async t => {
+  const h = setup(t);
+  const first = h.start(); await flush(); h.cancel(); await first;
+  h.w.api.deleteProject = async request => { h.calls.execute.push(request); return { state: 'unknown', operationId: 'slow', code: 'EXECUTION_PENDING', completed: [], kept: [], failed: [], skipped: [], stopped: [] }; };
+  h.w.api.projectDeleteState = async request => { h.calls.state.push(request); return { state: 'notStarted', operationId: 'slow', code: 'PREVIEW_CHANGED', refresh: true }; };
+  const pending = h.start(); await flush(); h.confirm().click(); await pending;
+  assert.equal(h.calls.execute.length, 1);
+  assert.equal(h.calls.execute[0].token, 'token-4', 'only the second dialog selected preview may execute');
+  assert.equal(h.calls.state.length, 1, 'pending execution must be followed by read-only state reconciliation');
+  assert.match(h.document.querySelector('.app-notice').textContent, /PREVIEW_CHANGED/);
+  assert.doesNotMatch(h.document.querySelector('.app-notice').textContent, /unresolved/);
+  assert.equal(h.document.querySelector('.project-delete-btn').disabled, false);
+});
+
+test('unresolved notice includes its main reason code', async t => {
+  const h = setup(t);
+  await h.w.settleProjectDeletion(h.p, { operationId: 'unknown', state: 'unknown', code: 'FENCE_UNAVAILABLE', completed: [], kept: [], failed: [], skipped: [], stopped: [] });
+  assert.match(h.document.querySelector('.app-notice').textContent, /FENCE_UNAVAILABLE/);
+});
+
+test('pending execute keeps its operation identity when the automatic state read becomes unavailable', async t => {
+  const h = setup(t);
+  h.w.api.deleteProject = async request => { h.calls.execute.push(request); return { state: 'unknown', operationId: 'slow', code: 'EXECUTION_PENDING' }; };
+  h.w.api.projectDeleteState = async request => { h.calls.state.push(request); return { ok: false, code: 'NOT_READY' }; };
+  const pending = h.start(); await flush(); h.confirm().click(); await pending;
+  assert.equal(h.calls.execute.length, 1);
+  const notice = h.document.querySelector('.app-notice');
+  assert.match(notice.textContent, /NOT_READY/);
+  assert.match(notice.textContent, /Check deletion state/, 'a refused read must retain the accepted operation for recovery');
+  assert.equal(h.w.isProjectDeleting(h.p), true);
+});
+
 test('a selected preview rejection names its port in the open dialog and Cancel releases both rows', async t => {
   const h = setup(t), original = h.w.api.previewProjectDelete;
   const other = { ...h.p, projectPath: '/other', sessions: [] };

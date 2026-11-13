@@ -243,7 +243,9 @@ test('reply timeout before admission leaves work owned and state cannot fence it
   const h = await setup(t), admission = h.gate.tryAdmit(h.projectPath), p = await h.preview();
   const pending = h.execute(p); await flush(); h.time.advance(1000);
   const result = await pending; assert.equal(result.state, 'unknown'); assert.ok(result.operationId); assert.equal(h.count(), 0);
-  assert.equal((await h.invoke('project-delete-state', { operationId: result.operationId })).state, 'unknown');
+  const stateRead = h.invoke('project-delete-state', { operationId: result.operationId });
+  await flush(); h.time.advance(1000);
+  assert.equal((await stateRead).state, 'unknown');
   assert.equal(h.calls.includes('fenceProjectDeletion'), false);
   admission.release();
   await h.service.whenIdle();

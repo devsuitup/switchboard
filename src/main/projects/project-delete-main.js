@@ -36,7 +36,7 @@ function createProjectDeleteRuntime(ports) {
     if (request.folderKey && parseFolderKey(request.folderKey).alias !== null) return;
     if (!processReads.has(budget.signal)) {
       const agents = bounded('runClaude.agents', () => ports.runClaude(['agents', '--json', '--all'],
-        { cwd: ports.homeDir, timeout: Math.max(1, budget.deadline - now()), maxOutputBytes: 8 * 1048576 }), budget);
+        { cwd: ports.homeDir, timeout: Math.max(1, budget.deadline - now()), signal: budget.signal, maxOutputBytes: 8 * 1048576 }), budget);
       const table = ports.cliSessionState.readProcessTableSnapshot
         ? Promise.resolve().then(() => ports.cliSessionState.readProcessTableSnapshot(budget.deadline))
           .catch(() => ({ map: null })) : Promise.resolve(undefined);
@@ -48,7 +48,7 @@ function createProjectDeleteRuntime(ports) {
     if (project.alias !== null) throw fail('DISCOVERY_UNAVAILABLE', 'Remote background inventory has no exhaustive read port.');
     const early = processReads.get(budget.signal);
     const agents = early?.agents || bounded('runClaude.agents', () => ports.runClaude(['agents', '--json', '--all'],
-      { cwd: ports.homeDir, timeout: Math.max(1, budget.deadline - now()), maxOutputBytes: 8 * 1048576 }), budget);
+      { cwd: ports.homeDir, timeout: Math.max(1, budget.deadline - now()), signal: budget.signal, maxOutputBytes: 8 * 1048576 }), budget);
     void agents.catch(() => {});
     const jobs = [], candidates = [], records = new Map();
     let directory, count = 0, bytes = 0;
@@ -119,7 +119,13 @@ function createProjectDeleteRuntime(ports) {
     if (members.size >= 50000 && !members.has(row.id)) throw fail('DISCOVERY_LIMIT', 'Runtime identity limit.');
     members.set(row.id, row);
     if (row.alias !== null || row.runtime === 'codex' || row.jobId) return { state: 'unknown' };
-    const processTable = await processReads.get(budget.signal)?.table;
+    const early = processReads.get(budget.signal);
+    let processTable = await early?.table;
+    if (processTable?.expiresAt <= now() && now() < budget.deadline) {
+      early.refreshed ||= bounded('cliSessionState.readProcessTableSnapshot',
+        () => ports.cliSessionState.readProcessTableSnapshot(budget.deadline), budget);
+      processTable = await early.refreshed;
+    }
     const evidenceOptions = processTable === undefined ? {} : { processTable };
     const matches = sessionsFor(row.sessionId || row.id);
     if (matches.length > 1) return { state: 'unknown' };
@@ -209,7 +215,7 @@ function createProjectDeleteMain(deps) {
   const inventory = createProjectDeleteInventory({ ...deps, ...runtime, ...clock, writer });
   const planner = createProjectDeletePlanner({ ...inventory, ...clock });
   const stop = createProjectDeleteStop({ ...deps, ...runtime, ...clock });
-  const service = createProjectDeleteService({ ...clock, writer, inventory, planner, stop, gate: deps.gate,
+  const service = createProjectDeleteService({ ...clock, writer, inventory, planner, stop, gate: deps.gate, log: deps.log,
     captureRuntimeRelease: runtime.captureRuntimeRelease,
     onHoldsInstalled: () => settleHolds?.(!disposed),
     notifyProjects: notify('notifyProjects'), notifySchedules: notify('notifySchedules') });
@@ -220,7 +226,8 @@ function createProjectDeleteMain(deps) {
     const result = ready && !disposed
       ? await runtime.withScope(() => service[method](sender, input), method === 'execute')
       : { ok: false, code: 'NOT_READY', retryable: true, ...(method === 'preview' ? { token: null } : {}) };
-    if (result.code === 'DISCOVERY_TIMEOUT') deps.log?.debug(`[project-delete] ${method}: ${result.port} elapsed=${result.elapsedMs}ms bound=${result.boundMs}ms`);
+    if (result.code === 'DISCOVERY_TIMEOUT') deps.log?.debug?.(`[project-delete] ${method}: ${result.port} elapsed=${result.elapsedMs}ms bound=${result.boundMs}ms`);
+    if (method === 'execute' && result.code === 'NOT_READY') deps.log?.debug?.('[project-delete] execute operation=- state=refused reason=NOT_READY elapsed=0ms');
     return result;
   };
   const registration = registerProjectDeleteIpc({ ...deps, service: guarded });
@@ -228,6 +235,8 @@ function createProjectDeleteMain(deps) {
     if (disposed) return Promise.resolve(false);
     if (recovery) return recovery;
     ready = false;
+    const startedAt = now();
+    let recoveryReason = 'RECOVERY_UNAVAILABLE';
     let holdsOutcome;
     holds = new Promise(resolve => {
       const timer = schedule(() => settleHolds(false, `HOLDS_TIMEOUT: ${HOLDS_TIMEOUT_MS} ms elapsed.`), HOLDS_TIMEOUT_MS);
@@ -250,17 +259,21 @@ function createProjectDeleteMain(deps) {
           }
         };
         const result = await Promise.race([Promise.resolve().then(work), new Promise(resolve => {
-          cancelRecovery = () => resolve(false);
+          cancelRecovery = () => { recoveryReason = disposed ? 'DISPOSED' : 'RECOVERY_TIMEOUT'; resolve(false); };
           timer = schedule(cancelRecovery, RECOVERY_TIMEOUT_MS);
         })]);
-        if (result && !disposed) { ready = true; deps.announce?.(registration.rebind() || []); }
+        if (result && !disposed) { ready = true; recoveryReason = 'READY'; deps.announce?.(registration.rebind() || []); }
         return result;
       } catch (error) {
+        recoveryReason = error.code || 'RECOVERY_UNAVAILABLE';
         if (holdsOutcome === true) deps.log?.warn('[project-delete] recovery unavailable: ' + error.message);
         settleHolds(false, `${error.code || 'RECOVERY_UNAVAILABLE'}: ${error.message}`);
         return false;
       }
-      finally { settleHolds(false); cancel(timer); cancelRecovery = null; recovery = null; }
+      finally {
+        settleHolds(false); cancel(timer); cancelRecovery = null; recovery = null;
+        deps.log?.debug?.(`[project-delete] recovery operation=- state=${ready ? 'ready' : 'unavailable'} reason=${recoveryReason} elapsed=${now() - startedAt}ms`);
+      }
     })();
     return recovery;
   }

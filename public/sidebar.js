@@ -1061,7 +1061,7 @@ async function settleProjectDeletion(project, result, { historical = false } = {
   if (result?.operationId && ['unknown', 'partial'].includes(result.state)) {
     projectDeletionOperations.set(key, { operationId: result.operationId, project, historical });
     setProjectDeletionBusy(project, true);
-    projectDeletionNotice(project, `Deletion is ${result.state === 'unknown' ? 'unresolved' : 'partially completed'}. No deletion will be replayed.\n` +
+    projectDeletionNotice(project, `Deletion is ${result.state === 'unknown' ? 'unresolved' : 'partially completed'}. No deletion will be replayed. Reason: ${result.code || 'UNKNOWN'}.\n` +
       JSON.stringify({ completed: result.completed, kept: result.kept, failed: result.failed, skipped: result.skipped,
         stopped: result.stopped, stoppedHistoryUnknown: result.stoppedHistoryUnknown }, null, 2),
     result.state === 'partial' ? { actionLabel: 'Review remaining deletion', onAction: () => {
@@ -1161,7 +1161,19 @@ async function confirmAndDeleteProjectFolder(project, button) {
     accepted = true;
     setProjectDeletionWritesBlocked(project, true);
     await window.flushProjectDeletionWrites?.();
-    const result = await projectDeletionCall('deleteProject', { token: answers.plan.token, fingerprint: answers.plan.plan.fingerprint });
+    let result = await projectDeletionCall('deleteProject', { token: answers.plan.token, fingerprint: answers.plan.plan.fingerprint });
+    const stateDeadline = Date.now() + 120000;
+    for (let reads = 0; reads < 8 && result?.operationId && result.state === 'unknown' && result.code === 'EXECUTION_PENDING'; reads++) {
+      const operationId = result.operationId;
+      try {
+        const next = await projectDeletionPreviewWait('projectDeleteState',
+          () => projectDeletionCall('projectDeleteState', { operationId }), stateDeadline);
+        if (next?.operationId && next.operationId !== operationId) throw new Error('Deletion operation identity changed.');
+        result = next?.operationId === operationId && next.state ? next : { ...result, code: next?.code || 'STATE_READ_UNAVAILABLE' };
+      } catch (error) {
+        result = { ...result, code: 'STATE_READ_UNAVAILABLE', error: error.message };
+      }
+    }
     return await settleProjectDeletion(project, result);
   } catch (error) {
     unresolved = accepted;

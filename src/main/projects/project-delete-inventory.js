@@ -440,10 +440,11 @@ function createProjectDeleteInventory(deps) {
     }
     await readLivenessBatch(c, budget, [...tabs.values()]);
     if (!deps.readJobs || !deps.getScheduleRunSnapshot) throw fail('SNAPSHOT_INCOMPLETE', 'Authoritative jobs and scheduler evidence are required.');
-    const [roster, runs] = await Promise.all([
+    const [roster] = await Promise.all([
       processPort(c, budget, 'readJobs', remaining => deps.readJobs(project, remaining)),
       c.runs || bounded(c, 'getScheduleRunSnapshot', () => deps.getScheduleRunSnapshot()),
     ]);
+    const runs = await bounded(c, 'getScheduleRunSnapshot', () => deps.getScheduleRunSnapshot());
     if (roster.complete !== true || !Array.isArray(roster.jobs)) throw fail('SNAPSHOT_INCOMPLETE', 'Background job discovery incomplete.');
     charge(c, roster.jobs.length + (roster.candidates?.length || 0));
     charge(c, 0, Buffer.byteLength(JSON.stringify(roster)));

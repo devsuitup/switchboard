@@ -10,6 +10,24 @@ const state = require('../cli-session-state');
 
 const ID = '01234567-89ab-cdef-0123-456789abcdef';
 
+test('failed WMI reads preserve bounded stderr, exit and timeout evidence and log once a minute', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-wmi-diagnostic-'));
+  t.after(() => { state.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
+  let time = Date.now(); const logs = [];
+  state.init({ dir, platform: 'win32', activeSessions: new Map(), now: () => time,
+    log: { debug: line => logs.push(line) },
+    readProcessTable: () => state.probeProcessTable('win32', 10, (_file, _args, _opts, done) => {
+      done(Object.assign(new Error('command failed'), { code: 7, killed: true, signal: 'SIGTERM' }), '', 'WMI denied ' + 'x'.repeat(400));
+    }) });
+  await state.readProcessTableSnapshot(time + 20000); time += 3000;
+  await state.readProcessTableSnapshot(time + 20000);
+  assert.equal(logs.length, 1, 'repeated WMI failures must be rate limited to one log per minute');
+  assert.match(logs[0], /exit=7.*timeout=true.*stderr=.*WMI denied/);
+  assert.ok(logs[0].length < 450, 'stderr diagnostics must be truncated to 300 characters');
+  time += 57000; await state.readProcessTableSnapshot(time + 20000);
+  assert.equal(logs.length, 2);
+});
+
 for (const failed of [false, true]) test(`preview snapshot reuses recent table reads including failure=${failed}`, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-table-cache-'));
   t.after(() => { state.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
@@ -20,6 +38,7 @@ for (const failed of [false, true]) test(`preview snapshot reuses recent table r
   const first = await state.readProcessTableSnapshot(time + 20000);
   time += 2000;
   const cached = await state.readProcessTableSnapshot(time + 20000);
+  assert.equal(cached.expiresAt, first.at + state.PROCESS_TABLE_TTL_MS, 'deletion runtime must know the actual captured table expiry');
   assert.equal(cached.map, first.map, 'a recent result is shared across previews');
   assert.deepEqual(timeouts, [15000], 'a recent failed read must not be retried either');
   time += 1000;

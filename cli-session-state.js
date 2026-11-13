@@ -39,6 +39,7 @@ let processTableEnabled = false;
 let processTableEpoch = 0;
 let processTable = null;
 let processTableInFlight = null;
+let processTableFailureLoggedAt = -Infinity;
 let ownPid = process.pid;
 let now = Date.now;
 let platform = process.platform;
@@ -172,8 +173,8 @@ function parseProcessTable(text) {
 function probeProcessTable(plat = process.platform, timeoutMs = PROCESS_TABLE_TIMEOUT_MS, exec = execFile) {
   return new Promise((resolve, reject) => {
     const opts = { timeout: timeoutMs, windowsHide: true, maxBuffer: PROCESS_TABLE_MAX_BUFFER };
-    const done = (err, stdout) => {
-      if (err) { reject(err); return; }
+    const done = (err, stdout, stderr) => {
+      if (err) { err.stderr = String(stderr || '').slice(0, 300); err.timedOut = err.killed === true && err.signal === 'SIGTERM'; reject(err); return; }
       resolve(parseProcessTable(stdout));
     };
     if (plat === 'win32') {
@@ -221,7 +222,10 @@ function refreshProcessTable({ force = false, deadline = Infinity } = {}) {
     try {
       map = normaliseProcessTable(await readProcessTable(Math.max(1, Math.min(PROCESS_TABLE_TIMEOUT_MS, deadline - now()))));
     } catch (err) {
-      log.debug(`[cli-state] process table unreadable: ${err && err.message}`);
+      if (now() - processTableFailureLoggedAt >= 60000) {
+        processTableFailureLoggedAt = now();
+        log.debug(`[cli-state] process table unreadable: exit=${err?.code ?? 'unknown'} timeout=${err?.timedOut === true} stderr=${JSON.stringify(String(err?.stderr || '').slice(0, 300))}`);
+      }
     }
     if (epoch === processTableEpoch) {
       processTable = { at: now(), observedAt, map };
@@ -244,7 +248,7 @@ function refreshProcessTable({ force = false, deadline = Infinity } = {}) {
 async function readProcessTableSnapshot(deadline) {
   if (!processTableEnabled) return undefined;
   await refreshProcessTable({ deadline });
-  return processTable ? { ...processTable } : { map: null };
+  return processTable ? { ...processTable, expiresAt: processTable.at + PROCESS_TABLE_TTL_MS } : { map: null };
 }
 
 function startProcessTableRefresh() {

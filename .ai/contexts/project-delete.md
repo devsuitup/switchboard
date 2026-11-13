@@ -1,5 +1,33 @@
 # Project deletion (#474 A4a–A4d)
 
+## Slow execution and diagnostics (#1103G)
+
+The service's 15-second reply budget is shorter than execution, which can perform
+three 20-second revalidations. An operation still running at reply time returns
+`EXECUTION_PENDING`, its operation ID and its current effect lists. This does not
+mean the command was lost. The renderer follows that same ID through at most
+eight read-only state requests within a 120-second deadline. A state request for
+a running operation waits on its existing work, with the same 15-second reply
+cap. No read resubmits deletion. Terminal refusal releases the UI lock; committed
+readback uses the existing ACK path. Unavailable reads preserve the operation ID
+and Check deletion state. Persistent pending/unknown outcomes remain explicit and
+their notice includes the reason code.
+
+Main logs execute replies, eventual execution completion and recovery outcomes
+with operation ID, state, reason and elapsed milliseconds, without project paths.
+Fence/readback failures retain their holds and are never treated as completion.
+Cancel still creates no operation or receipt; stale preview tokens expire under
+the existing token retention policy.
+
+The planner's abort signal reaches the CLI runner. Early preview exit aborts the
+outstanding reader and stops its captured child PID/tree; pre-aborted requests
+spawn nothing. Settlement removes the abort listener. A table snapshot exposes
+its expiry; if it has expired when liveness starts, the runtime shares one
+deadline-bounded refresh across that preview's readers. No further refresh is
+allowed within that preview, and expired or missing evidence remains unknown.
+The scheduler snapshot is sampled again after job discovery resolves, so a run
+started during a slow CLI read is included.
+
 ## Renderer boundary (A4d)
 
 Both the sidebar Delete button and Project Settings use
@@ -114,8 +142,9 @@ The process table reuses a cached result, including a failed result, for 3 secon
 or joins an in-flight read. PowerShell has a 15-second timeout clipped to the
 remaining deadline. The captured table is reused for Windows start/ancestry
 checks, avoiding per-descriptor Get-Process launches during preview. Expired,
-missing or mismatched captured identity is unknown, with no retry within that
-preview. A table cached before descriptor creation cannot prove a mismatched
+missing or mismatched captured identity is unknown. Expiry before liveness permits
+one shared deadline-bounded re-read within that preview; a failed or newly expired
+replacement still cannot prove absence. A table cached before descriptor creation cannot prove a mismatched
 descriptor dead. Descriptor absence still proves no writer without table
 availability. Post-stop evidence retains the fresh reader behavior.
 

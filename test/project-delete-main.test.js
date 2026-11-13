@@ -17,6 +17,98 @@ const supported = { skip: !openStore.supported && 'SQLite needs Node 22 or a mat
 const options = { sessions: true, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false };
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+for (const known of [false, true]) test(`slow execute returns a pending reason and state read waits for its real outcome, known=${known}`, supported, async t => {
+  const logs = [], h = await setup(t, true, { log: { debug: line => logs.push(line) } });
+  h.load(); await h.main.startRecovery();
+  const preview = await h.preview();
+  let entered, answer;
+  const started = new Promise(resolve => { entered = resolve; });
+  h.ports.cliSessionState.readStatusEvidence = () => { entered(); return new Promise(resolve => { answer = resolve; }); };
+  const execution = h.execute(preview); await started;
+  h.time.advance(15000);
+  const pending = await execution;
+  assert.equal(pending.state, 'unknown');
+  assert.equal(pending.code, 'EXECUTION_PENDING', 'the 15-second reply is pending execution, not a lost outcome');
+  assert.deepEqual(pending.completed, []);
+  let result;
+  const reading = h.invoke('project-delete-state', { operationId: pending.operationId }).then(value => { result = value; });
+  await flush();
+  assert.equal(result, undefined, 'state read must wait for the running operation rather than repeat its initial unknown');
+  h.ports.cliSessionState.readStatusEvidence = async () => ({ known, live: null });
+  answer({ known, live: null }); await reading;
+  assert.equal(result.state, known ? 'committed' : 'notStarted');
+  assert.equal(result.code, known ? undefined : 'PREVIEW_CHANGED');
+  assert.equal(h.calls.filter(command => command === 'completeProjectDeletion').length, known ? 1 : 0);
+  assert.ok(fs.existsSync(h.transcript));
+  assert.ok(logs.some(line => line.includes('execute') && line.includes(pending.operationId) && line.includes('EXECUTION_PENDING') && line.includes('elapsed=15000')));
+  assert.ok(logs.some(line => line.includes('execute-complete') && line.includes(known ? 'COMMITTED' : 'PREVIEW_CHANGED')));
+});
+
+test('early preview failure aborts its outstanding CLI reader', supported, async t => {
+  let signal;
+  const h = await setup(t, false, {
+    runClaude: (_args, opts) => { signal = opts.signal; return new Promise(() => {}); },
+    waitForIndex: async () => { throw new Error('index unavailable'); },
+  });
+  h.load(); await h.main.startRecovery();
+  await h.preview();
+  assert.equal(signal?.aborted, true, 'preview must pass its budget signal to the CLI reader and abort on early exit');
+});
+
+test('expired preview table is refreshed once across concurrent liveness reads within the deadline', async () => {
+  const time = clock(), controller = new AbortController();
+  let reads = 0;
+  const tables = [], runtime = implementation.createProjectDeleteRuntime({ ...time, activeSessions: new Map(),
+    runClaude: async () => ({ code: 0, stdout: '[]' }),
+    cliSessionState: {
+      readProcessTableSnapshot: async deadline => { reads++; assert.equal(deadline, time.now() + (reads === 1 ? 20000 : 16000)); return { map: new Map(), expiresAt: time.now() + 3000 }; },
+      readStatusEvidence: async (_id, _deadline, opts) => { tables.push(opts.processTable); return { known: opts.processTable.expiresAt > time.now(), live: null }; },
+    } });
+  const budget = { signal: controller.signal, deadline: time.now() + 20000 };
+  runtime.startProcessReads({}, budget); await flush(); time.advance(4000);
+  const values = await runtime.withScope(() => Promise.all(['a', 'b'].map(id => runtime.readLiveness({ id, alias: null }, budget))));
+  assert.deepEqual(values.map(value => value.state), ['stopped', 'stopped'], 'expired early evidence must get one fresh bounded read');
+  assert.equal(reads, 2);
+  assert.equal(tables[0], tables[1]);
+  time.advance(4000);
+  const stale = await runtime.withScope(() => runtime.readLiveness({ id: 'c', alias: null }, budget));
+  assert.equal(stale.state, 'unknown');
+  assert.equal(reads, 2, 'no repeated refresh loop inside one preview');
+});
+
+test('scheduler snapshot includes a run started while job discovery was pending', supported, async t => {
+  let entered, answer, running = false;
+  const started = new Promise(resolve => { entered = resolve; });
+  const h = await setup(t, false, { runClaude: () => { entered(); return new Promise(resolve => { answer = resolve; }); } });
+  h.ports.cliSessionState.getScheduleRunSnapshot = () => running ? [{ sessionId: 'late', cwd: h.projectPath, pid: 987, scheduleName: 'late' }] : [];
+  h.load(); await h.main.startRecovery();
+  const pending = h.preview(); await started; await flush();
+  running = true; answer({ code: 0, stdout: '[]' });
+  const result = await pending;
+  assert.equal(result.token, null, 'a schedule started during CLI discovery must prevent confirmation');
+  assert.ok(result.plan.jobs.some(job => job.id === 'late'));
+});
+
+for (const preAborted of [false, true]) test(`CLI reader abort kills only its child and removes the listener, preAborted=${preAborted}`, async () => {
+  const filename = path.join(__dirname, '..', 'main.js'), source = fs.readFileSync(filename, 'utf8');
+  const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+  child.pid = 123; child.exitCode = child.signalCode = null;
+  const time = clock(), stopped = [], controller = new AbortController(); let spawns = 0;
+  const context = vm.createContext({ path, getSetting: () => ({}), SETTING_DEFAULTS: { shellProfile: 'test' },
+    resolveShell: () => ({ path: '/bin/sh' }), isWindows: false, cleanPtyEnv: {}, shellArgs: () => [], quoteArgvForShell: () => '',
+    spawnChild: () => { spawns++; return child; }, stopProcessTree: async pid => { stopped.push(pid); return true; },
+    setTimeout: time.schedule, clearTimeout: time.cancel });
+  vm.runInContext(require('./app-source').extractFunction(source, 'runClaudeCommand'), context, { filename });
+  if (preAborted) controller.abort();
+  const pending = context.runClaudeCommand(['agents', '--json', '--all'], { timeout: 20000, signal: controller.signal });
+  controller.abort(); await flush();
+  assert.deepEqual(stopped, preAborted ? [] : [123], 'abort must kill the specific reader immediately');
+  assert.equal(spawns, preAborted ? 0 : 1, 'an already aborted request must not launch a process');
+  assert.match((await pending).stderr, /aborted/);
+  assert.equal(require('node:events').getEventListeners(controller.signal, 'abort').length, 0);
+  assert.equal(time.timers.size, 0);
+});
+
 test('process readers start before indexing and are reused across member and tab discovery', supported, async t => {
   let releaseIndex, cliCalls = 0, tableCalls = 0;
   const h = await setup(t, true, {
@@ -143,9 +235,10 @@ for (const port of ['readProjectDeletionRevision', 'readProjectDeletionScope']) 
   assert.equal(result.port, 'writer.' + port, 'outer deadline must retain the active writer port');
   assert.equal(result.elapsedMs, 20000);
   assert.equal(result.boundMs, 20000);
-  assert.equal(logs.length, 1, 'main logs one diagnostic per failed preview');
-  assert.match(logs[0], new RegExp('writer\\.' + port));
-  assert.match(logs[0], /20000/);
+  const previewLogs = logs.filter(line => line.includes('preview:'));
+  assert.equal(previewLogs.length, 1, 'main logs one diagnostic per failed preview');
+  assert.match(previewLogs[0], new RegExp('writer\\.' + port));
+  assert.match(previewLogs[0], /20000/);
   await pending;
 });
 
