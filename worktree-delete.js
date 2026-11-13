@@ -15,13 +15,21 @@ function within(root, candidate) {
   return relative && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
 }
 
-async function refuseDirectoryLinks(root) {
+function checkInspection(budget) {
+  if (budget?.signal?.aborted || (budget?.now || Date.now)() >= budget?.deadline) {
+    throw Object.assign(new Error('Worktree not inspected: inventory time budget exhausted. Reopen Delete to retry.'), { code: 'DISCOVERY_TIMEOUT' });
+  }
+}
+
+async function refuseDirectoryLinks(root, budget) {
+  checkInspection(budget);
   let stat;
   try { stat = await fs.promises.lstat(root); }
   catch (error) { if (error.code === 'ENOENT') return; throw error; }
   if (stat.isSymbolicLink()) throw new Error(`Deletion refused: the worktree path itself is a directory link: ${root}. Remove the link first without recursive deletion, then select the registered worktree.`);
   const started = Date.now();
   const checkTime = () => {
+    checkInspection(budget);
     if (Date.now() - started >= DIRECTORY_SCAN_MS) throw new Error('Directory link scan exceeded its 5 second time budget. Review or reduce the worktree directories before trying Delete again.');
   };
   const realRoot = await fs.promises.realpath(root).catch(() => null);
@@ -77,6 +85,7 @@ async function refuseDirectoryLinks(root) {
 }
 
 function hashBytes(budget, bytes) {
+  checkInspection(budget);
   budget.used += bytes;
   if (budget.used > HASH_LIMIT) {
     const largest = [...budget.files].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, size]) => `${name} (${size} bytes)`);
@@ -192,6 +201,7 @@ function parseWorktreeList(list) {
 }
 
 async function fileFingerprint(root, name, submodules, runGit, depth, budget) {
+  checkInspection(budget);
   const absolute = path.resolve(root, name);
   const relative = path.relative(path.resolve(root), absolute);
   if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
@@ -279,10 +289,16 @@ async function statusSnapshot(worktreePath, runGit, depth = 0, budget = { used: 
   return { dirty, ignored, submodules, index, records: recordsForFingerprint.sort() };
 }
 
-async function readStatus(worktreePath, parentRepo, runGit, readFile = fs.promises.readFile, inventory = {}) {
+async function readStatus(worktreePath, parentRepo, runGit, readFile = fs.promises.readFile, inventory = {}, budget) {
+  checkInspection(budget);
   const rawGit = runGit;
   runGit = async (...args) => {
-    try { return await rawGit(...args); }
+    try {
+      checkInspection(budget);
+      const result = await rawGit(...args);
+      checkInspection(budget);
+      return result;
+    }
     catch (error) {
       if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || /maxBuffer/i.test(error.message)) {
         throw new Error('Git preview output is too large. Review or reduce the changed files with Git before trying Delete again.');
@@ -312,8 +328,9 @@ async function readStatus(worktreePath, parentRepo, runGit, readFile = fs.promis
       if (error.code !== 'ENOENT') throw error;
     }
   }
-  await refuseDirectoryLinks(worktreePath);
-  const snapshot = await statusSnapshot(worktreePath, runGit);
+  await refuseDirectoryLinks(worktreePath, budget);
+  const snapshot = await statusSnapshot(worktreePath, runGit, 0, { ...budget, used: 0, files: new Map() });
+  checkInspection(budget);
   const { dirty, ignored, submodules } = snapshot;
   const fingerprint = createHash('sha256').update(JSON.stringify([
     comparablePath(worktreePath), fields, locked, lockReason, snapshot,

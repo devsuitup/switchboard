@@ -118,7 +118,13 @@ function createProjectDeletePlanner(deps) {
         try {
           if (project.alias !== null && selectedWorktrees.length) throw fail('WORKTREE_UNAVAILABLE', 'Remote worktree removal is unavailable.');
           if (deps.worktrees && project.alias === null && (boundKey === undefined || selectedWorktrees.length)) {
-            worktrees = items(await deps.worktrees.preview(project, { ...budget, snapshot,
+            worktrees = items(await deps.worktrees.preview(project, { ...budget, snapshot, selectedWorktrees,
+              deadline: now() + Math.min(2000, Math.max(0, (budget.deadline - now()) / 2)),
+              reportCandidate: candidate => {
+                if (!warnings.some(row => row.code === 'WORKTREE_UNAVAILABLE' && row.target === candidate.id && row.error === candidate.reason)) {
+                  warnings.push({ code: 'WORKTREE_UNAVAILABLE', target: candidate.id, error: candidate.reason });
+                }
+              },
               ...(boundKey === undefined ? {} : { worktreePaths: selectedWorktrees }) }));
           }
           worktrees = worktrees.map(row => ({ ...row, selected: selectedWorktrees.includes(row.path) }));

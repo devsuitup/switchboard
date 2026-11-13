@@ -13,6 +13,93 @@ try { implementation = require('../src/main/projects/project-delete-worktrees');
 catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; }
 const options = { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false };
 
+for (const selected of [false, true]) test(`slow status leaves a metadata plan with ${selected ? 'selected' : 'unselected'} uninspected rows`, async t => {
+  const f = gitFixture(t), p = planning([]);
+  p.deps.readSnapshot = async () => ({ complete: true, initialScanComplete: true, revision: '1',
+    projects: [{ alias: null, projectPath: f.root, folderKeys: [] }], declaredHosts: [] });
+  const calls = [];
+  p.deps.worktrees = implementation.createProjectDeleteWorktrees({
+    runGit: async args => {
+      calls.push(args);
+      if (args.includes('list')) return [f.root, f.target, f.kept].map(dir => `worktree ${dir}\nHEAD abc\n\n`).join('');
+      if (args.includes('rev-parse')) return path.join(f.root, 'absent-lock');
+      return new Promise(() => {});
+    }, readActivity: async () => ({ complete: true, sessions: [], jobs: [], candidates: [] }),
+  });
+  const started = Date.now();
+  const result = await createProjectDeletePlanner({ ...p.deps, timeoutMs: 1000 }).preview({
+    projectPath: f.root, options, worktrees: selected ? [f.target] : [],
+  });
+  assert.equal(result.ok, true, 'slow worktree status must not time out metadata planning');
+  assert.ok(Date.now() - started < 1000, 'inventory must reserve time for metadata planning');
+  for (const row of result.plan.worktrees.filter(row => !row.main)) {
+    assert.equal(row.removable, false);
+    assert.equal(row.statusKnown, false);
+    assert.match(row.reason, /not inspected/i);
+  }
+  assert.equal(calls.filter(args => args.includes('status')).length, 1, 'expired inventory starts no further status calls');
+  assert.equal(result.plan.refusals.length, selected ? 1 : 0);
+  if (selected) assert.match(result.plan.refusals[0].error, /not inspected/i);
+});
+
+for (const cwd of ['relative', null]) for (const binding of [null, 'folder', 'projectPath']) test(`session cwd ${cwd} is scoped by ${binding || 'dialog-level ownership'}`, async t => {
+  const f = gitFixture(t), { createProjectDeleteRuntime } = require('../src/main/projects/project-delete-main');
+  const row = { sessionId: 'stray', cwd, ...(binding === 'folder' ? { folder: 'linked-folder' }
+    : binding === 'projectPath' ? { projectPath: f.target } : {}) };
+  const runtime = createProjectDeleteRuntime({ activeSessions: new Map(), jobsDir: path.join(f.root, 'jobs'), homeDir: f.root,
+    runClaude: async () => ({ code: 0, stdout: '[]' }), cliSessionState: {
+      getSidebarDescriptors: () => [row], getScheduleRunSnapshot: () => [], readStatusEvidence: async () => ({ known: true, live: null }),
+    } });
+  const result = await runtime.readWorktreeActivity({ ...f.project, worktreePaths: [f.target, f.kept] }, {
+    ...f.budget(), snapshot: { sessions: [], projects: [{ alias: null, projectPath: f.target, folderKeys: ['linked-folder'] }] },
+  });
+  assert.deepEqual(result.byPath[f.kept].candidates, [], 'an unrelated row must not make every folder uncertain');
+  assert.equal(result.byPath[f.target].candidates.length, binding ? 1 : 0);
+  assert.equal(result.candidates.length, binding ? 0 : 1, 'unattributed session reason is shown once at dialog level');
+});
+
+test('global unknown job is shown once and blocks selected folders only', async t => {
+  const f = gitFixture(t), { createProjectDeleteRuntime } = require('../src/main/projects/project-delete-main');
+  const runtime = createProjectDeleteRuntime({ activeSessions: new Map(), jobsDir: path.join(f.root, 'jobs'), homeDir: f.root,
+    runClaude: async () => ({ code: 0, stdout: JSON.stringify([{ id: '1234abcd', kind: 'background', sessionId: 'unknown' }]) }),
+    cliSessionState: { getSidebarDescriptors: () => [], getScheduleRunSnapshot: () => [] } });
+  const result = await runtime.readWorktreeActivity({ ...f.project, worktreePaths: [f.target, f.kept] },
+    { ...f.budget(), selectedWorktrees: [f.target], snapshot: { sessions: [] } });
+  assert.deepEqual(result.byPath[f.kept].candidates, [], 'global job reason must not be copied to each folder');
+  assert.equal(result.candidates.length, 1);
+  assert.match(result.candidates[0].reason, /no durable job record/);
+  assert.equal(result.byPath[f.target].ownershipUncertain, true, 'unknown job may own selected folder');
+  assert.equal(result.byPath[f.kept].ownershipUncertain, false);
+  const p = planning([]);
+  p.deps.readSnapshot = async () => ({ complete: true, initialScanComplete: true, revision: '1', sessions: [],
+    projects: [{ alias: null, projectPath: f.root, folderKeys: [] }], declaredHosts: [] });
+  p.deps.worktrees = implementation.createProjectDeleteWorktrees({ readActivity: runtime.readWorktreeActivity,
+    runGit: async args => args.includes('list') ? [f.root, f.target, f.kept].map(dir => `worktree ${dir}\nHEAD abc\n\n`).join('')
+      : args.includes('rev-parse') ? path.join(f.root, 'absent-lock') : '' });
+  const planner = createProjectDeletePlanner(p.deps);
+  for (const selected of [[], [f.target]]) {
+    const preview = await planner.preview({ projectPath: f.root, options, worktrees: selected });
+    assert.equal(preview.ok, true);
+    assert.equal(preview.plan.warnings.filter(row => /no durable job record/.test(row.error)).length, 1);
+    assert.equal(preview.plan.worktrees.find(row => row.path === f.target).removable, selected.length === 0);
+    assert.equal(preview.plan.worktrees.find(row => row.path === f.kept).removable, true);
+    assert.equal(preview.plan.refusals.length, selected.length);
+  }
+});
+
+test('shared status stops after a late Git reply when its inspection deadline expires', async t => {
+  const f = gitFixture(t), deletion = require('../worktree-delete');
+  let now = 0;
+  const commands = [];
+  await assert.rejects(deletion.readStatus(f.target, f.root, async args => {
+    commands.push(args);
+    now = 20;
+    return args.includes('rev-parse') ? path.join(f.root, 'absent-lock') : '';
+  }, undefined, { records: [f.root, f.target].map(directory => ({ path: directory, fields: [] })) },
+  { deadline: 10, signal: new AbortController().signal, now: () => now }), /not inspected/i);
+  assert.equal(commands.length, 1, 'late Git reply must not trigger further status or hashing');
+});
+
 test('E production activity reader includes descendant sessions, schedules and refused background records', async t => {
   const { createProjectDeleteRuntime } = require('../src/main/projects/project-delete-main');
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'e-activity-')));

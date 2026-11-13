@@ -5,16 +5,34 @@
 Preview accepts optional `worktrees: string[]` alongside the unchanged five
 boolean writer options. These are exact paths from the main-owned Git inventory,
 not arbitrary filesystem targets. Missing means empty; duplicates and more than
-128 selections refuse. Every registered checkout has a row: path, branch,
-main/project-directory identity, dirty/untracked status, sessions, jobs and an
-availability reason. Status/activity failures are explicit, never rendered as
+128 selections refuse. Every registered checkout has a row with its path, branch,
+main/project-directory identity and availability reason. Eligible linked rows
+also report inspected dirty/untracked status, sessions and jobs; always-kept
+main/project-directory rows read none of those details. Status/activity failures are explicit, never rendered as
 clean/idle. The main checkout, the selected project directory and its ancestors
 are never removable. Remote selection refuses because no authoritative remote
 filesystem/removal port exists. Local discovery uses newline-delimited Git
 `worktree list --porcelain`, with the shared parser decoding Git-quoted paths,
 compatible with Git 2.24. Inventory failures have a visible dialog reason.
-Kept rows do not read status, scan activity or hash content. Removable labels
+Always-kept main/project-directory rows do not read status, scan activity or hash content. Removable labels
 show the ignored-entry count and at most five dirty entries plus the remainder.
+
+Preview worktree discovery receives at most two seconds and half the remaining
+planner budget. Git listing, activity and each status read are deadline-bounded;
+status traversal and hashing also check the deadline/signal. Exhausted rows say
+"not inspected" and cannot be removed. The metadata plan still completes: an
+unchecked row adds no refusal; selecting an uninspected row refuses that physical
+selection until it is unchecked or a fresh inspection succeeds.
+
+Missing session cwd is a folder candidate only when an absolute project path or
+the snapshot's local folder-key mapping ties the record to that subtree. Without
+such a tie its reason is reported once at dialog level. Global background-job
+candidates are likewise reported once, never copied into every row. A selected
+folder is blocked when a global job has no resolvable absolute cwd, or its cwd
+is that folder or a descendant. A resolvable cwd outside the selected subtree
+does not block it. This conservative rule also applies during removal preflight
+and the final per-folder guard. The parent metadata runtime retains its own
+existing background ownership checks.
 
 `project-delete-worktrees.js` calls the existing `worktree-delete` readStatus and
 removeWorktree functions. Clean removal uses no force; dirty content is hashed
@@ -74,8 +92,7 @@ never repeats disk removal or treats a metadata receipt as proof of disk success
 Plain-Node tests cover the production planner, service, activity reader, subtree
 gate and shared removal with controlled Git replies and real disposable files.
 The composition witness includes the real writer/SQLite fixture. Separate real
-Git worktree tests exercise the installed Git version. The former `list -z`
-command required Git 2.36 and failed on Git 2.24 before inventory could complete.
+Git worktree tests exercise the installed Git version.
 Native UI, full process restart, live process death and
 filesystem races after the shared last scan remain unverified locally.
 

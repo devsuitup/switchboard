@@ -95,7 +95,7 @@ function createProjectDeleteRuntime(ports) {
     if (!Array.isArray(raw) || !listed || listed.length !== raw.length
       || listed.length + count > Math.min(budget.limit, 20000)) throw fail('DISCOVERY_LIMIT', 'Background list invalid or oversized.');
     for (const row of listed.filter(row => row.kind === 'background')) {
-      if (!row.id || !records.has(row.id)) candidates.push({ id: row.id || row.sessionId, reason: 'Background list has no durable job record.' });
+      if (!row.id || !records.has(row.id)) candidates.push({ id: row.id || row.sessionId, cwd: row.cwd, reason: 'Background list has no durable job record.' });
       else records.set(row.id, { ...records.get(row.id), cwd: row.cwd || records.get(row.id).cwd });
     }
     return { candidates, records };
@@ -105,15 +105,15 @@ function createProjectDeleteRuntime(ports) {
     const inventory = inventoryFor(budget);
     inventory.jobs ||= scanJobs(budget);
     const scanned = await inventory.jobs;
-    const candidates = [...scanned.candidates], jobs = [];
+    const globalCandidates = [...scanned.candidates], candidates = [], jobs = [];
     const root = await resolvePath(project.projectPath, budget);
     const records = scanned.records;
     for (const [id, row] of records) {
-      if (!row.cwd || !path.isAbsolute(row.cwd) || !row.sessionId) { candidates.push({ id, reason: 'Background ownership unavailable.' }); continue; }
+      if (!row.cwd || !path.isAbsolute(row.cwd) || !row.sessionId) { globalCandidates.push({ id, cwd: row.cwd, reason: 'Background ownership unavailable.' }); continue; }
       let cwd;
       try { cwd = row.cwd === project.projectPath ? root : await resolvePath(row.cwd, budget); }
       catch (error) {
-        if (error.code !== 'ENOENT') candidates.push({ id, reason: error.message });
+        if (error.code !== 'ENOENT') globalCandidates.push({ id, cwd: row.cwd, reason: error.message });
         continue;
       }
       if (normalize(cwd) !== normalize(root) && !(project.includeDescendants && normalize(cwd).startsWith(normalize(root) + '/'))) continue;
@@ -121,7 +121,7 @@ function createProjectDeleteRuntime(ports) {
         conversationId: row.sessionId, sessionIds: [row.sessionId], liveness: { state: 'unknown', source: 'job' } });
       candidates.push({ id, reason: 'Background deletion awaits worker-incarnation control (#1090).' });
     }
-    return { complete: true, jobs, candidates };
+    return { complete: true, jobs, candidates: project.worktreeInventory ? candidates : [...globalCandidates, ...candidates], globalCandidates };
   }
   const sessionsFor = id => [...ports.activeSessions].filter(([key, session]) =>
     [key, session.sessionId, session.realSessionId].includes(id));
@@ -191,14 +191,39 @@ function createProjectDeleteRuntime(ports) {
     if (rows.length > budget.limit) throw fail('DISCOVERY_LIMIT', 'Too many worktree sessions to inspect.');
     const runs = await bounded(() => ports.cliSessionState.getScheduleRunSnapshot(), budget);
     if (!Array.isArray(runs) || runs.length + rows.length > budget.limit) throw fail('DISCOVERY_LIMIT', 'Schedule inventory unavailable or oversized.');
-    const evidenceById = new Map();
+    const evidenceById = new Map(), dialogCandidates = new Map();
+    const report = candidate => dialogCandidates.set(JSON.stringify([candidate.id, candidate.reason]), candidate);
+    const local = row => !(row.host || row.remoteAlias || row.alias || parseFolderKey(row.folder || row.folderKey).alias !== null);
+    const associatedPaths = row => {
+      const paths = [];
+      if (typeof row.projectPath === 'string' && path.isAbsolute(row.projectPath)) paths.push(row.projectPath);
+      const folder = row.folder || row.folderKey;
+      if (folder) for (const project of snapshot.projects || []) {
+        if (project.alias === null && project.folderKeys?.includes(folder)) paths.push(project.projectPath);
+      }
+      return paths;
+    };
+    for (const row of [...rows, ...runs]) {
+      const value = row.cwd;
+      if (local(row) && (typeof value !== 'string' || !path.isAbsolute(value)) && !associatedPaths(row).length) {
+        report({ id: row.sessionId || row.id, reason: 'Session cwd unavailable.' });
+      }
+    }
     async function forPath(projectPath) {
       const root = normalize(await resolvePath(projectPath, budget));
       const sessions = [], jobs = [], candidates = [], seen = new Set();
       const within = async row => {
-        if (row.host || row.remoteAlias || row.alias || row.folder && parseFolderKey(row.folder).alias !== null) return false;
-        const value = row.cwd || row.projectPath;
-        if (typeof value !== 'string' || !path.isAbsolute(value)) { candidates.push({ id: row.sessionId, reason: 'Session cwd unavailable.' }); return false; }
+        if (!local(row)) return false;
+        const value = row.cwd;
+        if (typeof value !== 'string' || !path.isAbsolute(value)) {
+          for (const value of associatedPaths(row)) {
+            const owner = normalize(await resolvePath(value, budget));
+            if (owner === root || owner.startsWith(root + '/')) {
+              candidates.push({ id: row.sessionId || row.id, reason: 'Session cwd unavailable.' }); break;
+            }
+          }
+          return false;
+        }
         let cwd;
         try { cwd = normalize(await resolvePath(value, budget)); }
         catch (error) {
@@ -219,16 +244,29 @@ function createProjectDeleteRuntime(ports) {
         if (!evidence?.known || evidence.ambiguous) candidates.push({ id, reason: 'Worktree session liveness uncertain.' });
         else if (evidence.live) sessions.push({ sessionId: id, cwd: row.cwd || row.projectPath });
       }
-      const roster = await readJobs({ ...project, projectPath, includeDescendants: true }, budget);
+      const roster = await readJobs({ ...project, projectPath, includeDescendants: true, worktreeInventory: true }, budget);
       jobs.push(...roster.jobs); candidates.push(...roster.candidates);
+      let ownershipUncertain = false;
+      for (const candidate of roster.globalCandidates) {
+        report(candidate);
+        if (!(budget.selectedWorktrees || budget.worktreePaths || []).some(value => normalize(value) === normalize(projectPath))) continue;
+        let owner;
+        if (typeof candidate.cwd === 'string' && path.isAbsolute(candidate.cwd)) {
+          try { owner = normalize(await resolvePath(candidate.cwd, budget)); } catch {}
+        }
+        if (!owner || owner === root || owner.startsWith(root + '/')) ownershipUncertain = true;
+      }
       if (runs.length + rows.length + jobs.length > budget.limit) throw fail('DISCOVERY_LIMIT', 'Schedule inventory unavailable or oversized.');
       for (const run of runs) if (await within(run)) jobs.push(run);
-      return { complete: true, sessions, jobs, candidates };
+      return { complete: true, sessions, jobs, candidates, ownershipUncertain };
     }
-    if (!project.worktreePaths) return forPath(project.projectPath);
+    if (!project.worktreePaths) {
+      const result = await forPath(project.projectPath);
+      return { ...result, candidates: [...result.candidates, ...dialogCandidates.values()] };
+    }
     const byPath = Object.create(null);
     for (const directory of project.worktreePaths) byPath[directory] = await forPath(directory);
-    return { byPath };
+    return { byPath, candidates: [...dialogCandidates.values()] };
   }
   return { readJobs, readLiveness, readTarget, readConversation, readWorktreeActivity, withScope, captureRuntimeRelease,
     getScheduleRunSnapshot: () => ports.cliSessionState.getScheduleRunSnapshot(),
