@@ -5,6 +5,8 @@ const { parseFolderKey } = require('../remote/remote-hosts');
 const { worktreeParentPath } = require('../../../public/worktree-nesting');
 const { OPTION_KEYS, isRecord, text, fail, canonicalPath, identity, stable, digest, compare, membershipRecord } = require('./project-delete-identity');
 
+const METADATA_FINISH_MARGIN_MS = 500;
+
 function validateRequest(request) {
   if (!isRecord(request) || Object.keys(request).some(key => !['projectPath', 'folderKey', 'options', 'worktrees'].includes(key))
     || !text(request.projectPath) || (request.folderKey !== undefined && !text(request.folderKey))
@@ -119,7 +121,7 @@ function createProjectDeletePlanner(deps) {
           if (project.alias !== null && selectedWorktrees.length) throw fail('WORKTREE_UNAVAILABLE', 'Remote worktree removal is unavailable.');
           if (deps.worktrees && project.alias === null && (boundKey === undefined || selectedWorktrees.length)) {
             worktrees = items(await deps.worktrees.preview(project, { ...budget, snapshot, selectedWorktrees,
-              deadline: selectedWorktrees.length ? budget.deadline
+              deadline: selectedWorktrees.length ? budget.deadline - METADATA_FINISH_MARGIN_MS
                 : now() + Math.min(2000, Math.max(0, (budget.deadline - now()) / 2)),
               reportCandidate: candidate => {
                 if (!warnings.some(row => row.code === 'WORKTREE_UNAVAILABLE' && row.target === candidate.id && row.error === candidate.reason)) {

@@ -19,7 +19,10 @@ show the ignored-entry count and at most five dirty entries plus the remainder.
 
 Unselected worktree discovery receives at most two seconds and half the remaining
 planner budget. Selected folders are inspected first, with the remaining planner
-budget, both after checkbox changes and on confirmation rechecks. Unselected
+budget minus a 500 ms metadata finish margin, both after checkbox changes and on
+confirmation rechecks. This reserves time for the writer revision fence and final
+deadline check; an exhausted selected inspection returns a refused, "not inspected"
+row while metadata planning can still complete. Unselected
 folders then retain their bounded share of the remaining time. Git listing,
 activity and each status read are deadline-bounded; status traversal and hashing
 also check the deadline/signal. Exhausted rows say "not inspected" and cannot be
@@ -31,6 +34,7 @@ preview, with that same fallback; selecting a folder never extends the deadline.
 Missing session cwd is a folder candidate only when an absolute project path or
 the snapshot's local folder-key mapping ties the record to that subtree. Without
 such a tie its reason is reported once at dialog level. Unlocated active tabs/PTYs,
+scheduled runs (live by definition, even without active or liveness fields),
 live or uncertain CLI descriptors, and rows carrying running/unknown liveness
 evidence block every selected folder; dormant historical rows without that evidence
 only produce the dialog reason. The single conservative rule for unattributed

@@ -192,7 +192,7 @@ function createProjectDeleteRuntime(ports) {
     const runs = await bounded(() => ports.cliSessionState.getScheduleRunSnapshot(), budget);
     if (!Array.isArray(runs) || runs.length + rows.length > budget.limit) throw fail('DISCOVERY_LIMIT', 'Schedule inventory unavailable or oversized.');
     const evidenceById = new Map(), dialogCandidates = new Map();
-    const descriptorRows = new Set(descriptors);
+    const descriptorRows = new Set(descriptors), scheduledRows = new Set(runs);
     let unlocatedActivity = false;
     const report = candidate => dialogCandidates.set(JSON.stringify([candidate.id, candidate.reason]), candidate);
     const local = row => !(row.host || row.remoteAlias || row.alias || parseFolderKey(row.folder || row.folderKey).alias !== null);
@@ -210,7 +210,7 @@ function createProjectDeleteRuntime(ports) {
       if (local(row) && (typeof value !== 'string' || !path.isAbsolute(value)) && !associatedPaths(row).length) {
         const id = row.sessionId || row.id;
         report({ id, reason: 'Session cwd unavailable.' });
-        if (row.active || row.liveness && row.liveness.state !== 'stopped') unlocatedActivity = true;
+        if (row.active || scheduledRows.has(row) || row.liveness && row.liveness.state !== 'stopped') unlocatedActivity = true;
         else if (descriptorRows.has(row)) {
           if (!id || row.runtime === 'codex') unlocatedActivity = true;
           else {
