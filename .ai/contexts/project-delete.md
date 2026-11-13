@@ -1,5 +1,51 @@
 # Project deletion (#474 A4a–A4d)
 
+## Slow execution and diagnostics (#1103G, #1103H)
+
+The service's 15-second reply budget is shorter than execution, which can perform
+three 20-second revalidations. An operation still running at reply time returns
+`EXECUTION_PENDING`, its operation ID and its current effect lists. This does not
+mean the command was lost. The renderer follows that same ID while the code is
+`EXECUTION_PENDING`, within `PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS` from the first
+execute reply. This shared setting-defaults constant is 325 seconds: three
+20-second revalidations, two 10-second scope reads, the 60-second stop/verify
+batch budget, 60 seconds for completion, the receipt-recovery observation
+window after a completion timeout (60 seconds without progress, each read
+capped at 10 seconds) and its 10-second fence, two 10-second notifications and a
+10-second retained-file read, plus 15 seconds of margin. This conservatively
+adds overlapping stop/revalidation budgets. Admission and recovery with ongoing
+progress can outlive this UI ceiling; it bounds automatic following, not backend
+ownership. A state request for
+a running operation waits on its existing work, with the same 15-second reply
+cap. No read resubmits deletion. Terminal refusal releases the UI lock; committed
+readback uses the existing ACK path. Unavailable reads preserve the operation ID
+and Check deletion state. Persistent pending/unknown outcomes remain explicit and
+their notice includes the reason code. Deadline expiry reports
+`STATE_READ_UNAVAILABLE` and retains Check deletion state. Any other reply code
+ends automatic following immediately; a changed operation ID is rejected.
+
+Once completion falls back to receipt recovery, the service explicitly sets
+`RECEIPT_UNRESOLVED` if it has no result yet. Reconciliation without a fresh
+observation sets `READBACK_UNAVAILABLE` alongside its retained-file evidence and
+warning. Neither branch inherits `EXECUTION_PENDING` from the still-running
+outer promise. Existing terminal receipts and specific fence/recovery failures
+keep their own result codes.
+
+Main logs execute replies, eventual execution completion and recovery outcomes
+with operation ID, state, reason and elapsed milliseconds, without project paths.
+Fence/readback failures retain their holds and are never treated as completion.
+Cancel still creates no operation or receipt; stale preview tokens expire under
+the existing token retention policy.
+
+The planner's abort signal reaches the CLI runner. Early preview exit aborts the
+outstanding reader and stops its captured child PID/tree; pre-aborted requests
+spawn nothing. Settlement removes the abort listener. A table snapshot exposes
+its expiry; if it has expired when liveness starts, the runtime shares one
+deadline-bounded refresh across that preview's readers. No further refresh is
+allowed within that preview, and expired or missing evidence remains unknown.
+The scheduler snapshot is sampled again after job discovery resolves, so a run
+started during a slow CLI read is included.
+
 ## Renderer boundary (A4d)
 
 Both the sidebar Delete button and Project Settings use
@@ -33,7 +79,10 @@ a deferred save in the current window and announces that persistence will follow
 deletion, while refusing a new Save if the write block is already active.
 Global Settings explicitly requests `remove: ['chrome']`; removals travel with
 deferred patches and are applied to a fresh global snapshot on replay. A later
-patch can set a previously removed key again. Project Settings checks the matched
+patch can set a previously removed key again. If replay rejects, the deferred-save
+notice becomes an error explaining that Settings could not be saved, with an
+Open Settings action to review the persisted values and save again. Successful
+replay adds no notice. Project Settings checks the matched
 folder's host/path identity so remote deletion previews block Save as well.
 
 Any NOT_READY reply makes deletion globally unavailable with the retryable
@@ -88,6 +137,74 @@ with the supplied home directory as cwd. Output accounting adds each chunk's
 byte length once. Job discovery resolves the project root once per scan;
 ENOENT for a job cwd means it no longer belongs to this project, while other
 cwd read errors produce an unreadable candidate for that record.
+
+Deletion discovery uses one effective deadline: the earlier of the planner's
+budget and the inventory context's timeout (20 seconds by default and maximum).
+`PROJECT_DELETE_PREVIEW_TIMEOUT_MS` in `public/setting-defaults.js` supplies the
+service, planner and inventory budgets. An explicit shorter timeout or port cap
+still applies. The separate 10-second `readConversation` budget is post-stop
+evidence, not a fresh preview budget.
+
+Immediately after validating a planner request, before indexing or snapshot
+reads, `startProcessReads` starts the local `claude agents --json --all` and
+process-table reads. The scheduler snapshot also starts then. CLI and table
+promises are keyed by the preview's AbortSignal and shared across ownership,
+member/tab liveness and runtime discovery. CLI parsing and durable job scanning
+still validate the combined roster; early rejection is handled until consumed.
+Each new preview/revalidation gets a new signal and an isolated process-table
+read, bypassing the global cache and another request's in-flight probe.
+Ownership, schedule and runtime assembly retain
+their order for path registration and PTY pinning. No git process is used.
+Remote readers remain bounded but production still supplies no exhaustive port.
+
+Outside deletion, the process table reuses a cached result, including a failed
+result, for 3 seconds, or joins an in-flight read. Deletion requests a fresh
+snapshot with its AbortSignal and never publishes into the global cache.
+The signal reaches execFile so planner completion aborts its probe.
+PowerShell has a 15-second timeout clipped to the
+remaining deadline. The captured table is reused for Windows start/ancestry
+checks, avoiding per-descriptor Get-Process launches during preview. Expired,
+missing or mismatched captured identity is unknown. Expiry before liveness permits
+one shared deadline-bounded re-read within that preview; a failed or newly expired
+replacement still cannot prove absence. A table cached before descriptor creation cannot prove a mismatched
+descriptor dead. Descriptor absence still proves no writer without table
+availability. Post-stop evidence retains the fresh reader behavior.
+
+The service starts its 20-second preview budget before planning and passes it
+through to the final writer scope read. Four seconds of planning leave sixteen
+seconds for that scope. Discovery bounds share active port descriptors.
+`DISCOVERY_TIMEOUT` errors and IPC replies carry `port`, `elapsedMs` and
+`boundMs`. Each completed service preview writes one debug line with total
+elapsed time and up to three slowest named ports (maximum elapsed per port,
+including outstanding reads at completion, excluding planner wrappers). Nested
+ports overlap; durations are not additive. Logs contain no paths. File and cwd errors
+propagate timeouts without turning them into candidates. Directory/file closes
+are named bounded reads; late-open handles retain disposal callbacks.
+
+From the Delete click, the renderer allows 21 seconds for the write-chain flush
+and capabilities request together. `PROJECT_DELETE_DIALOG_TIMEOUT_MS` derives
+this from the main deadline plus one second. Later option previews have the same
+watchdog. The choice dialog delegates its wait to this existing watchdog rather
+than racing it with its generic 15-second timer. No main or sidebar budget is
+increased. Returned and rejected timeout payloads name the port and tell the
+user to retry; the open dialog offers Retry preview without closing or changing
+choices. Pre-dialog failures release busy state; an open dialog
+retains its project lock until Cancel. Busy state is per host/path, not global;
+NOT_READY recovery availability is a separate global condition. Two-row DOM
+tests check identity rather than button order and verify both rows after failure
+or Cancel. Late pre-dialog replies cannot open a stale dialog.
+
+These are event-loop deadlines, not guarantees during a blocked renderer/main
+thread. Fake-clock composition tests cover a 15-second CLI, shared remaining
+budgets, startup before indexing and the 20-second deadline. Node/jsdom tests
+cannot measure real Electron behavior under workstation load.
+
+The service deadline is created per call: capabilities, selected-options and
+later dialogs do not share it. A readJobs bound near 4.5 seconds means preceding
+work in that same request spent about 15.5 seconds. The old global process-table
+in-flight promise could delay that work; aggregate readJobs logs alone cannot
+attribute the elapsed time. The per-port summary resolves that ambiguity.
+
 Background records remain explicitly blocked on #1090, even when a daemon state
 says done. Current headless schedules retain the inventory's blocking targets.
 Remote ownership/schedule discovery lacks an exhaustive production port and
@@ -1018,6 +1135,46 @@ contract are unchanged. Main sender/admission/stop and renderer recovery accepta
 remain A4c/d.
 
 ## Evidence boundary
+
+### Bounded member liveness (#1103E)
+
+Local ownership discovery finishes transcript identity checks before reading the
+verified, present members' liveness. Runtime discovery first resolves and
+deduplicates saved/active tabs, preserving the active record for duplicate IDs.
+Each stage reads at most four independent records concurrently. The runtime pins
+identity before awaiting evidence; distinct IDs use distinct operation-scope map
+entries. All reads retain the same inventory deadline and abort signal. A fatal
+failure stops admission of queued records; already outstanding native reads remain
+bounded and their late completion cannot publish a successful inventory.
+Member read failures still become candidates, while deadline/limit/stale failures
+propagate. Tab read failures still fail the runtime snapshot.
+
+The inventory regression uses eight slow members or tabs with a controlled clock:
+two batches of four finish at six seconds within a shared ten-second deadline.
+Never-settling batches expire with readLiveness attribution without starting the
+queued batch. This measures concurrency and deadline semantics, not host latency.
+
+### Dormant Windows sessions (#1103B)
+
+The runtime uses `cli-session-state.readStatusEvidence` for transcript-only
+members. Known descriptor absence no longer depends on the Windows global
+process-table cache. Previously even a missing sessions directory first needed
+a successful table refresh: failure was cached for 3000 ms from completion,
+while evidence age was measured from probe start. A failed or slow probe could
+therefore yield unknown on the first preview or after an earlier successful
+preview. A later timely refresh could yield stopped for the same dormant member.
+That change alters the plan fingerprint and adds a refusal, so execute returns
+`PREVIEW_CHANGED` at its first revalidation, before stopping or submitting to the
+writer. The existing canonical path and post-stop ownership checks are retained.
+
+The main composition tests use the real descriptor reader, inventory, planner,
+service and SQLite worker fixture. They preserve the original TMP spelling,
+exercise missing descriptor directories before cache warmup and after expiry,
+and refuse a newly appearing unverified live descriptor before commit. On
+Windows they run with both long and 8.3 TMP paths. The same short-path fixture
+with stable liveness confirms successfully without path-normalization changes.
+This reproduces both refusal mechanisms; historical WMI failure/timing in the
+supplied live logs is not measured by these tests.
 
 `test/project-delete-plan.test.js` loads the production module with plain
 require and uses isolated in-memory read-port implementations. It exercises the

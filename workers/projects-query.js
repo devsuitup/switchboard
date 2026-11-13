@@ -5,6 +5,8 @@ const { parentPort, workerData } = require('node:worker_threads');
 const Database = require('better-sqlite3');
 const cache = require('../session-cache');
 const { applySessionName, establishTranscriptBaseline } = require('../session-name');
+const { canonicalPath } = require('../src/main/projects/project-delete-identity');
+const { isProjectHidden } = require('../public/worktree-nesting');
 const db = new Database(workerData.dbPath, { readonly: true, fileMustExist: true });
 db.pragma('busy_timeout = 5000');
 
@@ -14,6 +16,7 @@ const readSnapshot = db.transaction(() => ({
     LEFT JOIN session_meta_fields f ON f.sessionId = m.sessionId AND f.field = 'name'`).all(),
   folders: db.prepare('SELECT * FROM cache_meta').all(),
   settings: db.prepare('SELECT key, value FROM settings').all(),
+  blocked: db.prepare('SELECT projectKey FROM project_delete_fences WHERE blocked = 1').all(),
 }));
 
 async function build(message) {
@@ -26,6 +29,21 @@ async function build(message) {
     try { value = JSON.parse(value); } catch {}
     return [row.key, value];
   }));
+  const global = settings.get('global') || {}, identities = new Map();
+  const blocked = new Set(data.blocked.map(row => row.projectKey));
+  const isProjectWriteBlocked = (alias, projectPath) => {
+    try { return blocked.has(JSON.stringify([alias, canonicalPath(projectPath, alias, identities)])); }
+    catch { return true; }
+  };
+  const deleted = (global.hiddenProjects || []).filter(entry => global.hiddenProjectKinds?.[entry] === 'delete');
+  const visible = projects => !deleted.length || !blocked.size ? projects : projects.filter(project => {
+    const alias = project.remoteAlias || null;
+    const normalize = value => {
+      try { return canonicalPath(value, alias, identities); } catch { return value; }
+    };
+    return !blocked.has(JSON.stringify([alias, normalize(project.projectPath)]))
+      || !isProjectHidden(deleted, alias, project.projectPath, global.hiddenProjectScopes, normalize);
+  });
   const effects = [];
   const adapter = {
     getAllCached: () => [...rows.values()],
@@ -63,7 +81,7 @@ async function build(message) {
   };
   for (const [name, write] of Object.entries(writers)) {
     adapter[name] = (...args) => {
-      effects.push({ name, args: structuredClone(args) });
+      if (!message.readOnly) effects.push({ name, args: structuredClone(args) });
       return write(...args);
     };
   }
@@ -75,11 +93,12 @@ async function build(message) {
     getMainWindow: () => null,
     log: console,
     db: adapter,
+    isProjectWriteBlocked: blocked.size ? isProjectWriteBlocked : undefined,
   });
   cache.setRemoteRoots(new Map(message.remoteRoots || []));
   cache.resetProjectsWorkerRetainedRows();
   let publishedLiveRows = new Map();
-  const reconciled = !!message.reconcile && adapter.isInitialScanComplete();
+  const reconciled = !message.readOnly && !!message.reconcile && adapter.isInitialScanComplete();
   if (reconciled) await cache.reconcileCacheFromFilesystemAsync({ throttle: false, onFolder: () => {
     const keptLiveRows = cache.getProjectsWorkerRetainedRows();
     const liveRowsChanged = keptLiveRows.length !== publishedLiveRows.size
@@ -88,9 +107,9 @@ async function build(message) {
     parentPort.postMessage({ id: message.id, progress: { effects: effects.splice(0), keptLiveRows } });
     publishedLiveRows = new Map(keptLiveRows);
   } });
-  const defaultProjects = cache.buildProjectsFromCache(false);
+  const defaultProjects = visible(cache.buildProjectsFromCache(false));
   const defaultProjection = cache.getProjectsProjection();
-  const allProjects = cache.buildProjectsFromCache(true);
+  const allProjects = visible(cache.buildProjectsFromCache(true));
   const allProjection = cache.getProjectsProjection();
   const projection = { buildId: message.id, facts: { ...defaultProjection.facts, ...allProjection.facts },
     removedInputs: { ...defaultProjection.removedInputs, ...allProjection.removedInputs } };

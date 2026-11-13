@@ -1,6 +1,8 @@
 'use strict';
 
 const { randomUUID, randomBytes } = require('node:crypto');
+const { PROJECT_DELETE_PREVIEW_TIMEOUT_MS } = require('../../../public/setting-defaults');
+const { createDiscoveryBounds, discoveryDetails } = require('./project-delete-deadline');
 const { operationId } = require('./project-delete-progress');
 const { membershipDigest, stable, isRecord, text, fail, OPTION_KEYS } = require('./project-delete-identity');
 
@@ -12,6 +14,7 @@ function createProjectDeleteService(deps) {
   const valid = sender => !disposed && sender?.valid?.() === true;
   const failure = (code, extra = {}) => ({ ok: false, code, partial: false, completed: [], kept: [], failed: [], skipped: [], stopped: [], retryable: false, ...extra });
   const track = promise => { tasks.add(promise); promise.finally(() => tasks.delete(promise)).catch(() => {}); return promise; };
+  const logOutcome = (method, result, startedAt) => deps.log?.debug?.(`[project-delete] ${method} operation=${result?.operationId || '-'} state=${result?.state || 'refused'} reason=${result?.code || 'COMMITTED'} elapsed=${now() - startedAt}ms`);
   function prune() {
     for (const [key, value] of tokens) if (now() - value.created >= 300000 || !valid(value.sender)) tokens.delete(key);
     const terminal = [...operations.values()].filter(op => op.released).sort((a, b) => a.finished - b.finished);
@@ -38,7 +41,7 @@ function createProjectDeleteService(deps) {
     } finally { cancel(timer); }
   }
   function view(op) {
-    return { ...failure('UNKNOWN'), operationId: op.id, state: 'unknown', ...op.result,
+    return { ...failure(op.running ? 'EXECUTION_PENDING' : 'UNKNOWN'), operationId: op.id, state: 'unknown', ...op.result,
       host: op.project.alias, projectPath: op.project.projectPath,
       stopped: structuredClone(op.stopped), ...(op.historyUnknown ? { stoppedHistoryUnknown: true } : {}) };
   }
@@ -61,12 +64,15 @@ function createProjectDeleteService(deps) {
     if (!valid(sender)) return failure('UNAUTHORIZED', { token: null });
     if (!ready) return failure('NOT_READY', { token: null });
     prune();
+    const startedAt = now();
+    const budget = { deadline: startedAt + PROJECT_DELETE_PREVIEW_TIMEOUT_MS, pendingPorts: new Map(), portElapsed: new Map() };
+    const read = createDiscoveryBounds({ now, schedule, cancel });
     try {
-      const result = await planner.preview(request);
+      const result = await read('planner.preview', () => planner.preview(request, budget), budget);
       if (!result.ok) return { ...result, token: null };
       const plan = structuredClone(result.plan);
       if (plan.refusals.length) return { ...result, token: null };
-      const scope = await bounded(() => writer.readProjectDeletionScope({ project: plan.project }));
+      const scope = await read('writer.readProjectDeletionScope', () => writer.readProjectDeletionScope({ project: plan.project }), budget);
       if (String(scope.writerRevision) !== plan.revision) return failure('SNAPSHOT_STALE', { token: null, refresh: true });
       if (!valid(sender)) return failure('UNAUTHORIZED', { token: null });
       prune();
@@ -75,7 +81,16 @@ function createProjectDeleteService(deps) {
       const options = Object.fromEntries(OPTION_KEYS.map(key => [key, plan.categories[key].selected]));
       tokens.set(token, { sender, boot, plan, options, epoch: scope.projectEpoch, created: now() });
       return { ...result, token };
-    } catch (error) { return failure(error.code || 'DISCOVERY_UNAVAILABLE', { token: null, error: error.message }); }
+    } catch (error) { return failure(error.code || 'DISCOVERY_UNAVAILABLE', { token: null, error: error.message, ...discoveryDetails(error) }); }
+    finally {
+      for (const detail of budget.pendingPorts.values()) {
+        budget.portElapsed.set(detail.port, Math.max(budget.portElapsed.get(detail.port) || 0, now() - detail.startedAt));
+      }
+      const slowest = [...budget.portElapsed].filter(([port]) => !port.startsWith('planner.'))
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 3)
+        .map(([port, elapsed]) => `${port}=${elapsed}ms`).join(',');
+      deps.log?.debug?.(`[project-delete] preview: total=${now() - startedAt}ms slowest=${slowest || '-'}`);
+    }
   }
   function stopRequest(plan, options) {
     const conversations = new Map(), targets = new Map(), targetMembers = new Map();
@@ -126,7 +141,7 @@ function createProjectDeleteService(deps) {
   async function acceptState(op, state) {
     const committed = state.state === 'committed' && state.receiptAvailable === true && state.terminal === true && state.invalidation;
     const known = state.receiptAvailable === true && state.terminal === true && ['partial', 'notStarted'].includes(state.state);
-    op.result = { ...failure('UNKNOWN'), operationId: op.id, state: committed ? 'committed' : known ? state.state : 'unknown',
+    op.result = { ...failure(state.code || 'RECEIPT_UNRESOLVED'), operationId: op.id, state: committed ? 'committed' : known ? state.state : 'unknown',
       ok: !!committed, partial: known && state.state === 'partial', retryable: false,
       completed: state.completed || [], kept: state.kept || [], failed: state.failed || [], skipped: state.remaining || [],
       observations: { projectHidden: state.projectHidden, settingsPresent: state.settingsPresent, metadata: state.metadata, readRevision: state.readRevision },
@@ -165,6 +180,7 @@ function createProjectDeleteService(deps) {
   }
   async function reconcile(op) {
     if (op.reconciling) return op.reconciling;
+    const startedAt = now();
     op.reconciling = (async () => {
       try {
         await op.admission;
@@ -173,17 +189,18 @@ function createProjectDeleteService(deps) {
         catch (error) { state = null; readError = error; }
         if ((!state || !state.terminal && !state.noLateCommit) && !op.released) {
           try { state = await bounded(() => writer.fenceProjectDeletion(binding(op))); }
-          catch { Object.assign(op.result ||= {}, await retained(op)); return view(op); }
+          catch { Object.assign(op.result ||= {}, await retained(op), { code: 'FENCE_UNAVAILABLE' }); return view(op); }
         }
         if (state) return await acceptState(op, state);
-        Object.assign(op.result ||= {}, await retained(op), { refresh: true, readbackWarning: readError?.message || 'Fresh observation unavailable.' });
+        Object.assign(op.result ||= {}, await retained(op), { code: 'READBACK_UNAVAILABLE', refresh: true, readbackWarning: readError?.message || 'Fresh observation unavailable.' });
         return view(op);
-      } catch (error) { op.result = { ...failure('UNKNOWN'), error: error.message, state: 'unknown' }; return view(op); }
-      finally { op.reconciling = null; }
+      } catch (error) { op.result = { ...failure(error.code || 'RECOVERY_UNAVAILABLE'), error: error.message, state: 'unknown' }; return view(op); }
+      finally { op.reconciling = null; logOutcome('recovery', view(op), startedAt); }
     })();
     return op.reconciling;
   }
   async function run(op) {
+    const startedAt = now();
     try {
       await op.admission;
       const before = await planner.revalidate(op.plan);
@@ -210,13 +227,14 @@ function createProjectDeleteService(deps) {
         membershipDigest: op.plan.membershipDigest, inventory: manifestInventory, groups: manifestInventory.groups, members: manifestInventory.members, options: op.options };
       op.submitted = true;
       try { return await acceptState(op, await bounded(() => writer.completeProjectDeletion(manifest), 60000)); }
-      catch { return await reconcile(op); }
+      catch { op.result ||= failure('RECEIPT_UNRESOLVED'); return await reconcile(op); }
     } catch (error) {
       op.result = { ...failure(error.code || 'DELETE_UNAVAILABLE'), error: error.message, state: 'notStarted', refresh: true };
       return view(op);
     } finally {
       op.running = false;
       if (!op.submitted) await release(op);
+      logOutcome('execute-complete', view(op), startedAt);
     }
   }
   function execute(sender, input) {
@@ -241,14 +259,16 @@ function createProjectDeleteService(deps) {
       projects.delete(op.project.key); operations.delete(op.id);
       return Promise.resolve(failure(error.code || 'BUSY'));
     }
-    return reply(op, track(run(op)));
+    op.work = track(run(op));
+    return reply(op, op.work);
   }
   function readState(sender, input) {
     if (!inputKeys(input, ['operationId'])) return Promise.resolve(failure('INVALID_REQUEST'));
     prune();
     const op = operations.get(input.operationId);
     if (!valid(sender) || !op?.authorities.has(sender)) return Promise.resolve(failure('UNAUTHORIZED'));
-    if (op.running || op.released && (!op.submitted || op.resultReady)) return Promise.resolve(structuredClone(view(op)));
+    if (op.running) return reply(op, op.work);
+    if (op.released && (!op.submitted || op.resultReady)) return Promise.resolve(structuredClone(view(op)));
     return reply(op, track(reconcile(op)));
   }
   function rebind(sender) {
@@ -291,7 +311,12 @@ function createProjectDeleteService(deps) {
     initializing.catch(() => { initializing = null; });
     return initializing;
   }
-  return { preview, execute, readState, rebind, initialize,
+  return { preview, async execute(sender, input) {
+    const startedAt = now();
+    const result = await execute(sender, input);
+    logOutcome('execute', result, startedAt);
+    return result;
+  }, readState, rebind, initialize,
     async whenIdle() { await Promise.all([...tasks]); },
     async recover() {
       const retained = [...operations.values()].filter(op => !op.running && !op.released);

@@ -19,6 +19,7 @@ const MAX_LIVE_QUERY_IDS = 200;
 const GET_STATUS_PROBE_THROTTLE_MS = 5000;
 const MAX_PROBE_PIDS = 64;
 const PROBE_TIMEOUT_MS = 5000;
+const PROCESS_TABLE_TIMEOUT_MS = 15000;
 const PROCESS_TABLE_TTL_MS = 3000;
 const PROCESS_TABLE_MAX_BUFFER = 4 << 20;
 
@@ -38,6 +39,7 @@ let processTableEnabled = false;
 let processTableEpoch = 0;
 let processTable = null;
 let processTableInFlight = null;
+let processTableFailureLoggedAt = -Infinity;
 let ownPid = process.pid;
 let now = Date.now;
 let platform = process.platform;
@@ -62,15 +64,17 @@ const pendingOwnerDeaths = new Map();
 const scheduledRuns = new Map();
 let v1Reader;
 
-function liveElsewhereV1Checked(...args) {
-  return v1Reader ? v1Reader.liveElsewhereV1Checked(...args) : Promise.resolve({ known: false, reason: 'reader not initialized' });
+function liveElsewhereV1Checked(id, hasPty, ptyPids, options = {}) {
+  if (Object.hasOwn(options, 'processTable')) options = { ...options,
+    processTable: { ...options.processTable, expiresAt: (options.processTable?.at ?? -Infinity) + PROCESS_TABLE_TTL_MS } };
+  return v1Reader ? v1Reader.liveElsewhereV1Checked(id, hasPty, ptyPids, options) : Promise.resolve({ known: false, reason: 'reader not initialized' });
 }
 
 function observeTabWriterV1(binding) {
   return v1Reader ? v1Reader.observeTabWriterV1(binding) : { uncertain: true };
 }
 
-async function readStatusEvidence(id, deadline) {
+async function readStatusEvidence(id, deadline, options = {}) {
   const bounded = async fn => {
     let timer;
     try { return await Promise.race([Promise.resolve().then(fn), new Promise(resolve => {
@@ -78,12 +82,17 @@ async function readStatusEvidence(id, deadline) {
     })]); } finally { clearTimeout(timer); }
   };
   if (now() >= deadline) return null;
+  const read = () => bounded(() => liveElsewhereV1Checked(id, () => false, () => [], { deadline, requireUnique: true, ...options }));
+  let result = await read();
+  if (now() >= deadline) return null;
+  if (result?.known && !result.live && !result.ambiguous) return result;
+  if (Object.hasOwn(options, 'processTable')) return result?.known || result?.ambiguous ? result : null;
   if (platform === 'win32') {
     await bounded(() => refreshProcessTable());
     const evidence = readWorkerProcessEvidence();
     if (!evidence.processTableFresh || now() - evidence.observedAt >= PROCESS_TABLE_TTL_MS || now() >= deadline) return null;
+    result = await read();
   }
-  const result = await bounded(() => liveElsewhereV1Checked(id, () => false, () => [], { deadline, requireUnique: true }));
   if (now() >= deadline || platform === 'win32' && (!processTableFresh()
     || now() - processTable.observedAt >= PROCESS_TABLE_TTL_MS)) return null;
   if (result?.ambiguous) return result;
@@ -161,11 +170,11 @@ function parseProcessTable(text) {
   return out;
 }
 
-function probeProcessTable(plat = process.platform, timeoutMs = PROBE_TIMEOUT_MS, exec = execFile) {
+function probeProcessTable(plat = process.platform, timeoutMs = PROCESS_TABLE_TIMEOUT_MS, exec = execFile, signal) {
   return new Promise((resolve, reject) => {
-    const opts = { timeout: timeoutMs, windowsHide: true, maxBuffer: PROCESS_TABLE_MAX_BUFFER };
-    const done = (err, stdout) => {
-      if (err) { reject(err); return; }
+    const opts = { timeout: timeoutMs, windowsHide: true, maxBuffer: PROCESS_TABLE_MAX_BUFFER, ...(signal ? { signal } : {}) };
+    const done = (err, stdout, stderr) => {
+      if (err) { err.stderr = String(stderr || '').slice(0, 300); err.timedOut = err.killed === true && err.signal === 'SIGTERM'; reject(err); return; }
       resolve(parseProcessTable(stdout));
     };
     if (plat === 'win32') {
@@ -180,8 +189,8 @@ function probeProcessTable(plat = process.platform, timeoutMs = PROBE_TIMEOUT_MS
   });
 }
 
-function defaultReadProcessTable() {
-  return probeProcessTable(process.platform);
+function defaultReadProcessTable(timeoutMs, { signal } = {}) {
+  return probeProcessTable(process.platform, timeoutMs, execFile, signal);
 }
 
 function processTableFresh() {
@@ -202,7 +211,7 @@ function normaliseProcessTable(read) {
   return out.size > 0 ? out : null;
 }
 
-function refreshProcessTable({ force = false } = {}) {
+function refreshProcessTable({ force = false, deadline = Infinity } = {}) {
   if (!processTableEnabled) return Promise.resolve(null);
   if (!force && processTableFresh()) return Promise.resolve(processTable.map);
   if (processTableInFlight) return processTableInFlight;
@@ -211,9 +220,12 @@ function refreshProcessTable({ force = false } = {}) {
   const inFlight = (async () => {
     let map = null;
     try {
-      map = normaliseProcessTable(await readProcessTable());
+      map = normaliseProcessTable(await readProcessTable(Math.max(1, Math.min(PROCESS_TABLE_TIMEOUT_MS, deadline - now()))));
     } catch (err) {
-      log.debug(`[cli-state] process table unreadable: ${err && err.message}`);
+      if (now() - processTableFailureLoggedAt >= 60000) {
+        processTableFailureLoggedAt = now();
+        log.debug(`[cli-state] process table unreadable: exit=${err?.code ?? 'unknown'} timeout=${err?.timedOut === true} stderr=${JSON.stringify(String(err?.stderr || '').slice(0, 300))}`);
+      }
     }
     if (epoch === processTableEpoch) {
       processTable = { at: now(), observedAt, map };
@@ -231,6 +243,23 @@ function refreshProcessTable({ force = false } = {}) {
   })();
   processTableInFlight = inFlight;
   return inFlight;
+}
+
+async function readProcessTableSnapshot(deadline, { fresh = false, signal } = {}) {
+  if (!processTableEnabled) return undefined;
+  if (fresh) {
+    const observedAt = now();
+    let map = null;
+    if (!signal?.aborted && observedAt < deadline) {
+      try { map = normaliseProcessTable(await readProcessTable(Math.min(PROCESS_TABLE_TIMEOUT_MS, deadline - observedAt), { signal })); }
+      catch {}
+    }
+    if (signal?.aborted || now() >= deadline) map = null;
+    const at = now();
+    return { at, observedAt, map, expiresAt: at + PROCESS_TABLE_TTL_MS };
+  }
+  await refreshProcessTable({ deadline });
+  return processTable ? { ...processTable, expiresAt: processTable.at + PROCESS_TABLE_TTL_MS } : { map: null };
 }
 
 function startProcessTableRefresh() {
@@ -1019,8 +1048,12 @@ function confirmDeliveryWriter(raw) {
   } catch { return false; }
 }
 
-function deliveryPtyStart(pid) {
+function deliveryPtyStart(pid, options = {}) {
   if (!deliveryInitialized || !Number.isInteger(pid) || pid <= 0) return null;
+  if (processTableEnabled && Object.hasOwn(options, 'processTable')) {
+    const table = options.processTable;
+    return table && now() - table.at < PROCESS_TABLE_TTL_MS ? table.map?.get(pid)?.created?.toString() ?? null : null;
+  }
   if (processTableEnabled) return processTableFresh() ? tableEntry(pid)?.created?.toString() ?? null : null;
   if (platform !== 'linux') return null;
   try { const start = readProcStart(pid); return start == null ? null : String(start); } catch { return null; }
@@ -1214,6 +1247,7 @@ module.exports = {
   ownProcessFilter,
   makePtyPids,
   refreshProcessTable,
+  readProcessTableSnapshot,
   parseProcessTable,
   probeProcessTable,
   PROCESS_TABLE_TTL_MS,

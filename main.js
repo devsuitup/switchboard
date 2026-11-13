@@ -2912,8 +2912,9 @@ function wireSessionPty(session, sessionId, ptyProcess) {
 }
 
 // Run `claude <argv>` to completion through the login shell -- see .ai/contexts/bg-agents.md ("Running the CLI")
-function runClaudeCommand(claudeArgv, { cwd, timeout, maxOutputBytes = Infinity }) {
+function runClaudeCommand(claudeArgv, { cwd, timeout, signal, maxOutputBytes = Infinity }) {
   return new Promise((resolve) => {
+    if (signal?.aborted) { resolve({ code: null, stdout: '', stderr: 'claude command aborted' }); return; }
     const globalSettings = getSetting('global') || {};
     const profile = resolveShell(globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile);
     const shell = profile.path;
@@ -2934,9 +2935,11 @@ function runClaudeCommand(claudeArgv, { cwd, timeout, maxOutputBytes = Infinity 
     let stderr = '';
     let outputBytes = 0;
     let settled = false;
+    let onAbort;
     const finish = (code, err) => {
       if (settled) return;
       settled = true;
+      signal?.removeEventListener('abort', onAbort);
       resolve({ code, stdout, stderr: err ? `${stderr}${err.message}` : stderr });
     };
     let child;
@@ -2979,6 +2982,9 @@ function runClaudeCommand(claudeArgv, { cwd, timeout, maxOutputBytes = Infinity 
       const grace = setTimeout(() => { clearTimeout(timer); finish(code); }, 1000);
       if (typeof grace.unref === 'function') grace.unref();
     });
+    onAbort = () => { clearTimeout(timer); stopCommand(); finish(null, new Error('claude command aborted')); };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
 }
 

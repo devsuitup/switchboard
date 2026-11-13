@@ -113,14 +113,18 @@ test('worker and direct project views have identical projection facts; build ide
   cache.init({ PROJECTS_DIR: dir, activeSessions: new Map(), getMainWindow: () => null, log: console,
     db: { getAllCached: () => rows, getAllMeta: () => new Map(), getAllFolderMeta: () => new Map(), getSetting: () => null } });
   const expected = cache.buildProjectsFromCache(true);
-  const source = fs.readFileSync(require.resolve('../workers/projects-query'), 'utf8');
+  const filename = require.resolve('../workers/projects-query');
+  const source = fs.readFileSync(filename, 'utf8');
   const start = source.indexOf('async function build('), end = source.indexOf('\nparentPort.on(', start);
-  const build = vm.runInNewContext(source.slice(start, end) + '\nbuild;', {
-    cache, readSnapshot: () => ({ rows, meta: [], folders: [], settings: [] }),
+  const context = vm.createContext({
+    cache, readSnapshot: () => ({ rows, meta: [], folders: [], settings: [], blocked: [] }),
     workerData: { projectsDir: dir }, console, structuredClone, Buffer,
     ...require('../session-name'),
+    canonicalPath: require('../src/main/projects/project-delete-identity').canonicalPath,
+    isProjectHidden: require('../public/worktree-nesting').isProjectHidden,
   });
-  const actual = await build({ id: 42 });
+  vm.runInContext(source.slice(start, end), context, { filename });
+  const actual = await context.build({ id: 42 });
   assert.deepEqual(JSON.parse(JSON.stringify(actual.allProjects)), JSON.parse(JSON.stringify(expected)));
   assert.equal(actual.projection.buildId, 42);
 });

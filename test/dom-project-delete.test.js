@@ -9,6 +9,227 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+test('selected preview keeps its own watchdog and shows the failed port with an in-dialog retry', async t => {
+  const h = setup(t), original = h.w.api.previewProjectDelete, timers = new Map();
+  let id = 0, time = 0, finish, calls = 0;
+  h.w.Date.now = () => time;
+  h.w.setTimeout = (fn, ms) => { timers.set(++id, { fn, at: time + ms }); return id; };
+  h.w.clearTimeout = key => timers.delete(key);
+  h.w.api.previewProjectDelete = request => ++calls === 2 ? new Promise(resolve => { finish = resolve; }) : original(request);
+  const pending = h.start(); await flush();
+  t.after(() => h.cancel());
+  time = 16000;
+  for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); }
+  await flush();
+  assert.equal(h.document.querySelector('[role="alert"]')?.hidden ?? true, true,
+    'the generic dialog timer must not preempt the project preview watchdog');
+  finish({ ok: false, code: 'DISCOVERY_TIMEOUT', port: 'readJobs', elapsedMs: 4500, boundMs: 4500 });
+  await flush();
+  const alert = h.document.querySelector('.choice-dialog [role="alert"]');
+  assert.match(alert.textContent, /readJobs.*retry/is);
+  assert.equal(h.confirm().disabled, true);
+  const retry = h.document.querySelector('.choice-dialog-retry');
+  assert.ok(retry && !retry.hidden, 'failed preview offers Retry inside the open dialog');
+  retry.click(); await flush();
+  assert.equal(h.confirm().disabled, false);
+  assert.equal(calls, 3);
+  assert.equal(h.calls.execute.length, 0);
+  h.cancel(); await pending;
+});
+
+for (const settles of [true, false]) test(`pending execute follows beyond 130 seconds or stops at the shared ceiling, settles=${settles}`, async t => {
+  const h = setup(t), timers = new Map(), applied = [];
+  let time = 0, id = 0, finished = false;
+  h.w.Date.now = () => time;
+  h.w.setTimeout = (fn, ms) => { timers.set(++id, { fn, at: time + ms }); return id; };
+  h.w.clearTimeout = key => timers.delete(key);
+  const pendingReply = { state: 'unknown', operationId: 'slow', code: 'EXECUTION_PENDING' };
+  h.w.api.deleteProject = async request => {
+    h.calls.execute.push(request);
+    return h.calls.execute.length === 1 ? pendingReply : { state: 'notStarted', code: 'INVALID_TOKEN', operationId: 'slow' };
+  };
+  h.w.api.projectDeleteState = request => {
+    h.calls.state.push(request);
+    return new Promise(resolve => h.w.setTimeout(() => resolve(settles && time >= 130000
+      ? { ok: true, state: 'committed', operationId: 'slow', invalidation: { sessionIds: [], restoreTargets: [] } }
+      : pendingReply), 10000));
+  };
+  h.w.applyProjectDeletion = async result => applied.push(result);
+  const pending = h.start().then(result => { finished = true; return result; });
+  await flush(); h.confirm().click(); await flush();
+  const ceiling = 3 * 20000 + 2 * 10000 + 60000 + 60000 + 70000 + 10000 + 3 * 10000 + 15000;
+  for (; time < ceiling && !finished;) {
+    time += 1000;
+    for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); }
+    await flush();
+  }
+  assert.equal(finished, true, 'follow-up must finish by its shared ceiling');
+  await pending;
+  assert.equal(h.calls.execute.length, 1, 'following state must never submit deletion again');
+  assert.ok(h.calls.state.every(request => request.operationId === 'slow'), 'all reads must keep the accepted operation ID');
+  if (settles) {
+    assert.equal(applied.length, 1, 'a pending execution settling after 130 seconds must apply its committed result');
+    assert.equal(time, 130000);
+    assert.equal(h.document.querySelector('.app-notice'), null);
+  } else {
+    assert.equal(time, ceiling, 'persistent pending must be followed until the shared ceiling');
+    assert.equal(applied.length, 0);
+    assert.match(h.document.querySelector('.app-notice').textContent, /unresolved.*STATE_READ_UNAVAILABLE/s);
+    assert.match(h.document.querySelector('.app-notice').textContent, /Check deletion state/);
+    assert.equal(h.w.isProjectDeleting(h.p), true);
+  }
+  assert.equal(require('../public/setting-defaults').PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS, ceiling);
+});
+
+test('pending follow-up rejects a changed operation identity', async t => {
+  const h = setup(t);
+  const settle = h.w.settleProjectDeletion;
+  let settled;
+  h.w.settleProjectDeletion = (project, result) => { settled = result; return settle(project, result); };
+  h.w.api.deleteProject = async request => { h.calls.execute.push(request); return { state: 'unknown', operationId: 'slow', code: 'EXECUTION_PENDING' }; };
+  h.w.api.projectDeleteState = async request => { h.calls.state.push(request); return { state: 'committed', operationId: 'different' }; };
+  const pending = h.start(); await flush(); h.confirm().click(); await pending;
+  assert.equal(h.calls.execute.length, 1);
+  assert.equal(h.calls.state.length, 1);
+  assert.match(settled.error, /Deletion operation identity changed/);
+  assert.match(h.document.querySelector('.app-notice').textContent, /STATE_READ_UNAVAILABLE/);
+  assert.equal(h.w.isProjectDeleting(h.p), true);
+});
+
+test('Cancel then reopen follows a pending execute to its terminal refusal without resubmission', async t => {
+  const h = setup(t);
+  const first = h.start(); await flush(); h.cancel(); await first;
+  h.w.api.deleteProject = async request => { h.calls.execute.push(request); return { state: 'unknown', operationId: 'slow', code: 'EXECUTION_PENDING', completed: [], kept: [], failed: [], skipped: [], stopped: [] }; };
+  h.w.api.projectDeleteState = async request => { h.calls.state.push(request); return { state: 'notStarted', operationId: 'slow', code: 'PREVIEW_CHANGED', refresh: true }; };
+  const pending = h.start(); await flush(); h.confirm().click(); await pending;
+  assert.equal(h.calls.execute.length, 1);
+  assert.equal(h.calls.execute[0].token, 'token-4', 'only the second dialog selected preview may execute');
+  assert.equal(h.calls.state.length, 1, 'pending execution must be followed by read-only state reconciliation');
+  assert.match(h.document.querySelector('.app-notice').textContent, /PREVIEW_CHANGED/);
+  assert.doesNotMatch(h.document.querySelector('.app-notice').textContent, /unresolved/);
+  assert.equal(h.document.querySelector('.project-delete-btn').disabled, false);
+});
+
+test('unresolved notice includes its main reason code', async t => {
+  const h = setup(t);
+  await h.w.settleProjectDeletion(h.p, { operationId: 'unknown', state: 'unknown', code: 'FENCE_UNAVAILABLE', completed: [], kept: [], failed: [], skipped: [], stopped: [] });
+  assert.match(h.document.querySelector('.app-notice').textContent, /FENCE_UNAVAILABLE/);
+});
+
+test('pending execute keeps its operation identity when the automatic state read becomes unavailable', async t => {
+  const h = setup(t);
+  h.w.api.deleteProject = async request => { h.calls.execute.push(request); return { state: 'unknown', operationId: 'slow', code: 'EXECUTION_PENDING' }; };
+  h.w.api.projectDeleteState = async request => { h.calls.state.push(request); return { ok: false, code: 'NOT_READY' }; };
+  const pending = h.start(); await flush(); h.confirm().click(); await pending;
+  assert.equal(h.calls.execute.length, 1);
+  const notice = h.document.querySelector('.app-notice');
+  assert.match(notice.textContent, /NOT_READY/);
+  assert.match(notice.textContent, /Check deletion state/, 'a refused read must retain the accepted operation for recovery');
+  assert.equal(h.w.isProjectDeleting(h.p), true);
+});
+
+test('a selected preview rejection names its port in the open dialog and Cancel releases both rows', async t => {
+  const h = setup(t), original = h.w.api.previewProjectDelete;
+  const other = { ...h.p, projectPath: '/other', sessions: [] };
+  h.w.cachedAllProjects = h.w.cachedProjects = [h.p, other];
+  h.w.renderProjects([h.p, other]);
+  let reject, calls = 0;
+  h.w.api.previewProjectDelete = request => ++calls === 1 ? original(request) : new Promise((_resolve, fail) => { reject = fail; });
+  const pending = h.start(); await flush();
+  assert.ok(h.confirm());
+  reject(Object.assign(new Error('Discovery failed'), { code: 'DISCOVERY_TIMEOUT', port: 'runClaude.agents', elapsedMs: 20000, boundMs: 20000 }));
+  await flush();
+  const message = h.document.querySelector('.choice-dialog').textContent;
+  assert.equal(h.confirm().disabled, true);
+  h.cancel(); await pending;
+  assert.ok([...h.document.querySelectorAll('.project-delete-btn')].every(button => !button.disabled));
+  assert.match(message, /runClaude\.agents/, 'open dialog must identify the failed port');
+  assert.equal(h.calls.execute.length, 0);
+});
+
+for (const rejected of [true, false]) test(`capabilities DISCOVERY_TIMEOUT rejection=${rejected} names the port and releases both project rows`, async t => {
+  const h = setup(t);
+  const other = { ...h.p, folder: 'other', projectPath: '/other', sessions: [] };
+  h.w.cachedAllProjects = h.w.cachedProjects = [h.p, other];
+  h.w.renderProjects([h.p, other]);
+  let finish;
+  h.w.api.previewProjectDelete = () => new Promise((resolve, reject) => { finish = rejected ? reject : resolve; });
+  const pending = h.start(); await flush();
+  const buttons = [...h.document.querySelectorAll('.project-delete-btn')];
+  assert.equal(buttons.length, 2);
+  const ownHeader = h.document.getElementById('ph-' + h.w.folderId(h.p.projectPath, h.p.remoteAlias));
+  const otherHeader = h.document.getElementById('ph-' + h.w.folderId(other.projectPath, other.remoteAlias));
+  assert.equal(ownHeader.querySelector('.project-delete-btn').disabled, true, 'pending preview blocks its project');
+  assert.equal(otherHeader.querySelector('.project-delete-btn').disabled, false, 'busy state is per project');
+  const failure = { code: 'DISCOVERY_TIMEOUT', port: 'runClaude.agents', elapsedMs: 20000, boundMs: 20000 };
+  finish(rejected ? Object.assign(new Error('Discovery failed'), failure) : { ok: false, ...failure });
+  assert.equal(await pending, false);
+  assert.match(h.document.querySelector('.app-notice[role="alert"]')?.textContent || '', /runClaude\.agents/, 'timeout notice must name the failed process port');
+  assert.ok([...h.document.querySelectorAll('.project-delete-btn')].every(button => !button.disabled), 'failure releases every project row');
+  assert.equal(h.document.querySelector('.choice-dialog'), null);
+  assert.equal(h.calls.execute.length, 0);
+});
+
+for (const stalled of ['flushProjectDeletionWrites', 'previewProjectDelete']) test(`click shows a notice within 21 seconds when ${stalled} never settles`, async t => {
+  const h = setup(t), timers = new Map(); let id = 0, time = 0, release;
+  h.w.Date.now = () => time;
+  h.w.setTimeout = (fn, ms) => { timers.set(++id, { fn, at: time + ms }); return id; };
+  h.w.clearTimeout = key => timers.delete(key);
+  const target = stalled === 'previewProjectDelete' ? h.w.api : h.w;
+  const original = target[stalled];
+  target[stalled] = () => new Promise(resolve => { release = resolve; });
+  const pending = h.start(); await flush();
+  time = 20000;
+  for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); }
+  await flush();
+  assert.equal(h.document.querySelector('.app-notice'), null, 'renderer must leave the main-side twenty-second budget intact');
+  time = 21000;
+  for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); }
+  await flush();
+  const notice = h.document.querySelector('.app-notice[role="alert"]');
+  assert.ok(notice, 'a stalled pre-dialog port must show a notice by the discovery deadline plus 1000 ms');
+  assert.match(notice.textContent, new RegExp(stalled));
+  assert.equal(await pending, false);
+  assert.equal(h.document.querySelector('.project-delete-btn').disabled, false);
+  target[stalled] = original;
+  release(stalled === 'previewProjectDelete' ? await original({ options: {} }) : undefined);
+  await flush();
+  assert.equal(h.document.querySelector('.choice-dialog'), null, 'late completion must not open a stale dialog');
+  assert.equal(h.calls.execute.length, 0);
+});
+
+test('a stalled real persistence chain shows a notice and shares the click budget with capabilities', async t => {
+  const h = setup(t), timers = new Map(); let id = 0, time = 0, release;
+  persistence(h);
+  h.w.Date.now = () => time;
+  h.w.setTimeout = (fn, ms) => { timers.set(++id, { fn, at: time + ms }); return id; };
+  h.w.clearTimeout = key => timers.delete(key);
+  h.w.api.getSetting = () => new Promise(resolve => { release = resolve; });
+  const saving = h.w.saveGlobalSettings({ sidebarWidth: 321 }); await flush();
+  h.w.api.previewProjectDelete = () => new Promise(() => {});
+  const pending = h.start(); await flush();
+  time = 8000; release({}); await saving; await flush();
+  time = 21000;
+  for (const [key, timer] of [...timers]) if (timer.at <= time) { timers.delete(key); timer.fn(); }
+  await flush();
+  assert.match(h.document.querySelector('.app-notice')?.textContent || '', /previewProjectDelete.*timed out/, 'capabilities must receive only the remaining click budget after the writer flush');
+  assert.equal(await pending, false);
+  assert.equal(h.document.querySelector('.choice-dialog'), null);
+});
+
+test('Confirm is disabled while the selected preview loads and becomes enabled on its valid reply', async t => {
+  const h = setup(t), original = h.w.api.previewProjectDelete;
+  let release, calls = 0;
+  h.w.api.previewProjectDelete = request => ++calls === 1 ? original(request)
+    : new Promise(resolve => { release = async () => resolve(await original(request)); });
+  const pending = h.start(); await flush();
+  assert.ok(h.confirm());
+  assert.equal(h.confirm().disabled, true);
+  await release(); await flush();
+  assert.equal(h.confirm().disabled, false, 'loading is not a permanent refusal');
+  h.cancel(); await pending;
+});
+
 function persistence(h) {
   let global = { hiddenProjects: [], sidebarWidth: 100 };
   Object.assign(h.w, { exitingApp: false, skippedWorkingSetEntries: new Map(), dormantWorkingSet: new Map(),
@@ -48,6 +269,33 @@ test('global patches remove keys only when requested and retain removal through 
   assert.equal(Object.hasOwn(saved(), 'chrome'), false);
   assert.equal(saved().browserMode, 'managed');
   assert.equal(saved().sidebarWidth, 321);
+  assert.equal(h.document.querySelector('.app-notice'), null, 'successful replay must not show a notice');
+});
+
+for (const method of ['getSetting', 'setSetting']) test(`deferred Settings replay ${method} rejection shows an actionable failure notice`, async t => {
+  const h = setup(t);
+  await settings(h, 'global');
+  const saved = persistence(h);
+  saved().chrome = true;
+  h.w.setProjectDeletionWritesBlocked(h.p, true);
+  assert.equal(await h.w.saveGlobalSettings({ browserMode: 'managed' }, { remove: ['chrome'] }), 'deferred');
+  const original = h.w.api[method];
+  h.w.api[method] = async () => { throw new Error('storage unavailable'); };
+  h.w.closeSettingsViewer();
+  h.w.setProjectDeletionWritesBlocked(h.p, false);
+  await flush(); await h.w.flushProjectDeletionWrites();
+  const notice = h.document.querySelector('.app-notice[role="alert"]');
+  assert.ok(notice, 'failed deferred Settings replay must show an error notice');
+  assert.match(notice.textContent, /settings could not be saved/i);
+  assert.match(notice.textContent, /save again/i);
+  assert.equal(saved().chrome, true, 'failed replay must not claim the removal was persisted');
+  h.w.api[method] = original;
+  const action = notice.querySelector('.app-notice-action');
+  assert.equal(action?.textContent, 'Open Settings');
+  action.click(); await flush();
+  assert.equal(h.document.getElementById('settings-viewer').style.display, 'flex');
+  assert.match(h.document.getElementById('settings-viewer-title').textContent, /Global Settings/);
+  assert.ok(h.document.querySelector('#sv-save-btn'), 'recovery must offer the Settings Save control');
 });
 
 for (const method of ['deleteProject', 'projectDeleteState']) test(`${method} preserves the backend bounded unknown reply and operation ID`, async t => {
@@ -128,7 +376,7 @@ async function settings(h, scope = 'project') {
     if (!h.document.getElementById(id)) { const el = h.document.createElement('div'); el.id = id; h.document.body.append(el); }
   }
   h.w.api.getSetting = async () => ({}); h.w.api.getShellProfiles = async () => [];
-  for (const file of ['setting-defaults.js', 'shortcuts.js', 'terminal-themes.js', 'remote-enrol-panel.js', 'settings-panel.js']) {
+  for (const file of ['shortcuts.js', 'terminal-themes.js', 'remote-enrol-panel.js', 'settings-panel.js']) {
     const filename = path.join(__dirname, '../public', file);
     vm.runInContext(fs.readFileSync(filename, 'utf8'), h.context, { filename });
   }
@@ -200,6 +448,8 @@ test('remote Project Settings refuses Save while its deletion dialog is open', a
 });
 function setup(t, extra = {}) {
   const ctx = setupSidebarDom(); t.after(() => ctx.destroy());
+  const defaults = path.join(__dirname, '../public/setting-defaults.js');
+  vm.runInContext(fs.readFileSync(defaults, 'utf8'), ctx.context, { filename: defaults });
   const w = ctx.window, p = makeSampleProject();
   const calls = { preview: [], execute: [], state: [], writes: [] };
   w.cachedAllProjects = w.cachedProjects = [p];
