@@ -69,7 +69,8 @@ A synchronous throw or rejected refresh shows its message as literal inline
 an answer clears the error and retries. The inline Retry preview button also
 requests a fresh plan for the current answers, without closing the dialog or
 persisting choices. It hides while pending and after success; Enter on the
-focused retry button activates it. During initial planning, focus falls
+focused retry button activates it. It reuses `new-session-cancel-btn` so its
+appearance follows the existing secondary dialog buttons. During initial planning, focus falls
 back to visible Cancel when Confirm would otherwise receive focus. All-disabled
 radio options stay unconfirmable even after a plan resolves. Secondary actions
 and `closeWith` retain their explicit independent result contracts; the hook

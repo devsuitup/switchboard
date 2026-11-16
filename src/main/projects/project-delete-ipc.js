@@ -4,7 +4,10 @@ function registerProjectDeleteIpc({ ipcMain, service, getMainWindow, announce = 
   let document = null, disposed = false;
   const listeners = [];
   const channels = ['preview-project-delete', 'delete-project', 'project-delete-state'];
-  function revoke() { document = null; }
+  function revoke() {
+    if (document) service.cancelPreviews(document);
+    document = null;
+  }
   function detach() {
     revoke();
     for (const [emitter, name, listener] of listeners.splice(0)) emitter.removeListener(name, listener);
@@ -16,6 +19,7 @@ function registerProjectDeleteIpc({ ipcMain, service, getMainWindow, announce = 
     const trustedUrl = wc.getURL();
     const bind = () => {
       if (disposed || win !== getMainWindow() || win.isDestroyed() || wc.isDestroyed() || wc.getURL() !== trustedUrl) return;
+      revoke();
       const state = { win, wc, frame: wc.mainFrame };
       state.valid = () => document === state && !disposed && win === getMainWindow()
         && !win.isDestroyed() && !wc.isDestroyed() && wc.mainFrame === state.frame;

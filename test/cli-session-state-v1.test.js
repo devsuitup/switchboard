@@ -10,6 +10,24 @@ const state = require('../cli-session-state');
 
 const ID = '01234567-89ab-cdef-0123-456789abcdef';
 
+test('Windows process probe forwards cancellation to its captured execFile child', async () => {
+  const controller = new AbortController(), killed = [];
+  let received;
+  const pending = state.probeProcessTable('win32', 15000, (file, args, opts, done) => {
+    assert.match(file, /powershell\.exe$/i);
+    assert.match(args.at(-1), /Get-CimInstance/);
+    received = opts.signal;
+    opts.signal?.addEventListener('abort', () => {
+      killed.push(123);
+      done(Object.assign(new Error('aborted'), { code: 'ABORT_ERR' }), '', '');
+    }, { once: true });
+  }, controller.signal);
+  assert.equal(received, controller.signal, 'execFile must receive the exact preview signal');
+  controller.abort();
+  await assert.rejects(pending, { code: 'ABORT_ERR' });
+  assert.deepEqual(killed, [123]);
+});
+
 test('failed WMI reads preserve bounded stderr, exit and timeout evidence and log once a minute', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-wmi-diagnostic-'));
   t.after(() => { state.stop(); fs.rmSync(dir, { recursive: true, force: true }); });

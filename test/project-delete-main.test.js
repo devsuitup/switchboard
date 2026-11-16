@@ -17,6 +17,94 @@ const supported = { skip: !openStore.supported && 'SQLite needs Node 22 or a mat
 const options = { sessions: true, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false };
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+function pendingProcessReads(t) {
+  const reads = [];
+  const read = (kind, signal) => new Promise(resolve => {
+    const row = { kind, signal, pending: true, aborted: false, finish() {
+      row.pending = false;
+      signal.removeEventListener('abort', abort);
+      resolve(kind === 'agents' ? { code: 0, stdout: '[]' } : { map: null });
+    } };
+    const abort = () => { row.aborted = true; row.finish(); };
+    signal.addEventListener('abort', abort, { once: true });
+    reads.push(row);
+  });
+  t.after(() => reads.forEach(row => row.finish()));
+  return { reads, runClaude: (_args, opts) => read('agents', opts.signal),
+    readProcessTableSnapshot: (_deadline, opts) => read('table', opts.signal) };
+}
+
+test('superseding previews abort both reads immediately and old cleanup preserves the newest preview', supported, async t => {
+  const pending = pendingProcessReads(t), indexes = [];
+  const h = await setup(t, false, { runClaude: pending.runClaude, waitForIndex: () => new Promise(resolve => indexes.push(resolve)) });
+  h.ports.cliSessionState.readProcessTableSnapshot = pending.readProcessTableSnapshot;
+  h.load(); await h.main.startRecovery();
+  const requests = [];
+  try {
+    let firstReply, secondReply;
+    const first = h.preview().then(value => { firstReply = value; return value; }); await flush();
+    requests.push(first);
+    const second = h.preview().then(value => { secondReply = value; return value; }); await flush();
+    requests.push(second);
+    assert.equal(pending.reads[0].signal.aborted, true, 'superseded planner signal must abort immediately');
+    assert.ok(pending.reads.slice(0, 2).every(row => row.aborted && !row.pending), 'both superseded process reads must settle on abort');
+    assert.equal(firstReply?.token, null, 'superseded preview must settle promptly without a token');
+    assert.ok(pending.reads.slice(2).every(row => !row.signal.aborted));
+    const third = h.preview(); await flush();
+    requests.push(third);
+    assert.ok(pending.reads.slice(2, 4).every(row => row.aborted && !row.pending), 'old finalizer must not remove the replacement entry');
+    assert.equal(secondReply?.token, null);
+    indexes.at(-1)();
+    pending.reads.slice(4).forEach(row => row.finish());
+    assert.ok((await third).token);
+    assert.ok(pending.reads.every(row => !row.pending));
+    assert.equal(h.time.timers.size, 0);
+  } finally {
+    h.time.advance(20001);
+    pending.reads.forEach(row => row.finish());
+    await Promise.all(requests);
+  }
+});
+
+for (const event of ['destroyed', 'did-navigate', 'render-process-gone']) test(`document ${event} aborts pending preview even while indexing is stalled`, supported, async t => {
+  const pending = pendingProcessReads(t);
+  const h = await setup(t, false, { runClaude: pending.runClaude, waitForIndex: () => new Promise(() => {}) });
+  h.ports.cliSessionState.readProcessTableSnapshot = pending.readProcessTableSnapshot;
+  h.load(); await h.main.startRecovery();
+  let reply;
+  const first = h.preview().then(value => { reply = value; }); await flush();
+  try {
+    h.ports.getMainWindow().webContents.emit(event); await flush();
+    assert.ok(pending.reads.every(row => row.aborted && !row.pending), 'revoked document must abort both process readers');
+    assert.equal(reply?.code, 'UNAUTHORIZED', 'aborted planner must settle without advancing the deadline');
+    await first;
+    assert.equal(h.time.timers.size, 0, 'aborted reads must release their deadline timers');
+  } finally {
+    h.time.advance(20001);
+    await first;
+  }
+});
+
+test('a new preview does not abort an execution revalidation', supported, async t => {
+  const pending = pendingProcessReads(t);
+  let pause = false;
+  const h = await setup(t, false, { runClaude: (...args) => pause ? pending.runClaude(...args) : Promise.resolve({ code: 0, stdout: '[]' }) });
+  h.load(); await h.main.startRecovery();
+  const preview = await h.preview();
+  pause = true;
+  h.ports.cliSessionState.readProcessTableSnapshot = pending.readProcessTableSnapshot;
+  const execution = h.execute(preview);
+  for (let i = 0; i < 20 && !pending.reads.length; i++) await flush();
+  const signal = pending.reads[0]?.signal;
+  const next = h.preview(); await flush();
+  assert.ok(signal && !signal.aborted, 'execution owns a separate process-read signal');
+  pause = false;
+  h.ports.cliSessionState.readProcessTableSnapshot = async () => ({ map: null });
+  pending.reads.forEach(row => row.finish());
+  await next;
+  assert.equal((await execution).state, 'committed');
+});
+
 test('a new preview starts fresh process reads while the previous preview table is pending', supported, async t => {
   const state = require('../cli-session-state');
   const h = await setup(t, true, { cliSessionState: state });

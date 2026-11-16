@@ -1,5 +1,28 @@
 # Project deletion (#474 A4a–A4d, E)
 
+## Superseded previews (#1106)
+
+The service retains one pending preview controller per webContents and canonical
+host/project identity. Starting another preview for that pair aborts the previous
+service budget and its linked planner budget. The existing fresh process-table
+reader forwards that signal to execFile, which kills its captured PowerShell
+child; runClaudeCommand stops its captured reader PID/tree. No process-name kill
+or additional spawn path is involved. Discovery bounds listen for abort so a
+stalled index or writer port cannot keep the planner waiting until its deadline.
+Late port replies are discarded; a superseded preview cannot mint a token.
+
+Document revocation (navigation, renderer exit, destruction, replacement or
+disposal) cancels pending previews through the IPC registration. Settlement
+removes only the matching controller, so an older finalizer cannot remove a
+replacement entry. Empty sender maps are removed. Different senders, projects
+and hosts remain independent. Execution revalidation retains its own planner
+controllers and is never part of this preview registry.
+
+The renderer keeps its existing choice-dialog request sequence and answer-match
+guards before accepting a plan, displaying details or enabling Confirm. Sidebar
+execution uses only that accepted plan's token; its operation-ID follow-up guard
+is unchanged. Retry preview reuses the existing secondary dialog button class.
+
 ## Linked worktree folders (E)
 
 Preview accepts optional `worktrees: string[]` alongside the unchanged five
