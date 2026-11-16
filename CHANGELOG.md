@@ -10,6 +10,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### Fixed
 - Workflow agents are now detected even when their folder timestamp does not change, so newly started agents no longer go missing from the sidebar. (#1080)
 - Remote hosts waiting at the 30-minute retry limit now log each failed refresh attempt, with the consecutive failure count, current error and next retry delay, so the log shows they are still being tried. (#1110)
+- Opening a running remote session now works when the host blocks access to its process environment, provided its default tmux server runs that session directly in its pane. (#1111)
 
 ## v0.0.106 — 2026-11-13
 

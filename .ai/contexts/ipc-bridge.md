@@ -888,6 +888,14 @@ other members finish cleanup. Inspection failures exclude that PID from the
 termination pass. The helper reports one member-failure warning per lifetime,
 returns an error for the affected job, and always removes/closes its job handle.
 
+`windows-job-member-errors` keeps its three Node children alive on redirected
+stdin until the probe's cleanup. A finite child timer can expire before the
+survivor observations on a delayed runner, independently of the helper. The
+probe retains the stdin writers through `Finish` and the survivor checks;
+normal cleanup kills only its owned PIDs, and probe death closes the pipes so
+the children can exit on EOF. The assertions still require both failed members
+alive, the ordinary sibling dead, the job released, and exactly one warning.
+
 The dormant A4c2a `terminateWithEvidence(id, { deadline })` JS port uses a
 separate `terminate-retained` verb. The native helper keeps that assigned job
 handle, skips unreadable members in strict mode, and returns failure when any
