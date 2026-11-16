@@ -22,6 +22,7 @@ const PROBE_TIMEOUT_MS = 5000;
 const PROCESS_TABLE_TIMEOUT_MS = 15000;
 const PROCESS_TABLE_TTL_MS = 3000;
 const PROCESS_TABLE_MAX_BUFFER = 4 << 20;
+const PROCESS_TABLE_LOG_WINDOW_MS = 60000;
 
 let dir = DEFAULT_DIR;
 let activeSessions = null;
@@ -40,6 +41,12 @@ let processTableEpoch = 0;
 let processTable = null;
 let processTableInFlight = null;
 let processTableFailureLoggedAt = -Infinity;
+const rosterOwnership = new Map();
+let probeWindow = null;
+let probeWindowTimer = null;
+let probeWindowEpoch = 0;
+let scheduleProbeWindow = setTimeout;
+let cancelProbeWindow = clearTimeout;
 let ownPid = process.pid;
 let now = Date.now;
 let platform = process.platform;
@@ -211,6 +218,50 @@ function normaliseProcessTable(read) {
   return out.size > 0 ? out : null;
 }
 
+function flushProbeWindow() {
+  const window = probeWindow;
+  if (probeWindowTimer) cancelProbeWindow(probeWindowTimer);
+  probeWindowTimer = null;
+  probeWindow = null;
+  if (!window || !(window.timeout || window.error || window.caller.timeout || window.caller.error || window.aborted)) return;
+  const durations = window.durations.sort((a, b) => a - b);
+  log.info?.(`[cli-state] process table probes: windowMs=${PROCESS_TABLE_LOG_WINDOW_MS} timeoutBudgetMs=${PROCESS_TABLE_TIMEOUT_MS}`
+    + ` ok=${window.ok} timeout=${window.timeout} error=${window.error} maxMs=${durations.at(-1) ?? 'n/a'} p95Ms=${durations[Math.ceil(durations.length * 0.95) - 1] ?? 'n/a'}`
+    + ` callerOk=${window.caller.ok} callerTimeout=${window.caller.timeout} callerError=${window.caller.error} aborted=${window.aborted}`);
+}
+
+function recordProcessTableProbe(outcome, duration, timeoutMs) {
+  if (probeWindow && now() - probeWindow.at >= PROCESS_TABLE_LOG_WINDOW_MS) flushProbeWindow();
+  if (!probeWindow) {
+    probeWindow = { at: now(), ok: 0, timeout: 0, error: 0, durations: [], caller: { ok: 0, timeout: 0, error: 0 }, aborted: 0 };
+    probeWindowTimer = scheduleProbeWindow(flushProbeWindow, PROCESS_TABLE_LOG_WINDOW_MS);
+    probeWindowTimer.unref?.();
+  }
+  if (outcome === 'aborted') probeWindow.aborted++;
+  else if (timeoutMs === PROCESS_TABLE_TIMEOUT_MS) {
+    probeWindow[outcome]++;
+    probeWindow.durations.push(duration);
+  } else probeWindow.caller[outcome]++;
+}
+
+async function measuredProcessTable(timeoutMs, options) {
+  const epoch = probeWindowEpoch;
+  const started = now();
+  let outcome = 'error';
+  try {
+    const map = normaliseProcessTable(await readProcessTable(timeoutMs, options));
+    if (map) outcome = 'ok';
+    return map;
+  } catch (err) {
+    if (err?.code === 'ABORT_ERR' || err?.name === 'AbortError') outcome = 'aborted';
+    else if (err?.timedOut === true) outcome = 'timeout';
+    throw err;
+  } finally {
+    if (options?.signal?.aborted) outcome = 'aborted';
+    if (epoch === probeWindowEpoch) recordProcessTableProbe(outcome, Math.max(0, now() - started), timeoutMs);
+  }
+}
+
 function refreshProcessTable({ force = false, deadline = Infinity } = {}) {
   if (!processTableEnabled) return Promise.resolve(null);
   if (!force && processTableFresh()) return Promise.resolve(processTable.map);
@@ -220,9 +271,9 @@ function refreshProcessTable({ force = false, deadline = Infinity } = {}) {
   const inFlight = (async () => {
     let map = null;
     try {
-      map = normaliseProcessTable(await readProcessTable(Math.max(1, Math.min(PROCESS_TABLE_TIMEOUT_MS, deadline - now()))));
+      map = await measuredProcessTable(Math.max(1, Math.min(PROCESS_TABLE_TIMEOUT_MS, deadline - now())));
     } catch (err) {
-      if (now() - processTableFailureLoggedAt >= 60000) {
+      if (now() - processTableFailureLoggedAt >= PROCESS_TABLE_LOG_WINDOW_MS) {
         processTableFailureLoggedAt = now();
         log.debug(`[cli-state] process table unreadable: exit=${err?.code ?? 'unknown'} timeout=${err?.timedOut === true} stderr=${JSON.stringify(String(err?.stderr || '').slice(0, 300))}`);
       }
@@ -231,6 +282,7 @@ function refreshProcessTable({ force = false, deadline = Infinity } = {}) {
       processTable = { at: now(), observedAt, map };
       processTableInFlight = null;
       if (map) {
+        for (const pid of rosterOwnership.keys()) if (!map.has(pid)) rosterOwnership.delete(pid);
         const stale = JSON.stringify([...known.values()].filter(entry => sidebarDescriptorIsStale(statusKey(entry.sessionId), entry))
           .map(entry => [statusKey(entry.sessionId), entry.pid]).sort());
         const sidebarChanged = stale !== staleSidebarIdentity;
@@ -251,7 +303,7 @@ async function readProcessTableSnapshot(deadline, { fresh = false, signal } = {}
     const observedAt = now();
     let map = null;
     if (!signal?.aborted && observedAt < deadline) {
-      try { map = normaliseProcessTable(await readProcessTable(Math.min(PROCESS_TABLE_TIMEOUT_MS, deadline - observedAt), { signal })); }
+      try { map = await measuredProcessTable(Math.min(PROCESS_TABLE_TIMEOUT_MS, deadline - observedAt), { signal }); }
       catch {}
     }
     if (signal?.aborted || now() >= deadline) map = null;
@@ -414,6 +466,9 @@ function init(ctx) {
   staleSidebarIdentity = '[]';
   processTableInFlight = null;
   stop();
+  processTableFailureLoggedAt = -Infinity;
+  scheduleProbeWindow = ctx.schedule || setTimeout;
+  cancelProbeWindow = ctx.cancel || clearTimeout;
 }
 
 function parseState(text) {
@@ -721,6 +776,11 @@ function ensureWatching() {
 }
 
 function stop() {
+  probeWindowEpoch++;
+  if (probeWindowTimer) cancelProbeWindow(probeWindowTimer);
+  probeWindowTimer = null;
+  probeWindow = null;
+  rosterOwnership.clear();
   pendingOwnerDeaths.clear();
   const hadStatus = statusBySession.size > 0;
   if (watcher) {
@@ -1147,7 +1207,18 @@ function descriptorWriterOwner(raw, ptyPid, descriptors, unreadable) {
 
 function ownPidTest(ptyPids) {
   const own = new Set(ptyPids());
-  return (pid) => own.has(pid) || descendsFromThisProcess(pid, own);
+  return (pid, descriptor) => {
+    if (own.has(pid) || pid === ownPid) return true;
+    if (!processTableEnabled) return descendsFromThisProcess(pid, own);
+    const key = JSON.stringify([pid, descriptor?.sessionId, descriptor?.procStart, descriptor?.startedAt, [...own].sort((a, b) => a - b)]);
+    if (!deliveryProcessTableFresh()) {
+      const previous = rosterOwnership.get(pid);
+      return previous?.key === key ? previous.result : null;
+    }
+    const result = descendsFromThisProcess(pid, own);
+    rosterOwnership.set(pid, { key, result });
+    return result;
+  };
 }
 
 function conversationExclusion(ptyPids) {

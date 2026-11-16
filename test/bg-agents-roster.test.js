@@ -21,6 +21,20 @@ const STATE = JSON.stringify({
   linkScanPath: '/home/u/.claude/projects/-home-u-p/bc3fd129-60bb-4bd2-8f38-63fecd1256e5.jsonl',
 });
 
+test('536b only boolean ownership classifies sessions; every other result is unknown', () => {
+  const descriptor = { kind: 'interactive', sessionId: 'session-536b', pid: 536 };
+  const jobs = new Map([['abcdef12', { sessionId: descriptor.sessionId, state: 'done' }]]);
+  for (const value of [undefined, null, 0, 1, '', 'own', true, false]) {
+    const isOwnPid = () => value;
+    const rows = mergeRoster({ descriptors: [descriptor], jobs, isOwnPid });
+    assert.equal(rows[0].conversationOwn, value === true ? true : value === false ? false : null,
+      `normalise ${String(value)} to the strict three-state contract`);
+    assert.equal(rows[0].kind, value === false ? 'interactive' : 'background');
+    const standalone = mergeRoster({ descriptors: [descriptor], isOwnPid });
+    assert.equal(standalone.length, value === false ? 1 : 0);
+  }
+});
+
 test('A-T1 running survives both parsers and retains worker identity and activity', () => {
   const job = parseJobState(JSON.stringify({ state: 'running', id: 'aaaaaaaa', daemonShort: 'bbbbbbbb',
     updatedAt: '2026-10-25T12:00:00Z', inFlight: { tasks: 0, kinds: [] } }));

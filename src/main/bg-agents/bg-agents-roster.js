@@ -187,7 +187,10 @@ function backgroundEntry(id, cliEntry, job, descriptor, descriptors) {
 }
 
 function mergeRoster({ cli, jobs, descriptors, isOwnPid, isAttachedHere }) {
-  const own = typeof isOwnPid === 'function' ? isOwnPid : () => false;
+  const own = (pid, descriptor) => {
+    const result = typeof isOwnPid === 'function' ? isOwnPid(pid, descriptor) : false;
+    return result === true ? true : result === false ? false : null;
+  };
   const attached = typeof isAttachedHere === 'function' ? isAttachedHere : () => false;
   const byJobId = new Map();
   for (const d of descriptors || []) {
@@ -206,13 +209,13 @@ function mergeRoster({ cli, jobs, descriptors, isOwnPid, isAttachedHere }) {
     const holder = (descriptors || []).find(matches);
     if (holder) {
       e.conversationPid = holder.pid;
-      e.conversationOwn = own(holder.pid);
+      e.conversationOwn = own(holder.pid, holder);
     }
     if (!['stopped', 'done', 'failed'].includes(e.state)) continue;
     const d = (descriptors || []).find(d => d && d.kind === 'interactive' && matches(d));
     if (!d) continue;
     matched.add(d.sessionId.toLowerCase());
-    if (own(d.pid)) continue;
+    if (own(d.pid, d) !== false) continue;
     Object.assign(e, {
       kind: 'interactive', state: null, jobState: e.state,
       transcriptSource: e.sessionId && e.sessionId.toLowerCase() !== d.sessionId.toLowerCase() ? 'live-session' : null,
@@ -223,7 +226,7 @@ function mergeRoster({ cli, jobs, descriptors, isOwnPid, isAttachedHere }) {
     });
   }
   for (const d of descriptors || []) {
-    if (!d || d.kind !== 'interactive' || !d.sessionId || own(d.pid)) continue;
+    if (!d || d.kind !== 'interactive' || !d.sessionId || own(d.pid, d) !== false) continue;
     if (matched.has(d.sessionId.toLowerCase())) continue;
     roster.push({
       ...emptyEntry(), kind: 'interactive', sessionId: d.sessionId, name: d.name, cwd: d.cwd,

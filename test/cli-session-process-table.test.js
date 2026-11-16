@@ -256,7 +256,7 @@ test('no snapshot is taken without a live descriptor for the asked session, or w
 test('the synchronous roster filter never reads the table itself, then knows the descendants once a snapshot landed', () => withDir(async (dir) => {
   const { reads } = boot(dir);
   const isOwn = cliSessionState.ownProcessFilter(() => [5001]);
-  assert.equal(isOwn(5004), false);
+  assert.equal(isOwn(5004), null);
   assert.equal(isOwn(5001), true);
   await cliSessionState.refreshProcessTable();
   assert.equal(reads.count, 1);
@@ -301,7 +301,7 @@ test('an async-first snapshot tells descriptor listeners once, and a roster filt
     const check = cliSessionState.liveElsewhere('sess-1', noPty, convPty([5001]));
     await new Promise((resolve) => setImmediate(resolve));
     const isOwn = cliSessionState.ownProcessFilter(() => [5001]);
-    assert.equal(isOwn(5004), false);
+    assert.equal(isOwn(5004), null);
     release();
     await check;
     await new Promise((resolve) => setImmediate(resolve));

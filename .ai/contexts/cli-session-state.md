@@ -46,9 +46,32 @@ status/action callers and post-stop reads omit the snapshot and retain fresh
 identity probing.
 
 Failed process-table reads log exit code, timeout flag and the first 300 characters
-of stderr, at most once per minute. The native exec callback preserves stderr
+of stderr at debug level, at most once per minute. The native exec callback preserves stderr
 separately from its generic command-failed message. This diagnostic does not
 change failure caching or turn unavailable WMI data into absence evidence.
+
+Each actual shared or isolated process-table read records an outcome. Cache hits
+and shared awaits are not additional probes. `PROCESS_TABLE_LOG_WINDOW_MS` is a
+module constant (60000 ms), not a setting. A window starts at the first completed
+probe and emits one info summary at its end only if it contains a timeout, error
+or abort:
+`[cli-state] process table probes: windowMs=60000 timeoutBudgetMs=15000 ok=19 timeout=1 error=1 maxMs=5000 p95Ms=200 callerOk=0 callerTimeout=1 callerError=0 aborted=1`.
+`ok`, `timeout`, `error`, `maxMs` and nearest-rank `p95Ms` include only unaborted
+reads granted the full `PROCESS_TABLE_TIMEOUT_MS` budget (15 s), whether shared
+or isolated. Reads clipped to a shorter caller deadline have separate
+`callerOk`, `callerTimeout` and `callerError` counts and contribute no durations.
+Without full-budget samples, both duration fields are `n/a`. Aborted reads count
+only in `aborted`, even if the callback also reports a timeout. Timeouts otherwise
+use the native exec callback's killed/SIGTERM evidence; other failures, including
+empty tables, count as errors in their budget group. `PROBE_TIMEOUT_MS` (5 s)
+only bounds `probeProcStartWindows` (Get-Process); those probes are not measured
+by this counter. The table read uses `PROCESS_TABLE_TIMEOUT_MS`.
+The unref'ed timer reports even if no later probe occurs. `stop()`
+cancels the partial window and ignores late metrics from pending reads; init
+starts a new lifecycle. Tests inject `now`, `schedule` and `cancel` without waiting
+on an unref'ed timer. There is no cli-state activity-trace hook in the module or
+its init wiring, so this change adds no activity-trace event. Neither existing
+probe timeout changes.
 
 The status gatherer shares one absolute now+2000 deadline across head and
 descriptor awaits, pins PTY/generation/start/namespace and rechecks after awaits.
@@ -582,7 +605,7 @@ Two rules share that snapshot and must not be confused:
   (below).
 
 - **Reader.** `probeProcessTable(platform)` runs one process, bounded by
-  `PROBE_TIMEOUT_MS` (5 s): on Windows `powershell.exe -NoProfile` over
+  `PROCESS_TABLE_TIMEOUT_MS` (15 s, clipped to a supplied deadline): on Windows `powershell.exe -NoProfile` over
   `Get-CimInstance Win32_Process` printing `<pid> <ppid>` lines (about 0.7-1.4 s
   cold, 340 processes, measured 2026-10-10) with the process's `CreationDate` as a
   FILETIME (within 5 ticks of `Get-Process`'s `StartTime.ToFileTimeUtc()`, the descriptor's
@@ -591,9 +614,9 @@ Two rules share that snapshot and must not be confused:
   `/proc`. `wmic` is not a fallback: recent Windows 11 no longer ships it (absent
   on the measured machine). Tests inject `readProcessTable`.
 - **Never synchronous.** The snapshot is always asynchronous. A chain walk is
-  synchronous and reads only the cached snapshot (`defaultReadParentPid`); with no
-  snapshot yet, or a failed one, it behaves as before (PTY pids only). An injected
-  `readParentPid` disables the snapshot entirely.
+  synchronous and reads only the cached snapshot (`defaultReadParentPid`). Roster
+  ownership requires a fresh usable table, except for a directly known PTY/main
+  PID. An injected `readParentPid` disables the snapshot entirely.
 - **Cache.** `PROCESS_TABLE_TTL_MS` (3 s). Concurrent callers share the one in-flight
   read; a failed or empty read is cached for the same window as "unknown", so a
   broken PowerShell is not respawned per check. `init()` drops the cache.
@@ -622,10 +645,17 @@ Two rules share that snapshot and must not be confused:
   the filter starts a snapshot when the cache is stale, without waiting for it, and
   calls the descriptor listeners when it lands (the notification comes from the shared
   refresh itself, so a snapshot started by an async check notifies too); the view's
-  `rebuild({onlyIfChanged})` then drops the row. The first roster after startup can therefore show an own
-  session as External for the length of one snapshot. A CLI started inside the
-  3 s window is not in the cached snapshot and stays External until the next
-  roster rebuild after the window (the view's 30 s re-read at the latest).
+  `rebuild({onlyIfChanged})` then updates ownership. Missing, failed and expired
+  tables mean unknown, never a new External classification (#536). At cold start
+  the filter returns `null`; the roster requires explicit `false` before creating
+  an interactive External row or converting a finished job to one. A previous
+  display classification is retained for the same PID, descriptor session/start
+  identity and PTY set until a successful read can classify it again. The cache
+  holds at most one classification per PID and prunes PIDs absent from successful
+  tables; init/stop clear it. This display fallback never enters action evidence.
+  Successful reads retain the original ancestry rule: a CLI started inside the
+  3 s window and missing from that otherwise successful snapshot can still be
+  External until a later roster refresh. This issue does not alter that case.
 - A chain stops as own at the first ancestor that is a PTY pid (and, for the roster,
   the main process). Windows reports a parent pid that can name a dead process whose
   pid was reused; the creation-order test above rejects that chain.

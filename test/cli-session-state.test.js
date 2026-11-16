@@ -608,13 +608,13 @@ test('liveElsewhere reports the descriptor kind and jobId, so a bg session can b
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('ownProcessFilter is exported and claims our own PTY pids', () => {
+test('ownProcessFilter claims our own PTY pids and leaves other Windows pids unknown before the table arrives', () => {
   const dir = mkTmp();
   try {
-    boot(dir, new Map());
+    boot(dir, new Map(), { platform: 'win32' });
     const isOwn = cliSessionState.ownProcessFilter(() => [77]);
     assert.equal(isOwn(77), true);
-    assert.equal(isOwn(78), false);
+    assert.equal(isOwn(78), null);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
