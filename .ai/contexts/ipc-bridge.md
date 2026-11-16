@@ -884,17 +884,34 @@ members. Opened GUI windows lose unsaved work. Enumeration/termination is a
 snapshot: a later child can escape. API errors are returned per job and the
 handle is closed without blindly killing unidentified members.
 An exception inspecting or terminating one member skips that member and lets the
-other members finish cleanup. Inspection failures exclude that PID from the
-termination pass. The helper reports one member-failure warning per lifetime,
-returns an error for the affected job, and always removes/closes its job handle.
+other members finish cleanup. Inspection failures seed protection before the
+descendant walk, so children with a validated same-snapshot ancestry also survive.
+The helper reports one member-failure warning per lifetime and returns
+`ERROR_MEMBER_SKIPPED` (299, the Win32 partial-copy value) for caught member
+cleanup exceptions. Protocol errors remain 87 (`ERROR_INVALID_PARAMETER`);
+an already-recorded native error retains precedence. Strict retained termination
+does not overwrite an existing error merely because protection is nonempty.
+Legacy termination always removes/closes its job handle.
 
-`windows-job-member-errors` keeps its three Node children alive on redirected
+The JS consumer names the same 299 constant and labels its per-request warning
+`(member skipped)` while preserving the false result. Stderr is split into lines
+across chunks, retaining at most 1024 characters of an unfinished line and
+discarding the remainder through its newline. Command-line and member-cleanup
+warnings are each forwarded once per helper lifetime, even in the same chunk;
+PID changes do not create a new warning kind. Other stderr diagnostics retain
+one bounded warning per lifetime. An unfinished final line is flushed at EOF.
+
+`windows-job-member-errors` keeps its three Node children and a child of the
+first faulted member alive on redirected
 stdin until the probe's cleanup. A finite child timer can expire before the
 survivor observations on a delayed runner, independently of the helper. The
 probe retains the stdin writers through `Finish` and the survivor checks;
 normal cleanup kills only its owned PIDs, and probe death closes the pipes so
 the children can exit on EOF. The assertions still require both failed members
-alive, the ordinary sibling dead, the job released, and exactly one warning.
+alive with the descendant, the ordinary sibling dead, and exactly one warning.
+Both legacy and retained termination are tested: the legacy job is released,
+the retained job remains owned until explicit cleanup. A malformed protocol
+request still returns 87; member inspection exceptions return 299.
 
 The dormant A4c2a `terminateWithEvidence(id, { deadline })` JS port uses a
 separate `terminate-retained` verb. The native helper keeps that assigned job

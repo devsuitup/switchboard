@@ -3,6 +3,7 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const ERROR_MEMBER_SKIPPED = 299;
 
 function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, startupMs = 15000,
   requestMs = 3000, protectedPids = () => [] } = {}) {
@@ -66,7 +67,8 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
       const entry = pending.get(match[2]);
       if (!entry || (match[1] !== 'error' && match[1] !== entry.response)) return fail('unexpected protocol response');
       if (match[1] === 'error') {
-        try { warn(`[pty] Windows job ${entry.id} ${entry.op} failed: ${match[3]}`); } catch {}
+        const detail = Number(match[3]) === ERROR_MEMBER_SKIPPED ? ' (member skipped)' : '';
+        try { warn(`[pty] Windows job ${entry.id} ${entry.op} failed: ${match[3]}${detail}`); } catch {}
       }
       settle(entry, match[1] === 'observed' ? { ended: match[3] === '0', observedAt: Date.now() } : match[1] !== 'error');
     }
@@ -87,12 +89,32 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
       child.stderr.on('error', error => fail(error.message));
       child.stdout.setEncoding?.('utf8');
       child.stdout.on('data', receive);
-      let stderrWarned = false;
+      let stderrLine = '';
+      const stderrWarned = new Set();
+      const forwardWarning = () => {
+        const line = stderrLine.trim();
+        stderrLine = '';
+        if (!line) return;
+        const kind = line.startsWith('[pty] Windows job command-line read failed;') ? 'command'
+          : line.startsWith('[pty] Windows job member cleanup failed;') ? 'member' : 'other';
+        if (stderrWarned.has(kind)) return;
+        stderrWarned.add(kind);
+        try { warn(line); } catch {}
+      };
+      child.stderr.setEncoding?.('utf8');
       child.stderr.on('data', data => {
-        if (stderrWarned) return;
-        stderrWarned = true;
-        try { warn(String(data).slice(0, 1024).trim()); } catch {}
+        const text = String(data);
+        let start = 0;
+        while (start < text.length) {
+          const newline = text.indexOf('\n', start);
+          const end = newline === -1 ? text.length : newline;
+          stderrLine += text.slice(start, Math.min(end, start + 1024 - stderrLine.length));
+          if (newline === -1) break;
+          forwardWarning();
+          start = newline + 1;
+        }
       });
+      child.stderr.on('end', forwardWarning);
       child.unref?.();
       for (const stream of [child.stdin, child.stdout, child.stderr]) stream.unref?.();
       startupTimer = setTimeout(() => fail('startup timed out'), startupMs);

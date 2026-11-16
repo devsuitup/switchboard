@@ -58,6 +58,48 @@ function fixture(t, options = {}) {
   return { helper, child, writes, invocations, warnings };
 }
 
+for (const chunks of ['one chunk', 'two chunks', 'split lines']) {
+  test(`both helper warning kinds are forwarded once with ${chunks}`, t => {
+    const f = fixture(t);
+    f.helper.start(); f.child.stdout.emit('data', 'ready\n');
+    const command = '[pty] Windows job command-line read failed; only roster PIDs protect unreadable members (pid=901)';
+    const member = '[pty] Windows job member cleanup failed; affected members skipped (pid=902)';
+    const data = `${command}\r\n${member}\r\n`;
+    const parts = chunks === 'one chunk' ? [data] : chunks === 'two chunks'
+      ? [`${command}\r\n`, `${member}\r\n`] : [data.slice(0, 33), data.slice(33, 150), data.slice(150)];
+    for (const part of parts) f.child.stderr.emit('data', Buffer.from(part));
+    f.child.stderr.emit('data', `${command.replace('901', '903')}\n${member.replace('902', '904')}\n`);
+    assert.deepEqual(f.warnings, [command, member], 'each warning kind must reach the logger once, independently of stderr chunks');
+  });
+}
+
+test('stderr lines are bounded and parsing resumes after an oversized line', t => {
+  const f = fixture(t);
+  f.helper.start(); f.child.stdout.emit('data', 'ready\n');
+  f.child.stderr.emit('data', 'x'.repeat(2048));
+  f.child.stderr.emit('data', 'y'.repeat(2048));
+  const member = '[pty] Windows job member cleanup failed; affected members skipped (pid=902)';
+  f.child.stderr.emit('data', `\n${member}\n`);
+  assert.deepEqual(f.warnings, ['x'.repeat(1024), member]);
+});
+
+test('member-skipped and protocol errors have distinct diagnostics and leave other jobs usable', async t => {
+  const f = fixture(t);
+  f.helper.start(); f.child.stdout.emit('data', 'ready\n');
+  for (const code of [299, 87]) {
+    const done = f.helper.terminate('one', []);
+    f.child.stdout.emit('data', `error one ${code}\n`);
+    assert.equal(await done, false);
+  }
+  assert.deepEqual(f.warnings, [
+    '[pty] Windows job one terminate failed: 299 (member skipped)',
+    '[pty] Windows job one terminate failed: 87',
+  ]);
+  const assigned = f.helper.assign('two', 898, 100);
+  f.child.stdout.emit('data', 'assigned two\n');
+  assert.equal(await assigned, true);
+});
+
 for (const op of ['release', 'terminate', 'assign']) {
   test(`F1: observation interleaved with ${op} keeps requests and later PTY tracking alive`, async t => {
     const { trackWindowsPty } = require('../src/main/terminals/pty-ops');
