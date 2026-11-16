@@ -9,6 +9,14 @@ TUI. Lists the daemon's `--bg` sessions and the external interactive ones,
 attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 `docs/background-agents.md`.
 
+Roster ownership may be `null` when the process table is unavailable (#536).
+`mergeRoster` treats only `true` as own, only `false` as external, and normalises
+every other filter result (including `undefined`) to unknown (`null`).
+Only explicit `false` creates an External interactive row or converts a finished
+job to one. `mergeRoster` passes the descriptor to the ownership filter so a
+previous display classification is retained only for the same session/start
+identity. See `cli-session-state.md`, "Own descendants outside Linux".
+
 ## Dormant guarded stop ports (#474 A4c2a)
 
 Project deletion's job-file inventory reads `state` through `parseJobState`.
@@ -1523,14 +1531,17 @@ the client is killed. The call resolves on `close` so stdout is drained, or
 - Descriptor liveness retains pid-only behaviour when process identity is
   unknown; a reused pid can still show an external session until the existing
   identity check has enough evidence to reject it.
-- An interactive descriptor is External unless `ownProcessFilter` claims its pid:
-  a PTY pid of this instance, or a descendant of one or of the main process (the
+- An interactive descriptor is External only when `ownProcessFilter` returns
+  `false`. It is own for a PTY pid of this instance, or a descendant of one or of the main process (the
   roster's broad visibility rule; the resume and delete guards use a narrower one,
   see cli-session-state.md). On
   Windows and macOS the parent chain comes from a cached, asynchronous process
   snapshot (`.ai/contexts/cli-session-state.md`, "Own descendants outside
-  Linux"), so the first roster after startup can list an own tab as External until
-  the snapshot lands and the view rebuilds.
+  Linux"). While the process list cannot be read (at startup, or when Windows
+  is slow or unable to list processes), sessions with unknown ownership are
+  left out of the Agents view. They appear after a successful read if they are
+  external; own tabs stay out of the list. Previously known classifications
+  are retained while a later read is unavailable.
 - A login shell whose rc files print to stdout is tolerated by the tolerant
   list parse, as long as the JSON array stays on its own lines; other noise
   (text on the same line as the JSON, a stray line that happens to parse as

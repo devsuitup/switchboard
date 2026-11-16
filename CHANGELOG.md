@@ -8,6 +8,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Choose individual linked worktree folders to remove from disk in the project deletion dialog. Choices start unchecked, the main checkout is always kept, and partial outcomes show what was removed or remains. (#474)
 
 ### Fixed
+- A Claude session started in Switchboard no longer briefly shows as External when Windows cannot finish listing processes. Sessions the app cannot yet identify stay out of the Agents view until a read succeeds, so external sessions can appear a moment later. (#536)
 - On Windows, closing a tab preserves a background agent's child processes when the agent itself could not be inspected. (#961)
 - Changing an option or retrying in the project deletion dialog no longer leaves the previous check running in the background. The Retry preview button now matches the other dialog buttons. (#1106)
 - Workflow agents are now detected even when their folder timestamp does not change, so newly started agents no longer go missing from the sidebar. (#1080)
