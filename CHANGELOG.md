@@ -9,6 +9,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - A Claude session started in Switchboard no longer briefly shows as External when Windows cannot finish listing processes. Sessions the app cannot yet identify stay out of the Agents view until a read succeeds, so external sessions can appear a moment later. (#536)
+- On Windows, closing a tab preserves a background agent's child processes when the agent itself could not be inspected. (#961)
 - Changing an option or retrying in the project deletion dialog no longer leaves the previous check running in the background. The Retry preview button now matches the other dialog buttons. (#1106)
 - Workflow agents are now detected even when their folder timestamp does not change, so newly started agents no longer go missing from the sidebar. (#1080)
 - Remote hosts waiting at the 30-minute retry limit now log each failed refresh attempt, with the consecutive failure count, current error and next retry delay, so the log shows they are still being tried. (#1110)
