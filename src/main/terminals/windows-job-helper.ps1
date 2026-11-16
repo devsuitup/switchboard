@@ -25,6 +25,7 @@ public static class PtyJobs {
  [DllImport("shell32.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern IntPtr CommandLineToArgvW(string command, out int count);
  [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr handle);
  static readonly Dictionary<string, IntPtr> Jobs = new Dictionary<string, IntPtr>();
+ const int ERROR_MEMBER_SKIPPED = 299;
  static bool commandWarning, memberWarning;
  static bool Limits(IntPtr job, uint flags) { var info = new Extended(); info.Basic.Flags = flags; return SetInformationJobObject(job, 9, ref info, (uint)Marshal.SizeOf(info)); }
  static int Error() { return Marshal.GetLastWin32Error(); }
@@ -152,11 +153,12 @@ public static class PtyJobs {
     if(strict&&(command==null||member==null)){skipped.Add(pid);error=5;}
     if (command == null) WarnCommand(pid);
     if (IsBackgroundAgent(command)) protect.Add(pid);
-   } catch (Exception) { skipped.Add(pid); if (error == 0) error = 87; WarnMember(pid); }
+   } catch (Exception) { skipped.Add(pid); if (error == 0) error = ERROR_MEMBER_SKIPPED; WarnMember(pid); }
    finally { if (process != IntPtr.Zero) CloseHandle(process); }
   }
+  protect.UnionWith(skipped);
   ProtectDescendants(members, protect);
-  if(strict&&protect.Count>0)error=5;
+  if(strict&&protect.Count>0&&error==0)error=5;
   foreach (uint pid in pids) {
    if (protect.Contains(pid) || skipped.Contains(pid)) continue;
    IntPtr process = IntPtr.Zero;
@@ -166,7 +168,7 @@ public static class PtyJobs {
     bool inJob;
     if (!IsProcessInJob(process, job, out inJob)) { if (error == 0) error = Error(); continue; }
     if (inJob && !TerminateProcess(process, 1) && error == 0) error = Error();
-   } catch (Exception) { if (error == 0) error = 87; WarnMember(pid); }
+   } catch (Exception) { if (error == 0) error = ERROR_MEMBER_SKIPPED; WarnMember(pid); }
    finally { if (process != IntPtr.Zero) CloseHandle(process); }
   }
   return error;
@@ -177,7 +179,7 @@ public static class PtyJobs {
   int error = 0;
   try { if (terminate) error = TerminateMembers(job, roster); }
   catch (System.ComponentModel.Win32Exception ex) { error = ex.NativeErrorCode; }
-  catch (Exception) { error = 87; WarnMember(0); }
+  catch (Exception) { error = ERROR_MEMBER_SKIPPED; WarnMember(0); }
   finally { Jobs.Remove(id); CloseHandle(job); }
   return error;
  }
