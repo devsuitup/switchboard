@@ -50,6 +50,15 @@ of stderr at debug level, at most once per minute. The native exec callback pres
 separately from its generic command-failed message. This diagnostic does not
 change failure caching or turn unavailable WMI data into absence evidence.
 
+Probe metrics are recorded synchronously around each existing process-table
+await. Adding an async measurement wrapper delays shared-table publication by
+another microtask: a continuation detection immediately after the probe resolves
+then still sees a pending table. Continuation re-keying keeps its existing
+closest-writer, dead-descriptor and stale-table rules; it does not use the Agents
+view's three-state ownership filter or retained classification cache. The
+unchanged stale dead-writer regression in `test/session-continuation-rekey.test.js`
+covers the transition from cached absence to a newly live owned writer.
+
 Each actual shared or isolated process-table read records an outcome. Cache hits
 and shared awaits are not additional probes. `PROCESS_TABLE_LOG_WINDOW_MS` is a
 module constant (60000 ms), not a setting. A window starts at the first completed

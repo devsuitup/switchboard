@@ -244,22 +244,16 @@ function recordProcessTableProbe(outcome, duration, timeoutMs) {
   } else probeWindow.caller[outcome]++;
 }
 
-async function measuredProcessTable(timeoutMs, options) {
+function measureProcessTable(timeoutMs, options) {
   const epoch = probeWindowEpoch;
   const started = now();
-  let outcome = 'error';
-  try {
-    const map = normaliseProcessTable(await readProcessTable(timeoutMs, options));
-    if (map) outcome = 'ok';
-    return map;
-  } catch (err) {
+  return (map, err) => {
+    let outcome = map ? 'ok' : 'error';
     if (err?.code === 'ABORT_ERR' || err?.name === 'AbortError') outcome = 'aborted';
     else if (err?.timedOut === true) outcome = 'timeout';
-    throw err;
-  } finally {
     if (options?.signal?.aborted) outcome = 'aborted';
     if (epoch === probeWindowEpoch) recordProcessTableProbe(outcome, Math.max(0, now() - started), timeoutMs);
-  }
+  };
 }
 
 function refreshProcessTable({ force = false, deadline = Infinity } = {}) {
@@ -270,14 +264,18 @@ function refreshProcessTable({ force = false, deadline = Infinity } = {}) {
   const observedAt = now();
   const inFlight = (async () => {
     let map = null;
+    let error;
+    const timeoutMs = Math.max(1, Math.min(PROCESS_TABLE_TIMEOUT_MS, deadline - now()));
+    const record = measureProcessTable(timeoutMs);
     try {
-      map = await measuredProcessTable(Math.max(1, Math.min(PROCESS_TABLE_TIMEOUT_MS, deadline - now())));
+      map = normaliseProcessTable(await readProcessTable(timeoutMs));
     } catch (err) {
+      error = err;
       if (now() - processTableFailureLoggedAt >= PROCESS_TABLE_LOG_WINDOW_MS) {
         processTableFailureLoggedAt = now();
         log.debug(`[cli-state] process table unreadable: exit=${err?.code ?? 'unknown'} timeout=${err?.timedOut === true} stderr=${JSON.stringify(String(err?.stderr || '').slice(0, 300))}`);
       }
-    }
+    } finally { record(map, error); }
     if (epoch === processTableEpoch) {
       processTable = { at: now(), observedAt, map };
       processTableInFlight = null;
@@ -303,8 +301,12 @@ async function readProcessTableSnapshot(deadline, { fresh = false, signal } = {}
     const observedAt = now();
     let map = null;
     if (!signal?.aborted && observedAt < deadline) {
-      try { map = await measuredProcessTable(Math.min(PROCESS_TABLE_TIMEOUT_MS, deadline - observedAt), { signal }); }
-      catch {}
+      const timeoutMs = Math.min(PROCESS_TABLE_TIMEOUT_MS, deadline - observedAt);
+      const record = measureProcessTable(timeoutMs, { signal });
+      let error;
+      try { map = normaliseProcessTable(await readProcessTable(timeoutMs, { signal })); }
+      catch (err) { error = err; }
+      finally { record(map, error); }
     }
     if (signal?.aborted || now() >= deadline) map = null;
     const at = now();
