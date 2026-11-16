@@ -2138,7 +2138,11 @@ Launching a new remote session (#222) and injection over the messaging socket
   discovered socket rides back as the first `PROBE_SEP` field
   (`parseDiscoveryProbeOutput`), and every later query, the interactive
   `attach -S <socket>`, and the restore on detach reuse that value, quoted,
-  never re-derived.
+  never re-derived. The descriptor's `tmux` field (`session:window.pane`) is a
+  target, never a socket name: real sockets such as `/tmp/tmux-0/orchestration`
+  do not match the session name, and deriving `-L <session>` from it failed with
+  `error connecting to /tmp/tmux-0/main` (#221). The socket is therefore read
+  from the process, or verified on the server, never guessed from the target.
   - **The process environment has priority.** `buildProbeCommand(pid, target)`
     reads `/proc/<pid>/environ` (`tr '\0' '\n'`, since the file is
     NUL-separated), extracts `TMUX=<socket>,<server-pid>,<index>` and takes the
