@@ -848,33 +848,35 @@ the exact remote command, and the mutation proofs are in
   silently forgotten. `remote-index.js` catches per host, so one dead host does
   not stop its peers or the local scan.
 
-- **A host that keeps failing backs off per host, exponentially, capped at
-  30 min — it is never disabled (issue #215).** Field incident 2026-09-07/08:
-  a `transport disposed` cause (fixed separately) reran the plain fixed-cadence
-  loop every 300.0 s for ~19 h (226 identical `refresh failed` warnings) because
-  nothing slowed a permanently broken host down. `refreshNow()` now tracks
-  `{ failures, lastError, nextAttemptAt }` per alias; on failure the delay is
-  `min(intervalMs * 2^(failures-1), 30 min)` — base equals the host's own
-  configured cadence, so an isolated blip costs nothing extra, and the 30 min
-  ceiling was chosen so an operator never has to restart the app to get a
-  recovered host picked back up. A host past `nextAttemptAt` is skipped for
-  that cycle only: no ssh call, no log line, and its peers still run on
-  schedule — the loop `continue`s per host, it never returns early. One
-  success resets `failures`/`nextAttemptAt` to nominal immediately (issue
-  requirement: fast recovery, not a cool-down after the outage ends).
-  **Decision: slow down, never disable.** Disabling would need to flip the
-  same `enabled` flag the Settings UI owns, which is out of this issue's scope
-  and would turn a transient network problem into a silent, permanent loss of
-  mirroring that nothing in the sidebar currently surfaces — the capped
-  exponential delay already bounds the cost of a dead host to one attempt per
-  30 min, which is cheap enough to just keep trying. Logging is throttled to
-  the first failure and each change of tier (`onHostFailure` in
-  `remote-index.js`), not every attempt, so the same field incident would have
-  produced roughly 5 lines instead of 226. Per-host state is readable via
-  `getRemoteHostState(alias)` (mirrors `getRemoteSessions(alias)`); the sidebar
-  reads its `nextAttemptAt` for the host dot's error tooltip (below). Proven in
-  `test/remote-index.test.js` with an injected `now()` clock — no real timers,
-  no `setTimeout` waits.
+- **Remote refresh failures back off per host, with a 30-minute cap; a host
+  is never disabled (issue #215).** `onHostFailure` in `remote-index.js` tracks
+  consecutive failures, the latest error, total attempts, and the next eligible
+  attempt time per alias. The delay is `min(intervalMs * 2^(failures-1), 30 min)`,
+  using the normalized refresh interval. The base equals the host's own cadence,
+  so an isolated blip costs nothing extra; the 30-minute ceiling bounds a dead
+  host to one attempt per 30 min while a recovered host is picked back up without
+  restarting the app. A plain fixed cadence is what #215 was filed against: a
+  permanently broken host (`transport disposed`) was retried every 300 s for
+  about 19 h and logged 226 identical `refresh failed` warnings.
+  **Slow down, never disable.** Disabling would flip the `enabled` flag the
+  Settings UI owns and turn a transient outage into a silent, permanent loss of
+  mirroring that nothing in the sidebar surfaces; the capped delay already makes
+  a dead host cheap to keep trying.
+  A non-forced refresh before `nextAttemptAt` skips that host without an SSH
+  attempt or a refresh-failure warning; eligible peers still run. An ordinary
+  success logs recovery once and clears the failure count, error, and deadline.
+  Forced refreshes reset the failure count and deadline before attempting, so a
+  forced failure starts a new streak at 1.
+  Logging is throttled to each change of tier below the cap, and one line per
+  attempt at the cap (#1110), including the failure that first reaches it. Both
+  use `[remote:<alias>] refresh failed (<count>x consecutive): <error>; retrying in <seconds>s`;
+  the capped delay is logged as `1800s` and the error is the current attempt's
+  message. This rule applies to both `refreshNow` and `refreshHostNow`, including
+  forced calls after their reset. Automatic attempts respect the deadline; forced
+  refreshes can run sooner, and a longer polling interval can run later.
+  `getRemoteHostState(alias)` exposes the state; the sidebar uses `nextAttemptAt`
+  in its error tooltip. `test/remote-index.test.js` covers the contract with
+  injected clocks and logs.
 
 - **A manual refresh means "I know the host is back": it ignores the backoff
   instead of waiting it out (issue #252).** Field incident 2026-09-10 17:41: a
@@ -931,8 +933,8 @@ the exact remote command, and the mutation proofs are in
   NAT) is detected and reaped instead of leaving `isRunning()` reporting a
   channel that receives nothing, forever. The last ≤200 bytes of stderr are
   kept per child and logged once per backoff-tier change on a quick failure
-  (`< HEALTHY_MS`), same throttle as `onHostFailure` above — never on every
-  attempt, never for a healthy long run that just happened to exit.
+  (`< HEALTHY_MS`) — never on every attempt, never for a healthy long run that
+  just happened to exit.
 
 - **A pending coalesce cooldown cannot fire after `stop()`** (audit finding
   F11, minor). `killChild` only ever cleared `restartTimer`; a coalesce
