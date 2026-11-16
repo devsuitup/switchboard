@@ -31,7 +31,7 @@ public class MemberFaults : IEqualityComparer<uint> {
   var jobs = (Dictionary<string, IntPtr>)type.GetField("Jobs", flags).GetValue(null);
   var children = new List<Process>();
   try {
-   for (int i = 0; i < 3; i++) children.Add(Process.Start(new ProcessStartInfo(node, "-e \"setTimeout(()=>{},20000)\"") { UseShellExecute = false, CreateNoWindow = true }));
+   for (int i = 0; i < 3; i++) children.Add(Process.Start(new ProcessStartInfo(node, "-e \"process.stdin.resume()\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true }));
    long now = (long)(DateTime.UtcNow - new DateTime(1970,1,1)).TotalMilliseconds;
    int assigned = (int)assign.Invoke(null, new object[] { "faults", (uint)children[0].Id, now });
    if (assigned != 0) throw new Exception("assign failed: " + assigned);
