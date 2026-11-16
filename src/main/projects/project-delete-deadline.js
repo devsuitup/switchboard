@@ -30,17 +30,23 @@ function createDiscoveryBounds({ now = Date.now, schedule = setTimeout, cancel =
     const pending = budget.pendingPorts ||= new Map(), key = Symbol(port);
     const detail = { port, startedAt, boundMs, key, parent: scopes.getStore() };
     pending.set(key, detail);
-    let timer, accepted = false, work;
+    let timer, abort, accepted = false, work;
     try {
       if (budget.signal?.aborted || boundMs <= 0) throw discoveryTimeout(budget, now, detail);
-      work = Promise.resolve().then(() => scopes.run(key, fn));
+      work = Promise.resolve().then(() => {
+        if (budget.signal?.aborted) throw discoveryTimeout(budget, now, detail);
+        return scopes.run(key, fn);
+      });
       const value = await Promise.race([work, new Promise((_, reject) => {
+        abort = () => reject(discoveryTimeout(budget, now, detail));
+        budget.signal?.addEventListener('abort', abort, { once: true });
         timer = schedule(() => reject(discoveryTimeout(budget, now, detail)), boundMs);
       })]);
       if (budget.signal?.aborted || now() >= startedAt + boundMs) throw discoveryTimeout(budget, now, detail);
       accepted = true;
       return value;
     } finally {
+      if (abort) budget.signal?.removeEventListener('abort', abort);
       cancel(timer);
       if (budget.portElapsed) budget.portElapsed.set(port, Math.max(budget.portElapsed.get(port) || 0, now() - startedAt));
       pending.delete(key);

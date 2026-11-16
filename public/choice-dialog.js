@@ -172,7 +172,7 @@ function openChoiceDialog({
       planPending.textContent = 'Preparing preview…';
       planPending.hidden = true;
       retryPlan.type = 'button';
-      retryPlan.className = 'choice-dialog-retry';
+      retryPlan.className = 'new-session-cancel-btn choice-dialog-retry';
       retryPlan.textContent = 'Retry preview';
       retryPlan.hidden = true;
       retryPlan.addEventListener('click', () => { void refreshPlan(currentValues()); });
