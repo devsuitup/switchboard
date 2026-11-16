@@ -269,8 +269,6 @@ test('attach() discovers the socket from the process TMUX env var, not the descr
   assert.match(attachCommand, /-t main:@0\.%0/, 'the descriptor tmux field still supplies the -t target');
 });
 
-// Property: when neither the process environment nor the verified default
-// socket supplies a discovery candidate, there is no attach attempt, ever.
 test('attach() refuses when neither the environment nor the verified default socket yields a tmux socket', async () => {
   const spawnCalls = [];
   let probeCalls = 0;

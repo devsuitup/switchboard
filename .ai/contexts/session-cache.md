@@ -2221,10 +2221,13 @@ Launching a new remote session (#222) and injection over the messaging socket
     `false` refuses, with `pid <n> now belongs to a process that is not a
     claude CLI — the session is gone`, before any `spawnPty` call. There is no
     `descriptor.procStart` gate.
-  Neither check compares a process start time (the one measured `procStart`
-  sample, in `.ai/contexts/cli-session-state.md`, is on a Windows `FILETIME`
-  scale that does not match `/proc/<pid>/stat`), so a later Claude process that
-  reuses both the pid and the target is not detected.
+  Neither check compares a process start time. The one measured `procStart`
+  sample (`.ai/contexts/cli-session-state.md`) is on a Windows `FILETIME`
+  scale, and whether the remote/Linux CLI writes the same units as
+  `/proc/<pid>/stat` field 22 (clock ticks since boot) is unverified.
+  Comparing unverified units would either always refuse or give false identity
+  assurance. A later Claude process that reuses both the pid and the target is
+  therefore not detected.
 
 - **`ConnectTimeout=5` on the probe and restore-on-detach ssh calls (F10,
   audit-fable-2026-09-11).** `defaultRunRemoteCommand`'s ssh spawn had a kill

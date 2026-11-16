@@ -591,7 +591,11 @@ const FAKE_TMUX = String.raw`
 { printf 'tmux'; printf '\037%s' "$@"; printf '\n'; } >> "$FAKE_DIR/log"
 fail() { printf '%s\n' "$*" >> "$FAKE_DIR/unexpected"; exit 99; }
 [ "$1" = -S ] || fail "missing -S: $*"
-[ "$2" = "$FAKE_SOCK" ] || exit 1
+if [ "$FAKE_SOCK_ANY" = 1 ]; then
+  case "$2" in */tmux-1000/default) ;; *) exit 1;; esac
+else
+  [ "$2" = "$FAKE_SOCK" ] || exit 1
+fi
 cmd=$3
 shift 3
 resolves() {
@@ -651,7 +655,7 @@ function mapProc(command, pid) {
 
 function runProbe(t, {
   pid = 4242, target = 'main:@0.%0', environ = 'missing', uid = '1000', idStatus = 0, sock = '/tmp/tmux-1000/default',
-  session = 'main', rest = '@0.%0', panePid = `${pid}\n`, paneStatus = 0, tmuxTmpdir, prelude = '', env = {}, clients = '',
+  session = 'main', rest = '@0.%0', panePid = `${pid}\n`, paneStatus = 0, tmuxTmpdir, prelude = '', env = {}, clients = '', sockAny = false,
 } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'probe-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -673,7 +677,7 @@ function runProbe(t, {
     PATH: process.env.PATH, TMPDIR: '/var/other-tmp', TMUX: '/ambient/socket,1,0',
     SWITCHBOARD_TEST_PROC_ROOT: shellPath(path.join(dir, 'proc')), FAKE_DIR: shellPath(dir),
     FAKE_SOCK: sock, FAKE_SESSION: session, FAKE_REST: rest, FAKE_PANE_PID: panePid, FAKE_PANE_STATUS: String(paneStatus),
-    FAKE_CLIENTS: clients, FAKE_ID_OUT: uid, FAKE_ID_STATUS: String(idStatus), ...env,
+    FAKE_CLIENTS: clients, FAKE_SOCK_ANY: sockAny ? '1' : '0', FAKE_ID_OUT: uid, FAKE_ID_STATUS: String(idStatus), ...env,
   };
   if (tmuxTmpdir !== undefined) childEnv.TMUX_TMPDIR = tmuxTmpdir;
   const result = spawnSync(TEST_SHELL, ['-c', `PATH=${shellQuote(shellPath(bin))}:$PATH; export PATH; ${prelude}${command}`], {
@@ -831,7 +835,7 @@ test('probe uses the root uid for the default socket', t => {
   assert.equal(firstField(result), sock);
 });
 
-function adapterOverShell(t, probeOptions, { chunk = 1 } = {}) {
+function adapterOverShell(t, probeOptions, { chunk = 1, clientList = '' } = {}) {
   const spawns = [];
   const commands = [];
   const shellResults = [];
@@ -851,6 +855,7 @@ function adapterOverShell(t, probeOptions, { chunk = 1 } = {}) {
     clearTimeoutFn() {},
     runRemoteCommand: (alias, command, options) => {
       commands.push(command);
+      if (command.includes('client_pid')) return Promise.resolve({ code: 0, stdout: clientList });
       if (!command.includes(`/proc/${pid}/environ`)) return Promise.resolve({ code: 0, stdout: '' });
       return defaultRunRemoteCommand(alias, command, {
         ...options,
@@ -889,10 +894,16 @@ function assertRejectedThroughAdapter(f, attached) {
   assertRefused(f.shellResults[0], [ID_CALL]);
 }
 
-const UTF8_LOCALE = (() => {
+const UTF8_LOCALES = (() => {
   const listed = spawnSync('locale', ['-a'], { encoding: 'utf8' });
-  return listed.status === 0 ? (listed.stdout.split('\n').find(name => /^C\.utf-?8$/i.test(name)) || null) : null;
+  if (listed.error || listed.status !== 0) return { error: listed.error?.message || `locale -a exited ${listed.status}` };
+  const names = listed.stdout.split('\n').filter(name => /\.utf-?8$/i.test(name));
+  return { name: names.find(name => /^C\.utf-?8$/i.test(name)) || names[0] || null };
 })();
+
+test('the installed locales can be enumerated', () => {
+  assert.equal(UTF8_LOCALES.error, undefined, 'locale -a must run so the UTF-8 locale variants are not skipped silently');
+});
 
 const BASE_BYTES = [
   ['a space', { tmuxTmpdir: '/tmp/a b' }],
@@ -907,8 +918,8 @@ const BASE_BYTES = [
   ['an invalid UTF-8 byte', { prelude: "TMUX_TMPDIR=$(printf '/tmp/\\377'); export TMUX_TMPDIR; ", bytes: Buffer.from([0x2f, 0x74, 0x6d, 0x70, 0x2f, 0xff]) }],
 ];
 
-for (const [locale, value] of [['C', 'C'], ['a UTF-8 locale', UTF8_LOCALE]]) {
-  const skip = value ? false : 'no UTF-8 locale installed';
+for (const [locale, value] of [['C', 'C'], ['a UTF-8 locale', UTF8_LOCALES.name]]) {
+  const skip = value || UTF8_LOCALES.error ? false : 'no UTF-8 locale installed';
   for (const [name, { bytes, ...options }] of BASE_BYTES) {
     test(`probe refuses a custom base containing ${name} before any tmux query, under ${locale}`, { skip }, async t => {
       const env = { LC_ALL: value };
@@ -916,7 +927,7 @@ for (const [locale, value] of [['C', 'C'], ['a UTF-8 locale', UTF8_LOCALE]]) {
         const preflight = spawnSync(TEST_SHELL, ['-c', `${options.prelude}printf '%s' "$TMUX_TMPDIR"`], { env });
         assert.deepEqual(preflight.stdout, bytes);
       }
-      const f = adapterOverShell(t, { ...options, env, sock: 'unused' });
+      const f = adapterOverShell(t, { ...options, env, sockAny: true });
       const attached = await f.attach();
       assertRejectedThroughAdapter(f, attached);
       assert.ok(!existsSync(path.join(f.shellResults[0].dir, 'injected')));
@@ -959,3 +970,41 @@ test('probe attaches the supplied layout through the default socket for pid 123'
   assert.ok(f.spawns[0].args.at(-1).includes(`-S ${shellSingleQuote(FALLBACK)}`));
   assert.ok(f.spawns[0].args.at(-1).includes('-t switchboard-first:@0.%0'));
 });
+
+const REFUSAL_CASES = [
+  ['the server is unavailable', { sock: '/tmp/other/default' }],
+  ['the target is missing', { rest: '@9.%9' }],
+  ['the pane pid differs', { panePid: '4000\n' }],
+  ['id -u fails', { idStatus: 1 }],
+];
+
+for (const [name, options] of REFUSAL_CASES) {
+  test(`adapter refuses through the real probe output when ${name}`, async t => {
+    const f = adapterOverShell(t, options);
+    const attached = await f.attach();
+    assert.equal(attached.ok, false);
+    assert.equal(attached.error, EXIT3_ERROR);
+    assert.equal(f.spawns.length, 0);
+    assert.equal(f.commands.length, 1);
+    assertRefused(f.shellResults[0]);
+  });
+}
+
+for (const [name, clients, clientList, shared] of [
+  ['solo', '', '', false],
+  ['shared', 'peer\n', '9000\t/dev/pts/2\t\n', true],
+]) {
+  test(`adapter attaches a ${name} session through the default socket from real probe output`, async t => {
+    const f = adapterOverShell(t, { clients }, { clientList });
+    const attached = await f.attach();
+    t.after(() => f.events.emit('exit'));
+    assert.equal(attached.ok, true, attached.error);
+    assert.equal(f.shellResults.length, 1);
+    assert.equal(f.commands.filter(command => command.includes('/proc/4242/environ')).length, 1);
+    assert.equal(attached.cols, shared ? 200 : 100);
+    assert.equal(attached.remoteResizeAllowed, !shared);
+    const attachCommand = f.spawns[0].args.at(-1);
+    assert.ok(attachCommand.includes(`-S ${shellSingleQuote(FALLBACK)}`));
+    assert.equal(attachCommand.includes('status off'), !shared);
+  });
+}
