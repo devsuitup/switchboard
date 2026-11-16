@@ -806,33 +806,197 @@ test('a host backing off does not block its peers from refreshing on schedule', 
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
-test('failure logging is throttled: only the first failure and tier changes are logged', async () => {
+const OK_SYNC = { fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0, changedFolders: new Set() };
+const BASE_SERIES_MS = [60_000, 120_000, 240_000, 480_000, 960_000, 1_800_000, 1_800_000, 1_800_000,
+  1_800_000, 1_800_000, 1_800_000, 1_800_000];
+
+function backoffHarness({ aliases = ['dead'], intervalMs = 60_000, outcome }) {
   const dataDir = tmp('idx-backoff-log');
-  try {
-    const clock = fakeClock(0);
-    const warnings = [];
-    const indexer = createRemoteIndexer({
-      getHosts: () => [{ alias: 'dead' }],
-      getRefreshMs: () => 60_000,
-      dataDir,
-      transport: {},
-      scanFolders: () => Promise.resolve({ ok: true }),
-      listIndexedFolderKeys: () => [],
-      log: { info() {}, warn: (m) => warnings.push(m), error() {} },
-      timers: fakeTimers(),
-      now: clock,
-      sync: async () => { throw new Error('ssh inventory failed (exit -1): transport disposed'); },
+  const clock = fakeClock(0);
+  const lines = { warn: [], info: [] };
+  const calls = [];
+  let notified = 0;
+  const indexer = createRemoteIndexer({
+    getHosts: () => aliases.map(alias => ({ alias })),
+    getRefreshMs: () => intervalMs,
+    dataDir,
+    transport: {},
+    scanFolders: () => Promise.resolve({ ok: true }),
+    listIndexedFolderKeys: () => [],
+    log: { info: m => lines.info.push(m), warn: m => lines.warn.push(m), error() {} },
+    notify: () => { notified++; },
+    timers: fakeTimers(),
+    now: clock,
+    sync: async ({ alias }) => {
+      calls.push(alias);
+      const message = outcome(alias, calls.filter(a => a === alias).length);
+      if (message === null) return OK_SYNC;
+      throw new Error(message);
+    },
+  });
+  const attempt = (mode, alias = aliases[0], opts = {}) => (mode === 'all'
+    ? indexer.refreshNow(opts)
+    : indexer.refreshHostNow(alias, opts));
+  const dueAttempt = async (mode, alias = aliases[0]) => {
+    const wait = indexer.getRemoteHostState(alias).nextAttemptAt - clock();
+    if (wait > 0) clock.advance(wait);
+    return attempt(mode, alias);
+  };
+  const cleanup = () => { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); };
+  return { indexer, clock, lines, calls, attempt, dueAttempt, cleanup, notified: () => notified };
+}
+
+const failLine = (alias, count, message, seconds) =>
+  `[remote:${alias}] refresh failed (${count}x consecutive): ${message}; retrying in ${seconds}s`;
+
+for (const mode of ['all', 'single']) {
+  test(`${mode}: every failed attempt at the backoff cap logs one line, below it only tier changes do`, async () => {
+    const h = backoffHarness({ outcome: () => 'offline' });
+    try {
+      const expected = [];
+      for (let i = 1; i <= 12; i++) {
+        await h.dueAttempt(mode);
+        const state = h.indexer.getRemoteHostState('dead');
+        assert.equal(h.calls.length, i, 'one sync per due attempt');
+        assert.equal(state.consecutiveFailures, i);
+        assert.equal(state.attempts, i);
+        assert.equal(state.nextAttemptAt - h.clock(), BASE_SERIES_MS[i - 1]);
+        expected.push(failLine('dead', i, 'offline', BASE_SERIES_MS[i - 1] / 1000));
+        assert.deepEqual(h.lines.warn, expected);
+
+        h.clock.advance(state.nextAttemptAt - 1 - h.clock());
+        const skipped = await h.attempt(mode);
+        if (mode === 'single') assert.deepEqual(skipped, { skipped: true, reason: 'backoff' });
+        else assert.deepEqual(skipped.errors, []);
+        assert.equal(h.calls.length, i, 'a call before the deadline does not attempt');
+        assert.deepEqual(h.lines.warn, expected, 'a call before the deadline does not log');
+        assert.equal(h.indexer.getRemoteHostState('dead').nextAttemptAt, state.nextAttemptAt);
+        assert.equal(h.indexer.getRemoteHostState('dead').attempts, i);
+      }
+      assert.equal(h.lines.warn.length, 12);
+    } finally { h.cleanup(); }
+  });
+
+  for (const intervalMs of [1_800_000, 3_600_000]) {
+    test(`${mode}: an interval of ${intervalMs} ms logs the very first failure and every later one`, async () => {
+      const h = backoffHarness({ intervalMs, outcome: () => 'offline' });
+      try {
+        const expected = [];
+        for (let i = 1; i <= 3; i++) {
+          await h.dueAttempt(mode);
+          expected.push(failLine('dead', i, 'offline', 1800));
+          assert.deepEqual(h.lines.warn, expected);
+          const state = h.indexer.getRemoteHostState('dead');
+          assert.equal(state.nextAttemptAt - h.clock(), 1_800_000);
+        }
+      } finally { h.cleanup(); }
     });
+  }
 
-    for (let i = 0; i < 12; i++) {
-      await indexer.refreshNow();
-      clock.advance(indexer.getRemoteHostState('dead').nextAttemptAt - clock());
+  for (const intervalMs of [60_000, 1_800_000, 3_600_000]) {
+    for (const forcedMode of ['all', 'single']) {
+      test(`${mode}/${forcedMode}: a forced failure after saturation restarts the streak at 1 and logs once (${intervalMs} ms)`, async () => {
+        const h = backoffHarness({ intervalMs, outcome: () => 'offline' });
+        try {
+          for (let i = 0; i < 7; i++) await h.dueAttempt(mode);
+          const resetSeconds = Math.min(intervalMs, 1_800_000) / 1000;
+          const warnsBefore = h.lines.warn.length;
+          assert.ok(h.indexer.getRemoteHostState('dead').nextAttemptAt > h.clock());
+
+          for (let n = 1; n <= 2; n++) {
+            await h.attempt(forcedMode, 'dead', { force: true });
+            const state = h.indexer.getRemoteHostState('dead');
+            assert.equal(h.calls.length, 7 + n, 'force attempts immediately');
+            assert.equal(h.lines.warn.length, warnsBefore + n);
+            assert.equal(h.lines.warn.at(-1), failLine('dead', 1, 'offline', resetSeconds));
+            assert.equal(state.consecutiveFailures, 1);
+            assert.equal(state.attempts, 7 + n);
+            assert.equal(state.lastError, 'offline');
+            assert.equal(state.nextAttemptAt, h.clock() + resetSeconds * 1000);
+          }
+        } finally { h.cleanup(); }
+      });
     }
+  }
 
-    assert.equal(indexer.getRemoteHostState('dead').consecutiveFailures, 12, '12 attempts actually happened');
-    assert.ok(warnings.length < 12, 'not every attempt is logged');
-    assert.ok(warnings.length <= 6, `only the tier changes are logged, got ${warnings.length}`);
-  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+  test(`${mode}: at the cap each failure logs the current message, and only a changed message notifies`, async () => {
+    const messages = ['offline', 'offline', 'offline', 'offline', 'offline', 'offline',
+      'offline', 'connection reset', 'connection reset'];
+    const h = backoffHarness({ outcome: (_alias, n) => messages[n - 1] });
+    try {
+      for (let i = 1; i <= 6; i++) await h.dueAttempt(mode);
+      const warnsBefore = h.lines.warn.length;
+      const steps = [
+        { count: 7, message: 'offline', notifies: false },
+        { count: 8, message: 'connection reset', notifies: true },
+        { count: 9, message: 'connection reset', notifies: false },
+      ];
+      for (const [k, step] of steps.entries()) {
+        const notifiedBefore = h.notified();
+        const result = await h.dueAttempt(mode);
+        assert.equal(h.lines.warn.length, warnsBefore + k + 1);
+        assert.equal(h.lines.warn.at(-1), failLine('dead', step.count, step.message, 1800));
+        assert.equal(h.indexer.getRemoteHostState('dead').lastError, step.message);
+        assert.equal(result.changed, step.notifies);
+        assert.equal(h.notified() - notifiedBefore, step.notifies ? 1 : 0);
+      }
+    } finally { h.cleanup(); }
+  });
+
+  test(`${mode}: recovery logs once after capped failures, then a new streak starts at 1 on the base delay`, async () => {
+    const h = backoffHarness({ outcome: (_alias, n) => (n === 8 || n === 9 ? null : 'offline') });
+    try {
+      for (let i = 0; i < 7; i++) await h.dueAttempt(mode);
+      const warnsBefore = h.lines.warn.length;
+      assert.equal(warnsBefore, 7);
+
+      await h.dueAttempt(mode);
+      const recovery = h.lines.info.filter(m => m.includes('recovered'));
+      assert.deepEqual(recovery, ['[remote:dead] refresh recovered after 7 consecutive failure(s)']);
+      assert.equal(h.lines.warn.length, warnsBefore);
+      const state = h.indexer.getRemoteHostState('dead');
+      assert.equal(state.consecutiveFailures, 0);
+      assert.equal(state.nextAttemptAt, 0);
+      assert.equal(state.lastError, null);
+
+      await h.dueAttempt(mode);
+      assert.equal(h.lines.info.filter(m => m.includes('recovered')).length, 1);
+
+      await h.dueAttempt(mode);
+      assert.equal(h.lines.warn.length, warnsBefore + 1);
+      assert.equal(h.lines.warn.at(-1), failLine('dead', 1, 'offline', 60));
+    } finally { h.cleanup(); }
+  });
+}
+
+test('capped hosts log independently, and recovering one leaves its peer logging', async () => {
+  const h = backoffHarness({
+    aliases: ['a', 'b'],
+    outcome: (alias, n) => (alias === 'a' && n === 8 ? null : `${alias} offline`),
+  });
+  try {
+    const cycle = async () => {
+      const wait = Math.max(...['a', 'b'].map(x => h.indexer.getRemoteHostState(x).nextAttemptAt)) - h.clock();
+      if (wait > 0) h.clock.advance(wait);
+      await h.indexer.refreshNow();
+    };
+    for (let i = 0; i < 7; i++) await cycle();
+    assert.equal(h.lines.warn.length, 14);
+    assert.deepEqual(h.lines.warn.slice(-2), [failLine('a', 7, 'a offline', 1800), failLine('b', 7, 'b offline', 1800)]);
+
+    await cycle();
+    assert.deepEqual(h.lines.info.filter(m => m.includes('recovered')),
+      ['[remote:a] refresh recovered after 7 consecutive failure(s)']);
+    assert.equal(h.lines.warn.length, 15);
+    assert.equal(h.lines.warn.at(-1), failLine('b', 8, 'b offline', 1800));
+
+    const aBefore = h.indexer.getRemoteHostState('a');
+    h.clock.advance(h.indexer.getRemoteHostState('b').nextAttemptAt - h.clock());
+    await h.indexer.refreshHostNow('b');
+    assert.equal(h.lines.warn.length, 16);
+    assert.equal(h.lines.warn.at(-1), failLine('b', 9, 'b offline', 1800));
+    assert.deepEqual(h.indexer.getRemoteHostState('a'), aBefore);
+  } finally { h.cleanup(); }
 });
 
 // refreshHostNow(alias) — issue #240's per-host entry point for the watch

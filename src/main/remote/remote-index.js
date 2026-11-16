@@ -154,7 +154,7 @@ function createRemoteIndexer(ctx) {
     state.lastErrorTransport = err.remoteTransport === true;
     const delay = backoffDelayMs(state.failures, intervalMs);
     state.nextAttemptAt = now() + delay;
-    if (delay !== prevDelay) {
+    if (delay !== prevDelay || delay === MAX_BACKOFF_MS) {
       log.warn(`[remote:${alias}] refresh failed (${state.failures}x consecutive): ${err.message}; ` +
         `retrying in ${Math.round(delay / 1000)}s`);
     }
