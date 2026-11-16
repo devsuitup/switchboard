@@ -867,8 +867,8 @@ probeTest('probe refuses when the directory inspection itself fails', t => {
 const ENV_SOCK = '/custom/tmux-1000/named';
 const ENV_TMUX = Buffer.from(`TMUX=${ENV_SOCK},122,0\0`);
 
-probeTest('probe keeps the environ socket, its fields and their order, without uid, ownership or pane queries', t => {
-  const result = runProbe(t, { environ: ENV_TMUX, sock: ENV_SOCK, kind: 'none' });
+test('probe keeps the environ socket, its fields and their order, without uid, ownership or pane queries', t => {
+  const result = runProbe(t, { environ: ENV_TMUX, sock: ENV_SOCK, baseName: null });
   assert.equal(result.status, 0, result.stderr.toString());
   assert.deepEqual(result.stdout.toString().split('\u0001').map(field => field.trim()), [
     ENV_SOCK, '200x50', 'status on', 'mouse off', 'window-size manual', 'set-titles off', 'set-titles-string plain', '0', '1',
