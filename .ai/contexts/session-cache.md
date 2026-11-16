@@ -848,26 +848,35 @@ the exact remote command, and the mutation proofs are in
   silently forgotten. `remote-index.js` catches per host, so one dead host does
   not stop its peers or the local scan.
 
-- **Remote refresh failures back off per host, with a 30-minute cap.**
-  `onHostFailure` in `remote-index.js` tracks consecutive failures, the latest
-  error, total attempts, and the next eligible attempt time per alias. The delay
-  is `min(intervalMs * 2^(failures-1), 30 min)`, using the normalized refresh
-  interval. A non-forced refresh before `nextAttemptAt` skips that host without
-  an SSH attempt or a refresh-failure warning; eligible peers still run.
-  Hosts remain enabled. An ordinary success logs recovery once and clears the
-  failure count, error, and deadline. Forced refreshes reset the failure count
-  and deadline before attempting, so a forced failure starts a new streak at 1.
-  Below the cap, a refresh-failure warning is emitted only when the computed
-  delay changes. At the cap, every failed attempt emits exactly one warning,
-  including the failure that first reaches it. Both cases use
-  `[remote:<alias>] refresh failed (<count>x consecutive): <error>; retrying in <seconds>s`.
-  The capped delay is logged as `1800s`; the error is the current attempt's
+- **Remote refresh failures back off per host, with a 30-minute cap; a host
+  is never disabled (issue #215).** `onHostFailure` in `remote-index.js` tracks
+  consecutive failures, the latest error, total attempts, and the next eligible
+  attempt time per alias. The delay is `min(intervalMs * 2^(failures-1), 30 min)`,
+  using the normalized refresh interval. The base equals the host's own cadence,
+  so an isolated blip costs nothing extra; the 30-minute ceiling bounds a dead
+  host to one attempt per 30 min while a recovered host is picked back up without
+  restarting the app. A plain fixed cadence is what #215 was filed against: a
+  permanently broken host (`transport disposed`) was retried every 300 s for
+  about 19 h and logged 226 identical `refresh failed` warnings.
+  **Slow down, never disable.** Disabling would flip the `enabled` flag the
+  Settings UI owns and turn a transient outage into a silent, permanent loss of
+  mirroring that nothing in the sidebar surfaces; the capped delay already makes
+  a dead host cheap to keep trying.
+  A non-forced refresh before `nextAttemptAt` skips that host without an SSH
+  attempt or a refresh-failure warning; eligible peers still run. An ordinary
+  success logs recovery once and clears the failure count, error, and deadline.
+  Forced refreshes reset the failure count and deadline before attempting, so a
+  forced failure starts a new streak at 1.
+  Logging is throttled to each change of tier below the cap, and one line per
+  attempt at the cap (#1110), including the failure that first reaches it. Both
+  use `[remote:<alias>] refresh failed (<count>x consecutive): <error>; retrying in <seconds>s`;
+  the capped delay is logged as `1800s` and the error is the current attempt's
   message. This rule applies to both `refreshNow` and `refreshHostNow`, including
-  forced calls after their reset. Skipped calls emit no refresh-failure warning.
-  Automatic attempts respect the deadline; forced refreshes can run sooner,
-  and a longer polling interval can run later. `getRemoteHostState(alias)`
-  exposes the state; the sidebar uses `nextAttemptAt` in its error tooltip.
-  `test/remote-index.test.js` covers the contract with injected clocks and logs.
+  forced calls after their reset. Automatic attempts respect the deadline; forced
+  refreshes can run sooner, and a longer polling interval can run later.
+  `getRemoteHostState(alias)` exposes the state; the sidebar uses `nextAttemptAt`
+  in its error tooltip. `test/remote-index.test.js` covers the contract with
+  injected clocks and logs.
 
 - **A manual refresh means "I know the host is back": it ignores the backoff
   instead of waiting it out (issue #252).** Field incident 2026-09-10 17:41: a
