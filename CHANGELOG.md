@@ -7,6 +7,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### New
 - Choose individual linked worktree folders to remove from disk in the project deletion dialog. Choices start unchecked, the main checkout is always kept, and partial outcomes show what was removed or remains. (#474)
 
+### Fixed
+- Remote hosts waiting at the 30-minute retry limit now log each failed refresh attempt, with the consecutive failure count, current error and next retry delay, so the log shows they are still being tried. (#1110)
+
 ## v0.0.106 — 2026-11-13
 
 ### New
