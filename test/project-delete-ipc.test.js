@@ -162,6 +162,54 @@ test('A4c3 ships callable service and actual IPC registration', () => {
   assert.equal(typeof ipcModule?.registerProjectDeleteIpc, 'function', 'production IPC registration must exist');
 });
 
+test('pending previews are isolated by webContents, canonical project and host', supported, async t => {
+  const h = await setup(t), pending = [];
+  h.serviceDeps.planner.preview = (_request, budget) => new Promise(resolve => pending.push({ budget, resolve }));
+  const wc = {}, a = { wc, valid: () => true }, b = { wc: {}, valid: () => true };
+  const request = { projectPath: h.projectPath, options };
+  const first = h.service.preview(a, request); await flush();
+  const otherProject = h.service.preview(a, { ...request, projectPath: path.join(h.projectPath, 'other') });
+  const otherSender = h.service.preview(b, request);
+  const remote = h.service.preview(a, { ...request, projectPath: '/remote', folderKey: 'host-a::folder' });
+  const otherHost = h.service.preview(a, { ...request, projectPath: '/remote', folderKey: 'host-b::folder' });
+  await flush();
+  assert.ok(pending.every(row => row.budget.signal && !row.budget.signal.aborted), 'different sender, project and host must retain live independent budgets');
+  const replacement = h.service.preview({ wc, valid: () => true }, { ...request, projectPath: path.join(h.projectPath, '.') });
+  await flush();
+  assert.equal(pending[0].budget.signal.aborted, true, 'same webContents and canonical project must supersede');
+  assert.ok(pending.slice(1).every(row => !row.budget.signal.aborted), 'supersede must not cancel another sender or project');
+  for (const row of pending) row.resolve({ ok: false, code: 'TEST_FINISHED' });
+  assert.equal((await first).token, null);
+  await Promise.all([otherProject, otherSender, remote, otherHost, replacement]);
+  assert.equal(h.time.timers.size, 0);
+});
+
+test('old document settlement cannot erase previews started immediately after reload', supported, async t => {
+  const h = await setup(t), reads = [], work = [];
+  const original = createProjectDeletePlanner({ ...h.serviceDeps.inventory, ...h.time, waitForIndex: () => new Promise(() => {}) }).preview;
+  h.serviceDeps.planner.preview = (request, budget) => {
+    reads.push(budget.signal);
+    const result = original(request, budget);
+    work.push(result);
+    return result;
+  };
+  const first = h.preview(); await flush();
+  h.win.webContents.emit('did-navigate');
+  h.win.webContents.mainFrame = {};
+  h.win.webContents.emit('did-finish-load');
+  const second = h.preview(); await flush();
+  const third = h.preview(); await flush();
+  try {
+    assert.equal(reads[1]?.aborted, true, 'old document cleanup must retain the replacement registry');
+    assert.equal((await first).code, 'UNAUTHORIZED');
+    assert.equal((await second).token, null);
+  } finally {
+    h.time.advance(20001);
+    await Promise.all([first, second, third]);
+    await Promise.all(work);
+  }
+});
+
 test('actual callbacks commit once and forward only receipt invalidation while keeping transcripts', supported, async t => {
   const h = await setup(t), before = h.db.changeCount(), bytes = fs.readFileSync(h.transcript);
   const p = await h.preview(); assert.equal(p.ok, true); assert.ok(p.token); assert.equal(h.db.changeCount(), before);

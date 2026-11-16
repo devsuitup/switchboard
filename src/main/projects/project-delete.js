@@ -4,11 +4,13 @@ const { randomUUID, randomBytes } = require('node:crypto');
 const { PROJECT_DELETE_PREVIEW_TIMEOUT_MS } = require('../../../public/setting-defaults');
 const { createDiscoveryBounds, discoveryDetails } = require('./project-delete-deadline');
 const { operationId } = require('./project-delete-progress');
+const { parseFolderKey } = require('../remote/remote-hosts');
 const { membershipDigest, stable, isRecord, text, fail, OPTION_KEYS, identity } = require('./project-delete-identity');
 
 function createProjectDeleteService(deps) {
   const { writer, planner, inventory, stop, gate, now = Date.now, schedule = setTimeout, cancel = clearTimeout } = deps;
   const tokens = new Map(), operations = new Map(), projects = new Map(), tasks = new Set();
+  const previews = new Map();
   const boot = randomUUID();
   let ready = false, disposed = false, initializing;
   const valid = sender => !disposed && sender?.valid?.() === true;
@@ -69,14 +71,29 @@ function createProjectDeleteService(deps) {
     if (projects.get(op.project.key) === op) projects.delete(op.project.key);
     prune();
   }
+  function cancelPreviews(sender) {
+    const key = sender.wc || sender;
+    const pending = previews.get(key);
+    previews.delete(key);
+    for (const controller of pending?.values() || []) controller.abort(fail('UNAUTHORIZED', 'Preview document was revoked.'));
+  }
   async function preview(sender, request) {
     if (!valid(sender)) return failure('UNAUTHORIZED', { token: null });
     if (!ready) return failure('NOT_READY', { token: null });
     prune();
     const startedAt = now();
-    const budget = { deadline: startedAt + PROJECT_DELETE_PREVIEW_TIMEOUT_MS, pendingPorts: new Map(), portElapsed: new Map() };
+    const controller = new AbortController(), owner = sender.wc || sender;
+    let projectKey, pending;
+    const budget = { signal: controller.signal, deadline: startedAt + PROJECT_DELETE_PREVIEW_TIMEOUT_MS, pendingPorts: new Map(), portElapsed: new Map() };
     const read = createDiscoveryBounds({ now, schedule, cancel });
     try {
+      try { projectKey = identity({ projectPath: request?.projectPath, alias: request?.folderKey === undefined ? null : parseFolderKey(request.folderKey).alias }).key; } catch {}
+      if (projectKey !== undefined) {
+        pending = previews.get(owner) || new Map();
+        pending.get(projectKey)?.abort(fail('PREVIEW_SUPERSEDED', 'A newer project preview replaced this check.'));
+        pending.set(projectKey, controller);
+        previews.set(owner, pending);
+      }
       const result = await read('planner.preview', () => planner.preview(request, budget), budget);
       if (!result.ok) return { ...result, token: null };
       const plan = structuredClone(result.plan);
@@ -90,8 +107,16 @@ function createProjectDeleteService(deps) {
       const options = Object.fromEntries(OPTION_KEYS.map(key => [key, plan.categories[key].selected]));
       tokens.set(token, { sender, boot, plan, options, epoch: scope.projectEpoch, created: now() });
       return { ...result, token };
-    } catch (error) { return failure(error.code || 'DISCOVERY_UNAVAILABLE', { token: null, error: error.message, ...discoveryDetails(error) }); }
+    } catch (error) {
+      if (controller.signal.aborted) error = controller.signal.reason;
+      return failure(error.code || 'DISCOVERY_UNAVAILABLE', { token: null, error: error.message, ...discoveryDetails(error) });
+    }
     finally {
+      if (pending?.get(projectKey) === controller) {
+        pending.delete(projectKey);
+        if (!pending.size && previews.get(owner) === pending) previews.delete(owner);
+      }
+      controller.abort();
       for (const detail of budget.pendingPorts.values()) {
         budget.portElapsed.set(detail.port, Math.max(budget.portElapsed.get(detail.port) || 0, now() - detail.startedAt));
       }
@@ -332,7 +357,7 @@ function createProjectDeleteService(deps) {
     initializing.catch(() => { initializing = null; });
     return initializing;
   }
-  return { preview, async execute(sender, input) {
+  return { preview, cancelPreviews, async execute(sender, input) {
     const startedAt = now();
     const result = await execute(sender, input);
     logOutcome('execute', result, startedAt);
@@ -346,7 +371,7 @@ function createProjectDeleteService(deps) {
       deps.onHoldsInstalled?.();
       for (const op of retained) if (!op.released) await reconcile(op);
     },
-    dispose() { disposed = true; tokens.clear(); for (const op of operations.values()) op.authorities.clear(); } };
+    dispose() { disposed = true; for (const sender of previews.keys()) cancelPreviews(sender); tokens.clear(); for (const op of operations.values()) op.authorities.clear(); } };
 }
 
 module.exports = { createProjectDeleteService };

@@ -98,6 +98,7 @@ test('selected preview keeps its own watchdog and shows the failed port with an 
   assert.equal(h.confirm().disabled, true);
   const retry = h.document.querySelector('.choice-dialog-retry');
   assert.ok(retry && !retry.hidden, 'failed preview offers Retry inside the open dialog');
+  assert.ok(retry.classList.contains('new-session-cancel-btn'), 'Retry must reuse the dialog secondary button style');
   retry.click(); await flush();
   assert.equal(h.confirm().disabled, false);
   assert.equal(calls, 3);
@@ -301,6 +302,31 @@ test('Confirm is disabled while the selected preview loads and becomes enabled o
   await release(); await flush();
   assert.equal(h.confirm().disabled, false, 'loading is not a permanent refusal');
   h.cancel(); await pending;
+});
+
+test('a superseded selected preview cannot replace the current token or full plan', async t => {
+  const h = setup(t), original = h.w.api.previewProjectDelete, replies = [];
+  let calls = 0;
+  h.w.api.previewProjectDelete = async request => {
+    const reply = await original(request);
+    if (++calls === 1) return reply;
+    return new Promise(resolve => replies.push({ reply, resolve }));
+  };
+  const pending = h.start(); await flush();
+  const box = h.document.querySelector('[data-choice-id="sessions"]');
+  box.click();
+  box.click(); await flush();
+  assert.equal(replies.length, 3);
+  assert.equal(h.document.querySelector('.choice-dialog [role="alert"]').hidden, true, 'superseded wait must not publish an error over the current pending preview');
+  replies[2].resolve(replies[2].reply); await flush();
+  const details = h.document.querySelector('.choice-dialog-plan pre').textContent;
+  replies[0].resolve({ ...replies[0].reply, token: 'obsolete' });
+  replies[1].resolve({ ok: false, code: 'DISCOVERY_TIMEOUT', port: 'old-read' });
+  await flush();
+  assert.equal(h.confirm().disabled, false, 'obsolete success/error must not disable the current plan');
+  assert.equal(h.document.querySelector('.choice-dialog-plan pre').textContent, details);
+  h.confirm().click(); await pending;
+  assert.equal(h.calls.execute[0].token, replies[2].reply.token, 'only the latest preview token may execute');
 });
 
 function persistence(h) {

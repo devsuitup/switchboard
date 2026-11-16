@@ -354,7 +354,7 @@ function createProjectDeleteMain(deps) {
     notifyProjects: notify('notifyProjects'), notifySchedules: notify('notifySchedules') });
   let ready = false, disposed = false, recovery = null, pendingAttach = null, cancelRecovery, bootstrap = 0;
   let holds, settleHolds;
-  const guarded = { rebind: sender => service.rebind(sender) };
+  const guarded = { rebind: sender => service.rebind(sender), cancelPreviews: sender => service.cancelPreviews(sender) };
   for (const method of ['preview', 'execute', 'readState']) guarded[method] = async (sender, input) => {
     const result = ready && !disposed
       ? await runtime.withScope(() => service[method](sender, input), method === 'execute')

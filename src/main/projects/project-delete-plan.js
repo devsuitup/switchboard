@@ -55,6 +55,9 @@ function createProjectDeletePlanner(deps) {
 
   async function preview(input, boundKey, sharedBudget) {
     const controller = new AbortController();
+    const abort = () => controller.abort(sharedBudget.signal.reason);
+    if (sharedBudget?.signal?.aborted) abort();
+    else sharedBudget?.signal?.addEventListener('abort', abort, { once: true });
     try {
       let request;
       try { request = structuredClone(input); }
@@ -301,6 +304,7 @@ function createProjectDeletePlanner(deps) {
           ? `${error.message} Use the dedicated "Delete worktree" action in the sidebar.`
           : error.message || 'Read-only planning unavailable.', ...discoveryDetails(error) };
     } finally {
+      sharedBudget?.signal?.removeEventListener('abort', abort);
       controller.abort();
     }
   }
