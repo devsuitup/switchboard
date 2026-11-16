@@ -144,22 +144,33 @@ function buildProcCmdlineCheck(pid) {
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", socket discovery)
+function describeNoTmuxEnv(pid, target, stderr) {
+  const cause = new RegExp(`^${NO_TMUX_ENV_MARKER} (\\w+)`).exec(String(stderr || ''))?.[1];
+  const reason = {
+    uid: 'the remote uid could not be read',
+    bytes: 'the default tmux socket path holds characters outside the allowed set',
+    owner: 'the default tmux socket is missing or not owned by the remote user',
+  }[cause] || `the default tmux socket could not be verified for target ${target} with pane pid ${pid}`;
+  return `process ${pid} carries no readable TMUX environment variable and ${reason} — cannot discover its tmux socket`;
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", socket discovery)
 function buildProbeCommand(pid, target) {
   const optionQuery = name => `tmux -S "$sock" show-options -A -t ${target} ${name} 2>/dev/null`;
-  const refuse = `printf '%s\\n' ${NO_TMUX_ENV_MARKER} >&2; exit ${NO_TMUX_ENV_EXIT_CODE}`;
+  const refuse = cause => `printf '%s\\n' '${NO_TMUX_ENV_MARKER} ${cause}' >&2; exit ${NO_TMUX_ENV_EXIT_CODE}`;
   const script = [
     `sock=$(tr '\\0' '\\n' 2>/dev/null < /proc/${pid}/environ | grep -m1 '^TMUX=' | cut -d= -f2- | cut -d, -f1)`,
     'if [ -z "$sock" ]; then',
     '  uid=$(id -u 2>/dev/null) || uid=',
     '  case "$uid" in',
-    `    ''|*[!0-9]*) ${refuse} ;;`,
+    `    ''|*[!0-9]*) ${refuse('uid')} ;;`,
     '  esac',
     '  sock="${TMUX_TMPDIR:-/tmp}/tmux-${uid}/default"',
     "  probe_sep=$(printf '\\001')",
     "  probe_lf='",
     "'",
     '  case "$sock" in',
-    `    *"$probe_sep"*|*"$probe_lf"*) ${refuse} ;;`,
+    `    *"$probe_sep"*|*"$probe_lf"*) ${refuse('bytes')} ;;`,
     '  esac',
     '  if ! (',
     '    LC_ALL=C',
@@ -169,11 +180,15 @@ function buildProbeCommand(pid, target) {
     '      *) exit 0 ;;',
     '    esac',
     '  ); then',
-    `    ${refuse}`,
+    `    ${refuse('bytes')}`,
+    '  fi',
+    '  if ! { [ -S "$sock" ] && [ -O "$sock" ] && [ -O "${sock%/*}" ] &&',
+    '    [ -z "$(find "${sock%/*}/." -prune \\( -perm -020 -o -perm -002 \\) 2>/dev/null)" ]; }; then',
+    `    ${refuse('owner')}`,
     '  fi',
     `  pane_pid=$(tmux -S "$sock" display-message -p -t ${shellSingleQuote(`=${target}`)} '#{pane_pid}' 2>/dev/null) || pane_pid=`,
     `  if [ "$pane_pid" != '${pid}' ]; then`,
-    `    ${refuse}`,
+    `    ${refuse('pane')}`,
     '  fi',
     'fi',
     `printf '%s${PROBE_SEP}' "$sock"`,
@@ -448,7 +463,7 @@ function createTmuxAttachAdapter(opts = {}) {
       return { ok: false, error: 'size probe failed: no response' };
     }
     if (probe.code === NO_TMUX_ENV_EXIT_CODE) {
-      return { ok: false, error: `process ${descriptor.pid} carries no readable TMUX environment variable and the default tmux socket could not be verified for target ${parsed.target} with pane pid ${descriptor.pid} — cannot discover its tmux socket` };
+      return { ok: false, error: describeNoTmuxEnv(descriptor.pid, parsed.target, probe.stderr) };
     }
     if (probe.code !== 0) {
       const reason = (probe.stderr || '').trim() || 'no stderr';

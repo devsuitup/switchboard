@@ -289,6 +289,30 @@ test('attach() refuses when neither the environment nor the verified default soc
   assert.equal(spawnCalls.length, 0, 'no attach pty may be spawned when the socket cannot be discovered');
 });
 
+test('attach() names the cause carried by the exit-3 marker and keeps the generic text for an unknown one', async () => {
+  const head = 'process 4242 carries no readable TMUX environment variable and ';
+  const tail = ' — cannot discover its tmux socket';
+  for (const [stderr, reason] of [
+    ['NO_TMUX_ENV uid\n', 'the remote uid could not be read'],
+    ['NO_TMUX_ENV bytes\n', 'the default tmux socket path holds characters outside the allowed set'],
+    ['NO_TMUX_ENV owner\n', 'the default tmux socket is missing or not owned by the remote user'],
+    ['NO_TMUX_ENV pane\n', 'the default tmux socket could not be verified for target main:@0.%0 with pane pid 4242'],
+    ['NO_TMUX_ENV other\n', 'the default tmux socket could not be verified for target main:@0.%0 with pane pid 4242'],
+    ['NO_TMUX_ENV\n', 'the default tmux socket could not be verified for target main:@0.%0 with pane pid 4242'],
+    ['', 'the default tmux socket could not be verified for target main:@0.%0 with pane pid 4242'],
+  ]) {
+    const spawnCalls = [];
+    const adapter = createTestAdapter({
+      spawnPty: (...args) => { spawnCalls.push(args); return fakeRawPty().pty; },
+      runRemoteCommand: async () => ({ code: 3, stdout: '', stderr }),
+      log: silentLog,
+    });
+    const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' });
+    assert.deepEqual(result, { ok: false, error: head + reason + tail }, JSON.stringify(stderr));
+    assert.equal(spawnCalls.length, 0);
+  }
+});
+
 test('attach() never lets cmdline fields or output override an exit-3 discovery result', async () => {
   const spawnCalls = [];
   const runRemoteCommand = async () => ({
@@ -728,6 +752,7 @@ test('buildProbeCommand is one quoted sh -c script that reads the environ first,
   };
   const order = [
     '/proc/4085772/environ', 'id -u', '${TMUX_TMPDIR:-/tmp}/tmux-${uid}/default', 'LC_ALL=C',
+    '[ -S "$sock" ] && [ -O "$sock" ] && [ -O "${sock%/*}" ]', 'find "${sock%/*}/." -prune \\( -perm -020 -o -perm -002 \\)',
     "display-message -p -t '=main:@0.%0' '#{pane_pid}'", `[ "$pane_pid" != '4085772' ]`, 'printf \'%s' + PROBE_SEP + '\' "$sock"',
   ].map(at);
   assert.deepEqual(order, [...order].sort((a, b) => a - b));

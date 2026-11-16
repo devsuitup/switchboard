@@ -2165,7 +2165,7 @@ Launching a new remote session (#222) and injection over the messaging socket
     `/tmp`, and a base the server was started with but the ssh exec cannot see
     is out of reach. Every tmux query names its socket with `-S`; the ssh
     shell's own `TMUX` never selects the server.
-  - **The candidate is accepted only after two checks.** First, before any tmux
+  - **The candidate is accepted only after three checks.** First, before any tmux
     query or any stdout, a candidate containing `PROBE_SEP` or LF is refused,
     and so is any byte outside `ABCDEFGHIJKLMNOPQRSTUVWXYZ`,
     `abcdefghijklmnopqrstuvwxyz`, `0123456789` and `/._:@%+=,-`, tested in a
@@ -2173,7 +2173,15 @@ Launching a new remote session (#222) and injection over the messaging socket
     invalid UTF-8 bases are refused; allowed punctuation stays literal. Because
     the accepted bytes are ASCII, the socket keeps its identity through
     `defaultRunRemoteCommand`'s per-chunk text decoding, which is unchanged.
-    The environment path has no such restriction. Second,
+    The environment path has no such restriction. Second, still before any tmux
+    query, the candidate must be a socket owned by the remote user
+    (`[ -S ]`, `[ -O ]`), its parent directory must be owned by that user, and
+    that directory must be neither group- nor other-writable (a `find <dir>/.
+    -prune` over `-perm -020` and `-perm -002`, which is POSIX where
+    `-maxdepth` and `-perm /022` are not). `tmux -S` skips tmux's own check of
+    the `tmux-<uid>` directory, so on a shared `/tmp` another user could
+    pre-create that directory; the check refuses it before anything is sent to
+    the socket. Third,
     `tmux -S <candidate> display-message -p -t '=<session>:<rest>'
     '#{pane_pid}'` must exit 0 and print exactly the descriptor pid. The `=`
     makes the session name an exact match instead of a prefix, and the window
@@ -2187,12 +2195,20 @@ Launching a new remote session (#222) and injection over the messaging socket
     accepted. The check is a point-in-time identity: it does not establish the
     process start time and does not make discovery and the later interactive
     attach atomic.
-  - **Refusal.** Any failure above exits 3 with `NO_TMUX_ENV` on stderr and
-    nothing on stdout; `attach()` returns `process <pid> carries no readable
-    TMUX environment variable and the default tmux socket could not be verified
-    for target <target> with pane pid <pid> — cannot discover its tmux socket`,
-    spawns no PTY and runs no later remote command. A socket longer than 4096
-    characters is refused by the same parser as before.
+  - **Refusal.** Any failure above exits 3 with nothing on stdout and
+    `NO_TMUX_ENV <cause>` on stderr, the cause being `uid` (`id -u` failed or
+    printed a non-number), `bytes` (separator, LF or a byte outside the
+    allowlist), `owner` (missing, not a socket, not owned, or an unsafe
+    directory) or `pane` (the tmux query failed or named another pid).
+    `attach()` returns `process <pid> carries no readable TMUX environment
+    variable and <reason> — cannot discover its tmux socket`, with `<reason>`
+    `the remote uid could not be read`, `the default tmux socket path holds
+    characters outside the allowed set`, `the default tmux socket is missing or
+    not owned by the remote user`, or, for `pane`, an unknown cause or an
+    absent one, `the default tmux socket could not be verified for target
+    <target> with pane pid <pid>`. It spawns no PTY and runs no later remote
+    command. A socket longer than 4096 characters is refused by the same parser
+    as before.
   `descriptor.pid` is validated as a positive integer upstream
   (`parseSessions`, above); `isValidPid`/`isSafeSocketPath` in
   `remote-attach.js` re-check it because this file builds shell command strings
