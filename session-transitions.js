@@ -243,10 +243,18 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
 
   const isBootstrap = !session.knownSubagents;
   const runDirs = workflowRunDirectories(subagentsDir);
-  const workflowStamp = runDirs.map(dir => {
-    try { return [dir, fs.statSync(dir).mtimeMs]; } catch { return [dir, null]; }
-  });
-  const workflowsChanged = JSON.stringify(workflowStamp) !== session._workflowStamp;
+  const workflowFiles = [];
+  for (const dir of runDirs) {
+    try {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isFile() && classifyTranscriptPath(path.join(sessionId, 'subagents', 'workflows', path.basename(dir), entry.name))?.agentId) {
+          workflowFiles.push(path.relative(subagentsDir, path.join(dir, entry.name)));
+        }
+      }
+    } catch {}
+  }
+  const workflowStamp = JSON.stringify(workflowFiles.sort());
+  const workflowsChanged = workflowStamp !== session._workflowStamp;
 
   // dirChanged: true when dir mtime moved or we have no prior scan yet.
   // Also true when the prior scan returned 0 files: the dir mtime may not
@@ -263,19 +271,13 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
   if (dirChanged) {
     try {
       files = fs.readdirSync(subagentsDir).filter(f => f.endsWith('.jsonl'));
-      for (const dir of runDirs) {
-        try {
-          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-            if (entry.isFile() && entry.name.endsWith('.jsonl')) files.push(path.relative(subagentsDir, path.join(dir, entry.name)));
-          }
-        } catch {}
-      }
+      files.push(...workflowFiles);
       files = files.filter(file => classifyTranscriptPath(path.join(sessionId, 'subagents', file))?.agentId);
     } catch {
       return;
     }
     session._prevDirMtime = dirMtime;
-    session._workflowStamp = JSON.stringify(workflowStamp);
+    session._workflowStamp = workflowStamp;
     session._subFileList = files;
   } else {
     // Dir mtime unchanged and we saw files before — reuse cached list; no

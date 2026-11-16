@@ -78,9 +78,16 @@ The cache identity remains `sub:<parent>:<agentId>`. The nullable
 `workflowRunId` column is reconciled additively without clearing the cache or
 its initial-scan marker. Full and header reads carry it; `resolveJsonlPath`
 uses it for cached refresh matching, transcript viewing, Changes sidecars and
-task snapshot hydration. Transition discovery includes workflow run-directory
-mtimes in its directory-list cache, so a new agent inside an existing run is
-visible even when the ordinary `subagents` directory has not changed.
+task snapshot hydration. Transition discovery lists canonical workflow run
+directories on every call and compares the sorted relative transcript paths
+with its previous snapshot. Directory mtimes alone cannot prove that a run's
+membership is unchanged: rapid writes can share a timestamp, and restoring a
+timestamp can hide arrivals or deletions (#1080). A new agent inside an
+existing run is therefore visible even when all directory mtimes stay equal.
+The ordinary `subagents` listing retains its mtime cache; settled transcript
+files still skip per-file stats. This trades one directory read per workflow
+run per detection for reliable membership discovery, without reading transcript
+contents unless the existing transition logic needs them.
 Only classified agent transcripts enter that cached list, so a remaining
 journal cannot prevent collection of a deleted agent. Missing run directories
 still participate in targeted deletion detection.
