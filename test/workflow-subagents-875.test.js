@@ -473,17 +473,23 @@ test('workflow transitions detect new and growing agents even when the ordinary 
   transitions.init({ PROJECTS_DIR: h.root, activeSessions: new Map(), log: h.log,
     getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: (channel, payload) => events.push({ channel, payload }) } }) });
   const session = {};
+  const directories = [path.join(h.dir, P, 'subagents'), path.dirname(path.dirname(h.file)), path.dirname(h.file)];
+  const directoryTime = new Date('2026-01-01T00:00:00.000Z');
+  const resetDirectoryTimes = () => {
+    for (const directory of directories) fs.utimesSync(directory, directoryTime, directoryTime);
+  };
+  resetDirectoryTimes();
   transitions.detectSubagentTransitions(P, session, h.dir);
   assert.ok(session.knownSubagents.has('workflow-child'), 'bootstrap records workflow children');
-  const mtime = fs.statSync(path.join(h.dir, P, 'subagents')).mtime;
   h.writeAgent(path.join(P, 'subagents', 'workflows', RUN, 'agent-later.jsonl'), 'later');
-  fs.utimesSync(path.join(h.dir, P, 'subagents'), mtime, mtime);
+  resetDirectoryTimes();
+  assert.ok(directories.every(directory => fs.statSync(directory).mtimeMs === directoryTime.getTime()));
   transitions.detectSubagentTransitions(P, session, h.dir);
-  assert.ok(events.some(event => event.channel === 'subagent-spawned' && event.payload.agentId === 'later'));
+  assert.ok(events.some(event => event.channel === 'subagent-spawned' && event.payload.agentId === 'later'),
+    'new workflow agent must be discovered with identical directory mtimes');
   const laterFile = path.join(path.dirname(h.file), 'agent-later.jsonl');
   fs.unlinkSync(laterFile);
-  const changed = new Date(Date.now() + 20000);
-  fs.utimesSync(path.dirname(h.file), changed, changed);
+  resetDirectoryTimes();
   transitions.detectSubagentTransitions(P, session, h.dir);
   assert.equal(session.knownSubagents.has('later'), false, 'the remaining journal must not keep a deleted workflow agent in the live registry');
 });
