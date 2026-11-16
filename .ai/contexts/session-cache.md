@@ -2178,7 +2178,9 @@ Launching a new remote session (#222) and injection over the messaging socket
     (`[ -S ]`, `[ -O ]`), its parent directory must be owned by that user, and
     that directory must be neither group- nor other-writable (a `find <dir>/.
     -prune` over `-perm -020` and `-perm -002`, which is POSIX where
-    `-maxdepth` and `-perm /022` are not). `tmux -S` skips tmux's own check of
+    `-maxdepth` and `-perm /022` are not). `find` must exit 0 and print
+    nothing, so a missing or failing `find` refuses, and a relative directory is
+    passed as `./<dir>` so a base starting with `-` is never read as an option. `tmux -S` skips tmux's own check of
     the `tmux-<uid>` directory, so on a shared `/tmp` another user could
     pre-create that directory; the check refuses it before anything is sent to
     the socket. Third,

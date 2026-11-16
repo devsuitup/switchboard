@@ -752,7 +752,7 @@ test('buildProbeCommand is one quoted sh -c script that reads the environ first,
   };
   const order = [
     '/proc/4085772/environ', 'id -u', '${TMUX_TMPDIR:-/tmp}/tmux-${uid}/default', 'LC_ALL=C',
-    '[ -S "$sock" ] && [ -O "$sock" ] && [ -O "${sock%/*}" ]', 'find "${sock%/*}/." -prune \\( -perm -020 -o -perm -002 \\)',
+    'sock_dir=${sock%/*}', 'sock_dir=./$sock_dir', '[ -S "$sock" ] && [ -O "$sock" ] && [ -O "$sock_dir" ]', 'find "$sock_dir/." -prune \\( -perm -020 -o -perm -002 \\)',
     "display-message -p -t '=main:@0.%0' '#{pane_pid}'", `[ "$pane_pid" != '4085772' ]`, 'printf \'%s' + PROBE_SEP + '\' "$sock"',
   ].map(at);
   assert.deepEqual(order, [...order].sort((a, b) => a - b));

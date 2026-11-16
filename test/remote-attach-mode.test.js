@@ -655,11 +655,17 @@ function mapProc(command, pid) {
   return mapped;
 }
 
-const FOREIGN_SOCKET = ['/run/systemd/private', '/run/systemd/journal/dev-log', '/run/dbus/system_bus_socket']
-  .find(candidate => { try { const st = statSync(candidate); return st.isSocket() && st.uid !== process.getuid(); } catch { return false; } });
-const IS_ROOT = process.getuid() === 0;
+const HAS_POSIX_OWNERS = typeof process.getuid === 'function';
+const FOREIGN_SOCKET = HAS_POSIX_OWNERS
+  ? ['/run/systemd/private', '/run/systemd/journal/dev-log', '/run/dbus/system_bus_socket']
+    .find(candidate => { try { const st = statSync(candidate); return st.isSocket() && st.uid !== process.getuid(); } catch { return false; } })
+  : undefined;
+const IS_ROOT = HAS_POSIX_OWNERS && process.getuid() === 0;
+const probeTest = HAS_POSIX_OWNERS
+  ? test
+  : (name, options, fn) => test(name, { skip: 'needs POSIX ownership, modes and unix sockets' }, typeof options === 'function' ? options : fn);
 
-function makeLayout(dir, { baseName, uid, kind, dirMode, foreignOwner }) {
+function makeLayout(dir, { baseName, uid, kind, dirMode, foreignOwner, relativeBase }) {
   const base = `${dir}/${baseName}`;
   const userDir = path.join(base, `tmux-${uid}`);
   const socketPath = path.join(userDir, 'default');
@@ -677,19 +683,20 @@ function makeLayout(dir, { baseName, uid, kind, dirMode, foreignOwner }) {
   }
   chmodSync(userDir, dirMode);
   if (foreignOwner === 'dir') chownSync(userDir, 65534, 65534);
-  return { tmuxTmpdir: base, sock: `${base}/tmux-${uid}/default` };
+  const visible = relativeBase ? baseName : base;
+  return { tmuxTmpdir: visible, sock: `${visible}/tmux-${uid}/default` };
 }
 
 function runProbe(t, {
   pid = 4242, target = 'main:@0.%0', environ = 'missing', uid = '1000', idStatus = 0, sock,
   session = 'main', rest = '@0.%0', panePid = `${pid}\n`, paneStatus = 0, tmuxTmpdir, prelude = '', env = {}, clients = '', sockAny = false,
-  baseName = 'base', kind = 'socket', dirMode = 0o700, foreignOwner,
+  baseName = 'base', kind = 'socket', dirMode = 0o700, foreignOwner, relativeBase = false, failingFind = false,
 } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'probe-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   let candidate = '';
   if (tmuxTmpdir === undefined && baseName !== null) {
-    const layout = makeLayout(dir, { baseName, uid: /^\d+$/.test(uid) ? uid : '1000', kind, dirMode, foreignOwner });
+    const layout = makeLayout(dir, { baseName, uid: /^\d+$/.test(uid) ? uid : '1000', kind, dirMode, foreignOwner, relativeBase });
     tmuxTmpdir = layout.tmuxTmpdir;
     candidate = layout.sock;
   }
@@ -706,6 +713,7 @@ function runProbe(t, {
   for (const [name, script] of Object.entries({
     tmux: FAKE_TMUX, id: FAKE_ID, sh: `exec ${shellQuote(resolved.stdout.trim())} "$@"\n`,
   })) writeFileSync(path.join(bin, name), '#!/bin/sh\n' + script, { mode: 0o755 });
+  if (failingFind) writeFileSync(path.join(bin, 'find'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
   const command = mapProc(buildProbeCommand(pid, target), pid);
   assert.ok(command.startsWith('sh -c '));
   const childEnv = {
@@ -745,7 +753,7 @@ for (const [name, environ] of [
   ['a readable environ without TMUX', Buffer.from('PATH=/usr/bin\0HOME=/home/x\0')],
   ['an empty TMUX socket component', Buffer.from('PATH=/usr/bin\0TMUX=,122,0\0')],
 ]) {
-  test(`probe falls back to the verified default socket after ${name}`, t => {
+  probeTest(`probe falls back to the verified default socket after ${name}`, t => {
     const result = runProbe(t, { environ });
     assert.equal(result.status, 0, result.stderr.toString());
     const discovery = parseDiscoveryProbeOutput(result.stdout.toString());
@@ -757,7 +765,7 @@ for (const [name, environ] of [
   });
 }
 
-test('probe fallback honors a visible custom TMUX_TMPDIR, ignores the ambient TMUX and queries one candidate', t => {
+probeTest('probe fallback honors a visible custom TMUX_TMPDIR, ignores the ambient TMUX and queries one candidate', t => {
   const result = runProbe(t, { baseName: 'sb_custom-base' });
   assert.equal(result.status, 0, result.stderr.toString());
   assert.ok(result.sock.endsWith('/sb_custom-base/tmux-1000/default'));
@@ -767,12 +775,12 @@ test('probe fallback honors a visible custom TMUX_TMPDIR, ignores the ambient TM
 });
 
 for (const [name, tmuxTmpdir] of [['empty', ''], ['unset', undefined]]) {
-  test(`probe fallback looks under /tmp when TMUX_TMPDIR is ${name}, and refuses an absent socket there`, t => {
+  probeTest(`probe fallback looks under /tmp when TMUX_TMPDIR is ${name}, and refuses an absent socket there`, t => {
     assertRefused(runProbe(t, { baseName: null, tmuxTmpdir, uid: '4242777' }), 'owner', [ID_CALL]);
   });
 }
 
-test('probe fallback keeps a trailing slash of TMUX_TMPDIR in its single candidate', t => {
+probeTest('probe fallback keeps a trailing slash of TMUX_TMPDIR in its single candidate', t => {
   const result = runProbe(t, { baseName: 'sb_slash/' });
   assert.equal(result.status, 0, result.stderr.toString());
   assert.ok(result.sock.endsWith('/sb_slash//tmux-1000/default'));
@@ -780,7 +788,7 @@ test('probe fallback keeps a trailing slash of TMUX_TMPDIR in its single candida
   assert.equal(result.calls.filter(call => call.includes('#{pane_pid}')).length, 1);
 });
 
-test('probe fallback does not retry /tmp after a failing custom candidate', t => {
+probeTest('probe fallback does not retry /tmp after a failing custom candidate', t => {
   const result = runProbe(t, { baseName: 'sb_custom-base', sock: '/tmp/tmux-1000/default' });
   assertRefused(result, 'pane');
   assert.equal(result.calls.length, 2);
@@ -793,7 +801,7 @@ for (const [name, options] of [
   ['tmux fails even though it printed the matching pid', { paneStatus: 1 }],
   ['only a session whose name merely starts with the descriptor session exists', { session: 'mainframe' }],
 ]) {
-  test(`probe refuses without further queries when ${name}`, t => {
+  probeTest(`probe refuses without further queries when ${name}`, t => {
     const result = runProbe(t, options);
     assertRefused(result, 'pane');
     assert.equal(result.calls.length, 2);
@@ -803,17 +811,17 @@ for (const [name, options] of [
   });
 }
 
-test('probe refuses a pane pid that is the tmux server of the supplied layout', t => {
+probeTest('probe refuses a pane pid that is the tmux server of the supplied layout', t => {
   const result = runProbe(t, { pid: 123, target: 'switchboard-first:@0.%0', session: 'switchboard-first', panePid: '122\n' });
   assertRefused(result, 'pane', [ID_CALL, PANE_QUERY(result.sock, '=switchboard-first:@0.%0')]);
 });
 
-test('probe refuses when the pane process is a shell parent of the descriptor pid', t => {
+probeTest('probe refuses when the pane process is a shell parent of the descriptor pid', t => {
   const result = runProbe(t, { pid: 4242, panePid: '4000\n' });
   assertRefused(result, 'pane', [ID_CALL, PANE_QUERY(result.sock, '=main:@0.%0')]);
 });
 
-test('probe accepts the supplied layout where the pane process is the descriptor pid', t => {
+probeTest('probe accepts the supplied layout where the pane process is the descriptor pid', t => {
   const result = runProbe(t, { pid: 123, target: 'switchboard-first:@0.%0', session: 'switchboard-first' });
   assert.equal(result.status, 0, result.stderr.toString());
   assert.equal(firstField(result), result.sock);
@@ -823,7 +831,7 @@ for (const [name, panePid] of [
   ['empty', ''], ['nonnumeric', 'abc\n'], ['zero', '0\n'], ['leading-zero', '04242\n'], ['leading-space', ' 4242\n'],
   ['trailing-space', '4242 \n'], ['multi-line', '4242\n4243\n'], ['different', '4243\n'],
 ]) {
-  test(`probe refuses a ${name} pane pid`, t => {
+  probeTest(`probe refuses a ${name} pane pid`, t => {
     assertRefused(runProbe(t, { panePid }), 'pane');
   });
 }
@@ -836,15 +844,30 @@ for (const [name, options, skip] of [
   ['the socket is owned by another user', { kind: 'foreign-socket' }, IS_ROOT || FOREIGN_SOCKET ? false : 'no socket owned by another user to link to'],
   ['the directory is owned by another user', { foreignOwner: 'dir' }, IS_ROOT ? false : 'changing the owner needs root'],
 ]) {
-  test(`probe refuses before any tmux query when ${name}`, { skip }, t => {
+  probeTest(`probe refuses before any tmux query when ${name}`, { skip }, t => {
     assertRefused(runProbe(t, options), 'owner', [ID_CALL]);
   });
 }
 
+probeTest('probe refuses a group-writable directory under a base starting with a hyphen', t => {
+  assertRefused(runProbe(t, { baseName: '-base', relativeBase: true, dirMode: 0o770 }), 'owner', [ID_CALL]);
+});
+
+probeTest('probe accepts a private directory and owned socket under a base starting with a hyphen', t => {
+  const result = runProbe(t, { baseName: '-base', relativeBase: true });
+  assert.equal(result.status, 0, result.stderr.toString());
+  assert.equal(firstField(result), '-base/tmux-1000/default');
+  assert.deepEqual(result.calls[1], PANE_QUERY('-base/tmux-1000/default', '=main:@0.%0'));
+});
+
+probeTest('probe refuses when the directory inspection itself fails', t => {
+  assertRefused(runProbe(t, { failingFind: true }), 'owner', [ID_CALL]);
+});
+
 const ENV_SOCK = '/custom/tmux-1000/named';
 const ENV_TMUX = Buffer.from(`TMUX=${ENV_SOCK},122,0\0`);
 
-test('probe keeps the environ socket, its fields and their order, without uid, ownership or pane queries', t => {
+probeTest('probe keeps the environ socket, its fields and their order, without uid, ownership or pane queries', t => {
   const result = runProbe(t, { environ: ENV_TMUX, sock: ENV_SOCK, kind: 'none' });
   assert.equal(result.status, 0, result.stderr.toString());
   assert.deepEqual(result.stdout.toString().split('\u0001').map(field => field.trim()), [
@@ -858,7 +881,7 @@ for (const [name, options] of [
   ['an unreachable server', { sock: '/elsewhere/default' }],
   ['a target absent from the server', { rest: '@9.%9' }],
 ]) {
-  test(`probe never falls back from the environ socket when it has ${name}`, async t => {
+  probeTest(`probe never falls back from the environ socket when it has ${name}`, async t => {
     const f = adapterOverShell(t, { environ: ENV_TMUX, sock: ENV_SOCK, ...options });
     const attached = await f.attach();
     assert.equal(attached.ok, false);
@@ -877,12 +900,12 @@ for (const [name, options] of [
   ['prints a signed number', { uid: '-1' }],
   ['prints digits followed by text', { uid: '10x' }],
 ]) {
-  test(`probe refuses without a tmux query when id -u ${name}`, t => {
+  probeTest(`probe refuses without a tmux query when id -u ${name}`, t => {
     assertRefused(runProbe(t, options), 'uid', [ID_CALL]);
   });
 }
 
-test('probe uses the root uid for the default socket', t => {
+probeTest('probe uses the root uid for the default socket', t => {
   const result = runProbe(t, { uid: '0' });
   assert.equal(result.status, 0, result.stderr.toString());
   assert.ok(result.sock.endsWith('/tmux-0/default'));
@@ -981,7 +1004,7 @@ const BASE_BYTES = [
 for (const [locale, value] of [['C', 'C'], ['a UTF-8 locale', UTF8_LOCALES.name]]) {
   const skip = value || UTF8_LOCALES.error ? false : 'no UTF-8 locale installed';
   for (const [name, { bytes, ...options }] of BASE_BYTES) {
-    test(`probe refuses a custom base containing ${name} before any tmux query, under ${locale}`, { skip }, async t => {
+    probeTest(`probe refuses a custom base containing ${name} before any tmux query, under ${locale}`, { skip }, async t => {
       const env = { LC_ALL: value };
       if (bytes) {
         const preflight = spawnSync(TEST_SHELL, ['-c', `${options.prelude}printf '%s' "$TMUX_TMPDIR"`], { env });
@@ -994,7 +1017,7 @@ for (const [locale, value] of [['C', 'C'], ['a UTF-8 locale', UTF8_LOCALES.name]
     });
   }
 
-  test(`probe keeps allowed punctuation in a custom base byte for byte over one-byte chunks, under ${locale}`, { skip }, async t => {
+  probeTest(`probe keeps allowed punctuation in a custom base byte for byte over one-byte chunks, under ${locale}`, { skip }, async t => {
     const f = adapterOverShell(t, { baseName: 'socket._-:@%+=,', env: { LC_ALL: value } });
     const attached = await f.attach();
     t.after(() => f.events.emit('exit'));
@@ -1016,14 +1039,14 @@ for (const [name, tmuxTmpdir] of [
   ['a single separator', '/tmp/a\x01b'],
   ['an embedded line feed', '/tmp/a\nb'],
 ]) {
-  test(`probe refuses a custom base carrying ${name} before any tmux query`, async t => {
+  probeTest(`probe refuses a custom base carrying ${name} before any tmux query`, async t => {
     const f = adapterOverShell(t, { tmuxTmpdir, sockAny: true });
     const attached = await f.attach();
     assertRejectedThroughAdapter(f, attached, 'bytes');
   });
 }
 
-test('probe attaches the supplied layout through the default socket for pid 123', async t => {
+probeTest('probe attaches the supplied layout through the default socket for pid 123', async t => {
   const f = adapterOverShell(t, { pid: 123, target: 'switchboard-first:@0.%0', session: 'switchboard-first' });
   const attached = await f.attach();
   t.after(() => f.events.emit('exit'));
@@ -1042,7 +1065,7 @@ const REFUSAL_CASES = [
 ];
 
 for (const [name, options, cause] of REFUSAL_CASES) {
-  test(`adapter refuses through the real probe output when ${name}`, async t => {
+  probeTest(`adapter refuses through the real probe output when ${name}`, async t => {
     const f = adapterOverShell(t, options);
     const attached = await f.attach();
     assert.equal(attached.ok, false);
@@ -1057,7 +1080,7 @@ for (const [name, clients, clientList, shared] of [
   ['solo', '', '', false],
   ['shared', 'peer\n', '9000\t/dev/pts/2\t\n', true],
 ]) {
-  test(`adapter attaches a ${name} session through the default socket from real probe output`, async t => {
+  probeTest(`adapter attaches a ${name} session through the default socket from real probe output`, async t => {
     const f = adapterOverShell(t, { clients }, { clientList });
     const attached = await f.attach();
     t.after(() => f.events.emit('exit'));
