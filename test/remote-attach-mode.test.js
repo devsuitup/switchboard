@@ -1004,13 +1004,13 @@ const BASE_BYTES = [
 for (const [locale, value] of [['C', 'C'], ['a UTF-8 locale', UTF8_LOCALES.name]]) {
   const skip = value || UTF8_LOCALES.error ? false : 'no UTF-8 locale installed';
   for (const [name, { bytes, ...options }] of BASE_BYTES) {
-    probeTest(`probe refuses a custom base containing ${name} before any tmux query, under ${locale}`, { skip }, async t => {
+    test(`probe refuses a custom base containing ${name} before any tmux query, under ${locale}`, { skip }, async t => {
       const env = { LC_ALL: value };
       if (bytes) {
         const preflight = spawnSync(TEST_SHELL, ['-c', `${options.prelude}printf '%s' "$TMUX_TMPDIR"`], { env });
         assert.deepEqual(preflight.stdout, bytes);
       }
-      const f = adapterOverShell(t, { ...options, env, sockAny: true });
+      const f = adapterOverShell(t, { ...options, env, sockAny: true, baseName: null });
       const attached = await f.attach();
       assertRejectedThroughAdapter(f, attached, 'bytes');
       assert.ok(!existsSync(path.join(f.shellResults[0].dir, 'injected')));
@@ -1039,7 +1039,7 @@ for (const [name, tmuxTmpdir] of [
   ['a single separator', '/tmp/a\x01b'],
   ['an embedded line feed', '/tmp/a\nb'],
 ]) {
-  probeTest(`probe refuses a custom base carrying ${name} before any tmux query`, async t => {
+  test(`probe refuses a custom base carrying ${name} before any tmux query`, async t => {
     const f = adapterOverShell(t, { tmuxTmpdir, sockAny: true });
     const attached = await f.attach();
     assertRejectedThroughAdapter(f, attached, 'bytes');
