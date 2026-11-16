@@ -1694,28 +1694,25 @@ Launching a new remote session (#222) and injection over the messaging socket
 
 - **The probe and the attach are two separate ssh calls, deliberately not
   combined with the mirror's own inventory ssh.** The probe
-  (`buildProbeCommand`) reads the socket from the process's `TMUX` variable
-  (see "Corrected 2026-09-08" below), then runs `tmux -S "$sock"
-  display-message -p -t <target> '#{window_width}x#{window_height}'`, then,
-  each after a `PROBE_SEP` control-byte separator, `show-options -A -t <target>`
-  for `status` and the other options it restores, the client count and a
-  `/proc/<pid>/cmdline` check — one non-interactive ssh round trip, parsed by
-  `parseProbeOutput`. The attach itself (`buildAttachCommand`) is
-  `tmux -S <socket> attach -t <target>`, run over a
+  (`buildProbeCommand`) is one `sh -c` script. It takes the socket from the
+  process's `TMUX` variable when `/proc/<pid>/environ` yields one; otherwise
+  it verifies the remote default socket (see "Socket discovery and the pane-pid
+  guard" below). It then runs `tmux -S "$sock" display-message -p -t <target>
+  '#{window_width}x#{window_height}'` and, each after a `PROBE_SEP`
+  control-byte separator, `show-options -A -t <target>` for `status` and the
+  other options it restores, the client count and a `/proc/<pid>/cmdline`
+  check — one non-interactive ssh round trip, fallback verification included,
+  parsed by `parseDiscoveryProbeOutput`. The attach itself
+  (`buildAttachCommand`) is `tmux -S <socket> attach -t <target>`, run over a
   **second**, interactive `ssh -tt <alias> …` that becomes the actual PTY —
   it cannot be the same call as the probe because the probe must complete and
   return a size before the interactive PTY is even spawned.
 
-- **Superseded by "Corrected 2026-09-08" below: the `tmux` field's own shape was first treated as the socket name too.** The CLI
-  writes e.g. `"main:@0.%0"` — a `session:window.pane` target string. This
-  adapter reads the part before `:` (`"main"`) as both the tmux socket
-  (`-L main`) and the session to query status on, on the assumption the CLI
-  always names its socket after its session. **This is an assumption, not
-  something measured against the CLI's own socket-naming code** — if a
-  future CLI version uses a socket name that differs from the session name,
-  `show-options -A -t <socket>` would query the wrong (or a nonexistent)
-  session and this adapter would need a real socket field instead of
-  deriving one.
+- **The descriptor's `tmux` field is a target, never a socket name.** The CLI
+  writes e.g. `"main:@0.%0"` — a `session:window.pane` target string that
+  supplies every `-t`. The socket comes from the discovery described in
+  "Socket discovery and the pane-pid guard" below; the adapter never passes
+  `-L` and never derives a socket from the session name.
 
 - **`TMUX_FIELD_RE` is the injection guard, not shell quoting.** Same posture
   as `remote-hosts.js`'s `isSafeRelPath`: the descriptor field is matched
@@ -2134,28 +2131,67 @@ Launching a new remote session (#222) and injection over the messaging socket
   `test/remote-attach.test.js` ("pilots the fake remote pty through write()
   and kill()") with a bare fake pty, no real node-pty involved.
 
-- **Corrected 2026-09-08 (issue #221) — the socket is discovered from the
-  process's own `TMUX` environment variable, not derived from the
-  descriptor's `tmux` field.** The assumption logged above ("the CLI always
-  names its socket after its session") was wrong: the descriptor's
-  `session:window.pane` string is a **target**, never a socket name, and the
-  real sockets on the host (`/tmp/tmux-0/orchestration`,
-  `/tmp/tmux-0/orchestration-harness`) don't match the session name at all —
-  the first click on a remote session failed with `error connecting to
-  /tmp/tmux-0/main`. `buildProbeCommand(pid, target)` now reads
-  `/proc/<pid>/environ` on the remote host (`tr '\0' '\n'`, since the file is
-  NUL-separated), extracts `TMUX=<socket>,<server-pid>,<index>`, and takes the
-  part before the first comma — all inside the **same** non-interactive ssh
-  call the size probe already made (the OpenSSH client on Windows has no
-  `ControlMaster`, so a second call is a second full connection, not a free
-  one). The discovered socket rides back to the caller as a prefix segment on
-  the probe's stdout (`parseDiscoveryProbeOutput`) so the later interactive
-  `attach -S <socket>` uses the same value, quoted, never re-derived. A pid
-  with no readable `TMUX` (dead process, unreadable `/proc`) degrades to a
-  refusal naming the reason — never a guessed socket. `descriptor.pid` was
-  already validated as a positive integer upstream (`parseSessions`, above);
-  `isValidPid`/`isSafeSocketPath` in `remote-attach.js` re-check it anyway
-  because this file builds shell command strings from it.
+- **Socket discovery and the pane-pid guard (issues #221, #1111).** The
+  socket is discovered on the remote host, inside the **same** non-interactive
+  ssh call as the size probe (the OpenSSH client on Windows has no
+  `ControlMaster`, so a second call is a second full connection). The
+  discovered socket rides back as the first `PROBE_SEP` field
+  (`parseDiscoveryProbeOutput`), and every later query, the interactive
+  `attach -S <socket>`, and the restore on detach reuse that value, quoted,
+  never re-derived.
+  - **The process environment has priority.** `buildProbeCommand(pid, target)`
+    reads `/proc/<pid>/environ` (`tr '\0' '\n'`, since the file is
+    NUL-separated), extracts `TMUX=<socket>,<server-pid>,<index>` and takes the
+    part before the first comma. A nonempty socket is used as is: `id -u` and
+    the pane query are skipped, and a failed query on it never switches to the
+    default socket. Its path keeps only the `isSafeSocketPath` restrictions
+    (nonempty, at most 4096 characters, no quote, backslash or whitespace),
+    applied by `parseDiscoveryProbeOutput`.
+  - **A missing socket tries exactly one default candidate.** An unreadable or
+    missing environ (hosts with `kernel.yama.ptrace_scope` set deny a same-uid
+    read of another process tree), an environ without `TMUX`, and an empty
+    `TMUX` socket component all lead to
+    `${TMUX_TMPDIR:-/tmp}/tmux-<uid>/default`, computed on the remote: `<uid>`
+    is the remote `id -u` (a failed, empty or non-digit result refuses), and a
+    nonempty `TMUX_TMPDIR` visible to the ssh exec is the base — an unset or
+    empty one means `/tmp`, never `TMPDIR`. A trailing slash on the base is
+    kept. No other candidate is tried: a failing custom base is not retried on
+    `/tmp`, and a base the server was started with but the ssh exec cannot see
+    is out of reach. Every tmux query names its socket with `-S`; the ssh
+    shell's own `TMUX` never selects the server.
+  - **The candidate is accepted only after two checks.** First, before any tmux
+    query or any stdout, a candidate containing `PROBE_SEP` or LF is refused,
+    and so is any byte outside `ABCDEFGHIJKLMNOPQRSTUVWXYZ`,
+    `abcdefghijklmnopqrstuvwxyz`, `0123456789` and `/._:@%+=,-`, tested in a
+    subshell with `LC_ALL=C` against those explicit lists. Non-ASCII and
+    invalid UTF-8 bases are refused; allowed punctuation stays literal. Because
+    the accepted bytes are ASCII, the socket keeps its identity through
+    `defaultRunRemoteCommand`'s per-chunk text decoding, which is unchanged.
+    The environment path has no such restriction. Second,
+    `tmux -S <candidate> display-message -p -t '=<session>:<rest>'
+    '#{pane_pid}'` must exit 0 and print exactly the descriptor pid. The `=`
+    makes the session name an exact match instead of a prefix, and the window
+    and pane parts keep their descriptor values. The comparison is exact string
+    equality: an empty, zero, padded, leading-zero, multi-line or different
+    pid fails, and so does a nonzero tmux status that printed the right one.
+  - **A pane pid is not a process-tree walk.** When the tmux server launches
+    Claude directly, `#{pane_pid}` is the descriptor pid. When the pane runs a
+    shell that launches Claude, `#{pane_pid}` is the shell's pid and the
+    fallback refuses; parents, children, wrappers and other panes are never
+    accepted. The check is a point-in-time identity: it does not establish the
+    process start time and does not make discovery and the later interactive
+    attach atomic.
+  - **Refusal.** Any failure above exits 3 with `NO_TMUX_ENV` on stderr and
+    nothing on stdout; `attach()` returns `process <pid> carries no readable
+    TMUX environment variable and the default tmux socket could not be verified
+    for target <target> with pane pid <pid> — cannot discover its tmux socket`,
+    spawns no PTY and runs no later remote command. A socket longer than 4096
+    characters is refused by the same parser as before.
+  `descriptor.pid` is validated as a positive integer upstream
+  (`parseSessions`, above); `isValidPid`/`isSafeSocketPath` in
+  `remote-attach.js` re-check it because this file builds shell command strings
+  from it. Proven in `test/remote-attach-mode.test.js`, which runs the
+  generated command under a POSIX shell with fake `tmux` and `id` binaries.
 - **`supports()` grew a `pid` requirement in the same change** — a
   descriptor with a `tmux` field but no usable `pid` can never discover a
   socket, so routing it to an attach attempt (`main.js`'s
@@ -2164,42 +2200,27 @@ Launching a new remote session (#222) and injection over the messaging socket
   a no-op on real data; it only changes routing for a hand-built or malformed
   descriptor.
 
-- **Pid-reuse guard (F6, audit-fable-2026-09-11).** Descriptors now survive a
+- **Pid-reuse guard (F6, audit-fable-2026-09-11).** Descriptors survive a
   failed refresh cycle for up to the backoff window (#255, above) — long
   enough for the CLI to die and the OS to hand its pid to an unrelated
-  process on the same host. Before this fix, `buildProbeCommand` read
-  *whatever* process now holds that pid's `TMUX` environment variable and, if
-  it was solo, reconfigured and attached to whatever tmux session that
-  process happened to be in — no check that it was still the session the
-  descriptor named. `buildProbeCommand` now appends one more
-  `PROBE_SEP`-delimited segment: `tr '\0' ' ' < /proc/<pid>/cmdline | grep -qi
-  claude && echo 1 || echo 0` (`buildProcCmdlineCheck`), read back by
-  `parseDiscoveryProbeOutput` as `cmdlineHasClaude` (`true`/`false`, or `null`
-  for a probe predating this segment). `attach()` runs this check only when
-  `descriptor.procStart != null`; on a `false` result it returns `{ ok:
-  false, error: 'pid <n> no longer belongs to this session (process start
-  differs)' }` before any `spawnPty` call — no attach, no `set`. A descriptor
-  with no `procStart` keeps today's unverified behavior.
-  **Not what the finding asked for, and why:** the audit wanted
-  `descriptor.procStart` compared against `/proc/<pid>/stat`'s starttime
-  (field 22, clock ticks since boot). The one measured `procStart` sample
-  this repo has (`.ai/contexts/cli-session-state.md`) is
-  `"134319945380279381"`, captured on a **Windows** CLI — 18 digits, the
-  right order of magnitude for a Windows `FILETIME` (100 ns since 1601), not
-  for Linux clock ticks since boot (which would need centuries of uptime to
-  reach 18 digits at 100 Hz). Whether the CLI's own remote/Linux code path
-  produces something on the *same* scale as `/proc/<pid>/stat` field 22 is
-  unverified — ssh access to a real host to check was out of scope for this
-  fix (`no ssh to any host` was a hard constraint). Comparing two values on
-  possibly-incompatible scales risks shipping a check that either always
-  refuses (units never line up) or silently never refuses (units happen to
-  overlap by coincidence) — worse than the cmdline check in both directions.
-  The `cmdline`-contains-`claude` check is strictly weaker than an exact
-  start-time match (it would not catch a *second* claude CLI reusing the
-  pid), but it does catch the audited scenario — pid reused by an unrelated
-  process in another tmux server — without depending on that unverified
-  format match. `descriptor.procStart != null` is still the gate, matching
-  the interface the finding asked for.
+  process on the same host. Two checks guard against attaching to that
+  process:
+  - On the default-socket fallback, the pane pid must equal the descriptor pid
+    exactly, unconditionally (see "Socket discovery and the pane-pid guard").
+    Parent processes are never accepted.
+  - `buildProbeCommand` ends with one more `PROBE_SEP`-delimited segment,
+    `tr '\0' ' ' < /proc/<pid>/cmdline | grep -qi claude && echo 1 || echo 0`
+    (`buildProcCmdlineCheck`), read back by `parseDiscoveryProbeOutput` as
+    `cmdlineHasClaude`. The parser accepts only the exact fields `1` and `0`;
+    the shell prints a trailing newline (`1\n`), which reads as `null`, so in
+    practice this flag is unknown and `attach()` continues. Only a parsed
+    `false` refuses, with `pid <n> now belongs to a process that is not a
+    claude CLI — the session is gone`, before any `spawnPty` call. There is no
+    `descriptor.procStart` gate.
+  Neither check compares a process start time (the one measured `procStart`
+  sample, in `.ai/contexts/cli-session-state.md`, is on a Windows `FILETIME`
+  scale that does not match `/proc/<pid>/stat`), so a later Claude process that
+  reuses both the pid and the target is not detected.
 
 - **`ConnectTimeout=5` on the probe and restore-on-detach ssh calls (F10,
   audit-fable-2026-09-11).** `defaultRunRemoteCommand`'s ssh spawn had a kill

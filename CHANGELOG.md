@@ -7,6 +7,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### New
 - Choose individual linked worktree folders to remove from disk in the project deletion dialog. Choices start unchecked, the main checkout is always kept, and partial outcomes show what was removed or remains. (#474)
 
+### Fixed
+- Opening a running remote session now works when the host blocks access to its process environment, provided its default tmux server runs that session directly in its pane. (#1111)
+
 ## v0.0.106 — 2026-11-13
 
 ### New

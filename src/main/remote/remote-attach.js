@@ -22,6 +22,7 @@ const MAX_CLIENT_ENV_BYTES = 64 * 1024;
 const DEFAULT_STATUS_LINES = 1;
 const NO_TMUX_ENV_EXIT_CODE = 3;
 const NO_TMUX_ENV_MARKER = 'NO_TMUX_ENV';
+const FALLBACK_SOCKET_FORBIDDEN_BYTES = '*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._:@%+=,-]*';
 
 /** Parse the CLI-written `tmux` descriptor field, e.g. "main:@0.%0". */
 function parseTmuxField(value) {
@@ -144,17 +145,46 @@ function buildProcCmdlineCheck(pid) {
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", socket discovery)
 function buildProbeCommand(pid, target) {
-  return `sock=$(tr '\\0' '\\n' < /proc/${pid}/environ 2>/dev/null | grep -m1 '^TMUX=' | cut -d= -f2- | cut -d, -f1); ` +
-    `if [ -z "$sock" ]; then echo ${NO_TMUX_ENV_MARKER} >&2; exit ${NO_TMUX_ENV_EXIT_CODE}; fi; ` +
-    `printf '%s${PROBE_SEP}' "$sock"; ` +
-    `tmux -S "$sock" display-message -p -t ${target} '#{window_width}x#{window_height}'` +
-    `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} status 2>/dev/null` +
-    `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} mouse 2>/dev/null` +
-    `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} window-size 2>/dev/null` +
-    `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} set-titles 2>/dev/null` +
-    `; printf '${PROBE_SEP}'; tmux -S "$sock" show-options -A -t ${target} set-titles-string 2>/dev/null` +
-    `; printf '${PROBE_SEP}'; tmux -S "$sock" list-clients -t ${target} 2>/dev/null | wc -l` +
-    `; printf '${PROBE_SEP}'; ${buildProcCmdlineCheck(pid)}`;
+  const optionQuery = name => `tmux -S "$sock" show-options -A -t ${target} ${name} 2>/dev/null`;
+  const refuse = `printf '%s\\n' ${NO_TMUX_ENV_MARKER} >&2; exit ${NO_TMUX_ENV_EXIT_CODE}`;
+  const script = [
+    `sock=$(tr '\\0' '\\n' 2>/dev/null < /proc/${pid}/environ | grep -m1 '^TMUX=' | cut -d= -f2- | cut -d, -f1)`,
+    'if [ -z "$sock" ]; then',
+    '  uid=$(id -u 2>/dev/null) || uid=',
+    '  case "$uid" in',
+    `    ''|*[!0-9]*) ${refuse} ;;`,
+    '  esac',
+    '  sock="${TMUX_TMPDIR:-/tmp}/tmux-${uid}/default"',
+    "  probe_sep=$(printf '\\001')",
+    "  probe_lf='",
+    "'",
+    '  case "$sock" in',
+    `    *"$probe_sep"*|*"$probe_lf"*) ${refuse} ;;`,
+    '  esac',
+    '  if ! (',
+    '    LC_ALL=C',
+    '    export LC_ALL',
+    '    case "$sock" in',
+    `      ${FALLBACK_SOCKET_FORBIDDEN_BYTES}) exit 1 ;;`,
+    '      *) exit 0 ;;',
+    '    esac',
+    '  ); then',
+    `    ${refuse}`,
+    '  fi',
+    `  pane_pid=$(tmux -S "$sock" display-message -p -t ${shellSingleQuote(`=${target}`)} '#{pane_pid}' 2>/dev/null) || pane_pid=`,
+    `  if [ "$pane_pid" != '${pid}' ]; then`,
+    `    ${refuse}`,
+    '  fi',
+    'fi',
+    `printf '%s${PROBE_SEP}' "$sock"`,
+    `tmux -S "$sock" display-message -p -t ${target} '#{window_width}x#{window_height}'`,
+    ...['status', 'mouse', 'window-size', 'set-titles', 'set-titles-string'].flatMap(name => [`printf '${PROBE_SEP}'`, optionQuery(name)]),
+    `printf '${PROBE_SEP}'`,
+    `tmux -S "$sock" list-clients -t ${target} 2>/dev/null | wc -l`,
+    `printf '${PROBE_SEP}'`,
+    buildProcCmdlineCheck(pid),
+  ].join('\n');
+  return `sh -c ${shellSingleQuote(script)}`;
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", set-titles, issue #290)
@@ -418,7 +448,7 @@ function createTmuxAttachAdapter(opts = {}) {
       return { ok: false, error: 'size probe failed: no response' };
     }
     if (probe.code === NO_TMUX_ENV_EXIT_CODE) {
-      return { ok: false, error: `process ${descriptor.pid} carries no readable TMUX environment variable — cannot discover its tmux socket` };
+      return { ok: false, error: `process ${descriptor.pid} carries no readable TMUX environment variable and the default tmux socket could not be verified for target ${parsed.target} with pane pid ${descriptor.pid} — cannot discover its tmux socket` };
     }
     if (probe.code !== 0) {
       const reason = (probe.stderr || '').trim() || 'no stderr';

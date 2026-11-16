@@ -269,9 +269,9 @@ test('attach() discovers the socket from the process TMUX env var, not the descr
   assert.match(attachCommand, /-t main:@0\.%0/, 'the descriptor tmux field still supplies the -t target');
 });
 
-// Property: no readable TMUX env var means no attach attempt, ever -- never
-// a guess at a socket name.
-test('attach() refuses when the remote process has no readable TMUX env var, without attempting to attach', async () => {
+// Property: when neither the process environment nor the verified default
+// socket supplies a discovery candidate, there is no attach attempt, ever.
+test('attach() refuses when neither the environment nor the verified default socket yields a tmux socket', async () => {
   const spawnCalls = [];
   let probeCalls = 0;
   const runRemoteCommand = async () => { probeCalls++; return { code: 3, stdout: '', stderr: 'NO_TMUX_ENV\n' }; };
@@ -283,10 +283,72 @@ test('attach() refuses when the remote process has no readable TMUX env var, wit
 
   const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' });
 
-  assert.equal(result.ok, false);
-  assert.match(result.error, /tmux environment/i);
+  assert.deepEqual(result, {
+    ok: false,
+    error: 'process 4242 carries no readable TMUX environment variable and the default tmux socket could not be verified for target main:@0.%0 with pane pid 4242 — cannot discover its tmux socket',
+  });
   assert.equal(probeCalls, 1);
   assert.equal(spawnCalls.length, 0, 'no attach pty may be spawned when the socket cannot be discovered');
+});
+
+test('attach() never lets cmdline fields or output override an exit-3 discovery result', async () => {
+  const spawnCalls = [];
+  const runRemoteCommand = async () => ({
+    code: 3, stdout: ['/tmp/wrong', '80x24', '', '', '', '', '', '0', '1', ''].join(PROBE_SEP), stderr: 'NO_TMUX_ENV\n',
+  });
+  const adapter = createTestAdapter({
+    spawnPty: (...args) => { spawnCalls.push(args); return fakeRawPty().pty; },
+    runRemoteCommand,
+    log: silentLog,
+  });
+  const result = await adapter.attach('vps', { sessionId: 's1', pid: 123, tmux: 'switchboard-first:@0.%0' });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /^process 123 carries no readable TMUX environment variable and the default tmux socket could not be verified for target switchboard-first:@0\.%0 with pane pid 123 /);
+  assert.equal(spawnCalls.length, 0);
+});
+
+test('attach() uses the verified default socket for solo and shared attaches with one discovery call', async () => {
+  for (const [count, shared] of [[0, false], [1, true]]) {
+    const spawnCalls = [];
+    const commands = [];
+    const adapter = createTestAdapter({
+      spawnPty: (file, args) => { spawnCalls.push({ file, args }); return fakeRawPty().pty; },
+      runRemoteCommand: async (alias, command) => {
+        commands.push(command);
+        if (command.includes('/proc/4242/environ')) {
+          return { code: 0, stdout: ['/tmp/tmux-1000/default', '200x50', 'status on', '', '', '', '', count, '1'].join(PROBE_SEP) };
+        }
+        if (command.includes('client_pid')) return { code: 0, stdout: count ? '9000\t/dev/pts/2\t\n' : '' };
+        return { code: 0, stdout: '' };
+      },
+      log: silentLog,
+    });
+    const result = await adapter.attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0' }, { cols: 100, rows: 40 });
+    assert.equal(result.ok, true);
+    assert.equal(commands.filter(command => command.includes('/proc/4242/environ')).length, 1);
+    const attachCommand = spawnCalls[0].args.at(-1);
+    assert.match(attachCommand, /-S '\/tmp\/tmux-1000\/default'/);
+    assert.match(attachCommand, /-t main:@0\.%0/);
+    assert.equal(/status off/.test(attachCommand), !shared, 'solo applies its session options, shared leaves them');
+    assert.equal(result.remoteResizeAllowed, !shared);
+  }
+});
+
+test('attach() refuses a parsed-false cmdline with or without procStart and continues on an unknown one', async () => {
+  for (const procStart of [undefined, '123456']) {
+    const spawnCalls = [];
+    const refused = await makeAdapter({
+      probeStdout: ['200x50', 'status on', '', '', '', '', '0', '0'].join(PROBE_SEP), spawnCalls,
+    }).attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0', procStart });
+    assert.equal(refused.ok, false);
+    assert.match(refused.error, /pid 4242 now belongs to a process that is not a claude CLI/);
+    assert.equal(spawnCalls.length, 0);
+    const unknown = await makeAdapter({
+      probeStdout: ['200x50', 'status on', '', '', '', '', '0', '1\n'].join(PROBE_SEP), spawnCalls,
+    }).attach('vps', { sessionId: 's1', pid: 4242, tmux: 'main:@0.%0', procStart });
+    assert.equal(unknown.ok, true);
+    assert.equal(spawnCalls.length, 1);
+  }
 });
 
 // Property: a descriptor with no readable pid is refused before any ssh call
@@ -654,6 +716,28 @@ for (const { name, input, printed } of SET_TITLES_STRING_CASES) {
     assert.ok(!withoutEscapes.includes("'"), `no unescaped single quote may remain inside the quoted segment: ${quoted}`);
   });
 }
+
+test('buildProbeCommand is one quoted sh -c script that reads the environ first, then verifies the remote default socket', () => {
+  const cmd = buildProbeCommand(4085772, 'main:@0.%0');
+  assert.ok(cmd.startsWith("sh -c '"));
+  assert.ok(cmd.endsWith("'"));
+  assert.doesNotMatch(cmd, /-L /);
+  const script = cmd.slice("sh -c '".length, -1).split("'\\''").join("'");
+  const at = needle => {
+    const index = script.indexOf(needle);
+    assert.notEqual(index, -1, `missing ${needle}`);
+    return index;
+  };
+  const order = [
+    '/proc/4085772/environ', 'id -u', '${TMUX_TMPDIR:-/tmp}/tmux-${uid}/default', 'LC_ALL=C',
+    "display-message -p -t '=main:@0.%0' '#{pane_pid}'", `[ "$pane_pid" != '4085772' ]`, 'printf \'%s' + PROBE_SEP + '\' "$sock"',
+  ].map(at);
+  assert.deepEqual(order, [...order].sort((a, b) => a - b));
+  assert.match(script, /\*"\$probe_sep"\*/);
+  assert.match(script, /\*"\$probe_lf"\*/);
+  assert.ok(script.includes('*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._:@%+=,-]*'));
+  assert.doesNotMatch(script, /\[\[|\bUID\b|pipefail/);
+});
 
 // issue #290 -- the probe must read back both new options so a restore has
 // something to put back.
