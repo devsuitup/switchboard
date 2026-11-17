@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.107 — 2026-11-17
+
 ### New
 - Choose individual linked worktree folders to remove from disk in the project deletion dialog. Choices start unchecked, the main checkout is always kept, and partial outcomes show what was removed or remains. (#474)
 
