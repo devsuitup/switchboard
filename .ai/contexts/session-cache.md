@@ -2235,12 +2235,13 @@ Launching a new remote session (#222) and injection over the messaging socket
   - `buildProbeCommand` ends with one more `PROBE_SEP`-delimited segment
     (`buildProcCmdlineCheck`): `1` when `/proc/<pid>/cmdline` contains
     `claude` (case-insensitive), `0` when it is readable and does not, and
-    nothing when it cannot be read. `parseDiscoveryProbeOutput` reads it as
+    nothing when it cannot be read or `grep` fails (any status other than 0
+    or 1). `parseDiscoveryProbeOutput` reads it as
     `cmdlineHasClaude`: `1` or `0`, each optionally followed by the one
     newline `echo` prints, give `true` or `false`; anything else, an empty
     field and a probe without the segment give `null`. An unreadable command
-    line (`/proc` mounted with `hidepid`, a process already gone) is unknown,
-    not proof of reuse, so it does not refuse. Only `false` refuses, with
+    line (`/proc` mounted with `hidepid`, a process already gone) or a failed
+    `grep` is unknown, not proof of reuse, so it does not refuse. Only `false` refuses, with
     `pid <n> now belongs to a process that is not a claude CLI — the session
     is gone`, before any `spawnPty` call. There is no `descriptor.procStart`
     gate.
