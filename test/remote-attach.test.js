@@ -823,6 +823,11 @@ test('parseDiscoveryProbeOutput reads the trailing cmdline-check segment as cmdl
   };
   assert.equal(parseDiscoveryProbeOutput(fields('1')).cmdlineHasClaude, true);
   assert.equal(parseDiscoveryProbeOutput(fields('0')).cmdlineHasClaude, false);
+  assert.equal(parseDiscoveryProbeOutput(fields('1\n')).cmdlineHasClaude, true);
+  assert.equal(parseDiscoveryProbeOutput(fields('0\n')).cmdlineHasClaude, false);
+  for (const field of ['', '\n', '1\n\n', ' 1', '10', 'yes']) {
+    assert.equal(parseDiscoveryProbeOutput(fields(field)).cmdlineHasClaude, null, JSON.stringify(field));
+  }
   assert.equal(parseDiscoveryProbeOutput(fields(null)).cmdlineHasClaude, null,
     'a probe predating this segment (old fixture/host script) must read as unknown, not false');
 });

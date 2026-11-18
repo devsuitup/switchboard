@@ -2232,15 +2232,18 @@ Launching a new remote session (#222) and injection over the messaging socket
   - On the default-socket fallback, the pane pid must equal the descriptor pid
     exactly, unconditionally (see "Socket discovery and the pane-pid guard").
     Parent processes are never accepted.
-  - `buildProbeCommand` ends with one more `PROBE_SEP`-delimited segment,
-    `tr '\0' ' ' < /proc/<pid>/cmdline | grep -qi claude && echo 1 || echo 0`
-    (`buildProcCmdlineCheck`), read back by `parseDiscoveryProbeOutput` as
-    `cmdlineHasClaude`. The parser accepts only the exact fields `1` and `0`;
-    the shell prints a trailing newline (`1\n`), which reads as `null`, so in
-    practice this flag is unknown and `attach()` continues. Only a parsed
-    `false` refuses, with `pid <n> now belongs to a process that is not a
-    claude CLI — the session is gone`, before any `spawnPty` call. There is no
-    `descriptor.procStart` gate.
+  - `buildProbeCommand` ends with one more `PROBE_SEP`-delimited segment
+    (`buildProcCmdlineCheck`): `1` when `/proc/<pid>/cmdline` contains
+    `claude` (case-insensitive), `0` when it is readable and does not, and
+    nothing when it cannot be read. `parseDiscoveryProbeOutput` reads it as
+    `cmdlineHasClaude`: `1` or `0`, each optionally followed by the one
+    newline `echo` prints, give `true` or `false`; anything else, an empty
+    field and a probe without the segment give `null`. An unreadable command
+    line (`/proc` mounted with `hidepid`, a process already gone) is unknown,
+    not proof of reuse, so it does not refuse. Only `false` refuses, with
+    `pid <n> now belongs to a process that is not a claude CLI — the session
+    is gone`, before any `spawnPty` call. There is no `descriptor.procStart`
+    gate.
   Neither check compares a process start time. The one measured `procStart`
   sample (`.ai/contexts/cli-session-state.md`) is on a Windows `FILETIME`
   scale, and whether the remote/Linux CLI writes the same units as
