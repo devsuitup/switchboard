@@ -13,7 +13,7 @@ From left to right:
 - **☰** — the application menu (Windows and Linux; on macOS the menu is in the
   system menu bar).
 - **Sessions** — the session list described on this page.
-- **Agent Files** and **Work Files** — see [Agent Files and Work Files](memory-workfiles.md).
+- **Agent Files** — see [Agent Files and session files](memory-workfiles.md).
 - **Stats** — see [Stats](activity-stats.md).
 - **Global settings** (gear) — see [Settings reference](settings.md).
 - **Hide sidebar** — collapses the sidebar to a narrow column; the same button
@@ -201,8 +201,7 @@ The search field filters the current tab by content, through an FTS5 full-text
 index held in Switchboard's database:
 
 - on **Sessions**, session and subagent transcripts;
-- on **Agent Files**, the listed memory and command files;
-- on **Work Files**, the files under `.work-files/`.
+- on **Agent Files**, the listed memory and command files.
 
 A compacted or continued conversation matches when any of its parts matches, including its
 latest part. A matching subagent stays nested under that conversation even

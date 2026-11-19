@@ -2363,7 +2363,7 @@ body { display: flex; flex-direction: column; }
   font-size: 13px;
 }
 
-/* Shared viewer toolbar (memory, work files, file panel) */
+/* Shared viewer toolbar (memory, file panel) */
 /* Shared controls: select, button, icon button, info button, modal; see .ai/contexts/viewer-panel.md */
 #star-toggle, #archive-toggle, #running-toggle, #today-toggle, .icon-btn {
   background: transparent;
@@ -3709,38 +3709,6 @@ body { display: flex; flex-direction: column; }
   display: none;
 }
 #memory-content .project-group.collapsed .arrow {
-  transform: rotate(-90deg);
-}
-
-/* ========== WORK FILES TAB ========== */
-
-#work-files-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px 0 16px;
-}
-
-#work-files-viewer {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface-sunken);
-}
-
-.work-file-icon {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  margin-top: 5px;
-  color: #7a9aaa;
-}
-
-/* Collapse/expand for work-files groups */
-#work-files-content .project-group.collapsed .project-sessions {
-  display: none;
-}
-#work-files-content .project-group.collapsed .arrow {
   transform: rotate(-90deg);
 }
 
@@ -5761,7 +5729,6 @@ body.window-frameless :is(
   #settings-viewer-header,
   #jsonl-viewer-header,
   #memory-viewer .viewer-toolbar,
-  #work-files-viewer .viewer-toolbar,
   #activity-trace-viewer .viewer-toolbar
 ) {
   min-height: var(--strip-min-height);
@@ -5776,7 +5743,6 @@ body.window-frameless #sidebar.collapsed ~ #main :is(
   #settings-viewer-header,
   #jsonl-viewer-header,
   #memory-viewer .viewer-toolbar,
-  #work-files-viewer .viewer-toolbar,
   #activity-trace-viewer .viewer-toolbar
 ) {
   padding-left: max(16px, calc(var(--strip-inset-left) - 42px + 8px));

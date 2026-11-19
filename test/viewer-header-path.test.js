@@ -87,7 +87,7 @@ test('shared path CSS shrinks the head first and lets an oversized filename tail
   assert.ok(headShrink > tailShrink);
 });
 
-for (const storageKey of ['markdownPreviewMode', 'workFilesPreviewMode']) {
+for (const storageKey of ['markdownPreviewMode', 'activityTracePreviewMode']) {
   test(`ViewerPanel headers use the shared path structure for ${storageKey}`, () => {
     const dom = new JSDOM('<!DOCTYPE html><div id="viewer"></div>', { url: 'http://localhost/', runScripts: 'outside-only' });
     try {

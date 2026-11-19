@@ -17,14 +17,12 @@ async function run() {
   const projectsDir = path.join(claudeDir, 'projects');
   const folderDir = path.join(projectsDir, encodeProjectPath(project));
   fs.mkdirSync(folderDir, { recursive: true });
-  fs.mkdirSync(path.join(project, '.work-files'), { recursive: true });
+  fs.mkdirSync(project, { recursive: true });
   fs.writeFileSync(path.join(folderDir, 'session.jsonl'), JSON.stringify({ cwd: project }) + '\n');
   const memory = path.join(project, 'CLAUDE.md');
   const other = path.join(project, 'agents.md');
-  const work = path.join(project, '.work-files/note.txt');
   fs.writeFileSync(memory, 'originalterm');
   fs.writeFileSync(other, 'unchangedterm');
-  fs.writeFileSync(work, 'workfileterm');
   db.upsertSearchEntries([{ id: 'stale-memory-file', type: 'memory', body: 'staleterm' }]);
   let global = {};
   const ctx = vm.createContext({
@@ -62,11 +60,6 @@ async function run() {
     assert.equal(db.searchByType('memory', 'originalterm', 20).length, 0);
     assert.equal(db.searchByType('memory', 'replacementterm', 20).length, 1);
     assert.deepEqual(rows().find(row => row.id === other), before.find(row => row.id === other));
-    await query('work-file');
-    assert.equal(db.searchByType('work-file', 'workfileterm', 20).length, 1);
-    fs.unlinkSync(work);
-    await query('work-file');
-    assert.equal(db.searchByType('work-file', 'workfileterm', 20).length, 0);
     fs.unlinkSync(memory);
     await query('memory');
     assert.equal(db.searchByType('memory', 'replacementterm', 20).length, 0);

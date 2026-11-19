@@ -12,9 +12,6 @@ contextBridge.exposeInMainWorld('api', {
   createScheduleFile: (projectPath, fields) => ipcRenderer.invoke('create-schedule-file', projectPath, fields),
   readMemory: (filePath) => ipcRenderer.invoke('read-memory', filePath),
   saveMemory: (filePath, content, expected) => ipcRenderer.invoke('save-memory', filePath, content, expected),
-  getWorkFiles: () => ipcRenderer.invoke('get-work-files'),
-  readWorkFile: (filePath) => ipcRenderer.invoke('read-work-file', filePath),
-  deleteWorkFile: (filePath) => ipcRenderer.invoke('delete-work-file', filePath),
   getIndexingState: () => ipcRenderer.invoke('get-indexing-state'),
   getLastKnownProjects: () => ipcRenderer.invoke('get-last-known-projects'),
   getProjects: async (showArchived) => {

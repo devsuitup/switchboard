@@ -162,7 +162,7 @@ The Changes badge is the one place that already meets "never colour alone".
 | Worktree Archive project | `sidebar.js` (`worktree-hide-btn`) | `Archive Project` | removes the row, keeps settings and cache, suspends schedules; reversible from Settings | no confirmation; 10-second Undo notice |
 | Project Archive | `settings-panel.js` (`sv-archive-btn`) | `Archive Project` | same | no confirmation; 10-second Undo notice |
 | Project Delete | `settings-panel.js` (`sv-delete-btn`) | `Delete Project` | drops settings, cache, search index and schedule registration; no file on disk is deleted | `showChoiceDialog`, danger style, focus on Cancel |
-| File delete (Agent Files / Work Files) | `viewer-panel.js:284` | — | delete file | danger `appConfirm`, `Delete "<name>"?` / `This cannot be undone.`, button `Delete` |
+| Optional viewer file delete | `viewer-panel.js:284` | — | delete file | danger `appConfirm`, `Delete "<name>"?` / `This cannot be undone.`, button `Delete` |
 | Trace file delete | `activity-trace-panel.js:120` | — | delete file | same wording |
 
 **Divergences.**

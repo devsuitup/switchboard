@@ -290,9 +290,9 @@ activityReporter.setEnabled(
   (getSetting('global') || {}).activityReporting ?? SETTING_DEFAULTS.activityReporting
 );
 
-// One-shot cleanup: the Plans tab was removed, so nothing indexes or clears
-// FTS rows of type 'plan' anymore. Purge any left behind by earlier versions.
-const legacySearchCleanup = deleteSearchType('plan').catch(() => {});
+const legacySearchCleanup = Promise.all(
+  ['plan', 'work-file'].map(type => deleteSearchType(type).catch(() => {}))
+);
 
 // --- Search query worker ---
 // Routes 'search' IPC off the main thread so that a slow FTS5 phrase query
@@ -329,7 +329,6 @@ searchClient.startWorker();
 const searchViaWorker = searchClient.searchViaWorker;
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
-// Ceiling for a file opened in the viewer panel, mirroring read-work-file.
 const PANEL_FILE_MAX_BYTES = 2 * 1024 * 1024;
 const TERMINAL_PATH_BATCH_MAX = 64;
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
@@ -1361,7 +1360,6 @@ ipcMain.handle('save-file-for-panel', async (_event, filePath, content, expected
     if (!opts?.git) return panelSaves.saveFileForPanel(filePath, content, expected, { version: opts?.version });
     const result = await gitChangesFile.writeTouchedChangesFile({ absolutePath: filePath, content, version: opts.version, maxBytes: PANEL_FILE_MAX_BYTES });
     if (!result.ok) return result;
-    if (/[\\/]\.work-files[\\/]/.test(result.savedPath)) invalidateFtsSignature('work-file', result.savedPath);
     if (result.savedPath.endsWith('.md')) invalidateFtsSignature('memory', result.savedPath);
     return { ok: true, version: result.version };
   } catch (err) {
@@ -1573,7 +1571,7 @@ const { fileListPathKey } = require('./src/main/viewer/file-lists-path');
 const FILE_LIST_INDEX_MAX_ENTRIES = 50;
 const FILE_LIST_INDEX_MAX_BODY_BYTES = 128 * 1024;
 const FILE_LIST_MAX_INVALIDATED_PATHS = 256;
-for (const kind of ['memory', 'work-file']) {
+for (const kind of ['memory']) {
   fileListStates.set(kind, { epoch: 0, indexed: null, targets: new Map(), paths: new Map(), invalidated: new Set(), invalidateAll: false });
 }
 
@@ -1593,13 +1591,9 @@ function invalidateFtsSignature(kind, filePath) {
   const key = filePath ? fileListPathKey(filePath, process.platform) : null;
   const matching = state.paths.get(key) || new Set();
   if (key && matching.size === 0) {
-    if (kind === 'work-file') {
-      if (!key.includes('/.work-files/')) return;
-    } else {
-      const root = fileListPathKey(CLAUDE_DIR, process.platform);
-      const names = process.platform === 'win32' ? ['claude.md', 'gemini.md', 'agents.md'] : ['CLAUDE.md', 'GEMINI.md', 'agents.md'];
-      if (!key.endsWith('.md') || !(key.startsWith(root + '/') || key.includes('/.claude/') || names.includes(key.slice(key.lastIndexOf('/') + 1)))) return;
-    }
+    const root = fileListPathKey(CLAUDE_DIR, process.platform);
+    const names = process.platform === 'win32' ? ['claude.md', 'gemini.md', 'agents.md'] : ['CLAUDE.md', 'GEMINI.md', 'agents.md'];
+    if (!key.endsWith('.md') || !(key.startsWith(root + '/') || key.includes('/.claude/') || names.includes(key.slice(key.lastIndexOf('/') + 1)))) return;
   }
   state.epoch++;
   if (key && state.indexed && !state.invalidateAll) {
@@ -1624,7 +1618,7 @@ function fileListsPolicy(kind) {
   const global = getSetting('global') || {};
   const hiddenProjects = global.hiddenProjects || [];
   const hiddenProjectScopes = global.hiddenProjectScopes || {};
-  const activeProjectPaths = kind === 'memory' ? [...activeSessions.values()].map(session => session.projectPath).filter(Boolean) : [];
+  const activeProjectPaths = [...activeSessions.values()].map(session => session.projectPath).filter(Boolean);
   return {
     hiddenProjects, hiddenProjectScopes, activeProjectPaths,
     version: JSON.stringify([state.epoch, hiddenProjects, hiddenProjectScopes, activeProjectPaths]),
@@ -1651,7 +1645,7 @@ async function applyFileListIndex(kind, result, valid) {
   for (const [id, signature] of signatures) {
     if (state.indexed.get(id) !== signature && !upserts.has(id)) return false;
   }
-  if (kind === 'memory') state.targets = new Map(result.manifest.map(([id, signature]) => [id, fileListPathKey(JSON.parse(JSON.parse(signature)[0])[2], process.platform)]));
+  state.targets = new Map(result.manifest.map(([id, signature]) => [id, fileListPathKey(JSON.parse(JSON.parse(signature)[0])[2], process.platform)]));
   publishFileListPaths(state, new Set([...state.indexed.keys(), ...signatures.keys()]));
   const removed = [...new Set([...result.deletes, ...state.indexed.keys()])].filter(id => !signatures.has(id));
   const changes = [...removed.map(id => ({ id })), ...result.upserts.map(entry => ({ entry }))];
@@ -1695,7 +1689,7 @@ async function applyFileListIndex(kind, result, valid) {
   return true;
 }
 
-const fileListClients = new Map(['memory', 'work-file'].map(kind => [kind, createFileListsWorkerClient({
+const fileListClients = new Map(['memory'].map(kind => [kind, createFileListsWorkerClient({
   workerFactory: () => new Worker(path.join(__dirname, 'workers', 'file-lists-query.js'), { workerData: { claudeDir: CLAUDE_DIR, projectsDir: PROJECTS_DIR } }),
   snapshot: () => fileListsSnapshot(kind),
   getVersion: () => fileListsPolicy(kind).version,
@@ -1766,54 +1760,6 @@ ipcMain.handle('read-memory', (_event, filePath) => {
 
 // --- IPC: save-memory ---
 ipcMain.handle('save-memory', (_event, filePath, content, expected) => panelSaves.saveMemory(filePath, content, expected));
-
-// --- IPC: get-work-files ---
-ipcMain.handle('get-work-files', async () => {
-  const started = TRACE.on ? performance.now() : null;
-  const result = await fileListsClient.request({ kind: 'work-file' });
-  if (TRACE.on) {
-    if (started !== null) trace('ipc.get-work-files', null, { totalMs: performance.now() - started, entries: result.entries });
-  }
-  return result.view;
-});
-
-// --- IPC: read-work-file ---
-ipcMain.handle('read-work-file', (_event, filePath) => {
-  try {
-    const resolved = path.resolve(filePath);
-    // Security: path must contain /.work-files/ segment
-    if (!resolved.includes('/.work-files/') && !resolved.includes('\\.work-files\\')) {
-      return '[access denied]';
-    }
-    if (!fs.existsSync(resolved)) return '';
-    const stat = fs.statSync(resolved);
-    if (stat.size > 2 * 1024 * 1024) return '[file too large to display]';
-    // Detect binary: try reading as utf8; if it fails or contains null bytes, treat as binary
-    const buf = fs.readFileSync(resolved);
-    if (buf.includes(0)) return '[binary file]';
-    return buf.toString('utf8');
-  } catch (err) {
-    console.error('Error reading work file:', err);
-    return '';
-  }
-});
-
-// --- IPC: delete-work-file ---
-ipcMain.handle('delete-work-file', (_event, filePath) => {
-  try {
-    const resolved = path.resolve(filePath);
-    if (!resolved.includes('/.work-files/') && !resolved.includes('\\.work-files\\')) {
-      return { ok: false, error: 'access denied' };
-    }
-    if (!fs.existsSync(resolved)) return { ok: false, error: 'not found' };
-    fs.unlinkSync(resolved);
-    invalidateFtsSignature('work-file', resolved);
-    return { ok: true };
-  } catch (err) {
-    console.error('Error deleting work file:', err);
-    return { ok: false, error: err.message };
-  }
-});
 
 // --- IPC: search ---
 // Routed through the search-query worker so that slow FTS5 phrase queries
@@ -2351,7 +2297,6 @@ ipcMain.handle('git-changes-save', async (_event, sessionId, filePath, content, 
       maxBytes: PANEL_FILE_MAX_BYTES,
     });
     if (!result.ok) return result;
-    if (result.savedPath.split(/[\\/]/).includes('.work-files')) invalidateFtsSignature('work-file', result.savedPath);
     if (result.savedPath.endsWith('.md')) invalidateFtsSignature('memory', result.savedPath);
     return { ok: true, version: result.version };
   } catch (err) {

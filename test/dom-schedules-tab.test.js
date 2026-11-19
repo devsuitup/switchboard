@@ -24,7 +24,7 @@ function setup(t, run = () => ({ ok: true })) {
   w.ICONS = { schedule: () => '<svg></svg>' };
   const opened = [];
   w.CSS = { escape: value => value };
-  for (const name of ['memoryContent', 'memoryViewer', 'placeholder', 'terminalArea', 'statsViewer', 'settingsViewer', 'workFilesViewer', 'jsonlViewer']) w[name] = w.document.createElement('div');
+  for (const name of ['memoryContent', 'memoryViewer', 'placeholder', 'terminalArea', 'statsViewer', 'settingsViewer', 'jsonlViewer']) w[name] = w.document.createElement('div');
   w.memoryPanel = { open: (...args) => opened.push(args) };
   w.openSession = session => calls.push(session);
   w.loadProjects = async () => { w.cachedAllProjects = [{ projectPath: project.projectPath, sessions: schedule.runs }]; };
@@ -614,14 +614,12 @@ test('Open refuses an empty read without opening an editor; toggle refreshes the
   await new Promise(resolve => setImmediate(resolve));
   assert.match(h.w.document.querySelector('[role="alert"]').textContent, /Could not open/);
   const content = '---\ncron: * * * * *\n---\nPrompt';
-  h.w.workFilesViewer.style.display = 'flex';
   h.w.jsonlViewer.style.display = 'flex';
   h.w.api.readMemory = async () => content;
   h.w.document.querySelector('.schedule-open-btn').click();
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(h.opened, [['schedule-nightly.md', '/p/schedule-nightly.md', content]]);
   assert.equal(h.w.memoryViewer.style.display, 'flex');
-  assert.equal(h.w.workFilesViewer.style.display, 'none', 'Open gives the memory editor the main viewer');
   assert.equal(h.w.jsonlViewer.style.display, 'none');
   assert.equal(h.w.document.querySelector('[role="alert"]'), null);
   let toggled;

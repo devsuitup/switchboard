@@ -31,7 +31,6 @@ function setup({ traceState, files = [], readResult, deleteResult = { ok: true }
     <div id="placeholder"></div>
     <div id="stats-viewer"></div>
     <div id="memory-viewer"></div>
-    <div id="work-files-viewer"></div>
     <div id="jsonl-viewer"></div>
   </body></html>`, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
