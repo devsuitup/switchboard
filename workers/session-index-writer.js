@@ -2,6 +2,7 @@
 
 const { parentPort } = require('node:worker_threads');
 const { setTimeout: delay, setImmediate: yieldTurn } = require('node:timers/promises');
+const { performance } = require('node:perf_hooks');
 const { openSessionIndexStore } = require('../session-index-store');
 const { createWriterCommands } = require('../session-index-commands');
 const { createProjectDeleteProgress, commitTransaction } = require('../src/main/projects/project-delete-progress');
@@ -26,6 +27,9 @@ const assertWorkflow = message => {
 let running = false, interactiveBurst = 0;
 const backgroundCommands = new Set(['effects', 'upsertCachedSessions', 'replaceSessionMetrics', 'upsertSearchEntries',
   'applySearchFileBatch', 'setCachedEntrypoints', 'setCachedCustomTitles', 'deleteCachedFolder', 'deleteSearchFolder', 'deleteSearchType', 'dropRemoteFolder', 'cleanupWorktree']);
+const journalCommands = new Set(['querySessionRequestOutcome', 'claimSessionResultNamespace', 'recordSessionResultPublication',
+  'recordConsumedSessionStatusRequest', 'recordSessionRequestConflict']);
+const chunkWallTimeMs = 10;
 
 const busyCounts = new Map();
 function flushBusyCounts() {
@@ -155,16 +159,16 @@ async function drain() {
     const interactive = queue.findIndex(job => !backgroundCommands.has(job.command) && !['close', 'drain'].includes(job.command));
     const background = queue.findIndex(job => backgroundCommands.has(job.command));
     const control = queue.findIndex(job => ['fenceWorkflow', 'fenceProjectDeletion'].includes(job.command));
-    const index = control >= 0 ? control : interactive >= 0 && (interactiveBurst < 4 || background < 0) ? interactive : background >= 0 ? background : 0;
+    const journal = queue.findIndex(job => journalCommands.has(job.command));
+    const index = control >= 0 ? control : journal >= 0 ? journal : interactive >= 0 && (interactiveBurst < 4 || background < 0) ? interactive : background >= 0 ? background : 0;
     const message = queue.splice(index, 1)[0];
-    if (backgroundCommands.has(message.command)) interactiveBurst = 0;
-    else interactiveBurst++;
+    if (!journalCommands.has(message.command)) interactiveBurst = backgroundCommands.has(message.command) ? 0 : interactiveBurst + 1;
     try {
       assertWorkflow(message);
       if (!message.started) { message.started = true; parentPort.postMessage({ id: message.id, started: true }); }
       message.iterator ||= commandUnits(message);
-      const unit = message.deferred || message.iterator.next();
-      message.deferred = null;
+      message.pending ||= [];
+      const unit = message.pending[0] || message.iterator.next();
       if (unit.done) {
         pendingDeletionHistory.delete(message);
         parentPort.postMessage({ id: message.id, ...(message.producerError ? { error: { message: message.producerError.message, code: message.producerError.code } }
@@ -186,12 +190,11 @@ async function drain() {
           if (message.command === 'effects' && message.committedRevision !== undefined && before !== message.committedRevision) {
             throw Object.assign(new Error('cache snapshot changed between writer effect batches'), { code: 'WRITER_STALE' });
           }
-          const buffered = [unit];
-          let deferred;
+          const buffered = message.pending.length ? message.pending : [unit];
+          let committed = 0;
           const acknowledgment = await transaction(message.command, () => {
             assertWorkflow(message);
-            deferred = null;
-            let next = unit, result, count = 0;
+            let next = unit, result, count = 0, elapsed = 0;
             while (!next.done) {
               const execute = () => {
                 try {
@@ -201,18 +204,21 @@ async function drain() {
                 catch (error) { message.producerError ||= error; return; }
                 return next.value();
               };
+              const started = performance.now();
               const applied = db.chunkUnit(execute, count);
-              if (applied.deferred) { deferred = next; break; }
+              elapsed += performance.now() - started;
+              if (applied.deferred) break;
               result = applied.result;
               count++;
-              if (count >= db.nextChunkSize()) break;
+              if (count >= db.nextChunkSize() || elapsed >= chunkWallTimeMs) break;
               next = buffered[count] ||= message.iterator.next();
             }
+            committed = count;
             return result;
           });
           message.result = acknowledgment.result;
           message.committedRevision = acknowledgment.committedRevision;
-          message.deferred = deferred;
+          message.pending = buffered.slice(committed);
           message.mutated ||= (db.getSetting('_writer_revision') || 0) !== before;
         }
         if (backgroundCommands.has(message.command)) queue.unshift(message);
