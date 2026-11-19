@@ -1923,7 +1923,7 @@ async function sendSessionToBackground(sessionId) {
     let result = await window.api.sendSessionToBackground(sessionId);
     if (result?.code === 'busy') {
       // see .ai/contexts/bg-agents.md ("Send to background")
-      if (!await appConfirm({ title: 'Send to background now?', message: 'Claude is working in this session. Sending /bg now interrupts the running tool: Claude sees it as killed and finishes the turn in the background. Wait for the turn to end, or send it now.', confirmLabel: 'Send now', cancelLabel: 'Wait' })) return;
+      if (!await appConfirm({ title: 'Send to background now?', message: 'Claude is working in this session. Sending /bg now interrupts the running tool: Claude sees it as killed and finishes the turn in the background. Wait for the turn to end, or send it now.', confirmLabel: 'Send now' })) return;
       if (openSessions.get(sessionId) !== oldEntry) return;
       result = await window.api.sendSessionToBackground(sessionId, { force: true });
     }

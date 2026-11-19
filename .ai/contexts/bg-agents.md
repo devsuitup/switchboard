@@ -1232,7 +1232,7 @@ Rule derived from that measurement: `backgroundRefusal(session, status,
 M4 case 2, not re-measured) and `shell`, and an unknown status, with or
 without `force`. `busy` without `force` returns `{ ok: false, code: 'busy' }`
 and writes nothing; the renderer then asks once ("Send to background now?",
-naming the interrupted tool, Send now / Wait) and retries with
+naming the interrupted tool, Send now / Cancel) and retries with
 `{ force: true }` through the same IPC (`send-session-to-background`,
 `sendSessionToBackground(id, { force })`). With `force`, `/bg` is submitted
 during the turn and the 300 ms post-write check no longer withholds Enter on
