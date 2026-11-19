@@ -2,7 +2,7 @@
 
 const { randomUUID } = require('node:crypto');
 
-function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAllowed,
+function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAllowed, log,
   now = Date.now, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout }) {
   const pending = new Map();
   const readyWaiters = new Set();
@@ -129,6 +129,9 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
   function ready(event) {
     const state = document;
     if (!senderMatches(state, event) || !launchAllowed()) return null;
+    if (!state.ready) {
+      try { log?.info('[trigger-watcher] renderer ready for trigger actions'); } catch {}
+    }
     state.ready = true;
     state.frame = event.senderFrame;
     for (const waiter of [...readyWaiters]) if (waiter.state === state) waiter.finish(readiness(state));

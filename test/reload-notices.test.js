@@ -11,7 +11,7 @@ async function reloadHarness(t, graph, options = {}) {
   h.rows.get('old').name = 'Reload conversation';
   await h.ctx.api.setSetting('global', { ...h.settings(), restoreOnStartup: 'auto' });
   vm.runInContext('activeSessionId = "old"; restoringWorkingSet = false;', h.ctx, { filename: __filename });
-  const app = loadAppFunctions(h.ctx, { functions: ['reopenActiveSessionAfterReload', 'showNotRestoredNotice', 'restoreWorkingSet', 'tickRestorePlanner', 'markRestoreIndexingDone', 'restoreSessionsAfterIndexing', 'restoreStartupSessions', 'loadStartupProjects'] });
+  const app = loadAppFunctions(h.ctx, { functions: ['reopenActiveSessionAfterReload', 'showNotRestoredNotice', 'restoreWorkingSet', 'tickRestorePlanner', 'markRestoreIndexingDone', 'restoreSessionsAfterIndexing', 'restoreStartupSessions', 'loadStartupProjects'], declarations: ['startupProjectsHandedOver'] });
   h.ctx.createRestorePlanner = require('../public/restore-plan').createRestorePlanner;
   h.ctx.api.getIndexingState = async () => ({ finished: false });
   h.ctx.api.getActiveSessions = async () => [];

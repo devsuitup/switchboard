@@ -228,6 +228,16 @@ async function resolveLocalTarget(sessionId, deps = {}) {
 function createTriggerActions({ fs = nativeFs, log, now = Date.now } = {}) {
   const limiter = createNewSessionLimiter({ now });
   const error = (...args) => { try { log?.error(...args); } catch {} };
+  const reportResult = result => {
+    if (result.reason === 'renderer not ready') {
+      try {
+        log?.info(`[trigger-watcher] v1 action refused: ${JSON.stringify({
+          action: result.action, requestedName: result.requestedName ?? null, reason: result.reason,
+        })}`);
+      } catch {}
+    }
+    return result;
+  };
   function readState(resultPath, markerPath) {
     function read(file) {
       const stat = fs.lstatSync(file);
@@ -293,10 +303,10 @@ function createTriggerActions({ fs = nativeFs, log, now = Date.now } = {}) {
       const evidence = { steps_total: 0 };
       const invalid = validateTrigger(trigger, stem, evidence);
       if (!invalid && trigger.action === 'open' && execution?.ctx.lifecycle) {
-        return executeOpen(trigger, { ...execution, limiter, now, evidence, requestId: stem });
+        return executeOpen(trigger, { ...execution, limiter, now, evidence, requestId: stem }).then(reportResult);
       }
       if (!invalid && trigger.action === 'stop' && execution?.ctx.lifecycle) {
-        return executeStop(trigger, { ...execution, now, evidence, requestId: stem });
+        return executeStop(trigger, { ...execution, now, evidence, requestId: stem }).then(reportResult);
       }
       return refusal(trigger, invalid || UNAVAILABLE, invalid || !own(trigger, 'new') ? evidence : { ...evidence, ...naming.requestedNameFields(trigger) });
     },

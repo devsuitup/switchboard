@@ -338,7 +338,7 @@ const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 // Active PTY sessions
 const activeSessions = new Map();
 const triggerRendererBridge = require('./src/main/triggers/trigger-renderer-bridge').createTriggerRendererBridge({
-  ipcMain, getWindow: () => mainWindow, getSession: id => activeSessions.get(id), launchAllowed: () => unsavedGuard.launchAllowed(),
+  ipcMain, log, getWindow: () => mainWindow, getSession: id => activeSessions.get(id), launchAllowed: () => unsavedGuard.launchAllowed(),
 });
 suspendTriggerActions = win => triggerRendererBridge.suspend(win);
 restoreTriggerActions = win => triggerRendererBridge.restore(win);

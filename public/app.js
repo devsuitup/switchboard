@@ -2398,9 +2398,15 @@ function observeSessionProjection({ generation, cause, provenance } = {}) {
   } catch {}
 }
 
+let startupProjectsHandedOver = false;
+
 async function reloadProjects(options) {
   try {
     const outcome = await loadProjects(options);
+    if (outcome?.accepted && startupProjectsHandedOver) {
+      try { await window.api.triggerActionsReady?.(); }
+      catch (error) { console.warn('[switchboard] trigger readiness announcement failed', error); }
+    }
     if (outcome?.accepted && options?.restoreRetry) await maybeRetryRestoreWorkingSet(outcome);
     return outcome?.accepted === true;
   } catch (error) {
@@ -3173,14 +3179,17 @@ async function loadStartupProjects() {
     if (loaded) await window.api.triggerActionsReady?.();
   }
   catch (error) { console.warn('[switchboard] startup restore failed', error); }
+  if (loaded) startupProjectsHandedOver = true;
   if (!loaded) {
     const retry = async remaining => {
       if (await reloadProjects()) {
         try { await restoreStartupSessions(); await window.api.triggerActionsReady?.(); }
         catch (error) { console.warn('[switchboard] startup restore failed', error); }
+        startupProjectsHandedOver = true;
         return;
       }
       if (remaining > 1) setTimeout(() => retry(remaining - 1), 1000);
+      else startupProjectsHandedOver = true;
     };
     setTimeout(() => retry(3), 1000);
   }
