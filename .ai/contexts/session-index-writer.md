@@ -308,8 +308,21 @@ the registry once; subsequent unchanged ticks do not advance the revision.
 Up to 32 commands are in flight on the client. The worker keeps one background
 command at the front and yields at each transaction boundary. Interactive commands
 can run between units, with at most four interactive service turns before serving
-pending background work. No filesystem I/O or await runs inside an ordinary
-transaction. Cache computations retain their synchronous algorithms against
+pending background work. The consumed-request journal commands
+(`querySessionRequestOutcome`, `claimSessionResultNamespace`,
+`recordSessionResultPublication`, `recordConsumedSessionStatusRequest`,
+`recordSessionRequestConflict`) form a third lane, selected right after the
+control commands and before any other interactive or background command; a
+journal selection neither increments nor resets the interactive burst counter
+(#1073). The lane cannot starve indexing indefinitely: the trigger watcher keeps
+at most eight triggers in flight, each issuing three or four journal commands
+separated by delivery work. The facade times each journal command from
+`send()` to its ACK and logs one `warn` line,
+`[session-index-writer] journal command <name> waited <n> ms`, when the wait
+reaches 200 ms (`journalWaitWarnMs`); a shorter wait logs nothing, so an
+absent line after a trigger means "under 200 ms", and an empty log with no
+trigger dropped means "not measured". No filesystem I/O or await runs inside
+an ordinary transaction. Cache computations retain their synchronous algorithms against
 cache-effects.js: lazy reads of affected rows, local read-your-writes overlay,
 then one acknowledged effects command. Worker admission checks its current revision
 against that snapshot. A rejected main-cache computation may recompute at most
@@ -342,7 +355,18 @@ injected in the store; the 10 ms target sums statement execution durations, excl
 queue time, BEGIN lock acquisition, JS preparation and commit. Exceeding it
 reduces the next chunk's unit count. Transactions below 5 ms and within the row
 and byte targets grow it by one, up to 32 units. Synchronous SQLite cannot be
-preempted. A chunk buffers each consumed iterator unit so a BUSY rollback replays
+preempted. The worker also caps each chunk by wall time: it sums the
+`performance.now()` time of every `chunkUnit` call and stops admitting units
+once 10 ms (`chunkWallTimeMs`) have been spent, in addition to the unit-count
+target (#1073). The first unit of a chunk always runs, so an oversized unit
+still occupies its own transaction; nothing is appended behind it. This caps
+the time a command arriving mid-chunk waits to one chunk of about 10 ms plus
+one unit; the store's statement-time adaptation is unchanged.
+`test/session-index-writer-chunk-wall-time.test.js` drives the shipped worker
+with `test/fixtures/writer-slow-units.cjs` (15 ms per unit): 32 slow rows
+commit as 32 transactions, and a journal query posted behind them is answered
+in under 200 ms and before queued `setSetting` commands. A chunk buffers each
+consumed iterator unit so a BUSY rollback replays
 the same units, including any savepoint-deferred unit, before advancing further.
 
 Metrics retain the existing session_metrics table, its index and legacy SQL contract.
