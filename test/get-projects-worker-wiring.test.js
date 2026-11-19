@@ -132,3 +132,106 @@ test('projects snapshot carries cached background state and attach identity in i
   assert.notEqual(completed.version, renamed.version);
   assert.notEqual(completed.liveVersion, renamed.liveVersion);
 });
+
+// #1125: the reconcile throttle after a cold scan, undelivered reconciles, stale deliveries and conflict diagnostics.
+const flush = () => new Promise(resolve => setImmediate(resolve));
+
+test('a completed cold scan advances the reconcile throttle', async () => {
+  let now = 100000, scanDone = false, finishScan;
+  const requests = [];
+  const scan = new Promise(resolve => { finishScan = resolve; });
+  const invoke = handler({
+    Date: { now: () => now },
+    isInitialScanComplete: () => scanDone,
+    populateCacheViaWorker: () => scan,
+    projectsClient: { request: async options => { requests.push(options); return { defaultProjects: [], allProjects: [] }; } },
+  });
+  await invoke(null, false);
+  assert.equal(requests[0].reconcile, false, 'a cold load never reconciles');
+  scanDone = true;
+  finishScan();
+  await flush();
+  await invoke(null, false);
+  assert.equal(requests[1].reconcile, false, 'the scan just read every file: the first post-scan load is a plain build');
+  now += 5000;
+  await invoke(null, false);
+  assert.equal(requests[2].reconcile, true);
+});
+
+test('a cold scan that ends without the completeness marker leaves the throttle alone', async () => {
+  const requests = [];
+  const invoke = handler({
+    isInitialScanComplete: () => false,
+    populateCacheViaWorker: async () => {},
+    projectsClient: { request: async options => { requests.push(options); return { defaultProjects: [], allProjects: [] }; } },
+  });
+  await invoke(null, false);
+  await flush();
+  assert.equal(invoke.reconciledAt(), 0);
+});
+
+test('an undelivered reconcile notifies the renderer once, a delivered one never', () => {
+  const notifications = [];
+  const invoke = handler({ notifyRendererProjectsChanged: cause => notifications.push(cause) });
+  invoke.accepted({ reconciled: true }, { delivered: false });
+  assert.deepEqual(notifications, ['reconcile']);
+  assert.ok(invoke.reconciledAt() > 0);
+  invoke.accepted({ reconciled: true }, { delivered: true });
+  invoke.accepted({ reconciled: false }, { delivered: false });
+  assert.deepEqual(notifications, ['reconcile'], 'a delivered result or a plain build never notifies');
+});
+
+test('a stale delivery returns both views, projectsStale: true, and schedules a conflict notification', async () => {
+  const notifications = [];
+  const projects = [{ projectPath: '/fixture', sessions: [] }];
+  const invoke = handler({
+    notifyRendererProjectsChanged: cause => notifications.push(cause),
+    projectsClient: { request: async () => ({ defaultProjects: projects, allProjects: projects, stale: true }) },
+  });
+  const reply = await invoke(null, 'both');
+  assert.deepEqual(reply.defaultProjects, projects);
+  assert.deepEqual(reply.allProjects, projects);
+  assert.equal(reply.projectsStale, true);
+  assert.equal(reply.projectsError, undefined);
+  assert.deepEqual(notifications, ['conflict']);
+  const fresh = handler({
+    notifyRendererProjectsChanged: cause => notifications.push(cause),
+    projectsClient: { request: async () => ({ defaultProjects: projects, allProjects: projects }) },
+  });
+  const accepted = await fresh(null, 'both');
+  assert.equal(accepted.projectsStale, undefined);
+  assert.deepEqual(notifications, ['conflict'], 'an accepted reply never notifies');
+});
+
+test('a terminal conflict logs the changed live component', async () => {
+  const warnings = [];
+  const conflict = fields => Object.assign(new Error('Projects changed while loading; reload to retry.'),
+    { code: 'PROJECTS_SNAPSHOT_CONFLICT', dispatches: 3, reconcile: false, ...fields });
+  let error;
+  const invoke = handler({ log: { warn: line => warnings.push(line) }, projectsClient: { request: async () => { throw error; } } });
+  const same = { activeSessions: [], remoteRoots: [], localJobs: [] };
+  error = conflict({ reason: 'live', before: JSON.stringify({ ...same, localDescriptors: [] }), after: JSON.stringify({ ...same, localDescriptors: [{ sessionId: 'new' }] }) });
+  assert.deepEqual(JSON.parse(JSON.stringify(await invoke(null, 'both'))), { projectsError: { code: 'PROJECTS_SNAPSHOT_CONFLICT', message: 'Projects changed while loading; reload to retry.' } });
+  assert.match(warnings[0], /^\[projects\] snapshot conflict after 3 dispatches: reason=live changed=localDescriptors reconcile=false$/);
+  error = conflict({ reason: 'live', before: 'not json', after: JSON.stringify(same) });
+  await invoke(null, 'both');
+  assert.match(warnings[1], /reason=live changed=unknown/);
+  error = conflict({ reason: 'live', before: JSON.stringify({ ...same, localDescriptors: [] }), after: JSON.stringify({ activeSessions: [{}], remoteRoots: [], localJobs: [{}], localDescriptors: [] }) });
+  await invoke(null, 'both');
+  assert.match(warnings[2], /changed=activeSessions,localJobs/);
+  error = conflict({ reason: 'db', reconcile: true });
+  await invoke(null, 'both');
+  assert.match(warnings[3], /^\[projects\] snapshot conflict after 3 dispatches: reason=db reconcile=true$/);
+});
+
+test('a caller timeout logs the job options and dispatch count, or unknown when the error carries none', async () => {
+  const warnings = [];
+  let error;
+  const invoke = handler({ log: { warn: line => warnings.push(line) }, console: { ...console, error() {} }, projectsClient: { request: async () => { throw error; } } });
+  error = Object.assign(new Error('projects worker timed out'), { code: 'PROJECTS_WORKER_TIMEOUT', timeoutMs: 30000, reconcile: true, dispatches: 2 });
+  await assert.rejects(invoke(null, 'both'), /timed out/);
+  assert.equal(warnings[0], '[projects] get-projects timed out after 30000 ms: reconcile=true dispatches=2');
+  error = Object.assign(new Error('projects worker timed out'), { code: 'PROJECTS_WORKER_TIMEOUT', timeoutMs: 30000 });
+  await assert.rejects(invoke(null, 'both'), /timed out/);
+  assert.equal(warnings[1], '[projects] get-projects timed out after 30000 ms: reconcile=unknown dispatches=unknown');
+});

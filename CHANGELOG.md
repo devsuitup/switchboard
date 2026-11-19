@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
+- While the index is being built at startup, the sidebar no longer fails reload after reload with "Projects changed while loading" as sessions start and stop: it shows the latest snapshot and refreshes at the next change. The first load after indexing no longer runs a full sweep that could time out, and a sweep that outlives its wait now refreshes the sidebar when it finishes. (#1125)
 - File triggers recover after a successful project reload even if every startup load failed, instead of remaining stuck with "renderer not ready" until the window restarts. (#1123)
 - Opening a remote session whose process has ended and whose pid now belongs to another program is refused with an error saying the session is gone, instead of attaching to that program's tmux pane. (#1114)
 

@@ -1373,8 +1373,14 @@ What Switchboard sets *after* cleaning stays: the plain terminal's `CLAUDECODE=1
 On terminal PROJECTS_SNAPSHOT_CONFLICT, get-projects schedules the existing
 throttled projects-changed notification with cause conflict, then returns only
 {projectsError:{code:'PROJECTS_SNAPSHOT_CONFLICT',message:'Projects changed while loading; reload to retry.'}}.
-Preload recognizes that exact envelope and reconstructs a coded Error. Ordinary
-errors still reject; boolean arrays and the paired defaultProjects/allProjects
+Preload recognizes that exact envelope and reconstructs a coded Error. An
+effect-free build whose third dispatch conflicts on the live snapshot is not an
+error (#1125): get-projects returns the paired reply with `projectsStale: true`
+(boolean replies stay plain arrays) and schedules the same conflict
+notification, so the renderer renders it as any reply and the next reload
+replaces it; main logs the differing live component for the rejected case and
+the job options for a caller timeout (session-cache.md, "Projects query
+worker"). Ordinary errors still reject; boolean arrays and the paired defaultProjects/allProjects
 reply retain their successful shapes, with compact provenance on the paired
 reply. Its `projection.facts` map shares deciding inputs by opaque `scope|root`
 across both views (#742). Rows carry no `projectionFacts`; main's assembly and
