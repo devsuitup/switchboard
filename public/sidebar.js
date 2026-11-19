@@ -2896,8 +2896,10 @@ function buildSessionItem(session) {
     && rowSessionIds(session).some(id => bgAgentSessionIds.has(String(id).toLowerCase())))) {
     const badge = document.createElement('span');
     badge.className = 'bg-badge';
-    badge.title = 'Background session run by the claude daemon — click to attach';
-    badge.textContent = 'bg';
+    const jobName = typeof session.bgJobName === 'string' && session.bgJobName.trim() ? session.bgJobName.trim() : null;
+    badge.title = 'Background session run by the claude daemon' + (jobName ? ' — job ' + jobName : '') + (session.bgJobId ? ' (' + session.bgJobId + ')' : '') + ' — click to attach';
+    const launchName = name => (name || '').replace(/ (d+)$/, '');
+    badge.textContent = jobName && launchName(jobName) !== launchName(displayName) ? 'bg · ' + jobName : 'bg';
     summaryEl.prepend(badge);
   }
 

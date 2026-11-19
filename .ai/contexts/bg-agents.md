@@ -1093,6 +1093,39 @@ consequences:
   resumes normally: the attach decision is made by `guardResume` from a live
   descriptor, not from the badge.
 
+### Job name and direct attach (#546)
+
+Observed 2026-11-19 after a Switchboard restart (main.log 19:15-19:23, v0.0.106):
+the four background jobs were reattached one by one from the Agents view, and
+the attached job 22d3a9d7 (`switchboard-dev (3)`) sat under its original
+conversation row `a9f4e948` (`headSessionId: 5190855a`), titled after that
+conversation. A sidebar click on such a row went through the saved-entry path:
+`openSessionNow` found the `bg` hold in `skippedWorkingSetEntries` and called
+`prepareBackgroundRestore`, whose `restore-background-job` IPC rechecks the job
+record, worker liveness and continuations before attaching, and whose refusals
+read "Check the background session in the Agents view". Without a hold it ran
+the continuation lookup and a live-elsewhere probe (a PowerShell process-table
+read on Windows) before `guardResume` turned the `bg` descriptor into an attach.
+The Agents view's Attach does none of that: it opens `{ type: 'attach', jobId,
+cwd }` directly.
+
+Two changes:
+
+- `mergeLocalBackgroundSessions` adds `bgJobName` next to `bgJobId`/`bgSessionId`
+  (the descriptor's `name`, else the cached job's `--name`). `dedup` lists it
+  among the projection keys. The `bg` badge's title names the job and its id, and
+  its text reads `bg · <job name>` when the job name differs from the row's
+  display name once ` (N)` collision suffixes are stripped from both; otherwise
+  it stays `bg`.
+- A user click (not automatic, no trigger, no explicit options, not a
+  choose-again) on a row whose `bgSessionId` is the row's own session id and
+  whose `bgJobId` is a valid job id attaches that job directly, exactly as the
+  Agents view does, before the saved-entry hold, the continuation lookup and
+  `guardResume` are consulted. Automatic restore keeps the guarded path. A stale
+  payload makes `open-terminal` fail with its ordinary attach error.
+
+Tests: `test/sidebar-bg-attach-661.test.js`.
+
 ## External Resume
 
 An interactive row with a session id offers Resume even when the daemon is

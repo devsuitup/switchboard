@@ -277,6 +277,7 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, options
     if (descriptor) {
       visible.bgJobId = descriptor.jobId;
       visible.bgSessionId = descriptor.sessionId;
+      visible.bgJobName = (typeof descriptor.name === 'string' && descriptor.name.trim()) || jobs.get(descriptor.jobId)?.name || null;
     }
   }
   const namesByRow = new Map();

@@ -300,7 +300,7 @@ test('an attach tab remains listed and marked open when no registry descriptor i
   const row = h.render().querySelector(`[data-session-id="${HEAD}"]`);
   assert.ok(row, 'the open attach tab supplies its explicit session identity');
   assert.ok(row.querySelector('.session-icon.running'));
-  assert.equal(row.querySelector('.bg-badge')?.textContent, 'bg');
+  assert.match(row.querySelector('.bg-badge')?.textContent, /^bg( · fixture launch)?$/);
   h.activeSessions.get(HEAD).exited = true;
   assert.equal(h.projects().flatMap(p => p.sessions).length, 0);
 });

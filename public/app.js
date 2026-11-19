@@ -2179,7 +2179,7 @@ const sessionMap = new Map();
 
 function dedup(projects) {
   dedup.projectionKeys ||= new WeakMap();
-  const known = ['bgJobId', 'bgSessionId', 'identityJobId', 'identitySessionId', 'descriptorOnly', 'headSessionId', 'mergedMemberIds', 'conversationParts', 'mergedMemberStatuses', 'status', 'statusUpdatedAt', 'waitingFor', 'remoteAlias', 'placeholder', 'remoteAttachable', 'remoteActiveAt'];
+  const known = ['bgJobId', 'bgSessionId', 'bgJobName', 'identityJobId', 'identitySessionId', 'descriptorOnly', 'headSessionId', 'mergedMemberIds', 'conversationParts', 'mergedMemberStatuses', 'status', 'statusUpdatedAt', 'waitingFor', 'remoteAlias', 'placeholder', 'remoteAttachable', 'remoteActiveAt'];
   for (const p of projects) {
     for (let i = 0; i < p.sessions.length; i++) {
       const s = p.sessions[i];
@@ -2650,6 +2650,11 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
     if (clearDormantRow(openId)) schedulePersistWorkingSet();
     if (mayShow()) showSession(openId);
     return triggerAction ? { ok: true, generation: ptyGenerations.get(openId) } : undefined;
+  }
+  // see .ai/contexts/bg-agents.md ("The sidebar")
+  if (!automatic && !customOptions && !triggerAction && !reattachOnly && !chooseAgain && /^[0-9a-f]{8}$/i.test(String(session.bgJobId || ''))
+    && typeof session.bgSessionId === 'string' && session.bgSessionId.toLowerCase() === String(session.sessionId).toLowerCase()) {
+    customOptions = { type: 'attach', jobId: session.bgJobId, cwd: session.projectPath };
   }
   const backgroundHeld = !backgroundRestoreJobId && !reattachOnly && customOptions?.type !== 'attach'
     && (dormantWorkingSet.get(session.sessionId) || skippedWorkingSetEntries.get(session.sessionId));
