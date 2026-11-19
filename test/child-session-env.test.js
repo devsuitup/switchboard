@@ -94,7 +94,7 @@ function mainContext() {
     ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
     mainWindow: {}, activeSessions: new Map(),
     unsavedGuard: { launchAllowed: () => true },
-    remoteIndexer: { findSessionAlias: () => null }, getCachedFolder: () => null,
+    remoteIndexer: { findSessionAlias: () => null }, getCachedFolder: () => null, getCachedSession: () => null,
     isRemoteFolder: () => false, resolveSessionRealCwd: () => null,
     PROJECTS_DIR: path.join(ROOT, '.work-files', 'no-transcripts-670'),
     normalizePtySize: require('../src/main/terminals/pty-size').normalizePtySize,

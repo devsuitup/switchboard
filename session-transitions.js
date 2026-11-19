@@ -637,7 +637,8 @@ function publishRekey(sessionId, newId, session, currentFiles, kind, background)
   session._prevDirMtime = undefined;
   session._subFileList = null;
   session._continuation = null;
-  session.continuationSnapshot = snapshotContinuations(path.join(PROJECTS_DIR, session.projectFolder, newId + '.jsonl'), newId);
+  session.continuationSnapshot = session.projectFolder
+    ? snapshotContinuations(path.join(PROJECTS_DIR, session.projectFolder, newId + '.jsonl'), newId) : null;
   session.backgroundCommandSource = null;
   session._pendingBackgroundContinuation = false;
   activeSessions.delete(sessionId);
@@ -945,4 +946,60 @@ function detectPendingBackgroundContinuations() {
   }
 }
 
-module.exports = { drainMetadataWrites, init, detectSessionTransitions, detectSubagentTransitions, refreshDescriptorSessions, detectPendingBackgroundContinuations, snapshotContinuations, snapshotContinuationsBeforeSpawn, holdContinuationExit, currentSessionId, isClearCommand, normalizeSessionId };
+// see .ai/contexts/cli-harnesses.md ("Launching: a session that learns its id afterwards")
+function pendingLaunchSessions() {
+  return [...activeSessions].filter(([, session]) => session && !session.exited && session.pendingLaunch && !session.realSessionId);
+}
+
+function hasPendingLaunches() {
+  return pendingLaunchSessions().length > 0;
+}
+
+function resolvePendingLaunches(harness, candidatePaths) {
+  let adopted = 0;
+  if (!harness?.matchesLaunch || !harness.readLaunchSignals) return adopted;
+  const signalsByPath = new Map();
+  for (const [tempId, session] of pendingLaunchSessions()) {
+    if (session.runtime !== harness.id) continue;
+    for (const filePath of candidatePaths) {
+      if (!signalsByPath.has(filePath)) signalsByPath.set(filePath, harness.readLaunchSignals(filePath));
+      const signals = signalsByPath.get(filePath);
+      if (!harness.matchesLaunch(signals, session.pendingLaunch)) continue;
+      if (isLive(signals.sessionId)) continue;
+      log.info(`[launch-detect] ${tempId} → ${signals.sessionId} (${harness.id}, originator=${signals.originator || 'none'})`);
+      const kind = session.pendingLaunch.forkFrom ? 'fork' : 'new';
+      session.pendingLaunch = null;
+      rekeySession(tempId, signals.sessionId, session, [], kind);
+      adopted++;
+      break;
+    }
+  }
+  return adopted;
+}
+
+function sweepPendingLaunches() {
+  const { getHarness } = require('./harnesses');
+  const since = new Map();
+  for (const [, session] of pendingLaunchSessions()) {
+    const harness = getHarness(session.runtime);
+    if (!harness.matchesLaunch || !harness.folderPrefix) continue;
+    const at = session.pendingLaunch.spawnedAt;
+    since.set(harness, Math.min(since.get(harness) ?? at, at));
+  }
+  let adopted = 0;
+  for (const [harness, spawnedAt] of since) {
+    const candidates = [];
+    for (const folder of harness.listFolders()) {
+      const dir = harness.folderPath(folder);
+      if (!dir) continue;
+      for (const filePath of harness.listTranscripts(dir)) {
+        try { if (fs.statSync(filePath).mtimeMs >= spawnedAt - 60000) candidates.push(filePath); } catch {}
+      }
+    }
+    adopted += resolvePendingLaunches(harness, candidates);
+  }
+  return adopted;
+}
+
+module.exports = { drainMetadataWrites, init, detectSessionTransitions, detectSubagentTransitions, refreshDescriptorSessions, detectPendingBackgroundContinuations, snapshotContinuations, snapshotContinuationsBeforeSpawn, holdContinuationExit, currentSessionId, isClearCommand, normalizeSessionId,
+  hasPendingLaunches, resolvePendingLaunches, sweepPendingLaunches };

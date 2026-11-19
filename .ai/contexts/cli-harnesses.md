@@ -146,8 +146,88 @@ re-shaped for the fork's contract. Measured against 237 rollouts on
   picked up by the next reconcile pass, not by the watcher (the index sits
   outside the sessions root).
 - Capabilities: all false, plus `deleteTranscript: false` (new flag, Claude
-  true). Launch and activity methods exist for the contract; routing them into
-  main is #822/#823.
+  true). Activity methods exist for the contract; routing them into main is
+  #823.
+
+## Launching through the harness (#822)
+
+Port of Ali Basiri's `7fe005eb`, `89440a33`, the fork part of `966715db`, the
+Codex part of `632dc9d5` and the argv rules of `809b7546`, on the fork's
+launch site.
+
+`open-terminal` resolves `launchHarness` once, from `sessionOptions.runtime`
+(a fork or a picker choice) or the cached row of the session being resumed or
+forked (`getCachedSession(resumeSourceId).runtime`), Claude when neither says.
+Everything downstream reads the adapter, never a runtime name:
+
+- `resolveSessionRealCwd` and the pre-spawn snapshot of `.jsonl` files
+  (`projectFolder`, `knownJsonlFiles`, `continuationSnapshot`) run only for a
+  `groupsByProject` store; a Codex session has `projectFolder: null`, which
+  keeps it out of `detectSessionTransitions`' fork and continuation detection.
+- "Start instead of resume" checks the transcript through the adapter: Claude's
+  `sessionTranscriptExists`, otherwise `fs.existsSync(transcriptPath(row))` on
+  the row's `sessionFile`. A Codex row whose rollout vanished launches fresh.
+- `launchHarness.buildLaunchArgs(...)` builds the argv and
+  `claudeCommand(shell, argv, { binary: launchHarness.binary })` names the
+  binary (`powershellLaunch` takes it too; the PowerShell preamble resolves
+  whatever `Get-Command` finds — measured on this machine: `codex` is
+  `codex.ps1`, and `__switchboard_launch 'codex' '--version'` returns
+  `codex-cli 0.160.0` in 5.9 s).
+- `launchSandbox` is `sessionOptions.sandbox && capabilities.sandbox`; MCP/IDE
+  emulation needs `capabilities.ideBridge`; both are simply off for Codex and
+  the sandbox badge follows `session.sandbox`. The bg `attach` path is reached
+  only from Claude job rows. The trigger watcher's idle wait is unchanged: it
+  reads the busy state `wireSessionPty` derives from the terminal, which #823
+  teaches to read Codex titles.
+- `launchHarness.launchEnv(sessionId)` is merged into the PTY environment for
+  every non-resume launch (Codex: `CODEX_INTERNAL_ORIGINATOR_OVERRIDE`, Claude
+  has none).
+
+The session record carries `runtime` and, when `needsIdDetection` says so and
+the adapter has `matchesLaunch`, a `pendingLaunch`
+`{ tag, forkFrom, projectPath: spawnCwd, spawnedAt }`.
+
+### Launching: a session that learns its id afterwards
+
+Codex refuses a pre-assigned id and writes nothing until the first turn, so a
+new or forked Codex session runs under the renderer's temporary uuid until its
+rollout appears. `session-transitions.js` owns the adoption:
+
+- `resolvePendingLaunches(harness, candidatePaths)` reads each candidate's head
+  once (`readLaunchSignals`) and, for every pending session of that runtime,
+  asks `matchesLaunch(signals, pendingLaunch)`: the originator tag is exact; a
+  fork matches by `forked_from_id` (a fork inherits its parent's tag); the cwd
+  plus start-time fallback refuses a rollout tagged for another Switchboard
+  launch. A transcript already live in another tab is skipped.
+- A match goes through `rekeySession(tempId, realId, session, [], kind)` with
+  `kind` `'new'` or `'fork'` — the same path as a Claude fork, so metadata is
+  re-keyed through the writer, `publishRekey` moves `activeSessions`, status
+  generations, MCP, activity, trigger ownership and sends `session-forked`,
+  which the renderer handles by re-keying the tab, pending row, restore set
+  and task records. `publishRekey` skips the continuation snapshot when the
+  session has no `projectFolder`.
+- The harness watcher (`startHarnessWatchers` in `main.js`) resolves pending
+  launches against the folder's transcripts before indexing it, so the row and
+  the re-key land in the same beat; `armLaunchSweep()` runs
+  `sweepPendingLaunches()` every 3 s while something is pending (rollouts with
+  an mtime within a minute of the spawn), as a backstop for a dropped watch
+  event, and stops itself.
+
+`liveElsewhere`: Codex has no `~/.claude/sessions/<pid>.json` equivalent. The
+process scan finds nothing for a Codex id, so the IPCs answer "no live process
+known" and the sidebar shows the row's liveness as unknown, the same wording a
+Claude row without a descriptor gets; `capabilities.liveElsewhere` is false and
+the delete guard refuses the row before that check.
+
+Renderer: `forkSession` passes `runtime` and `runtimeLabel` of the forked row
+in the options; `launchNewSession` copies them onto the pending row so the
+badge shows at once. The picker that starts a fresh Codex session is #824; the
+`canLaunch` projection is now `true` for every row.
+
+Tests: `harness-codex-launch.test.js` (argv goldens, tag and env, matching
+cases, head reading, the shell binary, the extracted launch block against a
+Codex row with and without its rollout, the re-key through
+`session-transitions`).
 
 ### Streaming transcript scan
 

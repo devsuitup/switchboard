@@ -139,7 +139,7 @@ test('projected sessions carry the runtime and its label and group under the tra
   const session = project.sessions.find(s => s.sessionId === ID_A);
   assert.equal(session.runtime, 'codex');
   assert.equal(session.runtimeLabel, 'Codex');
-  assert.equal(session.canLaunch, false, 'a Codex row is read-only until #822');
+  assert.equal(session.canLaunch, true, 'a Codex row can be resumed');
 });
 
 test('continuation rollups ignore rows of a harness without continuations', t => {

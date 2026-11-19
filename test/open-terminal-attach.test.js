@@ -17,7 +17,7 @@ function launchFixture() {
     require: require('node:module').createRequire(MAIN_FILENAME), fs, path, os: require('node:os'), process,
     mainWindow: {}, unsavedGuard: { launchAllowed: () => true }, activeSessions: new Map(),
     ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
-    getCachedFolder: () => null, isRemoteFolder: () => false, remoteIndexer: { findSessionAlias: () => null },
+    getCachedFolder: () => null, getCachedSession: () => null, isRemoteFolder: () => false, remoteIndexer: { findSessionAlias: () => null },
     resolveSessionRealCwd: () => root, PROJECTS_DIR: path.join(root, '.work-files', 'gate-transcripts'),
     encodeProjectPath: require('../encode-project-path').encodeProjectPath,
     normalizePtySize: require('../src/main/terminals/pty-size').normalizePtySize,
@@ -193,9 +193,10 @@ test('a held physical exit cannot be reported as a live reattach during handoff'
 test('open-terminal builds `claude attach <id>` for an attach session and never a --resume', () => {
   assert.match(MAIN, /const isAttach = sessionOptions\?\.type === 'attach';/);
   assert.match(MAIN, /claudeArgs\.push\('attach', attachJobId\);/);
-  assert.match(MAIN, /if \(!isAttach && sessionOptions\?\.sandbox\)/);
+  assert.match(MAIN, /const launchSandbox = !isAttach && !!sessionOptions\?\.sandbox && launchHarness\.capabilities\.sandbox;/);
+  assert.match(MAIN, /if \(launchSandbox\)/);
   assert.match(MAIN, /if \(!isAttach && sessionOptions\?\.preLaunchCmd\)/);
-  assert.match(MAIN, /if \(!isAttach && sessionOptions\?\.mcpEmulation !== false\)/);
+  assert.match(MAIN, /if \(!isAttach && sessionOptions\?\.mcpEmulation !== false && launchHarness\.capabilities\.ideBridge\)/);
   assert.match(MAIN, /isAttach, attachJobId,/, 'the session record must carry both fields');
 });
 

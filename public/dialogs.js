@@ -27,6 +27,8 @@ async function resolveDefaultSessionOptions(project) {
 async function forkSession(session, project) {
   const options = await resolveDefaultSessionOptions(project);
   options.forkFrom = session.sessionId;
+  // A fork runs on the CLI that wrote the session — see .ai/contexts/cli-harnesses.md ("Launching through the harness")
+  if (session.runtime) { options.runtime = session.runtime; options.runtimeLabel = session.runtimeLabel || null; }
   launchNewSession(project, options);
 }
 

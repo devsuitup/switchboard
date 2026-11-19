@@ -3131,7 +3131,10 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   const resumeSourceId = sessionOptions?.forkFrom
     ? String(sessionOptions.forkFrom)
     : (!isNew ? sessionId : null);
-  if (!triggerPermit && resumeSourceId && sessionOptions?.type !== 'terminal' && sessionOptions?.type !== 'attach') {
+  // see .ai/contexts/cli-harnesses.md ("Launching through the harness")
+  const cachedRow = resumeSourceId ? getCachedSession(resumeSourceId) : null;
+  const launchHarness = getHarness(sessionOptions?.runtime || cachedRow?.runtime);
+  if (!triggerPermit && resumeSourceId && launchHarness.groupsByProject && sessionOptions?.type !== 'terminal' && sessionOptions?.type !== 'attach') {
     const realCwd = resolveSessionRealCwd(
       PROJECTS_DIR, resumeSourceId, projectPath ? encodeProjectPath(projectPath) : null
     );
@@ -3209,7 +3212,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   let projectFolder = null;
   let continuationSnapshot = null;
 
-  if (!isPlainTerminal) {
+  if (!isPlainTerminal && launchHarness.groupsByProject) {
     // Snapshot existing .jsonl files before spawning (for new session + fork detection)
     projectFolder = encodeProjectPath(spawnCwd);
     const claudeProjectDir = path.join(PROJECTS_DIR, projectFolder);
@@ -3269,8 +3272,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         // with session ID", and the banner's advice — re-click to relaunch — could
         // never work because every retry resumed the same missing id. Start it
         // instead, reusing the id the sidebar already shows.
+        const transcriptOnDisk = () => (launchHarness.groupsByProject
+          ? sessionTranscriptExists(PROJECTS_DIR, sessionId)
+          : !!(cachedRow?.sessionFile && fs.existsSync(launchHarness.transcriptPath(cachedRow))));
         const startsFresh = isNew
-          || (!triggerPermit && !sessionOptions?.forkFrom && !sessionTranscriptExists(PROJECTS_DIR, sessionId));
+          || (!triggerPermit && !sessionOptions?.forkFrom && !transcriptOnDisk());
         launchMode = sessionOptions?.forkFrom ? 'fork' : startsFresh ? 'new' : 'resume';
         if (!isNew && startsFresh && !sessionOptions?.forkFrom) {
           log.info(`[open-terminal] ${sessionId} has no transcript — starting it instead of resuming`);
@@ -3280,11 +3286,12 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
           log.warn(`[open-terminal] ${spawnCwd} is not a git repository — launching without --worktree`);
           launchOptions = { ...sessionOptions, worktree: false };
         }
-        claudeArgs.push(...getHarness().buildLaunchArgs({ sessionId, isNew: startsFresh, options: launchOptions,
+        claudeArgs.push(...launchHarness.buildLaunchArgs({ sessionId, isNew: startsFresh, options: launchOptions,
           name: triggerPermit?.name }));
       }
+      const launchSandbox = !isAttach && !!sessionOptions?.sandbox && launchHarness.capabilities.sandbox;
 
-      if (!isAttach && sessionOptions?.sandbox && process.platform !== 'linux') {
+      if (launchSandbox && process.platform !== 'linux') {
         return { ok: false, error: 'Sandbox mode requires Linux (bubblewrap)' };
       }
 
@@ -3302,7 +3309,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
 
       // Start MCP server for this session so Claude CLI sends diffs/file opens to Switchboard
       // (skip if user disabled IDE emulation in global settings)
-      if (!isAttach && sessionOptions?.mcpEmulation !== false) {
+      if (!isAttach && sessionOptions?.mcpEmulation !== false && launchHarness.capabilities.ideBridge) {
         try {
           mcpServer = await startMcpServer(sessionId, [spawnCwd], mainWindow, log);
           mcpOwnedHere = true;
@@ -3314,12 +3321,13 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         }
       }
 
-      let claudeCmd = claudeCommand(shell, claudeArgs, { env: cleanPtyEnv, cwd: spawnCwd, prefix: pre, extraArgs: shellExtraArgs, ide: ideAdded });
+      let claudeCmd = claudeCommand(shell, claudeArgs, { env: cleanPtyEnv, cwd: spawnCwd, prefix: pre, extraArgs: shellExtraArgs, ide: ideAdded,
+        binary: launchHarness.binary });
 
       // Sandbox: run claude inside a bubblewrap sandbox that only exposes the
       // project directory and Claude's own config/state dirs. Linux only —
       // bwrap has no macOS/Windows equivalent wired up here.
-      if (!isAttach && sessionOptions?.sandbox) {
+      if (launchSandbox) {
         claudeCmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgs);
         if (pre) claudeCmd = pre + ' ' + claudeCmd;
       }
@@ -3349,9 +3357,10 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       if (mcpServer) {
         ptyEnv.CLAUDE_CODE_SSE_PORT = String(mcpServer.port);
       }
+      if (!isAttach && launchMode !== 'resume' && launchHarness.launchEnv) Object.assign(ptyEnv, launchHarness.launchEnv(sessionId));
       // see docs/sandbox.md ("Schedules")
       if (projectPath) await scheduleProjects().add(projectPath);
-      if (!isAttach && sessionOptions?.sandbox) {
+      if (launchSandbox) {
         ptyEnv.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = require('./src/main/triggers/trigger-watcher').getTriggersDir();
         fs.mkdirSync(path.join(ptyEnv.SWITCHBOARD_SANDBOX_TRIGGERS_DIR, 'processed'), { recursive: true });
         // Directories the sandboxed claude must still reach beyond the cwd:
@@ -3407,7 +3416,13 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     preLaunch: !isAttach && !!sessionOptions?.preLaunchCmd,
     // Recorded so a reattach can report it too — the renderer badges sandboxed
     // sessions, and a reattached session is still inside the same sandbox.
-    sandbox: !!sessionOptions?.sandbox,
+    sandbox: !isAttach && !!sessionOptions?.sandbox && launchHarness.capabilities.sandbox,
+    // see .ai/contexts/cli-harnesses.md ("Launching: a session that learns its id afterwards")
+    runtime: launchHarness.id,
+    pendingLaunch: !isPlainTerminal && !isAttach && launchMode !== 'resume' && launchHarness.matchesLaunch
+      && launchHarness.needsIdDetection({ isNew: true, options: sessionOptions })
+      ? { tag: launchHarness.originatorTag(sessionId), forkFrom: sessionOptions?.forkFrom || null, projectPath: spawnCwd, spawnedAt: Date.now() }
+      : null,
     mcpServer, mcpError, _openedAt: Date.now(),
     // see docs/automation.md — the trigger watcher's politeness guard
     composerState: createComposerState(),
@@ -3417,6 +3432,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   mcpOwnedHere = false;
   activeSessions.set(sessionId, session);
   if (!isPlainTerminal) revealIfSdkSession(sessionId);
+  if (session.pendingLaunch) armLaunchSweep();
   if (isAttach) notifyRendererProjectsChanged('session-attach');
   if (!isPlainTerminal && !panelOwnerId) activityReporter.sessionStarted({ sessionId, project: projectPath });
 
@@ -3434,7 +3450,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   }
 
   return {
-    ok: true, reattached: false, sandbox: !!sessionOptions?.sandbox,
+    ok: true, reattached: false, sandbox: session.sandbox,
     mcpState: mcpError ? 'failed' : getMcpState(sessionId),
     mcpError,
     generation: session.generation,
@@ -4042,6 +4058,12 @@ function startHarnessWatchers() {
       pendingFolders.clear();
       let changed = false;
       for (const folder of folders) {
+        // Claim a just-written transcript before indexing it, so the renderer learns the real id as the row appears.
+        if (sessionTransitions.hasPendingLaunches()) {
+          const dir = harness.folderPath(folder);
+          try { if (dir) sessionTransitions.resolvePendingLaunches(harness, harness.listTranscripts(dir)); }
+          catch (err) { log.error(`[launch-detect] ${harness.id} ${folder}:`, err.message); }
+        }
         try { if (await writer.refreshFolder(folder)) changed = true; }
         catch (err) { log.error(`[harness-watch] ${harness.id} ${folder}:`, err.message); }
       }
@@ -4065,8 +4087,21 @@ function startHarnessWatchers() {
   }
 }
 
+// Backstop for a dropped fs.watch event: a session waiting for its transcript would otherwise keep its temporary id.
+let launchSweepTimer = null;
+function armLaunchSweep() {
+  if (launchSweepTimer) return;
+  launchSweepTimer = setInterval(() => {
+    if (!sessionTransitions.hasPendingLaunches()) { clearInterval(launchSweepTimer); launchSweepTimer = null; return; }
+    try { sessionTransitions.sweepPendingLaunches(); }
+    catch (err) { log.error('[launch-detect] sweep failed:', err.message); }
+  }, 3000);
+  launchSweepTimer.unref?.();
+}
+
 function stopHarnessWatchers() {
   for (const watcher of harnessWatchers.splice(0)) watcher.close();
+  if (launchSweepTimer) { clearInterval(launchSweepTimer); launchSweepTimer = null; }
 }
 
 // --- IPC: app version ---

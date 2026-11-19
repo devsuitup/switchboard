@@ -201,7 +201,7 @@ test('m4: ordinary spawns retain the v1 capture condition and have a separate st
       cliSessionState: { deliveryPtyStart: () => 'start' }, launchMode: null, resumeSourceId: null, launchStartedAt: 1,
       projectPath: '', spawnCwd: '', projectFolder: '', knownJsonlFiles: new Set(), continuationSnapshot: null,
       isPlainTerminal: false, panelOwnerId: null, sessionOptions: {}, isAttach: false, attachJobId: null,
-      mcpServer: null, mcpError: null, createComposerState: () => ({}) });
+      mcpServer: null, mcpError: null, createComposerState: () => ({}), launchHarness: require('../harnesses').getHarness() });
     vm.runInContext(declaration, context, { filename });
     const session = vm.runInContext('session', context, { filename });
     assert.equal(Object.hasOwn(session, 'hostPtyStart'), !!triggerPermit, 'v1 pin capture remains trigger-only');

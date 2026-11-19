@@ -4,7 +4,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { scanLines } = require('../jsonl-scan');
+const { scanLines, readHead } = require('../jsonl-scan');
 
 const id = 'codex';
 const label = 'Codex';

@@ -854,7 +854,10 @@ function reconciliationFolders(throttle) {
     if (row.parentSessionId || !row.sessionId.startsWith('agent-') || parseFolderKey(row.folder).alias !== null) return false;
     try { fs.statSync(path.join(PROJECTS_DIR, row.folder, row.sessionId + '.jsonl')); return false; } catch { return true; }
   }).map(row => row.folder));
-  return fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+  let projectDirs = [];
+  try { projectDirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true }); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  return projectDirs
     .filter(d => d.isDirectory() && d.name !== '.git')
     .filter(d => {
       if (!isProjectWriteBlocked) return true;
@@ -1166,7 +1169,7 @@ function buildProjectsFromCache(showArchived) {
       projectPath: row.projectPath,
       runtime: row.runtime || DEFAULT_HARNESS,
       runtimeLabel: (row.runtime || DEFAULT_HARNESS) === DEFAULT_HARNESS ? null : getHarness(row.runtime).label,
-      canLaunch: (row.runtime || DEFAULT_HARNESS) === DEFAULT_HARNESS,
+      canLaunch: true,
       slug: row.slug || null,
       scheduleSlug: row.scheduleSlug || null,
       aiTitle: row.aiTitle || null,

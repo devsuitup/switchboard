@@ -2427,6 +2427,7 @@ async function launchNewSession(project, sessionOptions, restoreSessionId, flags
     messageCount: 0,
     modified: new Date().toISOString(),
     created: new Date().toISOString(),
+    ...(sessionOptions?.runtime ? { runtime: sessionOptions.runtime, runtimeLabel: sessionOptions.runtimeLabel || null, canLaunch: true } : {}),
   };
 
   // Track as pending (no .jsonl yet)

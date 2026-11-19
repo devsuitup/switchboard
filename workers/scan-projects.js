@@ -114,11 +114,17 @@ function readFolderFileSubsetFromFilesystem(folder, files, existingRows) {
 // caller write + notify after every folder instead.
 try {
   // workerData.folders restricts the sweep to a subset; absent, walk the root.
+  const listProjectFolders = () => {
+    try {
+      return fs.readdirSync(PROJECTS_DIR, { withFileTypes: true }).filter(d => d.isDirectory() && d.name !== '.git').map(d => d.name);
+    } catch (error) {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    }
+  };
   const folders = Array.isArray(workerData.folders)
     ? workerData.folders.filter(f => typeof f === 'string' && f && f !== '.git' && f !== '.' && f !== '..' && !/[\\/]/.test(f))
-    : fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
-      .filter(d => d.isDirectory() && d.name !== '.git')
-      .map(d => d.name);
+    : listProjectFolders();
 
   // see .ai/contexts/session-cache.md ("Remote hosts file-level rescan")
   const targets = Array.isArray(workerData.targets) ? workerData.targets : [];
