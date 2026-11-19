@@ -2034,6 +2034,12 @@ async function handleSendToBackground(_event, sessionId, options) {
     },
     schedule: (fn, ms) => { const timer = setTimeout(fn, ms); if (typeof timer.unref === 'function') timer.unref(); },
     kill: entry => killPty(entry, sessionId),
+    checkContinuations: async id => {
+      const continuation = await bgAgents.continuationJobCheck(id);
+      if (continuation.known && continuation.job) return { refuse: 'This conversation already runs in background job ' + continuation.job.id + '. Open it from the sidebar instead.' };
+      if (!continuation.known) log.info(`[bg-handoff] ${id} continuation liveness unknown (${continuation.reason}); /bg goes ahead`);
+      return null;
+    },
   });
   if (result.ok && session?.projectFolder) detectSessionTransitions(session.projectFolder);
   if (result.ok) {

@@ -104,6 +104,10 @@ async function sendToBackground(sessionId, deps) {
     const previous = new Set(snapshot.map(id => id.toLowerCase()));
     const recheck = backgroundRefusal({ ...session, backgrounding: false }, deps.getStatus(oldId), { force });
     if (recheck || !bound() || deps.now() >= deadline) return { ok: false, code: 'refused', error: recheck || 'The tab changed or its handoff deadline passed. Check the terminal, then try again.' };
+    const held = deps.checkContinuations ? await deps.checkContinuations(oldId, session) : null;
+    if (held?.refuse) return { ok: false, code: 'refused', error: held.refuse };
+    const afterCheck = backgroundRefusal({ ...session, backgrounding: false }, deps.getStatus(oldId), { force });
+    if (afterCheck || !bound() || deps.now() >= deadline) return { ok: false, code: 'refused', error: afterCheck || 'The tab changed or its handoff deadline passed. Check the terminal, then try again.' };
     const command = '/bg';
     dispose = deps.tapOutput(session, text => { output = (output + text).slice(-16384); });
     const composer = session.composerState;

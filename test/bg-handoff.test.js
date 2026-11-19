@@ -322,6 +322,22 @@ test('T20d: a conversation that once ran as a job still goes through /bg, never 
   assert.deepEqual(h.writes, ['/bg', '\r']);
 });
 
+test('T29: a known live continuation of the conversation refuses before any write', async () => {
+  const h = setup();
+  h.deps.checkContinuations = async () => ({ refuse: 'This conversation already runs in background job bbbbbbbb. Open it from the sidebar instead.' });
+  const result = await sendToBackground('old', h.deps);
+  assert.equal(result.code, 'refused');
+  assert.match(result.error, /bbbbbbbb/);
+  assert.deepEqual(h.writes, []);
+});
+
+test('T30: an unknown continuation check does not hold /bg back', async () => {
+  const h = setup();
+  h.deps.checkContinuations = async () => null;
+  assert.equal((await sendToBackground('old', h.deps)).ok, true);
+  assert.deepEqual(h.writes, ['/bg', '\r']);
+});
+
 test('T21: input that leaves the same /bg text during the gap still withholds Enter', async () => {
   const h = setup();
   h.deps.delay = async ms => { noteUserInput(h.session.composerState, 'x\x7f', ms); };

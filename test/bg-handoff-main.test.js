@@ -356,4 +356,25 @@ for (const external of [false, true]) {
     assert.deepEqual(sends, []);
   });
 }
-
+
+
+test('the shipped handler refuses /bg before any write while a live job hosts a continuation of the conversation', async t => {
+  const h = ipcSetup(t);
+  h.ctx.bgAgents.continuationJobCheck = async () => ({ known: true, job: { id: 'bbbbbbbb', state: 'working' } });
+  const result = await h.handleSendToBackground({}, 'tab');
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'refused');
+  assert.match(result.error, /bbbbbbbb/);
+  assert.deepEqual(h.writes, []);
+});
+
+test('the shipped handler lets /bg go when continuation liveness is unknown, and logs it', async t => {
+  const h = ipcSetup(t);
+  const infos = [];
+  h.ctx.log.info = (...args) => infos.push(args.join(' '));
+  h.ctx.bgAgents.continuationJobCheck = async () => ({ known: false, reason: 'cannot read background jobs' });
+  const result = await h.handleSendToBackground({}, 'tab');
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.writes, ['/bg', '\r']);
+  assert.ok(infos.some(line => /continuation liveness unknown/.test(line)));
+});
