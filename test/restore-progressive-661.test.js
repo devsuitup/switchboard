@@ -23,13 +23,13 @@ function topLevelDeclarations(src, names) {
     .join('\n');
 }
 
-function setup({ savedSet }) {
+function setup({ savedSet, activeWaitMs = 20000 }) {
   const dom = new JSDOM('<!DOCTYPE html><body></body>', { runScripts: 'outside-only' });
   const ctx = dom.getInternalVMContext();
   const notices = dom.window.document.createElement('div');
   notices.id = 'app-notices';
   dom.window.document.body.append(notices);
-  vm.runInContext(read('app-notices.js'), ctx);
+  vm.runInContext(read('app-notices.js'), ctx, { filename: path.join(__dirname, '..', 'public', 'app-notices.js') });
   const settings = { global: { restoreOnStartup: 'auto', openWorkingSet: savedSet } };
   const events = [];
   const pendingOpens = [];
@@ -51,7 +51,7 @@ function setup({ savedSet }) {
   };
   dom.window.appConfirm = async () => { throw new Error('an automatic restore must never prompt'); };
 
-  vm.runInContext(read('utils.js'), ctx);
+  vm.runInContext(read('utils.js'), ctx, { filename: path.join(__dirname, '..', 'public', 'utils.js') });
   vm.runInContext(read('resume-guard.js'), ctx, { filename: path.join(__dirname, '..', 'public', 'resume-guard.js') });
   vm.runInContext(`
     var openSessions = new Map();
@@ -67,6 +67,7 @@ function setup({ savedSet }) {
     var _persistChain = Promise.resolve();
     var exitingApp = false;
     var RESTORE_STAGGER_MS = 0;
+    var RESTORE_ACTIVE_WAIT_MS = ${activeWaitMs};
     var LIVE_ELSEWHERE_NOTICE_MS = 60000;
     function createTerminalEntry(session) {
       const entry = { session, closed: false, terminal: { write() {} }, initialSize: {} };
@@ -127,7 +128,7 @@ test('the saved active session opens first and is shown before the others open',
   while (h.pendingOpens.length) { h.pendingOpens.shift().resolve(); await h.settle(); }
   await done;
   assert.deepEqual(h.events.map((event) => event[1]), ['b', 'a', 'c']);
-  assert.deepEqual(h.shown(), ['b', 'b'], 'the later opens never take the active tab');
+  assert.deepEqual(h.shown(), ['b'], 'the later opens never take the active tab, and nothing is shown twice');
   assert.deepEqual(h.tabs(), ['a', 'b', 'c'], 'the tab order follows the saved order');
 });
 
@@ -159,5 +160,95 @@ test('background sessions are attached two at a time, behind the active tab', as
   }
   await done;
   assert.equal(h.active(), 'x', 'attaching a background session never takes the active tab');
-  assert.deepEqual(h.shown(), ['x', 'x']);
+  assert.deepEqual(h.shown(), ['x']);
+});
+
+async function drain(h, done) {
+  for (let n = 0; n < 40 && (h.pendingRestores.length || h.pendingOpens.length || n < 3); n++) {
+    while (h.pendingRestores.length) h.pendingRestores.shift().resolve();
+    while (h.pendingOpens.length) h.pendingOpens.shift().resolve();
+    await h.settle();
+  }
+  await done;
+}
+
+test('a saved active background entry opens before an interactive sibling', async (t) => {
+  const h = setup({ savedSet: [
+    { sessionId: 'a', projectPath: '/pa' },
+    { sessionId: 'bg', projectPath: '/pb', bg: true, active: true, attachJobId: '1234abcd' },
+  ] });
+  const done = h.restore();
+  t.after(async () => { await drain(h, done); h.dom.window.close(); });
+  await h.settle();
+  assert.deepEqual(h.pendingOpens.map((p) => p.sessionId), [], 'no other terminal opens before the saved active background entry is ready');
+  assert.equal(h.pendingRestores.length, 1);
+  h.pendingRestores.shift().resolve();
+  await h.settle();
+  assert.deepEqual(h.pendingOpens.map((p) => p.sessionId), ['bg'], 'the active background entry reaches its terminal first');
+  h.pendingOpens.shift().resolve();
+  await h.settle();
+  assert.equal(h.active(), 'bg');
+  assert.deepEqual(h.pendingOpens.map((p) => p.sessionId), ['a'], 'the interactive sibling opens once the active entry is up');
+});
+
+test('a delayed active background attach does not take a tab the user selected meanwhile', async (t) => {
+  const h = setup({ savedSet: [
+    { sessionId: 'a', projectPath: '/pa' },
+    { sessionId: 'bg', projectPath: '/pb', bg: true, active: true, attachJobId: '1234abcd' },
+  ] });
+  const done = h.restore();
+  t.after(async () => { await drain(h, done); h.dom.window.close(); });
+  await h.settle();
+  h.pendingRestores.shift().resolve();
+  await h.settle();
+  assert.deepEqual(h.pendingOpens.map((p) => p.sessionId), ['bg']);
+  vm.runInContext("showSession('a')", h.ctx);
+  h.pendingOpens.shift().resolve();
+  await h.settle();
+  assert.equal(h.active(), 'a', 'background completion does not steal focus back to bg');
+  while (h.pendingOpens.length) { h.pendingOpens.shift().resolve(); await h.settle(); }
+  await done;
+  assert.equal(h.active(), 'a');
+});
+
+test('when the active background entry is slow, the rest opens after the bound and the late attach keeps the user tab', async (t) => {
+  const h = setup({ activeWaitMs: 50, savedSet: [
+    { sessionId: 'a', projectPath: '/pa' },
+    { sessionId: 'bg', projectPath: '/pb', bg: true, active: true, attachJobId: '1234abcd' },
+  ] });
+  const done = h.restore();
+  t.after(async () => { await drain(h, done); h.dom.window.close(); });
+  await h.settle();
+  assert.deepEqual(h.pendingOpens.map((p) => p.sessionId), []);
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.deepEqual(h.pendingOpens.map((p) => p.sessionId), ['a'], 'the bound expired: the interactive entry opens');
+  h.pendingOpens.shift().resolve();
+  await h.settle();
+  assert.equal(h.active(), 'a', 'an empty screen is filled by the first tab that opens');
+  h.pendingRestores.shift().resolve();
+  await h.settle();
+  h.pendingOpens.shift().resolve();
+  await done;
+  assert.equal(h.active(), 'a', 'the late active attach does not take the tab the user is on');
+  assert.deepEqual(h.tabs(), ['a', 'bg']);
+});
+
+test('completing an interactive restore preserves a user selection made during the run', async (t) => {
+  const h = setup({ savedSet: [
+    { sessionId: 'a', projectPath: '/pa' },
+    { sessionId: 'b', projectPath: '/pb', active: true },
+    { sessionId: 'c', projectPath: '/pc' },
+  ] });
+  const done = h.restore();
+  t.after(async () => { await drain(h, done); h.dom.window.close(); });
+  await h.settle();
+  h.pendingOpens.shift().resolve();
+  await h.settle();
+  h.pendingOpens.shift().resolve();
+  await h.settle();
+  vm.runInContext("showSession('a')", h.ctx);
+  h.pendingOpens.shift().resolve();
+  await done;
+  assert.equal(h.active(), 'a', 'the final restoration respects the user selection');
+  assert.deepEqual(h.shown(), ['b', 'a']);
 });

@@ -154,6 +154,7 @@ let restoringWorkingSet = false;
 let restoreRunDepth = 0;
 let persistWorkingSetTimer = null;
 const RESTORE_STAGGER_MS = 500;
+const RESTORE_ACTIVE_WAIT_MS = 20000;
 const LIVE_ELSEWHERE_NOTICE_MS = 15000;
 
 // Cold-cache retry-until-indexed: see .ai/contexts/session-cache.md.
@@ -448,6 +449,9 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       for (const [id, entry] of ordered) openSessions.set(id, entry);
     };
     const RESTORE_BACKGROUND_CONCURRENCY = 2;
+    const activeWaitMs = typeof RESTORE_ACTIVE_WAIT_MS === 'number' ? RESTORE_ACTIVE_WAIT_MS : 20000;
+    const showWhenOpened = () => ({ activate: !activeSessionId, activeFrom: activeSessionId });
+    let activeGate = null;
     let backgroundSlots = 0;
     const backgroundWaiters = [];
     const acquireBackgroundSlot = () => backgroundSlots < RESTORE_BACKGROUND_CONCURRENCY
@@ -460,6 +464,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       for (const item of ordered) {
         const position = list.indexOf(item);
         if (window.isDeletedProjectRestoreTarget?.(item)) continue;
+        if (activeGate && item.bg !== true) await activeGate;
         if (startsFresh(item)) {
           if (!restoreInFlight.has(item.sessionId)) continue;
           try {
@@ -493,7 +498,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
               await acquireBackgroundSlot();
               try {
                 const background = await prepareBackgroundRestore(session, item);
-                if (background && !window.isDeletedProjectRestoreTarget?.(item)) await openSession(session, undefined, { automatic: true, fromRestore: true, allowBgAttach: true, continuationResolved: true, activate: item === activeItem || !activeSessionId, ...background });
+                if (background && !window.isDeletedProjectRestoreTarget?.(item)) await openSession(session, undefined, { automatic: true, fromRestore: true, allowBgAttach: true, continuationResolved: true, ...showWhenOpened(), ...background });
               } finally { releaseBackgroundSlot(); }
               reorderRestoredTabs();
             } finally {
@@ -503,6 +508,10 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           })();
           task.catch(err => showSessionActionFailure('Restore', session, err.message || String(err), 'Open it from the sidebar to retry restoring.'));
           backgroundTasks.push(task);
+          if (item === activeItem) {
+            let timer;
+            activeGate = Promise.race([task.catch(() => {}), new Promise(resolve => { timer = setTimeout(resolve, activeWaitMs); })]).finally(() => clearTimeout(timer));
+          }
           continue;
         }
         let holdReason = { waitingForIndex: false };
@@ -539,7 +548,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         let blockedBy;
         try {
           opened = await openSession(s, undefined, {
-            automatic: true, fromRestore: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId || item.bg === true, activate: item === activeItem || !activeSessionId,
+            automatic: true, fromRestore: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId || item.bg === true, ...showWhenOpened(),
             onBlocked: part => { blockedBy = { session: part.sessionId === s.sessionId ? s : { sessionId: part.sessionId, projectPath: part.live?.cwd }, live: part.live }; },
           });
         } finally {
@@ -581,7 +590,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
     }
     const shownItem = activeItem || list[list.length - 1];
     const activeId = shownItem && (startedAs.get(shownItem.sessionId) || shownItem.sessionId);
-    if (activeId && openSessions.has(activeId)) {
+    if (activeId && openSessions.has(activeId) && !activeSessionId) {
       showSession(activeId);
     }
   } finally {
