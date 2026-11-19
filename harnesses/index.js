@@ -54,8 +54,7 @@ function assertHarnessSettings(fields) {
 
 // see .ai/contexts/session-cache.md ("Harness folders")
 function prefixedHarnesses(disabledIds) {
-  const disabled = disabledSet(disabledIds);
-  return availableHarnesses().filter(harness => harness.folderPrefix && !disabled.has(harness.id));
+  return enabledHarnesses(disabledIds).filter(harness => harness.folderPrefix);
 }
 
 function harnessFolderIndexMtimeMs(harness, dir, files) {

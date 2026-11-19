@@ -323,11 +323,11 @@ function startedAfterSpawn(signals, spawnedAt) {
 
 function matchesLaunch(signals, { tag, forkFrom, projectPath, spawnedAt }) {
   if (!signals || signals.isSubagent || !signals.sessionId) return false;
-  if (forkFrom) return signals.forkedFrom === forkFrom && startedAfterSpawn(signals, spawnedAt);
-  if (tag && signals.originator === tag) return true;
+  if (tag && signals.originator === tag) return 'tag';
+  if (forkFrom) return signals.forkedFrom === forkFrom && startedAfterSpawn(signals, spawnedAt) ? 'fork' : false;
   if (signals.originator && /^switchboard_/.test(signals.originator)) return false;
   if (!projectPath || signals.cwd !== projectPath) return false;
-  return startedAfterSpawn(signals, spawnedAt);
+  return startedAfterSpawn(signals, spawnedAt) ? 'cwd' : false;
 }
 
 function readModelCatalog() {

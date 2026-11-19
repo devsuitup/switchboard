@@ -122,3 +122,28 @@ test('main exposes the CLI list and model catalog over IPC and restarts the harn
   const codex = require('../harnesses/codex');
   assert.equal(typeof codex.readModelCatalog, 'function');
 });
+
+test('a switched-off Claude leaves the "+" menu with the other CLIs and Terminal only, keyboard order included', async t => {
+  const h = setupSidebarDom();
+  t.after(() => h.destroy());
+  h.window.api.getHarnesses = async () => [
+    { id: 'claude', label: 'Claude', available: true, enabled: false, isDefault: true },
+    { id: 'codex', label: 'Codex', available: true, enabled: true, isDefault: false },
+  ];
+  h.evalPublic('setting-defaults.js');
+  h.evalPublic('dialogs.js');
+  const anchor = h.document.createElement('button');
+  h.document.body.appendChild(anchor);
+  h.window.showNewSessionPopover(makeSampleProject({ projectPath: '/repo' }), anchor);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const popover = h.document.querySelector('.new-session-popover');
+  assert.ok(popover && popover.isConnected, 'the menu stays open');
+  assert.deepEqual([...popover.querySelectorAll('.popover-option')].map(e => e.textContent.trim()), ['Codex', 'Terminal'],
+    'neither Claude entry is offered');
+  const codexBtn = popover.querySelector('.popover-option[data-runtime="codex"]');
+  assert.equal(h.document.activeElement, codexBtn, 'focus lands on the first remaining entry');
+  codexBtn.dispatchEvent(new h.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+  assert.equal(h.document.activeElement.classList.contains('popover-option-terminal'), true);
+  h.document.activeElement.dispatchEvent(new h.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+  assert.equal(h.document.activeElement, codexBtn, 'the arrow keys cycle over the remaining entries only');
+});

@@ -4084,7 +4084,7 @@ function startHarnessWatchers() {
       pendingFolders.clear();
       let changed = false;
       for (const folder of folders) {
-        // Claim a just-written transcript before indexing it, so the renderer learns the real id as the row appears.
+        // see .ai/contexts/cli-harnesses.md ("Launching: a session that learns its id afterwards")
         if (sessionTransitions.hasPendingLaunches()) {
           const dir = harness.folderPath(folder);
           try { if (dir) sessionTransitions.resolvePendingLaunches(harness, harness.listTranscripts(dir)); }
@@ -4113,7 +4113,7 @@ function startHarnessWatchers() {
   }
 }
 
-// Backstop for a dropped fs.watch event: a session waiting for its transcript would otherwise keep its temporary id.
+// see .ai/contexts/cli-harnesses.md ("Launching: a session that learns its id afterwards")
 let launchSweepTimer = null;
 function armLaunchSweep() {
   if (launchSweepTimer) return;

@@ -28,9 +28,7 @@ function getFolderIndexMtimeMs(folderPath) {
   return indexMtimeMs;
 }
 
-/** Freshness stamp of a folder whose transcripts the caller already listed:
- *  the directory mtime, the newest transcript mtime and any extra stamp
- *  (a title index kept outside the transcripts). 0 when the folder is gone. */
+// see .ai/contexts/session-cache.md ("Harness folders")
 function getTranscriptsIndexMtimeMs(folderPath, files, extraMtimeMs = 0) {
   let indexMtimeMs;
   try {

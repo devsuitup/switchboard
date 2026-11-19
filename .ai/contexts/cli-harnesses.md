@@ -86,9 +86,12 @@ so `test/fixtures/root-app-modules.json` remains unchanged.
 The writer's existing writable column reconcile adds
 `runtime TEXT DEFAULT 'claude'` and `sessionFile TEXT`. This addition does not
 set `mustReindex`, clear rows or change numbered migrations. Readonly opens
-perform no schema changes. Existing named-column upserts retain their old
-arguments and preserve the new columns on update; populating these fields
-from other runtimes belongs to a later phase.
+perform no schema changes, so `session-index-store.js` prepares its
+`cacheUpsert` statement on first use: a readonly open of a pre-#820 store has
+no `runtime` column yet, and preparing the statement eagerly would fail the
+open. Existing named-column upserts retain their old arguments and preserve
+the new columns on update; populating these fields from other runtimes belongs
+to a later phase.
 
 Tests: `harness-contract.test.js`, `harness-launch.test.js`,
 `harness-schema.test.js`, `module-layout.test.js`, `session-launch-guards.test.js`.
@@ -194,11 +197,23 @@ new or forked Codex session runs under the renderer's temporary uuid until its
 rollout appears. `session-transitions.js` owns the adoption:
 
 - `resolvePendingLaunches(harness, candidatePaths)` reads each candidate's head
-  once (`readLaunchSignals`) and, for every pending session of that runtime,
-  asks `matchesLaunch(signals, pendingLaunch)`: the originator tag is exact; a
-  fork matches by `forked_from_id` (a fork inherits its parent's tag); the cwd
-  plus start-time fallback refuses a rollout tagged for another Switchboard
-  launch. A transcript already live in another tab is skipped.
+  once (`readLaunchSignals`), skips a transcript already live in another tab,
+  and grades every (pending session, candidate) pair with
+  `matchesLaunch(signals, pendingLaunch)`, which returns `'tag'` when the
+  originator is the launch's own tag, `'fork'` when `forked_from_id` names the
+  parent and the rollout started after the spawn, `'cwd'` for the cwd plus
+  start-time fallback of a fresh launch, `false` otherwise. The fallback
+  refuses a rollout tagged for another Switchboard launch; a fork cannot,
+  because a fork may inherit its parent's tag (whether Codex honours
+  `CODEX_INTERNAL_ORIGINATOR_OVERRIDE` on `codex fork` is not measured).
+- Adoption is exact first: a candidate graded `'tag'` by a pending session goes
+  to that session, and nothing else may take it. A remaining candidate is then
+  adopted by fallback only when exactly one open session matches it and that
+  session matches exactly one open candidate. Two forks of the same parent
+  started together, both with inherited tags, therefore stay pending rather
+  than being paired in insertion order; a lone fork still adopts its lone
+  rollout, and the pairing resolves as soon as it becomes unique (one tab
+  closes, one rollout vanishes, or a tagged rollout settles one side).
 - A match goes through `rekeySession(tempId, realId, session, [], kind)` with
   `kind` `'new'` or `'fork'` — the same path as a Claude fork, so metadata is
   re-keyed through the writer, `publishRekey` moves `activeSessions`, status
@@ -225,9 +240,9 @@ badge shows at once. The picker that starts a fresh Codex session is #824; the
 `canLaunch` projection is now `true` for every row.
 
 Tests: `harness-codex-launch.test.js` (argv goldens, tag and env, matching
-cases, head reading, the shell binary, the extracted launch block against a
+grades, head reading, the shell binary, the extracted launch block against a
 Codex row with and without its rollout, the re-key through
-`session-transitions`).
+`session-transitions`, two forks of one parent with and without tags).
 
 ## Busy and attention per harness (#823)
 
@@ -298,16 +313,25 @@ default; nothing here fetches it, so no token leaves the machine.
   restarted by `set-setting` when the list changes); `buildProjectsFromCache`
   hides its rows (`exclude(row, 'harness-off')`) and the picker skips it. Its
   cached rows are kept, so switching it back on costs one incremental
-  reconcile.
+  reconcile. `prefixedHarnesses` filters on the setting only, not on
+  `available()`: an enabled CLI whose sessions root is gone lists no folders,
+  so its cached folders are reconciled and their rows dropped (the watcher
+  checks the root itself; the cold scan walks nothing).
 - IPC: `get-harnesses` and `get-harness-models(runtime)` (generic names
   rather than upstream's `get-codex-models`; see ipc-bridge.md). No
   `harnesses-changed` event: the toggle goes through `set-setting`, which
   already triggers `projects-changed`, and the picker asks on every open.
 - Picker: `showNewSessionPopover` renders the Claude entries at once and, when
   `getHarnesses` answers, inserts one `popover-option[data-runtime]` per
-  enabled non-default CLI before Terminal (keyboard order follows). The entry
-  launches with `runtime` and `runtimeLabel` in the options, which
-  `open-terminal` resolves (#822) and the pending row badges (#821).
+  enabled non-default CLI before Terminal (keyboard order follows), then
+  removes both Claude entries when the default CLI is switched off — focus
+  moves to the first remaining entry first, so the focus-out close does not
+  fire. The entry launches with `runtime` and `runtimeLabel` in the options,
+  which `open-terminal` resolves (#822) and the pending row badges (#821).
+  `resolveDefaultSessionOptions` copies the non-empty Codex settings into the
+  same options bag; the Codex builder validates them, Claude's ignores them.
+  The settings panel locks the last checked toggle; the writer refuses an
+  all-off patch anyway.
 - Settings panel: a global "CLI Agents" section with one toggle per
   registered CLI (lock on the last one, "Not installed here" for an unavailable
   one) and, when Codex is registered, four selects for sandbox, approval,
@@ -316,7 +340,7 @@ default; nothing here fetches it, so no token leaves the machine.
 
 Tests: `harness-settings.test.js` (defaults, guard and writer refusal,
 disabled CLI hidden and skipped with rows kept, the picker's async entry and
-its launch options, the IPC and preload wiring). The settings panel's toggle
+its launch options, the picker without Claude, the IPC and preload wiring). The settings panel's toggle
 rendering and save are not covered by a dom test.
 
 ### Streaming transcript scan

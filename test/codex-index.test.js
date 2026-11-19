@@ -199,3 +199,17 @@ test('the store writes runtime and sessionFile and keeps them on a Claude-shaped
     assert.equal(db.getCachedSession(ID_A).sessionFile, '/sessions/b.jsonl');
   } finally { db.closeDb(); }
 });
+
+test('reconciliation drops the cached rows and search entries of a Codex sessions root that is gone', t => {
+  const f = fixture(t);
+  f.write(ID_A, [['user', 'hello']]);
+  f.cache.refreshFolder(FOLDER);
+  assert.equal(f.rows.size, 1);
+  assert.equal(f.search.size, 1);
+  fs.rmSync(path.join(f.codexHome, 'sessions'), { recursive: true });
+  const seen = [];
+  f.cache.reconcileCacheFromFilesystem({ onFolder: folder => seen.push(folder), throttle: false });
+  assert.deepEqual(seen, [FOLDER], 'the cached folder of an unavailable CLI is still reconciled');
+  assert.equal(f.rows.size, 0, 'a missing sessions root purges its cached sessions');
+  assert.equal(f.search.size, 0);
+});

@@ -514,7 +514,7 @@
     </div>
   `;
 
-    // At least one CLI stays on: the last checked toggle locks — the writer refuses an all-off patch anyway.
+    // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
     const harnessToggles = [...settingsViewerBody.querySelectorAll('.sv-harness-toggle')];
     const syncHarnessLock = () => {
       const on = harnessToggles.filter(t => t.checked);

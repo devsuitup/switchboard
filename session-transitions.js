@@ -956,23 +956,46 @@ function hasPendingLaunches() {
 }
 
 function resolvePendingLaunches(harness, candidatePaths) {
-  let adopted = 0;
-  if (!harness?.matchesLaunch || !harness.readLaunchSignals) return adopted;
-  const signalsByPath = new Map();
-  for (const [tempId, session] of pendingLaunchSessions()) {
-    if (session.runtime !== harness.id) continue;
-    for (const filePath of candidatePaths) {
-      if (!signalsByPath.has(filePath)) signalsByPath.set(filePath, harness.readLaunchSignals(filePath));
-      const signals = signalsByPath.get(filePath);
-      if (!harness.matchesLaunch(signals, session.pendingLaunch)) continue;
-      if (isLive(signals.sessionId)) continue;
-      log.info(`[launch-detect] ${tempId} → ${signals.sessionId} (${harness.id}, originator=${signals.originator || 'none'})`);
-      const kind = session.pendingLaunch.forkFrom ? 'fork' : 'new';
-      session.pendingLaunch = null;
-      rekeySession(tempId, signals.sessionId, session, [], kind);
-      adopted++;
-      break;
+  if (!harness?.matchesLaunch || !harness.readLaunchSignals) return 0;
+  const pending = pendingLaunchSessions().filter(([, session]) => session.runtime === harness.id);
+  if (!pending.length) return 0;
+  const candidates = [];
+  for (const filePath of new Set(candidatePaths)) {
+    const signals = harness.readLaunchSignals(filePath);
+    if (signals?.sessionId && !isLive(signals.sessionId)) candidates.push(signals);
+  }
+  const bySession = new Map(pending.map(([tempId]) => [tempId, []]));
+  const byCandidate = new Map(candidates.map(signals => [signals, []]));
+  for (const [tempId, session] of pending) {
+    for (const signals of candidates) {
+      const match = harness.matchesLaunch(signals, session.pendingLaunch);
+      if (!match) continue;
+      bySession.get(tempId).push({ signals, match });
+      byCandidate.get(signals).push({ tempId, session, match });
     }
+  }
+  let adopted = 0;
+  const settled = new Set();
+  const adopt = (tempId, session, signals) => {
+    log.info(`[launch-detect] ${tempId} → ${signals.sessionId} (${harness.id}, originator=${signals.originator || 'none'})`);
+    const kind = session.pendingLaunch.forkFrom ? 'fork' : 'new';
+    session.pendingLaunch = null;
+    settled.add(tempId);
+    settled.add(signals);
+    rekeySession(tempId, signals.sessionId, session, [], kind);
+    adopted++;
+  };
+  for (const [signals, owners] of byCandidate) {
+    const exact = owners.filter(o => o.match === 'tag');
+    if (exact.length === 1 && !settled.has(exact[0].tempId)) adopt(exact[0].tempId, exact[0].session, signals);
+  }
+  for (const [signals, owners] of byCandidate) {
+    if (settled.has(signals)) continue;
+    const open = owners.filter(o => !settled.has(o.tempId));
+    if (open.length !== 1) continue;
+    const { tempId, session } = open[0];
+    if (bySession.get(tempId).filter(c => !settled.has(c.signals)).length !== 1) continue;
+    adopt(tempId, session, signals);
   }
   return adopted;
 }

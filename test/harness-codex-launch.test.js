@@ -84,22 +84,24 @@ test('the originator tag is header-safe and the launch env carries it', () => {
   assert.equal(codex.needsIdDetection({ isNew: false }), false);
 });
 
-test('matchesLaunch: tag first, cwd+time fallback, foreign tag refused, fork by forked_from_id', () => {
+test('matchesLaunch grades a match: the exact tag, then a fork by forked_from_id, then cwd+time; a foreign tag is refused', () => {
   const base = { tag: TAG(), projectPath: '/Users/me/proj', spawnedAt: AT };
-  assert.equal(codex.matchesLaunch(signals(), { tag: TAG(), projectPath: '/elsewhere', spawnedAt: AT + 60000 }), true);
+  assert.equal(codex.matchesLaunch(signals(), { tag: TAG(), projectPath: '/elsewhere', spawnedAt: AT + 60000 }), 'tag');
   assert.equal(codex.matchesLaunch(signals({ originator: 'switchboard_someoneelse' }), base), false);
-  assert.equal(codex.matchesLaunch(signals({ originator: 'codex_cli_rs' }), base), true);
+  assert.equal(codex.matchesLaunch(signals({ originator: 'codex_cli_rs' }), base), 'cwd');
   assert.equal(codex.matchesLaunch(signals({ originator: 'x', cwd: '/other' }), base), false);
   assert.equal(codex.matchesLaunch(signals({ originator: 'x', startedAt: '2026-08-26T09:00:00.000Z' }), base), false);
-  assert.equal(codex.matchesLaunch(signals({ originator: 'x', startedAt: '2026-08-26T09:59:58.000Z' }), base), true);
+  assert.equal(codex.matchesLaunch(signals({ originator: 'x', startedAt: '2026-08-26T09:59:58.000Z' }), base), 'cwd');
   assert.equal(codex.matchesLaunch(signals({ isSubagent: true }), base), false);
   assert.equal(codex.matchesLaunch(null, base), false);
   assert.equal(codex.matchesLaunch(signals({ sessionId: null }), base), false);
   assert.equal(codex.matchesLaunch(signals({ originator: 'x', startedAt: null }), base), false);
   const fork = { ...base, forkFrom: 'parent-id' };
-  assert.equal(codex.matchesLaunch(signals({ forkedFrom: 'parent-id', originator: 'switchboard_parentslaunch' }), fork), true);
-  assert.equal(codex.matchesLaunch(signals({ forkedFrom: 'other', originator: TAG() }), fork), false);
-  assert.equal(codex.matchesLaunch(signals({ forkedFrom: 'parent-id', startedAt: '2026-08-26T09:00:00.000Z' }), fork), false);
+  assert.equal(codex.matchesLaunch(signals({ forkedFrom: 'parent-id', originator: 'switchboard_parentslaunch' }), fork), 'fork');
+  assert.equal(codex.matchesLaunch(signals({ forkedFrom: 'parent-id', originator: TAG() }), fork), 'tag');
+  assert.equal(codex.matchesLaunch(signals({ forkedFrom: 'other', originator: TAG() }), fork), 'tag', 'the launch\'s own tag is authoritative');
+  assert.equal(codex.matchesLaunch(signals({ forkedFrom: 'other', originator: 'switchboard_parentslaunch' }), fork), false);
+  assert.equal(codex.matchesLaunch(signals({ forkedFrom: 'parent-id', originator: 'switchboard_parentslaunch', startedAt: '2026-08-26T09:00:00.000Z' }), fork), false);
 });
 
 test('readLaunchSignals reads only the rollout head and yields nothing for a half-written one', () => {
@@ -189,4 +191,72 @@ test('a pending Codex launch is re-keyed onto its rollout through the fork re-ke
   assert.deepEqual(migrated.map(m => m[0]).sort(), ['activity', 'mcp']);
   assert.equal(transitions.hasPendingLaunches(), false);
   assert.equal(transitions.sweepPendingLaunches(), 0);
+});
+
+function pendingForkFixture(t) {
+  const transitions = require('../session-transitions');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-forks-'));
+  const previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  t.after(() => {
+    if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous;
+    transitions.init({ activeSessions: new Map() });
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const day = path.join(home, 'sessions', '2026', '08', '26');
+  fs.mkdirSync(day, { recursive: true });
+  const activeSessions = new Map(), events = [];
+  transitions.init({ PROJECTS_DIR: path.join(home, 'projects'), activeSessions, log: { info() {}, warn() {}, debug() {}, error() {} },
+    getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: (...args) => events.push(args) } }),
+    rekeyMcpServer() {}, rekeyActivity() {}, rekeyMetadata() {}, setTimeout: () => ({ unref() {} }) });
+  const spawnedAt = Date.parse('2026-08-26T09:59:59.000Z');
+  const pend = tempId => {
+    const session = { pty: { pid: 7 }, exited: false, runtime: 'codex', projectFolder: null, knownJsonlFiles: null, generation: 1,
+      pendingLaunch: { tag: codex.originatorTag(tempId), forkFrom: 'parent-id', projectPath: '/Users/me/proj', spawnedAt } };
+    activeSessions.set(tempId, session);
+    return session;
+  };
+  const rollout = (suffix, meta) => {
+    const id = ID.slice(0, -1) + suffix;
+    const file = path.join(day, `rollout-2026-08-26T11-55-0${suffix}-${id}.jsonl`);
+    fs.writeFileSync(file, rolloutHead({ forked_from_id: 'parent-id', timestamp: '2026-08-26T10:00:00.000Z', ...meta }));
+    return { id, file };
+  };
+  return { transitions, activeSessions, events, pend, rollout };
+}
+
+const TEMP_A = '3f0c8a1e-aaaa-4222-8333-444455556666';
+const TEMP_B = '3f0c8a1e-bbbb-4222-8333-444455556666';
+
+test('two pending forks of one parent: a rollout tagged for one fork is adopted by that fork, never by the other', t => {
+  const f = pendingForkFixture(t);
+  const a = f.pend(TEMP_A), b = f.pend(TEMP_B);
+  const forB = f.rollout('1', { originator: codex.originatorTag(TEMP_B) });
+  assert.equal(f.transitions.resolvePendingLaunches(codex, [forB.file]), 1);
+  assert.equal(f.activeSessions.get(forB.id), b, 'the rollout carrying the second fork\'s tag belongs to the second fork');
+  assert.equal(f.activeSessions.get(TEMP_A), a, 'the first fork is still waiting');
+  assert.ok(a.pendingLaunch);
+  assert.deepEqual(f.events, [['session-forked', TEMP_B, forB.id, 'fork']]);
+  const inherited = f.rollout('2', { originator: 'switchboard_parentslaunch' });
+  assert.equal(f.transitions.resolvePendingLaunches(codex, [forB.file, inherited.file]), 1, 'the lone remaining fork takes the lone remaining same-parent rollout');
+  assert.equal(f.activeSessions.get(inherited.id), a);
+  assert.equal(f.transitions.hasPendingLaunches(), false);
+});
+
+test('two pending forks of one parent and only inherited tags: nothing is re-keyed while the pairing is ambiguous', t => {
+  const f = pendingForkFixture(t);
+  const a = f.pend(TEMP_A), b = f.pend(TEMP_B);
+  const first = f.rollout('1', { originator: 'switchboard_parentslaunch' });
+  assert.equal(f.transitions.resolvePendingLaunches(codex, [first.file]), 0, 'one rollout, two candidate forks: no guess');
+  const second = f.rollout('2', { originator: 'switchboard_parentslaunch' });
+  assert.equal(f.transitions.resolvePendingLaunches(codex, [first.file, second.file]), 0, 'two rollouts, two forks: still no guess');
+  assert.equal(f.transitions.sweepPendingLaunches(), 0);
+  assert.equal(f.activeSessions.get(TEMP_A), a);
+  assert.equal(f.activeSessions.get(TEMP_B), b);
+  assert.deepEqual(f.events, []);
+  b.exited = true;
+  assert.equal(f.transitions.resolvePendingLaunches(codex, [first.file, second.file]), 0, 'one fork, two rollouts: no guess either');
+  fs.rmSync(second.file);
+  assert.equal(f.transitions.sweepPendingLaunches(), 1, 'one fork, one rollout: adopted');
+  assert.equal(f.activeSessions.get(first.id), a);
 });

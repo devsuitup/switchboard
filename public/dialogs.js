@@ -21,7 +21,7 @@ async function resolveDefaultSessionOptions(project) {
   if (effective.preLaunchCmd) options.preLaunchCmd = effective.preLaunchCmd;
   if (effective.addDirs) options.addDirs = effective.addDirs;
   if (effective.mcpEmulation === false) options.mcpEmulation = false;
-  // Codex launch options travel in the same bag; the Codex adapter validates them, Claude ignores them.
+  // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
   for (const key of ['codexSandbox', 'codexApproval', 'codexModel', 'codexEffort']) {
     if (effective[key]) options[key] = effective[key];
   }
@@ -120,8 +120,9 @@ function showNewSessionPopover(project, anchorEl) {
   if (typeof window.api.getHarnesses === 'function') {
     window.api.getHarnesses().then(list => {
       if (!popover.isConnected) return;
-      for (const harness of Array.isArray(list) ? list : []) {
-        if (!harness || harness.isDefault || !harness.enabled) continue;
+      const harnesses = Array.isArray(list) ? list.filter(Boolean) : [];
+      for (const harness of harnesses) {
+        if (harness.isDefault || !harness.enabled) continue;
         const btn = document.createElement('button');
         btn.className = 'popover-option';
         btn.dataset.runtime = harness.id;
@@ -139,6 +140,7 @@ function showNewSessionPopover(project, anchorEl) {
         popover.insertBefore(btn, termBtn);
         items.splice(items.indexOf(termBtn), 0, btn);
       }
+      if (harnesses.some(harness => harness.isDefault && !harness.enabled)) for (const btn of [claudeBtn, claudeOptsBtn]) removeItem(btn);
     }).catch(() => {});
   }
 
@@ -159,6 +161,14 @@ function showNewSessionPopover(project, anchorEl) {
   function focusItem(item) {
     for (const button of items) button.tabIndex = button === item ? 0 : -1;
     item.focus();
+  }
+
+  function removeItem(item) {
+    const index = items.indexOf(item);
+    if (index === -1) return;
+    items.splice(index, 1);
+    if (document.activeElement === item && items.length) focusItem(items[Math.min(index, items.length - 1)]);
+    item.remove();
   }
 
   function close(returnFocus = false) {

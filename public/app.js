@@ -1191,7 +1191,7 @@ window.api.onTerminalNotification((sessionId, message, kind) => {
   if (state === 'attention' && sessionId !== activeSessionId) {
     setAttention(sessionId, true, 'onTerminalNotification');
   } else if (state === 'idle') {
-    // A delayed "turn finished" notification: mark response-ready
+    // see .ai/contexts/cli-harnesses.md ("Busy and attention per harness")
     setActivity(sessionId, false, 'onTerminalNotification');
   }
 

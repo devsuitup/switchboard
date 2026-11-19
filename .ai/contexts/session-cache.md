@@ -3038,13 +3038,20 @@ the cached row. Rows of vanished transcripts are deleted unless
 is); `setFolderMeta(folder, null, stamp)` records a null project, because the
 folder spans projects. The stamp is `harnessFolderIndexMtimeMs` (directory
 mtime, newest transcript mtime, and the harness's `titleIndexMtimeMs()` when
-it has one), from `getTranscriptsIndexMtimeMs` in `folder-index-state.js`.
+it has one), from `getTranscriptsIndexMtimeMs(folderPath, files, extraMtimeMs)`
+in `folder-index-state.js`: it takes the transcripts the caller already listed
+instead of enumerating them again, folds in the extra stamp of an index kept
+outside the transcripts (Codex's `session_index.jsonl`), and returns 0 when
+the folder is gone.
 
 `reconciliationFolders` appends `harnessReconciliationFolders(metaMap)`: every
-listed folder of every available prefixed harness, refreshed when its stamp
+listed folder of every enabled prefixed harness, refreshed when its stamp
 beats `cache_meta.indexMtimeMs`, plus every `cache_meta` key under the prefix
-that is no longer listed, refreshed so its rows drop. The projects query worker
-runs this too, through the same `session-cache.js`.
+that is no longer listed, refreshed so its rows drop. Enabled, not available:
+a harness whose whole sessions root vanished lists no folders, so every cached
+folder under its prefix is refreshed and `refreshHarnessFolder` drops its rows
+and search entries. The projects query worker runs this too, through the same
+`session-cache.js`.
 
 The cold scan (`workers/scan-projects.js`) walks the harness folders after the
 Claude folders (not for a `folders`-restricted retry nor a remote mirror) and

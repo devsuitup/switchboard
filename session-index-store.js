@@ -428,7 +428,7 @@ const stmts = {
   
   cacheCount: db.prepare('SELECT COUNT(*) as cnt FROM session_cache'),
   cacheGetAll: db.prepare('SELECT * FROM session_cache'),
-  // Prepared on first use: a readonly open of a pre-#820 schema has no runtime column yet.
+  // see .ai/contexts/cli-harnesses.md (the writer's runtime and sessionFile columns)
   get cacheUpsert() { return cacheUpsertStatement || (cacheUpsertStatement = db.prepare(`
     INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description, fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint, scheduleSlug, continuationIndex, customTitle, fileSize, workflowRunId, messageCountIndex, runtime, sessionFile)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 'claude'), ?)
