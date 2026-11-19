@@ -23,7 +23,7 @@ function topLevelDeclarations(src, names) {
     .join('\n');
 }
 
-function setup({ savedSet, activeWaitMs = 20000 }) {
+function setup({ savedSet, activeWaitMs = 20000, fresh = false }) {
   const dom = new JSDOM('<!DOCTYPE html><body></body>', { runScripts: 'outside-only' });
   const ctx = dom.getInternalVMContext();
   const notices = dom.window.document.createElement('div');
@@ -37,7 +37,8 @@ function setup({ savedSet, activeWaitMs = 20000 }) {
   dom.window.api = {
     restoreBackgroundJob: (id) => new Promise((resolve) => {
       events.push(['restore', id]);
-      pendingRestores.push({ id, resolve: () => resolve({ action: 'attach', sessionId: id, jobId: '1234abcd' }) });
+      pendingRestores.push({ id, resolve: () => resolve({ action: 'attach', sessionId: id, jobId: '1234abcd' }),
+        refuse: () => resolve({ action: 'refuse', reason: 'worker liveness unknown', jobId: '1234abcd' }) });
     }),
     getSessionContinuations: async () => ({ candidates: [], unresolved: false, continued: false }),
     getSetting: async (key) => JSON.parse(JSON.stringify(settings[key] || null)),
@@ -97,7 +98,13 @@ function setup({ savedSet, activeWaitMs = 20000 }) {
   loadAppFunctions(ctx, { functions: ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'openSession', 'openSessionNow', 'indexedRowOf', 'prepareBackgroundRestore'].filter((name) => APP_SRC.includes(`function ${name}(`)) });
   ctx.restoreSavedIndexFrom = savedSet;
   vm.runInContext('restoreSavedIndex = new Map(restoreSavedIndexFrom.map((item, index) => [item.sessionId, index]));', ctx);
-  for (const item of savedSet) {
+  if (fresh) {
+    vm.runInContext('var cachedProjects = []; var cachedAllProjects = []; function refreshSidebar() {}', ctx, { filename: __filename });
+    ctx.encodeProjectPath = require('../encode-project-path').encodeProjectPath;
+    Object.defineProperty(dom.window, 'crypto', { value: { randomUUID: () => 'new-fresh' } });
+    loadAppFunctions(ctx, { functions: ['launchNewSession'] });
+  }
+  for (const item of savedSet.filter((item) => !item.fresh)) {
     vm.runInContext(`sessionMap.set(${JSON.stringify(item.sessionId)}, ${JSON.stringify({ sessionId: item.sessionId, projectPath: item.projectPath, name: `name-${item.sessionId}` })});`, ctx);
   }
   const restore = () => {
@@ -240,6 +247,88 @@ test('when the active background entry is slow, the rest opens after the bound a
   await done;
   assert.equal(h.active(), 'a', 'the late active attach does not take the tab the user is on');
   assert.deepEqual(h.tabs(), ['a', 'bg']);
+});
+
+test('a fresh restored terminal does not take the selected tab', async (t) => {
+  const h = setup({ fresh: true, savedSet: [
+    { sessionId: 'a', projectPath: '/pa', active: true },
+    { sessionId: 'fresh', projectPath: '/pf', fresh: true },
+  ] });
+  const done = h.restore();
+  t.after(async () => { await drain(h, done); h.dom.window.close(); });
+  await h.settle();
+  assert.equal(h.pendingOpens[0]?.sessionId, 'a');
+  h.pendingOpens.shift().resolve();
+  await h.settle();
+  assert.equal(h.active(), 'a');
+  assert.equal(h.pendingOpens[0]?.sessionId, 'new-fresh', 'the fresh entry opens behind the active tab');
+  h.pendingOpens.shift().resolve();
+  await done;
+  assert.equal(h.active(), 'a', 'a fresh restore preserves the selected tab');
+  assert.deepEqual(h.shown(), ['a']);
+});
+
+test('a fresh restored terminal does not take a tab selected while its open is pending', async (t) => {
+  const h = setup({ fresh: true, savedSet: [
+    { sessionId: 'a', projectPath: '/pa', active: true },
+    { sessionId: 'b', projectPath: '/pb' },
+    { sessionId: 'fresh', projectPath: '/pf', fresh: true },
+  ] });
+  const done = h.restore();
+  t.after(async () => { await drain(h, done); h.dom.window.close(); });
+  await h.settle();
+  h.pendingOpens.shift().resolve();
+  await h.settle();
+  h.pendingOpens.shift().resolve();
+  await h.settle();
+  assert.equal(h.active(), 'a');
+  assert.equal(h.pendingOpens[0]?.sessionId, 'new-fresh');
+  vm.runInContext("showSession('b')", h.ctx);
+  h.pendingOpens.shift().resolve();
+  await done;
+  assert.equal(h.active(), 'b', 'the fresh terminal opens behind the tab selected while it was pending');
+  assert.deepEqual(h.shown(), ['a', 'b']);
+});
+
+test('a background sibling does not fill the screen before the saved active background entry', async (t) => {
+  const h = setup({ savedSet: [
+    { sessionId: 'active-bg', projectPath: '/pa', bg: true, active: true, attachJobId: '1234abcd' },
+    { sessionId: 'peer-bg', projectPath: '/pb', bg: true, attachJobId: '1234abcd' },
+  ] });
+  const done = h.restore();
+  t.after(async () => { await drain(h, done); h.dom.window.close(); });
+  await h.settle();
+  assert.equal(h.pendingRestores.length, 2, 'both preparations run concurrently');
+  h.pendingRestores.splice(1, 1)[0].resolve();
+  await h.settle();
+  assert.equal(h.pendingOpens[0]?.sessionId, 'peer-bg');
+  h.pendingOpens.shift().resolve();
+  await h.settle();
+  assert.equal(h.active(), null, 'a peer does not fill the screen before the active gate settles');
+  h.pendingRestores.shift().resolve();
+  await h.settle();
+  h.pendingOpens.shift().resolve();
+  await done;
+  assert.equal(h.active(), 'active-bg', 'the saved active entry fills the screen when it opens');
+  assert.deepEqual(h.tabs(), ['active-bg', 'peer-bg']);
+});
+
+test('when the saved active background entry is refused, the first open tab fills the empty screen at the end', async (t) => {
+  const h = setup({ savedSet: [
+    { sessionId: 'active-bg', projectPath: '/pa', bg: true, active: true, attachJobId: '1234abcd' },
+    { sessionId: 'peer-bg', projectPath: '/pb', bg: true, attachJobId: '1234abcd' },
+  ] });
+  const done = h.restore();
+  t.after(async () => { await drain(h, done); h.dom.window.close(); });
+  await h.settle();
+  h.pendingRestores.splice(1, 1)[0].resolve();
+  await h.settle();
+  h.pendingOpens.shift().resolve();
+  await h.settle();
+  assert.equal(h.active(), null);
+  h.pendingRestores.shift().refuse();
+  await done;
+  assert.equal(h.active(), 'peer-bg', 'nothing else is shown, so the open peer fills the screen');
 });
 
 test('completing an interactive restore preserves a user selection made during the run', async (t) => {
