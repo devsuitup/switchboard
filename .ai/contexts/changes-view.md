@@ -881,7 +881,11 @@ platform; the fork's rows carry repo-relative git paths) into folder nodes,
 numeric, case-insensitive `localeCompare`, and compacts a folder whose only
 child is a folder into one row named `a/b` (VS Code's compact folders), and
 `changesTreeRows` flattens that into display rows, skipping the children of a
-collapsed folder. A file row in tree mode shows the node's own name, carries
+collapsed folder. A leaf is one status record, not one path: git reports two
+records at one path after `git rm --cached f` (a staged deletion and an
+untracked file), the flat list shows both, and the tree keeps both under the
+folder, in git's order, each with its own click target (the leaf key carries
+the record's index). A file row in tree mode shows the node's own name, carries
 `.tree` and `--depth` for its indent, keeps `data-path` as the full repo path
 (so the selection, the click handler, the untracked-count writeback and every
 `[data-path=…]` selector are unchanged), and takes the full path — with the
@@ -896,7 +900,14 @@ under it. Collapsed state is per tab, in `tab.collapsedFolders`, a `Set` keyed
 by `changesFolderKey(subSessionId, folderPath)` — the group id and the path
 joined by `\0`, which no git path can contain — so the parent's `src` and a
 group's `src` fold independently, and a fold survives a refresh (the tab is
-the same) but not a reopened tab. Clicking a folder bumps `tab.listRevision`
+the same) but not a reopened tab. The keys are real folder paths, never the
+compacted display name: a compacted row stands for every folder in its chain
+(`changesFolderChain`, `src` and `src/nested` for a row named `src/nested`) and
+is collapsed when any of them is in the set, so a fold made on `src` holds when
+a refresh leaves `src/nested` as its only child and the row compacts, and a
+fold made on `nested` holds when `src` compacts onto it. Folding adds the
+deepest folder of the row; unfolding removes the whole chain, so no stale fold
+reappears once the chain splits again. Clicking a folder bumps `tab.listRevision`
 and goes through `renderPanel`, the same path as the untracked-count
 writeback: the list is rebuilt, the editor is reused (the reuse test's
 `editors.length` pins that), and focus is put back on the new copy of the

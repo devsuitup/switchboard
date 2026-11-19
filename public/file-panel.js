@@ -1829,7 +1829,7 @@ function sortChangesTreeLevel(nodes) {
 
 function buildChangesTree(files) {
   const root = new Map();
-  for (const file of files) {
+  files.forEach((file, index) => {
     const parts = String(file.path || '').split('/').filter(Boolean);
     let level = root;
     for (let i = 0; i < parts.length - 1; i++) {
@@ -1841,8 +1841,8 @@ function buildChangesTree(files) {
       level = node.children;
     }
     const name = parts[parts.length - 1] || file.path;
-    level.set(`\0${name}`, { kind: 'file', name, file });
-  }
+    level.set(`\0${name}\0${index}`, { kind: 'file', name, file });
+  });
   const toArray = (map) => [...map.values()].map(node => node.kind === 'folder' ? { ...node, children: toArray(node.children) } : node);
   return sortChangesTreeLevel(toArray(root));
 }
@@ -1857,13 +1857,25 @@ function changesFolderKey(subSessionId, folderPath) {
   return `${subSessionId || ''}\0${folderPath}`;
 }
 
+// The folders a compacted row stands for, outermost first — see .ai/contexts/changes-view.md ("List or tree")
+function changesFolderChain(parentPath, name) {
+  const chain = [];
+  let folderPath = parentPath;
+  for (const part of String(name).split('/')) {
+    folderPath = folderPath ? `${folderPath}/${part}` : part;
+    chain.push(folderPath);
+  }
+  return chain;
+}
+
 function changesTreeRows(tree, collapsed, subSessionId, parentPath = '', depth = 0) {
   const rows = [];
   for (const node of tree) {
     if (node.kind === 'folder') {
-      const folderPath = parentPath ? `${parentPath}/${node.name}` : node.name;
-      const isCollapsed = collapsed.has(changesFolderKey(subSessionId, folderPath));
-      rows.push({ kind: 'folder', depth, name: node.name, folderPath, count: countChangesTreeFiles(node), collapsed: isCollapsed });
+      const chain = changesFolderChain(parentPath, node.name);
+      const folderPath = chain[chain.length - 1];
+      const isCollapsed = chain.some(folder => collapsed.has(changesFolderKey(subSessionId, folder)));
+      rows.push({ kind: 'folder', depth, name: node.name, folderPath, chain, count: countChangesTreeFiles(node), collapsed: isCollapsed });
       if (!isCollapsed) rows.push(...changesTreeRows(node.children, collapsed, subSessionId, folderPath, depth + 1));
     } else {
       rows.push({ kind: 'file', depth, name: node.name, file: node.file });
@@ -1898,9 +1910,8 @@ function buildChangesFolderRow(sessionId, tab, row, subSessionId) {
   button.appendChild(count);
 
   button.addEventListener('click', () => {
-    const key = changesFolderKey(subSessionId, row.folderPath);
-    if (tab.collapsedFolders.has(key)) tab.collapsedFolders.delete(key);
-    else tab.collapsedFolders.add(key);
+    if (row.collapsed) for (const folder of row.chain) tab.collapsedFolders.delete(changesFolderKey(subSessionId, folder));
+    else tab.collapsedFolders.add(changesFolderKey(subSessionId, row.folderPath));
     tab.listRevision = (tab.listRevision || 0) + 1;
     renderPanel(sessionId);
     const again = [...changesListEl.querySelectorAll('.changes-folder-row')]

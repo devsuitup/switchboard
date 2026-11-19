@@ -2712,3 +2712,75 @@ test('subagent groups render as trees of their own, folded independently of the 
     assert.equal(ctx.document.querySelector('.changes-folder-row[data-folder="src"]:not([data-subagent])').getAttribute('aria-expanded'), 'true');
   } finally { ctx.destroy(); }
 });
+
+test('tree view keeps both records git reports at one path: the staged deletion and the untracked file (mutation target: keying leaves by name alone)', async () => {
+  // `git rm --cached src/a.js`: porcelain v2 carries a staged deletion and an untracked entry at the same path.
+  const { parseStatusPorcelainV2, mergeChanges } = require('../src/main/changes/git-changes');
+  const porcelain = ['# branch.head main',
+    '1 D. N... 100644 000000 000000 1111111111111111111111111111111111111111 0000000000000000000000000000000000000000 src/a.js',
+    '? src/a.js', ''].join('\0');
+  const merged = mergeChanges(parseStatusPorcelainV2(porcelain), { 'src/a.js': { added: 0, deleted: 9 } }, {});
+  assert.deepEqual(merged.files.map(f => f.state), ['D', '?'], 'the shipped parser keeps both records');
+  const group = subagentGroup({ files: merged.files.map(f => ({ ...f })), totals: merged.totals });
+  const ctx = setupFilePanelDom({
+    statusImpl: () => ({ ok: true, kind: 'local', ...merged, subagents: [group] }),
+    diffImpl: () => UNTRACKED_DIFF_RESULT,
+    seedStorage: { changesListView: 'tree' },
+  });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    const parentRows = Array.from(ctx.document.querySelectorAll('.changes-file-row:not([data-subagent])'));
+    assert.deepEqual(parentRows.map(row => row.querySelector('.changes-file-state').textContent), ['D', '?'], 'both records are leaves of the tree, in git order');
+    assert.equal(ctx.document.querySelector('.changes-folder-row[data-folder="src"]:not([data-subagent]) .changes-folder-count').textContent, '2');
+    assert.deepEqual(subagentRows(ctx).map(row => row.querySelector('.changes-file-state').textContent), ['D', '?'], 'a subagent group goes through the same builder');
+
+    parentRows[0].dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
+    await flush();
+    assert.deepEqual(ctx.calls.file.at(-1), { sessionId: 's1', filePath: 'src/a.js', staged: true }, 'the deletion row still opens the staged side');
+
+    ctx.document.getElementById('changes-list-view-btn').click();
+    await flush();
+    assert.equal(ctx.document.querySelectorAll('.changes-file-row:not([data-subagent])').length, 2, 'the flat list shows the same two records');
+  } finally { ctx.destroy(); }
+});
+
+test('a fold survives a refresh that compacts or splits the folder chain it was made on (mutation target: keying folds by the compacted row path)', async () => {
+  let paths = ['src/readme.md', 'src/nested/one.js'];
+  const ctx = setupFilePanelDom({ statusImpl: () => treeStatus(paths), seedStorage: { changesListView: 'tree' } });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    ctx.document.querySelector('.changes-folder-row[data-folder="src"]').click();
+    await flush();
+    assert.deepEqual(listRowLabels(ctx), ['folder:src']);
+
+    paths = ['src/nested/one.js'];
+    ctx.document.getElementById('changes-refresh-btn').click();
+    await flush();
+    const compact = ctx.document.querySelector('.changes-folder-row[data-folder="src/nested"]');
+    assert.ok(compact, 'src/readme.md is clean, so src and nested compact into one row');
+    assert.equal(compact.getAttribute('aria-expanded'), 'false', 'the row stands for src, which is folded');
+    assert.deepEqual(listRowLabels(ctx), ['folder:src/nested']);
+
+    compact.click();
+    await flush();
+    assert.deepEqual(listRowLabels(ctx), ['folder:src/nested', 'file:one.js'], 'unfolding the compact row unfolds every folder it stands for');
+
+    paths = ['src/readme.md', 'src/nested/one.js'];
+    ctx.document.getElementById('changes-refresh-btn').click();
+    await flush();
+    assert.deepEqual(listRowLabels(ctx), ['folder:src', 'folder:nested', 'file:one.js', 'file:readme.md'], 'no stale fold comes back once the chain splits again');
+
+    ctx.document.querySelector('.changes-folder-row[data-folder="src/nested"]').click();
+    await flush();
+    paths = ['src/nested/one.js'];
+    ctx.document.getElementById('changes-refresh-btn').click();
+    await flush();
+    assert.deepEqual(listRowLabels(ctx), ['folder:src/nested'], 'a fold made on nested holds when src compacts onto it');
+  } finally { ctx.destroy(); }
+});
