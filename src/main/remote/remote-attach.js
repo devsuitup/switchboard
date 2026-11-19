@@ -140,7 +140,7 @@ function parseProbeOutput(stdout) {
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", pid-reuse guard)
 function buildProcCmdlineCheck(pid) {
-  return `tr '\\0' ' ' < /proc/${pid}/cmdline 2>/dev/null | grep -qi claude && echo 1 || echo 0`;
+  return `if cmdline=$(tr '\\0' ' ' 2>/dev/null < /proc/${pid}/cmdline); then printf '%s' "$cmdline" | grep -qi claude; case $? in (0) echo 1 ;; (1) echo 0 ;; esac; fi`;
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", socket discovery)
@@ -328,7 +328,8 @@ function parseDiscoveryProbeOutput(stdout) {
   const probed = parseProbeOutput(parts.slice(1, 7).join(PROBE_SEP));
   if (!probed) return null;
   const clientCount = parseClientCount(parts[7]);
-  const cmdlineHasClaude = parts[8] === '1' ? true : parts[8] === '0' ? false : null;
+  const cmdlineField = parts[8]?.replace(/\n$/, '');
+  const cmdlineHasClaude = cmdlineField === '1' ? true : cmdlineField === '0' ? false : null;
   return { socket, cols: probed.cols, rows: probed.rows, pre: probed.pre, clientCount, cmdlineHasClaude };
 }
 

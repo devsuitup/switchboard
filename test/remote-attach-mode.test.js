@@ -691,6 +691,7 @@ function runProbe(t, {
   pid = 4242, target = 'main:@0.%0', environ = 'missing', uid = '1000', idStatus = 0, sock,
   session = 'main', rest = '@0.%0', panePid = `${pid}\n`, paneStatus = 0, tmuxTmpdir, prelude = '', env = {}, clients = '', sockAny = false,
   baseName = 'base', kind = 'socket', dirMode = 0o700, foreignOwner, relativeBase = false, failingFind = false,
+  cmdline = CLAUDE_CMDLINE, grepStatus,
 } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'probe-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -705,7 +706,7 @@ function runProbe(t, {
   const procDir = path.join(dir, 'proc', String(pid));
   mkdirSync(bin);
   mkdirSync(procDir, { recursive: true });
-  writeFileSync(path.join(procDir, 'cmdline'), CLAUDE_CMDLINE);
+  if (cmdline !== null) writeFileSync(path.join(procDir, 'cmdline'), cmdline);
   if (environ === 'dir') mkdirSync(path.join(procDir, 'environ'));
   else if (environ !== 'missing') writeFileSync(path.join(procDir, 'environ'), environ);
   const resolved = spawnSync(TEST_SHELL, ['-c', 'command -v "$0"', shellPath(TEST_SHELL)], { encoding: 'utf8', timeout: 30000 });
@@ -714,6 +715,7 @@ function runProbe(t, {
     tmux: FAKE_TMUX, id: FAKE_ID, sh: `exec ${shellQuote(resolved.stdout.trim())} "$@"\n`,
   })) writeFileSync(path.join(bin, name), '#!/bin/sh\n' + script, { mode: 0o755 });
   if (failingFind) writeFileSync(path.join(bin, 'find'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  if (grepStatus !== undefined) writeFileSync(path.join(bin, 'grep'), `#!/bin/sh\nexit ${grepStatus}\n`, { mode: 0o755 });
   const command = mapProc(buildProbeCommand(pid, target), pid);
   assert.ok(command.startsWith('sh -c '));
   const childEnv = {
@@ -1073,6 +1075,36 @@ for (const [name, options, cause] of REFUSAL_CASES) {
     assert.equal(f.spawns.length, 0);
     assert.equal(f.commands.length, 1);
     assertRefused(f.shellResults[0], cause);
+  });
+}
+
+for (const [name, cmdline, refused] of [
+  ['the pid runs a program that is not claude', Buffer.from('vim\0notes.txt\0'), true],
+  ['the command line of the pid cannot be read', null, false],
+  ['the pid runs claude', CLAUDE_CMDLINE, false],
+]) {
+  test(`adapter ${refused ? 'refuses' : 'attaches'} through the real probe output when ${name}`, async t => {
+    const f = adapterOverShell(t, { environ: ENV_TMUX, sock: ENV_SOCK, baseName: null, cmdline });
+    const attached = await f.attach();
+    t.after(() => f.events.emit('exit'));
+    if (refused) {
+      assert.equal(attached.ok, false);
+      assert.equal(attached.error, 'pid 4242 now belongs to a process that is not a claude CLI — the session is gone');
+      assert.equal(f.spawns.length, 0);
+    } else {
+      assert.equal(attached.ok, true, attached.error);
+      assert.equal(f.spawns.length, 1);
+    }
+  });
+}
+
+for (const grepStatus of [2, 127]) {
+  probeTest(`adapter attaches through the real probe output when grep exits ${grepStatus} on a readable claude command line`, async t => {
+    const f = adapterOverShell(t, { grepStatus });
+    const attached = await f.attach();
+    t.after(() => f.events.emit('exit'));
+    assert.equal(attached.ok, true, attached.error);
+    assert.equal(f.spawns.length, 1);
   });
 }
 
