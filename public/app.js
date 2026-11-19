@@ -33,27 +33,6 @@ const memoryPanel = new ViewerPanel(memoryViewer, {
   language: 'markdown', storageKey: 'markdownPreviewMode',
   onSave: (filePath, content, expected) => window.api.saveMemory(filePath, content, expected),
 });
-const workFilesContent = document.getElementById('work-files-content');
-const workFilesViewer = document.getElementById('work-files-viewer');
-const workFilesPanel = new ViewerPanel(workFilesViewer, {
-  copyPath: true, copyContent: true,
-  language: 'auto', storageKey: 'workFilesPreviewMode',
-  format: true,
-  onDelete: async (filePath) => {
-    const result = await window.api.deleteWorkFile(filePath);
-    if (result && result.ok) {
-      // Hide the panel and surgically remove the entry from the cached list.
-      // We avoid loadWorkFiles() because the full disk re-scan can freeze the
-      // UI on projects with large .work-files/ trees (e.g. tagpay = 39k files).
-      workFilesViewer.style.display = 'none';
-      if (typeof removeWorkFileFromCache === 'function') removeWorkFileFromCache(filePath);
-    }
-    return result;
-  },
-  onClose: () => {
-    workFilesViewer.style.display = 'none';
-  },
-});
 const terminalArea = document.getElementById('terminal-area');
 const settingsViewer = document.getElementById('settings-viewer');
 const globalSettingsBtn = document.getElementById('global-settings-btn');
@@ -364,7 +343,6 @@ async function applyProjectDeletion(result) {
   }
   resetSearchFilter();
   queueSchedulesReload();
-  if (typeof loadWorkFiles === 'function') await loadWorkFiles();
   if (typeof loadMemories === 'function') await loadMemories();
 }
 
@@ -1343,8 +1321,6 @@ function clearSearch() {
     clearRenderRaf = requestAnimationFrame(() => { clearRenderRaf = null; refreshSidebar({ resort: true }); });
   } else if (activeTab === 'memory') {
     renderMemories();
-  } else if (activeTab === 'work-files') {
-    renderWorkFiles();
   }
 }
 
@@ -1366,8 +1342,6 @@ function resetSearchFilter() {
     clearRenderRaf = requestAnimationFrame(() => { clearRenderRaf = null; refreshSidebar({ resort: true }); });
   } else if (activeTab === 'memory') {
     renderMemories();
-  } else if (activeTab === 'work-files') {
-    renderWorkFiles();
   }
 }
 
@@ -1415,11 +1389,6 @@ async function runSearchQuery() {
       if (generation !== searchGeneration) return;
       const matchIds = new Set(results.map(r => r.id));
       renderMemories(matchIds);
-    } else if (activeTab === 'work-files') {
-      const results = await window.api.search('work-file', query, searchTitlesOnly);
-      if (generation !== searchGeneration) return;
-      const matchIds = new Set(results.map(r => r.id));
-      renderWorkFiles(matchIds);
     }
   } catch {
     if (generation !== searchGeneration) return;
@@ -2940,7 +2909,6 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
     sidebarContent.style.display = 'none';
     statsContent.style.display = 'none';
     memoryContent.style.display = 'none';
-    workFilesContent.style.display = 'none';
     sessionFilters.style.display = 'none';
     searchBar.style.display = 'none';
 
@@ -2982,11 +2950,6 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
       searchInput.placeholder = 'Search agent files...';
       memoryContent.style.display = '';
       loadMemories();
-    } else if (tabName === 'work-files') {
-      searchBar.style.display = '';
-      searchInput.placeholder = 'Search work files...';
-      workFilesContent.style.display = '';
-      loadWorkFiles();
     }
   });
 });
@@ -3001,7 +2964,7 @@ initAgentsView();
 
 // Stats view (loadStats, buildUsageSection, buildDailyBarChart, buildHeatmap, calculateStreak, buildStatsSummary) → stats-view.js
 
-// Memory & Work Files viewers → memory-workfiles-view.js
+// see .ai/contexts/viewer-panel.md
 
 
 // Dialogs (resolveDefaultSessionOptions, forkSession, showNewSessionPopover,

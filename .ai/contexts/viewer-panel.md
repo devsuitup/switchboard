@@ -28,35 +28,36 @@ search, disconnects the observer and removes highlights without moving focus.
 Evidence: `test/message-search-819.test.js`; jsdom verifies behavior, not native
 highlight painting or scroll geometry.
 
-**Purpose**: Reusable CodeMirror-based file viewer with a configurable toolbar. Used by **3 callsites**: `memoryPanel` (Memory tab) and `workFilesPanel` (.work-files tab) in `public/app.js`, and the Activity trace viewer in `public/activity-trace-panel.js`. The file panel does not use it: a file opened there goes to the Touched editor (`.ai/contexts/touched-files.md`). Optionally read-only or savable. Watches the file on disk: reloads a clean buffer on an external change, and never replaces a dirty one without asking.
+**Purpose**: Reusable CodeMirror-based file viewer with a configurable toolbar. Used by **2 callsites**: `memoryPanel` (Agent Files tab) in `public/app.js`, and the Activity trace viewer in `public/activity-trace-panel.js`. The file panel does not use it: a file opened there goes to the Touched editor (`.ai/contexts/touched-files.md`). Optionally read-only or savable. Watches the file on disk: reloads a clean buffer on an external change, and never replaces a dirty one without asking.
 
 
 ## File list workers
 
-Issue #616 slice 2 routes `get-memories` and `get-work-files` through
-`file-lists-worker-client.js` to `workers/file-lists-query.js`.
-`file-lists.js` contains the previous synchronous listing algorithms, executed
-only inside the worker. Main snapshots hidden projects and live project roots
-without walking the filesystem; live roots participate only in Memory's version,
-so session start/stop does not discard Work Files jobs. The worker adds the
-roots derived from the on-disk project folders, then uses the unchanged `isAllowedMemoryPath` and
-`scan-md-files` acceptance rules. Hidden-project filtering, Memory display
-paths and ordering, Work Files worktree deduplication, recursive traversal,
-the 200-file cap and total counts retain their previous behavior.
+Issue #1018 removes the Work Files tab, its recursive walk, its worker client
+and the get-work-files/read-work-file/delete-work-file IPCs and preload API.
+The Memory list still routes `get-memories` through `file-lists-worker-client.js`
+to `workers/file-lists-query.js`; `file-lists.js` keeps `listMemories`.
+Main snapshots hidden projects and live roots; the worker adds roots derived
+from project folders and uses the shared `isAllowedMemoryPath` and `scan-md-files`
+guards. One lazy filesystem worker serves Memory independently of Projects.
+The client follows the Projects client pattern: one in-flight scan, one coalesced
+pending scan, fixed 30-second deadlines from caller registration, a five-minute
+dispatch ceiling, worker termination after errors or unobserved timed-out work,
+and three bounded snapshot conflicts. Unlike the Projects client's read-only
+fallback, an exhausted policy conflict rejects the listing rather than publishing
+files from an obsolete allowlist or hidden-project setting. Quit shuts down the
+client. There is no main-thread filesystem fallback. A rejected list load keeps
+the renderer's previous list and shows a persistent error notice asking the user
+to reopen that tab to retry; a successful reload clears the notice.
 
-Each list has its own lazy worker and client. They are separate from the
-Projects worker so a large Work Files traversal cannot queue ahead of a
-Projects query or Memory listing. This adds at most two filesystem workers,
-with no SQLite connection in either. Each client follows the Projects client
-pattern: one in-flight scan, one coalesced pending scan, fixed 30-second deadlines
-from caller registration, a five-minute dispatch ceiling, worker termination
-after errors or unobserved timed-out work, and three bounded snapshot conflicts.
-Unlike the Projects client's read-only fallback, an exhausted policy conflict
-rejects the listing rather than publishing files from an obsolete allowlist or
-hidden-project setting. Quit shuts down both clients. There is no main-thread
-filesystem fallback. A rejected list load keeps the renderer's previous list and
-shows a persistent error notice asking the user to reopen that tab to retry;
-a successful reload clears the notice.
+Startup purges retired `plan` and `work-file` search rows through
+`deleteSearchType` and awaits the cleanup before creating the window.
+`test/legacy-search-cleanup-1018.test.js` executes this wiring against a real store
+to check the map, stored content and FTS postings, preserving Memory and sessions.
+
+Terminal path links and Touched still open `.work-files` documents through the
+file panel. Agent Files keeps its separate allowed-path reader/editor and
+schedule failure notifications in `memory-workfiles-view.js`.
 
 FTS preparation happens in the worker. Memory caches each file's acceptance
 and first 32,768 characters by precise mtime, size and real path; empty files
@@ -65,9 +66,8 @@ and `scanMdFiles` accept an optional content reader after their normal guards.
 That reader can return a string or `{content, nonempty}`: the latter retains
 the acceptance of a file whose non-whitespace text starts beyond the FTS body
 window, without retaining its entire body. The renderer payload contains no
-bodies. Work Files keeps the previous text policy: title-only entries for
-`.jsonl` and files over 64 KiB. Unchanged files produce no upserts. Changed,
-added, removed, newly hidden and cap-displaced entries produce targeted deltas;
+bodies. Unchanged files produce no upserts. Changed,
+added, removed and newly hidden entries produce targeted deltas;
 the title is part of the signature. Duplicate Memory paths share one FTS row.
 
 Main remains the sole SQLite writer. On the first request per type it reads
@@ -113,24 +113,23 @@ looks up all matching IDs, including shared targets, without scanning the index.
 Successful deletions remove their IDs from this map; invalidation does not add
 unwritten entries to the accepted signatures.
 Unrelated Markdown saves leave the epochs alone: invalidations cover Claude
-memory directories, project instruction files, known listed aliases, and
-`.work-files/` for Work Files. Before a first snapshot there is no per-path set;
+memory directories, project instruction files and known listed aliases. Before a first snapshot there is no per-path set;
 afterwards `FILE_LIST_MAX_INVALIDATED_PATHS` (256) bounds it, collapsing overflow
 to whole-type invalidation until a successful apply. Saving an unlisted file
 does not grow the accepted-signature map. Invalidating a whole type is still
 supported. Structured clone and bounded SQLite/FTS writes remain on main; no live responsiveness or
 stress measurement was performed for this slice.
 
-Diagnostics records `ipc.get-memories` and `ipc.get-work-files` with `totalMs`
+Diagnostics records `ipc.get-memories` with `totalMs`
 (time to a valid view, including queue, listing and pre-publication retries)
 and `entries` (listed file descriptors, including duplicate Memory paths),
 behind the existing mutable
-`TRACE.on` guard. `test/activity-trace-probe-guards.test.js` inventories both.
+`TRACE.on` guard. `test/activity-trace-probe-guards.test.js` inventories this probe.
 `totalMs` excludes background index batches, including any previous job's apply.
 Only scan work can queue a list request.
 The new tests compare real-worker lists and initial FTS deltas to a frozen
 pre-change synchronous fixture, verify unchanged-body read counts and per-file
-changes, path guards, hidden projects and cap behavior, exercise client
+changes, path guards and hidden projects, exercise client
 deadlines/conflicts/errors/shutdown, execute main's guarded batch writer, and
 verify row preservation, deletion and FTS integrity in an isolated real WAL DB
 under Electron's Node mode. The normal CI test runner discovers these files.
@@ -165,7 +164,7 @@ panel.getContent();                    // current editor content
 panel.destroy();                       // tear down (rare; usually open() replaces)
 ```
 
-Used at `public/app.js:31-57` for the two panel instances, and at `public/activity-trace-panel.js:24`.
+Used in `public/app.js` for Memory and in `public/activity-trace-panel.js` for Activity trace.
 
 ## Toolbar buttons (visibility rules)
 
@@ -327,7 +326,7 @@ Each of these reads and clears `pendingTouchedOpen` before `destroyCurrentTab`, 
 
 ### Unsaved edits on quit, reload and close
 
-Nothing ends the window with unsaved file-panel edits without the user saying so. The scope is the Touched editor in the slot (a tab with an `absolutePath`) and every `touchedStashes` entry, in every session of `filePanelState`; the Memory and Work Files panels, MCP diff tabs and Changes buffers are not covered.
+Nothing ends the window with unsaved file-panel edits without the user saying so. The scope is the Touched editor in the slot (a tab with an `absolutePath`) and every `touchedStashes` entry, in every session of `filePanelState`; the Memory panel, MCP diff tabs and Changes buffers are not covered.
 
 - **Main** (`unsaved-guard.js` and `session-exit.js`) binds each exit to a window, attempt id, version, action and PTY-generation snapshot. App-menu Quit/Exit, Restart and bare window close check unsaved edits first, then name threatened local sessions, plain terminals and panel shells in a separate Stop/Cancel dialog. Save/Discard does not grant Stop consent. Only after both choices does `flushStateForExit` run, bounded to 2000 ms. A failed Save never reaches the session question. With only attach/remote clients, the edits check still runs but the Stop question is omitted. Main supplies identities and types; renderer names are text-only. See [window-frame](window-frame.md), "Closing the window", for inventory and wording.
 
@@ -382,18 +381,18 @@ The Changes panel's registry (`git-changes-watch.js`) solves the same problem di
 
 ## Non-obvious behaviors
 
-- **Markdown preview mode is persisted per-storageKey** in `localStorage`. Memory uses `'markdownPreviewMode'`; .work-files uses `'workFilesPreviewMode'`.
+- **Markdown preview mode is persisted per-storageKey** in `localStorage`. Memory uses `'markdownPreviewMode'`.
 - **Line-wrap default depends on file type**: markdown wraps, code doesn't. Wrap state is NOT persisted — resets per file.
 - **`format` for `.jsonl` is intentionally non-standard**: each line is pretty-printed and joined with `\n---\n`. This produces human-readable output but is no longer valid JSON. The button is for *viewing*, not for converting files to a different format.
 - **Cmd/Ctrl+S keybinding**: CodeMirror dispatches a `cm-save` custom event which the ViewerPanel listens for. Chromium's "Save Page" default is blocked globally in `viewer-toolbar.js:699` (`keydown` listener with `preventDefault`).
-- **The editor's surface is the app's, not the CodeMirror theme's**: `public/style.css` puts `.viewer-panel-editor .cm-editor`, its gutters and its active-line gutter on `--surface-sunken`, with a `--hairline` rule after the gutter. The same rule covers the file panel's editor hosts, so the Memory viewer, the Work Files viewer, the MCP diff and the Changes and Touched editors share one surface. See `.ai/contexts/changes-view.md` ("Look and feel").
+- **The editor's surface is the app's, not the CodeMirror theme's**: `public/style.css` puts `.viewer-panel-editor .cm-editor`, its gutters and its active-line gutter on `--surface-sunken`, with a `--hairline` rule after the gutter. The same rule covers the file panel's editor hosts, so the Memory viewer, the MCP diff and the Changes and Touched editors share one surface. See `.ai/contexts/changes-view.md` ("Look and feel").
 - **The toolbar API exposes button refs directly** (`toolbar.saveBtn`, `toolbar.formatBtn`, …). The ViewerPanel reads `null` checks instead of asking the toolbar — slightly leaky encapsulation, but harmless.
 
 ## If you change this, also check
 
-- `public/app.js` and `public/activity-trace-panel.js` panel constructors (3 callsites) — adding a new opt may need wiring there
+- `public/app.js` and `public/activity-trace-panel.js` panel constructors (2 callsites) — adding a new opt may need wiring there
 - `eslint.config.js` if you expose a new cross-file global (e.g. `flashButtonText`, `toggleMarkdownPreview` are already declared)
-- `test/dom-work-files-view.test.js` — covers the panel render path for the .work-files tab
+- `test/dom-memory-list.test.js` — preserves the Memory list and retry notice on worker failure
 - If you add a new file-type-aware button, mirror the `_isJsonish()` / `_isMarkdown()` pattern with an `_isXyz()` helper rather than inlining the extension check
 
 ## Changes mode (issue #251)
@@ -462,7 +461,7 @@ computed from that callback is therefore still right after an undo.
 
 - **CodeMirror state holds DOM references** — calling `destroy()` then immediately `open()` on the SAME container works because `_createEditor` rebuilds it, but if you reorder this, the editor can dangle.
 - **`format` swallows parse errors**: an invalid `.json` file shows a `!` flash on the button instead of an error message. By design (no toast system in this codebase yet).
-- **`onDelete` doesn't refresh the list automatically** — the workFilesPanel wires a manual `removeWorkFileFromCache(filePath)` call in its `onDelete` handler. If you wire `onDelete` to another panel, add the equivalent refresh.
+- **`onDelete` does not refresh a caller's list automatically** — callers own any list refresh after deletion.
 
 ## Shared controls and header paths (#467)
 
@@ -473,7 +472,7 @@ button style, and `icon-btn` and `info-btn` compose compact controls.
 `modal-overlay` and `modal-dialog` share the existing What's new dialog rules.
 
 `setViewerPath` in `public/viewer-toolbar.js` builds every file/diff header
-path: ViewerPanel (Memory, Work Files, Activity trace), Changes/Touched editors
+path: ViewerPanel (Memory, Activity trace), Changes/Touched editors
 and the MCP diff header. It keeps the complete path in `title` and two text
 spans: the head shrinks first with ellipsis, and an oversized filename tail
 can also shrink with its own ellipsis. A separator-ending path displays its

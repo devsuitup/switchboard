@@ -25,7 +25,6 @@ function fixture(t) {
   write(path.join(projectsDir, folder, 'session.jsonl'), JSON.stringify({ cwd: project }) + '\n');
   write(path.join(projectsDir, encodeProjectPath(hidden), 'session.jsonl'), JSON.stringify({ cwd: hidden }) + '\n');
   write(path.join(hidden, 'CLAUDE.md'), 'hidden');
-  write(path.join(hidden, '.work-files', 'hidden.txt'), 'hidden');
   const worktree = path.join(project, '.worktrees', 'lane');
   fs.mkdirSync(worktree, { recursive: true });
   write(path.join(projectsDir, encodeProjectPath(worktree), 'session.jsonl'), JSON.stringify({ cwd: worktree }) + '\n');
@@ -35,13 +34,6 @@ function fixture(t) {
   write(path.join(project, 'agents.md'), 'second');
   write(path.join(project, '.claude', 'commands', 'command.md'), 'command');
   write(path.join(project, '.claude', 'empty.md'), ' \n');
-  write(path.join(project, '.work-files', 'nested', 'note.txt'), 'work text');
-  write(path.join(project, '.work-files', 'stream.jsonl'), 'skip body');
-  write(path.join(project, '.work-files', 'large.txt'), 'x'.repeat(65537));
-  for (let i = 0; i < 202; i++) {
-    const file = write(path.join(project, '.work-files', `${i}.txt`), 'small');
-    fs.utimesSync(file, new Date('2026-01-01'), new Date('2026-01-01'));
-  }
   const options = { claudeDir, projectsDir, hiddenProjects: [hidden], activeProjectPaths: [claudeDir] };
   return { options, first, project, write };
 }
@@ -61,7 +53,8 @@ function baseline(options) {
     deleteSearchType: () => {}, upsertSearchEntries: entries => batches.push(entries),
     ipcMain: { handle: (channel, fn) => handlers.set(channel, fn) },
   };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'fixtures/file-lists-baseline.cjs'), 'utf8'), context);
+  const filename = path.join(__dirname, 'fixtures/file-lists-baseline.cjs');
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), context, { filename });
   return { handlers, batches };
 }
 
@@ -81,16 +74,16 @@ function shipped(t, options, observed = false) {
   };
 }
 
-test('file-list workers hide local memory and work files under a local scope', async t => {
+test('file-list workers hide local memory under a local scope', async t => {
   const f = fixture(t);
   const query = shipped(t, f.options);
-  for (const kind of ['memory', 'work-file']) {
+  for (const kind of ['memory']) {
     const result = await query(kind, { hiddenProjects: [f.project], hiddenProjectScopes: { [f.project]: { alias: null } } });
     assert.equal(result.view.projects.some(p => p.projectPath === f.project), false, 'local scope must hide the local file list: ' + kind);
   }
 });
 
-for (const kind of ['listMemories', 'listWorkFiles']) {
+for (const kind of ['listMemories']) {
   test(`${kind} builds one hidden matcher per call across project folders`, t => {
     const f = fixture(t);
     const hidden = f.options.hiddenProjects[0];
@@ -107,15 +100,14 @@ for (const kind of ['listMemories', 'listWorkFiles']) {
   });
 }
 
-test('worker lists equal the pre-change synchronous fixture including hidden projects, worktree dedupe and cap', async t => {
+test('worker lists equal the pre-change synchronous fixture including hidden projects and memory paths', async t => {
   const f = fixture(t);
   const old = baseline(f.options);
   const query = shipped(t, f.options);
-  for (const [kind, channel] of [['memory', 'get-memories'], ['work-file', 'get-work-files']]) {
+  for (const [kind, channel] of [['memory', 'get-memories']]) {
     const expected = old.handlers.get(channel)();
     const result = await query(kind);
     assert.deepEqual(JSON.parse(JSON.stringify(result.view)), JSON.parse(JSON.stringify(expected)));
-    if (kind === 'work-file') { assert.equal(result.view.projects.length, 1); assert.equal(result.view.projects[0].files.length, 200); assert.equal(result.view.projects[0].totalCount, 205); }
     const expectedEntries = new Map(old.batches.flat().map(entry => [entry.id, { ...entry, body: entry.body.slice(0, 32768) }]));
     assert.deepEqual(JSON.parse(JSON.stringify(result.upserts)), JSON.parse(JSON.stringify([...expectedEntries.values()])));
     old.batches.length = 0;
@@ -146,22 +138,6 @@ test('unchanged memory bodies are not re-read and cache acceptance remembers emp
   assert.equal(changed.bodyReads, first.bodyReads + 1);
   assert.equal(changed.upserts.length, 1);
   assert.equal(changed.upserts[0].id, empty);
-});
-
-test('work-file unchanged calls have no delta and size changes at the same mtime index only that file', async t => {
-  const f = fixture(t);
-  const query = shipped(t, f.options);
-  const first = await query('work-file');
-  assert.equal((await query('work-file')).upserts.length, 0);
-  const file = first.view.projects[0].files.find(entry => entry.filename === 'note.txt');
-  assert.ok(file);
-  const stat = fs.statSync(file.filePath);
-  fs.writeFileSync(file.filePath, 'changed work file size');
-  fs.utimesSync(file.filePath, stat.atime, stat.mtime);
-  const changed = await query('work-file');
-  assert.equal(changed.upserts.length, 1);
-  assert.equal(changed.upserts[0].id, file.filePath);
-  assert.equal(changed.upserts[0].body, 'changed work file size');
 });
 
 test('removed and newly hidden files leave the incremental index', async t => {
@@ -221,10 +197,10 @@ test('saving a resolved Memory alias invalidates its cached body even at the sam
   assert.equal(changed.bodyReads, first.bodyReads + 1);
 });
 
-for (const kind of ['memory', 'work-file']) {
+for (const kind of ['memory']) {
   test(`${kind} invalidation folds Windows case and separators at unchanged mtime and size`, async t => {
     const f = fixture(t);
-    const file = kind === 'memory' ? f.first : path.join(f.project, '.work-files', 'nested', 'note.txt');
+    const file = f.first;
     fs.writeFileSync(file, 'before');
     fs.utimesSync(file, new Date('2026-02-01'), new Date('2026-02-01'));
     const query = shipped(t, f.options);

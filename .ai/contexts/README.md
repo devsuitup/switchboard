@@ -16,7 +16,7 @@ change without re-reading `main.js`, now ~4100 LOC.
 | Cron schedules, schedule `.md` files, `claude --resume -p` spawn | [schedule-runner](schedule-runner.md) |
 | Project operation admission, launch reservations and draining in-flight spawns | [project-operation-gate](project-operation-gate.md) |
 | Subagent sidebar grouping, transcript view, parent→child wiring | [subagent-observability](subagent-observability.md) |
-| Memory/.work-files tabs, CodeMirror panel, format/delete buttons | [viewer-panel](viewer-panel.md) |
+| Memory and Activity trace viewers, CodeMirror panel, toolbar buttons | [viewer-panel](viewer-panel.md) |
 | New IPC, preload bridge changes, renderer ↔ main protocol | [ipc-bridge](ipc-bridge.md) |
 | File-trigger watcher, harness input injection, idle-wait | [trigger-watcher](trigger-watcher.md) |
 | Claude CLI state files, early subagent rescan, canary tests | [cli-session-state](cli-session-state.md) |

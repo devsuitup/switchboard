@@ -73,16 +73,14 @@ test('snapshots carry only live roots and hidden-project state without filesyste
   assert.deepEqual(JSON.parse(JSON.stringify(state.indexed)), [['existing', null]]);
 });
 
-test('session start and stop change Memory policy but leave Work Files jobs valid', () => {
+test('session start and stop change Memory policy', () => {
   const sessions = new Map();
   const ctx = mainIndex({ activeSessions: sessions });
-  const workVersion = ctx.fileListsSnapshot('work-file').version;
   const memoryVersion = ctx.fileListsSnapshot('memory').version;
   sessions.set('one', { projectPath: 'repo' });
-  assert.equal(ctx.fileListsSnapshot('work-file').version, workVersion);
   assert.notEqual(ctx.fileListsSnapshot('memory').version, memoryVersion);
   sessions.clear();
-  assert.equal(ctx.fileListsSnapshot('work-file').version, workVersion);
+  assert.equal(ctx.fileListsSnapshot('memory').version, memoryVersion);
 });
 
 test('index transactions bound UTF-8 body bytes as well as entry count', async () => {
@@ -196,9 +194,9 @@ test('a delta scanned before the previous apply retries when an omitted body is 
   assert.equal(ctx.fileListsSnapshot('memory').indexed[0][1], written.manifest[0][1]);
 });
 
-test('unrelated Markdown saves leave both list versions and invalidations unchanged', () => {
+test('unrelated Markdown saves leave the Memory list version and invalidations unchanged', () => {
   const ctx = mainIndex();
-  for (const kind of ['memory', 'work-file']) {
+  for (const kind of ['memory']) {
     const before = ctx.fileListsSnapshot(kind);
     ctx.invalidateFtsSignature(kind, path.join(path.parse(process.cwd()).root, 'unrelated-repo', 'docs', 'guide.md'));
     const after = ctx.fileListsSnapshot(kind);

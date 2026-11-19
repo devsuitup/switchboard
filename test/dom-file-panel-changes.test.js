@@ -1,7 +1,7 @@
 'use strict';
 
 // Renderer tests for the Changes mode in public/file-panel.js (issue #251).
-// Strategy mirrors test/dom-work-files-view.test.js: evaluate the real
+// Evaluate the real
 // renderer files in a jsdom window, stub window.api, drive
 // the public tab functions, and assert on the resulting DOM plus call counts.
 //

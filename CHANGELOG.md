@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Changed
+- Removed the per-project Work Files sidebar tab. Open session files from Touched or terminal path links; files in `.work-files/` stay on disk. (#1018)
+
 ### Fixed
 - Opening a remote session whose process has ended and whose pid now belongs to another program is refused with an error saying the session is gone, instead of attaching to that program's tmux pane. (#1114)
 
