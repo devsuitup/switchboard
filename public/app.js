@@ -435,9 +435,30 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
     for (const item of pending) restoreInFlight.set(item.sessionId, item);
     const skippedNow = [];
     const startedAs = new Map();
+    // see .ai/contexts/bg-agents.md ("Restore of background sessions")
+    const activeItem = list.find(i => i.active && !startsFresh(i)) || null;
+    const reorderRestoredTabs = () => {
+      const order = new Map(restoreSavedIndex);
+      for (const [id, newId] of startedAs) order.set(newId, order.get(id));
+      const entries = [...openSessions];
+      const saved = entries.filter(([id]) => order.has(id)).sort(([a], [b]) => order.get(a) - order.get(b));
+      let savedPosition = 0;
+      const ordered = entries.map(entry => order.has(entry[0]) ? saved[savedPosition++] : entry);
+      openSessions.clear();
+      for (const [id, entry] of ordered) openSessions.set(id, entry);
+    };
+    const RESTORE_BACKGROUND_CONCURRENCY = 2;
+    let backgroundSlots = 0;
+    const backgroundWaiters = [];
+    const acquireBackgroundSlot = () => backgroundSlots < RESTORE_BACKGROUND_CONCURRENCY
+      ? (backgroundSlots++, Promise.resolve())
+      : new Promise(resolve => backgroundWaiters.push(resolve)).then(() => { backgroundSlots++; });
+    const releaseBackgroundSlot = () => { backgroundSlots--; backgroundWaiters.shift()?.(); };
     try {
       const liveById = await liveElsewhereMany(pending.filter(item => !startsFresh(item)).map(item => item.sessionId), { api: window.api });
-      for (const [position, item] of list.entries()) {
+      const ordered = activeItem ? [activeItem, ...list.filter(item => item !== activeItem)] : [...list];
+      for (const item of ordered) {
+        const position = list.indexOf(item);
         if (window.isDeletedProjectRestoreTarget?.(item)) continue;
         if (startsFresh(item)) {
           if (!restoreInFlight.has(item.sessionId)) continue;
@@ -469,16 +490,12 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           const session = s;
           const task = (async () => {
             try {
-              const background = await prepareBackgroundRestore(session, item);
-              if (background && !window.isDeletedProjectRestoreTarget?.(item)) await openSession(session, undefined, { automatic: true, fromRestore: true, allowBgAttach: true, continuationResolved: true, ...background });
-              const order = new Map(restoreSavedIndex);
-              for (const [id, newId] of startedAs) order.set(newId, order.get(id));
-              const entries = [...openSessions];
-              const saved = entries.filter(([id]) => order.has(id)).sort(([a], [b]) => order.get(a) - order.get(b));
-              let savedPosition = 0;
-              const ordered = entries.map(entry => order.has(entry[0]) ? saved[savedPosition++] : entry);
-              openSessions.clear();
-              for (const [id, entry] of ordered) openSessions.set(id, entry);
+              await acquireBackgroundSlot();
+              try {
+                const background = await prepareBackgroundRestore(session, item);
+                if (background && !window.isDeletedProjectRestoreTarget?.(item)) await openSession(session, undefined, { automatic: true, fromRestore: true, allowBgAttach: true, continuationResolved: true, activate: item === activeItem || !activeSessionId, ...background });
+              } finally { releaseBackgroundSlot(); }
+              reorderRestoredTabs();
             } finally {
               restoreInFlight.delete(originalId);
               schedulePersistWorkingSet();
@@ -522,7 +539,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         let blockedBy;
         try {
           opened = await openSession(s, undefined, {
-            automatic: true, fromRestore: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId || item.bg === true,
+            automatic: true, fromRestore: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId || item.bg === true, activate: item === activeItem || !activeSessionId,
             onBlocked: part => { blockedBy = { session: part.sessionId === s.sessionId ? s : { sessionId: part.sessionId, projectPath: part.live?.cwd }, live: part.live }; },
           });
         } finally {
@@ -535,6 +552,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           else if (live) skippedNow.push({ session: s, live });
           continue;
         }
+        reorderRestoredTabs();
         if (openSessions.has(s.sessionId) && !openSessions.get(s.sessionId).closed) {
           clearAppNotice(sessionActionNoticeId('Restore', originalSession));
           if (continuationNotice) showAppNotice(continuationNotice);
@@ -561,8 +579,8 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
     if (!indexingRetried && retryAfterIndexing && restoreIndexingDone && skippedNow.some(item => item.continuation)) {
       await markRestoreIndexingDone();
     }
-    const activeItem = list.find(i => i.active) || list[list.length - 1];
-    const activeId = activeItem && (startedAs.get(activeItem.sessionId) || activeItem.sessionId);
+    const shownItem = activeItem || list[list.length - 1];
+    const activeId = shownItem && (startedAs.get(shownItem.sessionId) || shownItem.sessionId);
     if (activeId && openSessions.has(activeId)) {
       showSession(activeId);
     }

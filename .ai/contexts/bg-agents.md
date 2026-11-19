@@ -198,6 +198,30 @@ A user click outside any run still cancels planning. Reopening the active tab
 after renderer reload outside a run remains an outside open that cancels planning.
 Lazy/manual held-entry opens share
 `prepareBackgroundRestore`.
+
+### Active tab first, the rest behind it (#546, #785)
+
+Decided by Jean-Baptiste on 2026-11-19: on a restart every saved session comes
+back without opening the tabs one by one, the first one is usable at once and
+the others start behind it. `runRestore` therefore opens the saved `active`
+entry first (`activeItem`; a fresh, transcript-less entry is excluded because
+`launchNewSession` owns its activation) and only then the rest in saved order,
+interactive tabs still one at a time with `RESTORE_STAGGER_MS` between them.
+Every open during the run passes `activate: item === activeItem ||
+!activeSessionId`: the active entry, or the first tab when nothing is shown
+yet, is shown as soon as its terminal opens; no later interactive open or
+background attach takes the active tab from the user. Background entries still
+run as concurrent tasks, but at most `RESTORE_BACKGROUND_CONCURRENCY` (2,
+local to `runRestore`) hold a slot from `prepareBackgroundRestore` through
+their `openSession`; the others wait for a release. After each interactive
+open and each background attach, `reorderRestoredTabs` (a closure over
+`startedAs`) re-sorts `openSessions` by saved index, so opening out of saved
+order does not reorder the tab strip; unsaved tabs keep their positions. The
+final `showSession` keeps its fallback to the last entry when none is marked
+active. Both helpers are local to `runRestore` so the test harnesses that cut
+it out of `app.js` need no further declarations. Tests:
+`test/restore-progressive-661.test.js`; `restore-live-elsewhere` now expects
+the active entry to open first.
 The remembered active background entry defers to startup policy. Renderer
 rechecks descriptor identity and requires an attach verdict; no interactive
 fallback is allowed after a refusal during background preparation. An interactive

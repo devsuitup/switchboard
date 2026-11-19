@@ -598,7 +598,7 @@ for (const missing of [true, false]) {
 test('a session live elsewhere is not resumed, and survives in the persisted working set at its place', async () => {
   const h = setup({ savedSet: SAVED, liveIds: ['x'] });
   await h.restore();
-  assert.deepEqual(h.openTerminalCalls, ['a', 'b'], 'no open-terminal for the live session');
+  assert.deepEqual(h.openTerminalCalls, ['b', 'a'], 'no open-terminal for the live session; the active session opens first');
 
   await h.persist();
   assert.deepEqual(h.settings.global.openWorkingSet.map((i) => i.sessionId), ['a', 'x', 'b']);
@@ -634,7 +634,7 @@ test('the whole batch is checked with one directory scan, not one per session', 
 test('a failed batch check fails open: every session is resumed, nothing is skipped', async () => {
   const h = setup({ savedSet: SAVED, liveIds: ['x'], batchFails: true });
   await h.restore();
-  assert.deepEqual(h.openTerminalCalls, ['a', 'x', 'b']);
+  assert.deepEqual(h.openTerminalCalls, ['b', 'a', 'x']);
   assert.equal(h.dom.window.document.querySelector('[data-notice-id="Restore:batch"]'), null);
   h.dom.window.close();
 });
@@ -644,7 +644,7 @@ test('once the user opens the skipped session and closes it, it leaves the worki
   await h.restore();
   h.dom.window.appConfirm = async () => true;
   await vm.runInContext('openSession(sessionMap.get("x"))', h.ctx);
-  assert.deepEqual(h.openTerminalCalls, ['a', 'b', 'x']);
+  assert.deepEqual(h.openTerminalCalls, ['b', 'a', 'x']);
   assert.equal(h.dom.window.document.querySelector('[data-notice-id="Restore:batch"]'), null, 'successful manual retry clears its Restore notice');
   vm.runInContext('openSessions.get("x").closed = true;', h.ctx);
   await h.persist();
@@ -687,7 +687,7 @@ for (const failure of ['refusal', 'rejection', 'missing result']) {
       return failure === 'missing result' ? undefined : { ok: false, error: 'resume unavailable' };
     };
     await h.restore();
-    assert.deepEqual(h.openTerminalCalls, ['a', 'b']);
+    assert.deepEqual(h.openTerminalCalls, ['b', 'a']);
     assert.equal(vm.runInContext('openSessions.has("x")', h.ctx), false);
     const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:local:x"]');
     assert.ok(notice);
