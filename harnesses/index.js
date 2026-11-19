@@ -30,9 +30,32 @@ function transcriptPath(row) {
   return getHarness(row.runtime).transcriptPath(row);
 }
 
+// see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
+function disabledSet(disabledIds) {
+  return new Set(Array.isArray(disabledIds) ? disabledIds.map(String) : []);
+}
+
+function enabledHarnesses(disabledIds) {
+  const disabled = disabledSet(disabledIds);
+  return allHarnesses().filter(harness => !disabled.has(harness.id));
+}
+
+function assertHarnessSettings(fields) {
+  if (fields && fields.disabledHarnesses !== undefined) {
+    if (!Array.isArray(fields.disabledHarnesses) || fields.disabledHarnesses.some(id => typeof id !== 'string')) {
+      throw Object.assign(new TypeError('disabledHarnesses must be a list of CLI ids'), { code: 'HARNESS_GUARD' });
+    }
+    if (!enabledHarnesses(fields.disabledHarnesses).length) {
+      throw Object.assign(new Error('at least one CLI must stay enabled'), { code: 'HARNESS_GUARD' });
+    }
+  }
+  return fields;
+}
+
 // see .ai/contexts/session-cache.md ("Harness folders")
-function prefixedHarnesses() {
-  return availableHarnesses().filter(harness => harness.folderPrefix);
+function prefixedHarnesses(disabledIds) {
+  const disabled = disabledSet(disabledIds);
+  return availableHarnesses().filter(harness => harness.folderPrefix && !disabled.has(harness.id));
 }
 
 function harnessFolderIndexMtimeMs(harness, dir, files) {
@@ -54,4 +77,4 @@ function readHarnessFolder(harness, folder) {
 }
 
 module.exports = { HARNESSES, DEFAULT_HARNESS, getHarness, allHarnesses, availableHarnesses, harnessForFolder, transcriptPath,
-  prefixedHarnesses, harnessFolderIndexMtimeMs, readHarnessFolder };
+  prefixedHarnesses, harnessFolderIndexMtimeMs, readHarnessFolder, enabledHarnesses, assertHarnessSettings };

@@ -101,6 +101,50 @@
       try { reportingState = (await window.api.getActivityReportingState()) || reportingState; } catch {};
     }
 
+    // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
+    let harnessList = [];
+    let codexModels = [];
+    if (!isProject && typeof window.api.getHarnesses === 'function') {
+      try { const list = await window.api.getHarnesses(); harnessList = Array.isArray(list) ? list.filter(h => h && typeof h.id === 'string') : []; } catch {}
+      if (harnessList.some(h => h.id === 'codex') && typeof window.api.getHarnessModels === 'function') {
+        try { const models = await window.api.getHarnessModels('codex'); codexModels = Array.isArray(models) ? models.filter(m => m && typeof m.slug === 'string' && m.visible !== false) : []; } catch {}
+      }
+    }
+    const codexSelect = (id, key, choices) => `<select class="settings-select control-select" id="${id}">
+      ${choices.map(([value, label]) => `<option value="${escapeHtml(value)}" ${(current[key] || '') === value ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}
+    </select>`;
+    const codexModelChoices = [['', 'Codex default']].concat(codexModels.map(m => [m.slug, m.label || m.slug]));
+    if (current.codexModel && !codexModelChoices.some(([value]) => value === current.codexModel)) codexModelChoices.push([current.codexModel, current.codexModel]);
+    const harnessSection = !isProject && harnessList.length ? `<div class="settings-section">
+        <div class="settings-section-title">CLI Agents</div>
+        ${harnessList.map(h => `<div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">${escapeHtml(h.label)}</span>
+            <div class="settings-description sv-harness-desc" data-harness="${escapeHtml(h.id)}">${h.available ? 'Sessions indexed, watched and offered in the + menu' : 'Not installed here: no sessions found for it'}</div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" class="sv-harness-toggle" data-harness="${escapeHtml(h.id)}" ${h.enabled ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>`).join('')}
+        ${harnessList.some(h => h.id === 'codex') ? `
+        <div class="settings-field">
+          <div class="settings-field-info"><span class="settings-label">Codex sandbox</span><div class="settings-description">Passed as <code>--sandbox</code>; empty leaves codex's own config</div></div>
+          <div class="settings-field-control">${codexSelect('sv-codex-sandbox', 'codexSandbox', [['', 'Codex default'], ['read-only', 'Read-only'], ['workspace-write', 'Workspace write'], ['danger-full-access', 'Full access (danger)']])}</div>
+        </div>
+        <div class="settings-field">
+          <div class="settings-field-info"><span class="settings-label">Codex approval</span><div class="settings-description">Passed as <code>--ask-for-approval</code></div></div>
+          <div class="settings-field-control">${codexSelect('sv-codex-approval', 'codexApproval', [['', 'Codex default'], ['on-request', 'On request'], ['never', 'Never']])}</div>
+        </div>
+        <div class="settings-field">
+          <div class="settings-field-info"><span class="settings-label">Codex model</span><div class="settings-description">From codex's own model cache</div></div>
+          <div class="settings-field-control">${codexSelect('sv-codex-model', 'codexModel', codexModelChoices)}</div>
+        </div>
+        <div class="settings-field">
+          <div class="settings-field-info"><span class="settings-label">Codex reasoning effort</span><div class="settings-description">Passed as <code>model_reasoning_effort</code></div></div>
+          <div class="settings-field-control">${codexSelect('sv-codex-effort', 'codexEffort', [['', 'Codex default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max'], ['ultra', 'Ultra']])}</div>
+        </div>` : ''}
+      </div>` : '';
+
     // Working copy of the (global-only) re-bindable keyboard shortcuts.
     let scShortcuts = normalizeShortcuts(isProject ? null : current.shortcuts);
     const scIsMac = typeof isMac !== 'undefined' ? isMac : /Mac|iPhone|iPad/.test(navigator.platform);
@@ -216,6 +260,8 @@
           </div>
         </div>
       </div>
+
+      ${harnessSection}
 
       ${!isProject ? `<div class="settings-section">
         <div class="settings-section-title">Application</div>
@@ -468,6 +514,21 @@
     </div>
   `;
 
+    // At least one CLI stays on: the last checked toggle locks — the writer refuses an all-off patch anyway.
+    const harnessToggles = [...settingsViewerBody.querySelectorAll('.sv-harness-toggle')];
+    const syncHarnessLock = () => {
+      const on = harnessToggles.filter(t => t.checked);
+      for (const t of harnessToggles) {
+        const lock = on.length === 1 && t.checked;
+        t.disabled = lock;
+        const desc = settingsViewerBody.querySelector(`.sv-harness-desc[data-harness="${t.dataset.harness}"]`);
+        if (desc && lock) desc.textContent = 'Kept on — at least one CLI must stay enabled';
+        else if (desc && desc.textContent.startsWith('Kept on')) desc.textContent = 'Sessions indexed, watched and offered in the + menu';
+      }
+    };
+    harnessToggles.forEach(t => t.addEventListener('change', syncHarnessLock));
+    syncHarnessLock();
+
     if (!isProject) {
       const list = settingsViewerBody.querySelector('#sv-archived-projects');
       const deleted = current.hiddenProjectKinds || {};
@@ -646,6 +707,11 @@
         if (sandboxToggle) settings.sandbox = sandboxToggle.checked;
         settings.preLaunchCmd = settingsViewerBody.querySelector('#sv-pre-launch').value.trim();
         settings.addDirs = settingsViewerBody.querySelector('#sv-add-dirs').value.trim();
+        if (harnessToggles.length) settings.disabledHarnesses = harnessToggles.filter(t => !t.checked).map(t => t.dataset.harness);
+        for (const [key, id] of [['codexSandbox', 'sv-codex-sandbox'], ['codexApproval', 'sv-codex-approval'], ['codexModel', 'sv-codex-model'], ['codexEffort', 'sv-codex-effort']]) {
+          const field = settingsViewerBody.querySelector('#' + id);
+          if (field) settings[key] = field.value;
+        }
         settings.visibleSessionCount = parseInt(settingsViewerBody.querySelector('#sv-visible-count').value) || SETTING_DEFAULTS.visibleSessionCount;
         settings.sessionMaxAgeDays = parseInt(settingsViewerBody.querySelector('#sv-max-age').value) || SETTING_DEFAULTS.sessionMaxAgeDays;
         settings.terminalTheme = settingsViewerBody.querySelector('#sv-terminal-theme').value || SETTING_DEFAULTS.terminalTheme;

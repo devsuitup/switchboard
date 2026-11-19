@@ -130,7 +130,7 @@ try {
   const targets = Array.isArray(workerData.targets) ? workerData.targets : [];
   // see .ai/contexts/session-cache.md ("Harness folders")
   const harnessFolders = Array.isArray(workerData.folders) || FOLDER_PREFIX !== '' ? []
-    : prefixedHarnesses().flatMap(harness => harness.listFolders().map(folder => ({ harness, folder })));
+    : prefixedHarnesses(workerData.disabledHarnesses).flatMap(harness => harness.listFolders().map(folder => ({ harness, folder })));
   const total = folders.length + harnessFolders.length + targets.length;
   let current = 0;
   const failedFolders = [];

@@ -271,6 +271,54 @@ Tests: `harness-activity.test.js` (title and notification tables for both
 adapters, the renderer function through `loadAppFunctions`, the extracted
 `wireSessionPty` fed Codex titles and OSC 9 messages).
 
+## Picker, toggles and settings (#824, partial)
+
+Port of the picker and toggles of Ali Basiri's `ecd687f0`, `62e10fb9` and
+`e0cd4dde`. The usage gauge (`3ca3d19d`, codex-auth of `ee656523`) is **not**
+in this branch: it reads `~/.codex/auth.json` and calls an undocumented
+chatgpt.com endpoint, and JB decided (2026-10-28) it must be opt-in and off by
+default; nothing here fetches it, so no token leaves the machine.
+
+- Settings (`public/setting-defaults.js`): `disabledHarnesses: []` — the
+  disabled list, so a CLI added later defaults to on — and `codexSandbox`,
+  `codexApproval`, `codexModel`, `codexEffort`, all `''` meaning "leave it to
+  codex's own config". `resolveDefaultSessionOptions` copies the non-empty
+  Codex keys into the launch options; the Codex builder validates them and the
+  Claude builder ignores them.
+- Guard: `assertHarnessSettings(fields)` (`harnesses/index.js`) refuses a
+  `disabledHarnesses` that is not a string list or that leaves no registered
+  CLI on (`code: 'HARNESS_GUARD'`). It runs inside the writer, on
+  `patchGlobal` (`session-index-commands.js`) and on a raw
+  `setSetting('global', …)` (`workers/session-index-writer.js`), so no
+  forwarded read-modify-write can switch everything off (ADR 0004). The panel
+  also locks the last checked toggle.
+- Effects of a switched-off CLI: `prefixedHarnesses(disabledIds)` drops it
+  from the reconcile listing (`session-cache.js`), the cold scan
+  (`workerData.disabledHarnesses`) and the watchers (`startHarnessWatchers`,
+  restarted by `set-setting` when the list changes); `buildProjectsFromCache`
+  hides its rows (`exclude(row, 'harness-off')`) and the picker skips it. Its
+  cached rows are kept, so switching it back on costs one incremental
+  reconcile.
+- IPC: `get-harnesses` and `get-harness-models(runtime)` (generic names
+  rather than upstream's `get-codex-models`; see ipc-bridge.md). No
+  `harnesses-changed` event: the toggle goes through `set-setting`, which
+  already triggers `projects-changed`, and the picker asks on every open.
+- Picker: `showNewSessionPopover` renders the Claude entries at once and, when
+  `getHarnesses` answers, inserts one `popover-option[data-runtime]` per
+  enabled non-default CLI before Terminal (keyboard order follows). The entry
+  launches with `runtime` and `runtimeLabel` in the options, which
+  `open-terminal` resolves (#822) and the pending row badges (#821).
+- Settings panel: a global "CLI Agents" section with one toggle per
+  registered CLI (lock on the last one, "Not installed here" for an unavailable
+  one) and, when Codex is registered, four selects for sandbox, approval,
+  model (from `get-harness-models`) and effort. The section is global only;
+  project scope keeps its Claude overrides.
+
+Tests: `harness-settings.test.js` (defaults, guard and writer refusal,
+disabled CLI hidden and skipped with rows kept, the picker's async entry and
+its launch options, the IPC and preload wiring). The settings panel's toggle
+rendering and save are not covered by a dom test.
+
 ### Streaming transcript scan
 
 `jsonl-scan.js` (root, listed in `test/fixtures/root-app-modules.json`) is

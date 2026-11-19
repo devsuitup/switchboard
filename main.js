@@ -615,7 +615,7 @@ ipcMain.handle('whats-new-dismissed', async () => await whatsNew.dismissed());
 // --- Session cache helpers ---
 
 const { resolveSessionRealCwd, sessionTranscriptExists, isGitRepo } = require('./derive-project-path');
-const { getHarness, prefixedHarnesses } = require('./harnesses');
+const { getHarness, prefixedHarnesses, allHarnesses, DEFAULT_HARNESS } = require('./harnesses');
 const { resolveRowDeletionTargets } = require('./delete-session-target');
 
 // Session cache → session-cache.js
@@ -1819,9 +1819,28 @@ ipcMain.handle('get-settings-by-prefix', (_event, prefix) => {
 });
 
 ipcMain.handle('set-setting', async (_event, key, value) => {
+  const disabledBefore = key === 'global' ? JSON.stringify(getSetting('global')?.disabledHarnesses || []) : null;
   await setSetting(key, value);
-  if (key === 'global') applyUpdateChannel();
+  if (key === 'global') {
+    applyUpdateChannel();
+    // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
+    if (JSON.stringify(value?.disabledHarnesses || []) !== disabledBefore) {
+      restartHarnessWatchers();
+      notifyRendererProjectsChanged('settings');
+    }
+  }
   return { ok: true };
+});
+
+// see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
+ipcMain.handle('get-harnesses', () => {
+  const disabled = new Set(getSetting('global')?.disabledHarnesses || []);
+  return allHarnesses().map(h => ({ id: h.id, label: h.label, available: h.available(), enabled: !disabled.has(h.id), isDefault: h.id === DEFAULT_HARNESS }));
+});
+
+ipcMain.handle('get-harness-models', (_event, runtime) => {
+  const harness = getHarness(runtime);
+  return typeof harness.readModelCatalog === 'function' ? harness.readModelCatalog() : [];
 });
 
 // --- IPC: remote hosts ---
@@ -4054,7 +4073,7 @@ function startProjectsWatcher() {
 // see .ai/contexts/session-cache.md ("Harness folders")
 const harnessWatchers = [];
 function startHarnessWatchers() {
-  for (const harness of prefixedHarnesses()) {
+  for (const harness of prefixedHarnesses(getSetting('global')?.disabledHarnesses)) {
     const root = harness.sessionsRoot();
     if (!fs.existsSync(root)) continue;
     const pendingFolders = new Set();
@@ -4109,6 +4128,11 @@ function armLaunchSweep() {
 function stopHarnessWatchers() {
   for (const watcher of harnessWatchers.splice(0)) watcher.close();
   if (launchSweepTimer) { clearInterval(launchSweepTimer); launchSweepTimer = null; }
+}
+
+function restartHarnessWatchers() {
+  for (const watcher of harnessWatchers.splice(0)) watcher.close();
+  startHarnessWatchers();
 }
 
 // --- IPC: app version ---

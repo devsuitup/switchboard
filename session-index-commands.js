@@ -8,6 +8,7 @@ const { createHash } = require('node:crypto');
 const path = require('node:path');
 const { archiveProjectIdentity: projectIdentity } = require('./src/main/projects/project-archive-workflow');
 const { parseFolderKey } = require('./src/main/remote/remote-hosts');
+const { assertHarnessSettings } = require('./harnesses');
 
 const requestError = (code, message) => Object.assign(new Error(message), { code });
 const requestBytes = value => Buffer.isBuffer(value) || (ArrayBuffer.isView(value) && value.BYTES_PER_ELEMENT === 1);
@@ -116,7 +117,7 @@ function createSessionRequestCommands(db) {
 // see .ai/contexts/session-index-writer.md
 function createWriterCommands(db) {
   const settings = { getSetting: db.getSetting, setSetting: db.setSetting, scheduleName: () => null };
-  const patch = fields => db.setSetting('global', { ...(db.getSetting('global') || {}), ...fields });
+  const patch = fields => db.setSetting('global', { ...(db.getSetting('global') || {}), ...assertHarnessSettings(fields) });
   const entryProject = entry => { const { alias, folder } = parseFolderKey(entry); return { alias, projectPath: alias && folder === '' ? '/' : folder }; };
   const groupProjects = groups => archive.validArchiveGroups(groups).map(group => ({ alias: parseFolderKey(group.folderKey).alias, projectPath: group.projectPath }));
   const fence = project => db.projectDeletion?.fence(projectIdentity(project).key) || { epoch: 0, blocked: 0 };

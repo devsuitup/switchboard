@@ -445,9 +445,15 @@ function refreshHarnessFolder(harness, folder) {
   return changed;
 }
 
+// see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
+function disabledHarnessIds() {
+  const disabled = getSetting ? getSetting('global')?.disabledHarnesses : null;
+  return Array.isArray(disabled) ? disabled : [];
+}
+
 function harnessReconciliationFolders(metaMap) {
   const out = [];
-  for (const harness of prefixedHarnesses()) {
+  for (const harness of prefixedHarnesses(disabledHarnessIds())) {
     const listed = new Set(harness.listFolders());
     for (const folder of metaMap.keys()) {
       if (folder.startsWith(harness.folderPrefix) && !listed.has(folder)) out.push({ folder, refresh: true });
@@ -1136,9 +1142,11 @@ function buildProjectsFromCache(showArchived) {
   const projectMap = new Map();
   // '|' cannot occur in an alias (remote-hosts.js ALIAS_RE): the key is injective.
   const groupKey = (alias, projectPath) => (alias === null ? '' : alias) + '|' + projectPath;
+  const disabledRuntimes = new Set(disabledHarnessIds());
   for (const row of cachedRows) {
     if (row.mergedIntoSessionId || rollup.has(row.sessionId)) continue;
     if (!row.projectPath) continue;
+    if (disabledRuntimes.has(row.runtime || DEFAULT_HARNESS)) { exclude(row, 'harness-off'); continue; }
     const { alias } = parseFolderKey(row.folder);
     if (hiddenSdkIds.has(row.sessionId) || hiddenSdkIds.has(row.parentSessionId)) {
       exclude(row, 'sdk-only');
@@ -1723,7 +1731,8 @@ function populateCacheViaWorker({ force = false } = {}, retryTimerFired = false)
 
     try {
       worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
-        workerData: { projectsDir: PROJECTS_DIR, remaps: remappedProjectsSetting(), ...(retryFolders ? { folders: retryFolders } : {}) },
+        workerData: { projectsDir: PROJECTS_DIR, remaps: remappedProjectsSetting(), disabledHarnesses: disabledHarnessIds(),
+          ...(retryFolders ? { folders: retryFolders } : {}) },
       });
     } catch (err) {
       unknownFailure = true;

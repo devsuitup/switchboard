@@ -21,6 +21,10 @@ async function resolveDefaultSessionOptions(project) {
   if (effective.preLaunchCmd) options.preLaunchCmd = effective.preLaunchCmd;
   if (effective.addDirs) options.addDirs = effective.addDirs;
   if (effective.mcpEmulation === false) options.mcpEmulation = false;
+  // Codex launch options travel in the same bag; the Codex adapter validates them, Claude ignores them.
+  for (const key of ['codexSandbox', 'codexApproval', 'codexModel', 'codexEffort']) {
+    if (effective[key]) options[key] = effective[key];
+  }
   return options;
 }
 
@@ -111,6 +115,32 @@ function showNewSessionPopover(project, anchorEl) {
   popover.appendChild(claudeBtn);
   popover.appendChild(claudeOptsBtn);
   popover.appendChild(termBtn);
+
+  // Other CLIs arrive once main answers; Claude renders at once — see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
+  if (typeof window.api.getHarnesses === 'function') {
+    window.api.getHarnesses().then(list => {
+      if (!popover.isConnected) return;
+      for (const harness of Array.isArray(list) ? list : []) {
+        if (!harness || harness.isDefault || !harness.enabled) continue;
+        const btn = document.createElement('button');
+        btn.className = 'popover-option';
+        btn.dataset.runtime = harness.id;
+        btn.setAttribute('role', 'menuitem');
+        btn.tabIndex = -1;
+        btn.innerHTML = '<svg class="popover-option-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-5-6-5"/><path d="M12 19h8"/></svg> ';
+        btn.appendChild(document.createTextNode(harness.label));
+        btn.onclick = async () => {
+          close();
+          const options = await resolveDefaultSessionOptions(project);
+          options.runtime = harness.id;
+          options.runtimeLabel = harness.label;
+          launchNewSession(project, options);
+        };
+        popover.insertBefore(btn, termBtn);
+        items.splice(items.indexOf(termBtn), 0, btn);
+      }
+    }).catch(() => {});
+  }
 
   // Position relative to anchor, flip upward if it would overflow
   document.body.appendChild(popover);

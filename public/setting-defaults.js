@@ -35,6 +35,14 @@ const SETTING_DEFAULTS = {
   remoteTriggers: false,
   schedulesTab: false,
   lastSeenVersion: null, // see docs/changelog.md
+  // CLIs switched off in Settings, stored as the disabled list so a CLI added
+  // later defaults to on — see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
+  disabledHarnesses: [],
+  // Codex launch options; '' means "leave it to codex's own config"
+  codexSandbox: '',
+  codexApproval: '',
+  codexModel: '',
+  codexEffort: '',
 };
 
 const PROJECT_DELETE_PREVIEW_TIMEOUT_MS = 20000;

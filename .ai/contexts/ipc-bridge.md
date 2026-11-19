@@ -490,6 +490,8 @@ uninitialised submodule refuses preview/deletion before force can hide its files
 | `get-setting` / `set-setting` / `delete-setting` | Generic key/value over `settings` table |
 | `get-settings-by-prefix` | `(prefix)` accepts only the non-empty string `continuationChoice:` and returns an object of matching keys and values; other prefixes throw before reading settings. Bridge: `getSettingsByPrefix`. Used to load continuation choices before restore and reload. |
 | `get-effective-settings` | `(projectPath)` — resolves global + project overrides |
+| `get-harnesses` | `()` → `[{ id, label, available, enabled, isDefault }]` for every registered CLI adapter; `enabled` reflects `global.disabledHarnesses`. Bridge: `getHarnesses`. See cli-harnesses.md ("Picker, toggles and settings"). |
+| `get-harness-models` | `(runtime)` → the adapter's model catalog (`[{ slug, label, efforts, defaultEffort, visible }]`, Codex reads `$CODEX_HOME/models_cache.json`), `[]` when it has none. Bridge: `getHarnessModels`. |
 | `get-shell-profiles` | Configured shell list |
 | `get-schedule-creator-command` / `create-schedule-session` / `run-schedule-now` | Schedule integration |
 
