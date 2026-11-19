@@ -2898,7 +2898,7 @@ function buildSessionItem(session) {
     badge.className = 'bg-badge';
     const jobName = typeof session.bgJobName === 'string' && session.bgJobName.trim() ? session.bgJobName.trim() : null;
     badge.title = 'Background session run by the claude daemon' + (jobName ? ' — job ' + jobName : '') + (session.bgJobId ? ' (' + session.bgJobId + ')' : '') + ' — click to attach';
-    const launchName = name => (name || '').replace(/ (d+)$/, '');
+    const launchName = name => (name || '').replace(/\s\(\d+\)$/, '');
     badge.textContent = jobName && launchName(jobName) !== launchName(displayName) ? 'bg · ' + jobName : 'bg';
     summaryEl.prepend(badge);
   }

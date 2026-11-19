@@ -2672,7 +2672,11 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
   // see .ai/contexts/bg-agents.md ("The sidebar")
   if (!automatic && !customOptions && !triggerAction && !reattachOnly && !chooseAgain && /^[0-9a-f]{8}$/i.test(String(session.bgJobId || ''))
     && typeof session.bgSessionId === 'string' && session.bgSessionId.toLowerCase() === String(session.sessionId).toLowerCase()) {
-    customOptions = { type: 'attach', jobId: session.bgJobId, cwd: session.projectPath };
+    let current = null;
+    try { current = await window.api.getSessionLiveElsewhere(session.sessionId); } catch { current = null; }
+    if (current?.kind === 'bg' && typeof current.jobId === 'string' && current.jobId.toLowerCase() === session.bgJobId.toLowerCase()) {
+      customOptions = { type: 'attach', jobId: current.jobId, cwd: current.cwd || session.projectPath };
+    } else if (live === undefined) live = current;
   }
   const backgroundHeld = !backgroundRestoreJobId && !reattachOnly && customOptions?.type !== 'attach'
     && (dormantWorkingSet.get(session.sessionId) || skippedWorkingSetEntries.get(session.sessionId));

@@ -44,6 +44,28 @@ test('the bg badge shows the job name when the row is titled after its original 
   assert.match(badge.title, /33333333/);
 });
 
+test('a collision suffix alone does not repeat the launch name in the badge', (t) => {
+  const ctx = setupSidebarDom();
+  t.after(() => ctx.destroy());
+  const project = { projectPath: PROJECT, sessions: [
+    { sessionId: HEAD, name: 'switchboard-dev', modified: new Date().toISOString(), messageCount: 3,
+      bgJobId: '33333333', bgSessionId: HEAD, bgJobName: 'switchboard-dev (3)' },
+  ] };
+  ctx.sidebar.renderProjects([project], false);
+  assert.equal(ctx.document.querySelector(`[data-session-id="${HEAD}"] .bg-badge`).textContent, 'bg');
+});
+
+test('a name that ends in a d is not mistaken for a collision suffix', (t) => {
+  const ctx = setupSidebarDom();
+  t.after(() => ctx.destroy());
+  const project = { projectPath: PROJECT, sessions: [
+    { sessionId: HEAD, name: 'board', modified: new Date().toISOString(), messageCount: 3,
+      bgJobId: '33333333', bgSessionId: HEAD, bgJobName: 'board d' },
+  ] };
+  ctx.sidebar.renderProjects([project], false);
+  assert.equal(ctx.document.querySelector(`[data-session-id="${HEAD}"] .bg-badge`).textContent, 'bg · board d');
+});
+
 test('the bg badge stays short when the row already reads the job name', (t) => {
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
@@ -119,12 +141,42 @@ test('clicking a live background row attaches it directly, even while a saved re
   assert.equal(h.window.openSessions.get(HEAD)?.attachJobId, '1234abcd');
 });
 
-test('clicking a live background row without a saved entry attaches without the continuation and liveness round trips', async (t) => {
+test('clicking a live background row without a saved entry attaches without the continuation lookup', async (t) => {
   const h = setupOpen();
   t.after(() => h.destroy());
   await h.window.openSession(h.row);
   await settle();
   assert.deepEqual(JSON.parse(JSON.stringify(h.calls)), [['open', HEAD, { type: 'attach', jobId: '1234abcd', cwd: PROJECT }]]);
+});
+
+test('the direct attach follows the descriptor the main process reads now, not the cached row', async (t) => {
+  const h = setupOpen();
+  t.after(() => h.destroy());
+  h.window.api.getSessionLiveElsewhere = async () => ({ kind: 'bg', jobId: '1234ABCD', cwd: '/current/worktree' });
+  await h.window.openSession(h.row);
+  await settle();
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls)), [['open', HEAD, { type: 'attach', jobId: '1234ABCD', cwd: '/current/worktree' }]]);
+});
+
+test('a stale row does not dispatch an attach after its conversation moved to another job', async (t) => {
+  const h = setupOpen();
+  t.after(() => h.destroy());
+  h.window.api.getSessionLiveElsewhere = async () => ({ kind: 'bg', jobId: '8765abcd', cwd: PROJECT });
+  await h.window.openSession(h.row);
+  await settle();
+  const staleAttaches = h.calls.filter(c => c[0] === 'open' && c[2]?.jobId === '1234abcd');
+  assert.equal(staleAttaches.length, 0, 'cached job 1234abcd is no longer the job for this conversation');
+  assert.deepEqual(h.calls.map(c => c[0]), ['continuations', 'guard', 'open'], 'the click re-resolves through the ordinary guarded path');
+});
+
+test('a row whose conversation no longer runs in the background resumes through the guarded path', async (t) => {
+  const h = setupOpen();
+  t.after(() => h.destroy());
+  h.window.api.getSessionLiveElsewhere = async () => null;
+  await h.window.openSession(h.row);
+  await settle();
+  assert.deepEqual(h.calls.map(c => c[0]), ['continuations', 'guard', 'open']);
+  assert.equal(h.calls[2][2]?.type, undefined, 'no attach options for a conversation without a live job');
 });
 
 test('an automatic open of a background row keeps the guarded restore path', async (t) => {

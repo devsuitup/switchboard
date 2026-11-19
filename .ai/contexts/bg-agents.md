@@ -1143,10 +1143,17 @@ Two changes:
   it stays `bg`.
 - A user click (not automatic, no trigger, no explicit options, not a
   choose-again) on a row whose `bgSessionId` is the row's own session id and
-  whose `bgJobId` is a valid job id attaches that job directly, exactly as the
-  Agents view does, before the saved-entry hold, the continuation lookup and
-  `guardResume` are consulted. Automatic restore keeps the guarded path. A stale
-  payload makes `open-terminal` fail with its ordinary attach error.
+  whose `bgJobId` is a valid job id asks main for the conversation's current
+  live descriptor (`getSessionLiveElsewhere`). Only a `kind: bg` answer whose
+  `jobId` equals the row's `bgJobId` (case-insensitive) authorizes the direct
+  attach, with that descriptor's `cwd`, before the saved-entry hold, the
+  continuation lookup and `guardResume` are consulted. Any other answer (another
+  job, an interactive process, nothing live, a failed IPC) falls back to the
+  ordinary guarded path with that answer as `live`: a row still binding
+  conversation A to job J after J moved to conversation B re-resolves instead of
+  attaching J under A's identity. Main's `open-terminal` attach branch still
+  validates only the job id format; the binding check is this renderer-to-main
+  descriptor read. Automatic restore keeps the guarded path.
 
 Tests: `test/sidebar-bg-attach-661.test.js`.
 
