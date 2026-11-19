@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- The Changes list can be viewed as a tree: a toolbar button switches between the flat list (the default) and files grouped under collapsible folders. The choice is remembered. (#828)
+
 ### Changed
 - Removed the per-project Work Files sidebar tab. Open session files from Touched or terminal path links; files in `.work-files/` stay on disk. (#1018)
 

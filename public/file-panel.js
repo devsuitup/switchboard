@@ -49,6 +49,7 @@ let changesDiffHostEl = null;
 let changesDiffPreviewEl = null;
 let changesPreviewTab = null;
 let changesListSplitterEl = null;
+let changesListViewBtn = null;
 
 // Row ceiling for the Changes list — see .ai/contexts/changes-view.md ("Untracked files")
 const MAX_CHANGES_ROWS = 500;
@@ -82,6 +83,13 @@ const CHANGES_STATE_NAMES = { M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renam
 const CHANGES_DIFF_MODE_KEY = 'changesDiffMode';
 const CHANGES_DIFF_MODES = ['side-by-side', 'inline', 'plain'];
 const CHANGES_DIFF_MODE_LABELS = { 'side-by-side': 'Side-by-side diff', inline: 'Inline diff', plain: 'Plain editor, no diff' };
+// see .ai/contexts/changes-view.md ("List or tree")
+const CHANGES_LIST_VIEW_KEY = 'changesListView';
+const CHANGES_LIST_VIEWS = ['list', 'tree'];
+const CHANGES_LIST_VIEW_LABELS = { list: 'List', tree: 'Tree' };
+let changesListView = CHANGES_LIST_VIEWS.includes(localStorage.getItem(CHANGES_LIST_VIEW_KEY))
+  ? localStorage.getItem(CHANGES_LIST_VIEW_KEY)
+  : 'list';
 // see .ai/contexts/changes-view.md ("The list and the editor")
 let changesDiffMode = CHANGES_DIFF_MODES.includes(localStorage.getItem(CHANGES_DIFF_MODE_KEY))
   ? localStorage.getItem(CHANGES_DIFF_MODE_KEY)
@@ -98,6 +106,10 @@ const FP_ICONS = {
   inline: FP_STROKE_ICON('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/>'),
   plain: FP_STROKE_ICON('<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/>'),
   formatted: FP_STROKE_ICON('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
+  list: FP_STROKE_ICON('<path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h7"/>'),
+  tree: FP_STROKE_ICON('<path d="M21 12h-8"/><path d="M21 6H8"/><path d="M21 18h-8"/><path d="M3 6v4c0 1.1.9 2 2 2h3"/><path d="M3 10v6c0 1.1.9 2 2 2h3"/>'),
+  chevronRight: FP_STROKE_ICON('<path d="m9 6 6 6-6 6"/>'),
+  chevronDown: FP_STROKE_ICON('<path d="m6 9 6 6 6-6"/>'),
 };
 // ── Initialization ──────────────────────────────────────────────────
 
@@ -340,6 +352,13 @@ function initFilePanel() {
 
   const changesControls = document.createElement('div');
   changesControls.className = 'viewer-toolbar-controls';
+
+  changesListViewBtn = document.createElement('button');
+  changesListViewBtn.className = 'icon-btn';
+  changesListViewBtn.id = 'changes-list-view-btn';
+  changesListViewBtn.addEventListener('click', handleChangesListViewToggle);
+  changesControls.appendChild(changesListViewBtn);
+  updateChangesListViewButton();
 
   const changesRefreshBtn = document.createElement('button');
   changesRefreshBtn.className = 'icon-btn';
@@ -1691,7 +1710,7 @@ function renderChangesContent(sessionId, tab) {
 }
 
 function renderChangesList(sessionId, tab) {
-  const signature = [tab.data, tab.loading, tab.error, tab.listRevision];
+  const signature = [tab.data, tab.loading, tab.error, tab.listRevision, changesListView];
   const branchInfoEl = document.getElementById('changes-branch-info');
   if (reusePanelList(changesListEl, changesSummaryEl, tab, signature, branchInfoEl)) {
     updateChangesListSelection(tab);
@@ -1742,9 +1761,7 @@ function renderChangesList(sessionId, tab) {
 
   changesListEl.innerHTML = '';
   const shown = files.length > MAX_CHANGES_ROWS ? files.slice(0, MAX_CHANGES_ROWS) : files;
-  for (const file of shown) {
-    changesListEl.appendChild(buildChangesFileRow(sessionId, tab, file));
-  }
+  appendChangesRows(sessionId, tab, shown, null);
   if (shown.length < files.length) {
     const more = document.createElement('div');
     more.className = 'changes-more-note';
@@ -1768,6 +1785,129 @@ function updateChangesListSelection(tab) {
     row.classList.toggle('selected', !!selected && row.dataset.path === selected.path
       && (row.dataset.subagent || null) === (selected.subSessionId || null));
   }
+  for (const row of changesListEl.querySelectorAll('.changes-folder-row')) {
+    row.classList.toggle('selected', !!selected && row.getAttribute('aria-expanded') === 'false'
+      && selected.path.startsWith(row.dataset.folder + '/')
+      && (row.dataset.subagent || null) === (selected.subSessionId || null));
+  }
+}
+
+// see .ai/contexts/changes-view.md ("List or tree")
+function appendChangesRows(sessionId, tab, files, subSessionId) {
+  if (changesListView !== 'tree') {
+    for (const file of files) changesListEl.appendChild(buildChangesFileRow(sessionId, tab, file, subSessionId));
+    return;
+  }
+  if (!(tab.collapsedFolders instanceof Set)) tab.collapsedFolders = new Set();
+  for (const row of changesTreeRows(buildChangesTree(files), tab.collapsedFolders, subSessionId)) {
+    if (row.kind === 'folder') changesListEl.appendChild(buildChangesFolderRow(sessionId, tab, row, subSessionId));
+    else changesListEl.appendChild(buildChangesFileRow(sessionId, tab, row.file, subSessionId, { depth: row.depth, name: row.name }));
+  }
+}
+
+function compareChangesNames(a, b) {
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+}
+
+function sortChangesTreeLevel(nodes) {
+  const sorted = nodes.map((node) => {
+    if (node.kind !== 'folder') return node;
+    let name = node.name;
+    let children = sortChangesTreeLevel(node.children);
+    while (children.length === 1 && children[0].kind === 'folder') {
+      name = `${name}/${children[0].name}`;
+      children = children[0].children;
+    }
+    return { kind: 'folder', name, children };
+  });
+  sorted.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
+    return compareChangesNames(a.name, b.name);
+  });
+  return sorted;
+}
+
+function buildChangesTree(files) {
+  const root = new Map();
+  for (const file of files) {
+    const parts = String(file.path || '').split('/').filter(Boolean);
+    let level = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      let node = level.get(parts[i]);
+      if (!node || node.kind !== 'folder') {
+        node = { kind: 'folder', name: parts[i], children: new Map() };
+        level.set(parts[i], node);
+      }
+      level = node.children;
+    }
+    const name = parts[parts.length - 1] || file.path;
+    level.set(`\0${name}`, { kind: 'file', name, file });
+  }
+  const toArray = (map) => [...map.values()].map(node => node.kind === 'folder' ? { ...node, children: toArray(node.children) } : node);
+  return sortChangesTreeLevel(toArray(root));
+}
+
+function countChangesTreeFiles(node) {
+  let count = 0;
+  for (const child of node.children) count += child.kind === 'file' ? 1 : countChangesTreeFiles(child);
+  return count;
+}
+
+function changesFolderKey(subSessionId, folderPath) {
+  return `${subSessionId || ''}\0${folderPath}`;
+}
+
+function changesTreeRows(tree, collapsed, subSessionId, parentPath = '', depth = 0) {
+  const rows = [];
+  for (const node of tree) {
+    if (node.kind === 'folder') {
+      const folderPath = parentPath ? `${parentPath}/${node.name}` : node.name;
+      const isCollapsed = collapsed.has(changesFolderKey(subSessionId, folderPath));
+      rows.push({ kind: 'folder', depth, name: node.name, folderPath, count: countChangesTreeFiles(node), collapsed: isCollapsed });
+      if (!isCollapsed) rows.push(...changesTreeRows(node.children, collapsed, subSessionId, folderPath, depth + 1));
+    } else {
+      rows.push({ kind: 'file', depth, name: node.name, file: node.file });
+    }
+  }
+  return rows;
+}
+
+function buildChangesFolderRow(sessionId, tab, row, subSessionId) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'changes-folder-row';
+  button.dataset.folder = row.folderPath;
+  if (subSessionId) button.dataset.subagent = subSessionId;
+  button.style.setProperty('--depth', String(row.depth));
+  button.setAttribute('aria-expanded', row.collapsed ? 'false' : 'true');
+  button.title = row.folderPath;
+
+  const chevron = document.createElement('span');
+  chevron.className = 'changes-folder-chevron';
+  chevron.innerHTML = row.collapsed ? FP_ICONS.chevronRight : FP_ICONS.chevronDown;
+  button.appendChild(chevron);
+
+  const name = document.createElement('span');
+  name.className = 'changes-folder-name';
+  name.textContent = row.name;
+  button.appendChild(name);
+
+  const count = document.createElement('span');
+  count.className = 'changes-folder-count';
+  count.textContent = String(row.count);
+  button.appendChild(count);
+
+  button.addEventListener('click', () => {
+    const key = changesFolderKey(subSessionId, row.folderPath);
+    if (tab.collapsedFolders.has(key)) tab.collapsedFolders.delete(key);
+    else tab.collapsedFolders.add(key);
+    tab.listRevision = (tab.listRevision || 0) + 1;
+    renderPanel(sessionId);
+    const again = [...changesListEl.querySelectorAll('.changes-folder-row')]
+      .find(el => el.dataset.folder === row.folderPath && (el.dataset.subagent || null) === (subSessionId || null));
+    if (again) again.focus();
+  });
+  return button;
 }
 
 // see .ai/contexts/changes-view.md ("Subagent worktrees")
@@ -1781,9 +1921,7 @@ function appendSubagentChangesGroup(sessionId, tab, group) {
   changesListEl.appendChild(header);
 
   const shown = group.files.length > MAX_SUBAGENT_GROUP_ROWS ? group.files.slice(0, MAX_SUBAGENT_GROUP_ROWS) : group.files;
-  for (const file of shown) {
-    changesListEl.appendChild(buildChangesFileRow(sessionId, tab, file, group.sessionId));
-  }
+  appendChangesRows(sessionId, tab, shown, group.sessionId);
   if (shown.length < group.files.length) {
     const more = document.createElement('div');
     more.className = 'changes-more-note';
@@ -1807,11 +1945,17 @@ function describeUncounted(uncounted) {
   return ` (${uncounted} file${uncounted === 1 ? '' : 's'} not counted)`;
 }
 
-function buildChangesFileRow(sessionId, tab, file, subSessionId = null) {
+function buildChangesFileRow(sessionId, tab, file, subSessionId = null, treeNode = null) {
   const row = document.createElement('div');
   row.className = 'changes-file-row';
   row.dataset.path = file.path;
   if (subSessionId) row.dataset.subagent = subSessionId;
+  const fullLabel = (file.renamed && file.origPath) ? `${file.origPath} → ${file.path}` : file.path;
+  if (treeNode) {
+    row.classList.add('tree');
+    row.style.setProperty('--depth', String(treeNode.depth));
+    row.title = fullLabel;
+  }
 
   const state = document.createElement('span');
   state.className = 'changes-file-state changes-state-' + (file.state || '?').toLowerCase();
@@ -1821,7 +1965,7 @@ function buildChangesFileRow(sessionId, tab, file, subSessionId = null) {
 
   const pathEl = document.createElement('span');
   pathEl.className = 'changes-file-path';
-  pathEl.textContent = (file.renamed && file.origPath) ? `${file.origPath} → ${file.path}` : file.path;
+  pathEl.textContent = treeNode ? treeNode.name : fullLabel;
   row.appendChild(pathEl);
 
   const counts = document.createElement('span');
@@ -2277,6 +2421,23 @@ function readChangesEditorContent(tab) {
 function isChangesBufferDirty(tab) {
   const content = readChangesEditorContent(tab);
   return content != null && content !== tab.savedContent;
+}
+
+function updateChangesListViewButton() {
+  if (!changesListViewBtn) return;
+  const next = CHANGES_LIST_VIEWS[(CHANGES_LIST_VIEWS.indexOf(changesListView) + 1) % CHANGES_LIST_VIEWS.length];
+  changesListViewBtn.dataset.view = changesListView;
+  changesListViewBtn.innerHTML = FP_ICONS[changesListView];
+  changesListViewBtn.title = `${CHANGES_LIST_VIEW_LABELS[changesListView]} — click for ${CHANGES_LIST_VIEW_LABELS[next].toLowerCase()} view`;
+  changesListViewBtn.setAttribute('aria-label', changesListViewBtn.title);
+}
+
+function handleChangesListViewToggle() {
+  const next = (CHANGES_LIST_VIEWS.indexOf(changesListView) + 1) % CHANGES_LIST_VIEWS.length;
+  changesListView = CHANGES_LIST_VIEWS[next];
+  try { localStorage.setItem(CHANGES_LIST_VIEW_KEY, changesListView); } catch {}
+  updateChangesListViewButton();
+  if (currentPanelSessionId) renderPanel(currentPanelSessionId);
 }
 
 function handleChangesDiffModeToggle() {

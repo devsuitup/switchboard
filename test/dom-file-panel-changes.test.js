@@ -118,9 +118,10 @@ function makeEditorStub(window, mode, doc, created, onChange) {
   return view;
 }
 
-function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmImpl } = {}) {
+function setupFilePanelDom({ statusImpl, diffImpl, fileImpl, saveImpl, confirmImpl, seedStorage } = {}) {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
+  for (const [key, value] of Object.entries(seedStorage || {})) window.localStorage.setItem(key, value);
 
   const calls = { status: [], diff: [], file: [], save: [], watch: [], unwatch: [], confirm: [], readFile: [] };
   const editors = [];
@@ -2573,5 +2574,141 @@ test('delayed discard consent cannot close a replacement MCP tab', async () => {
     answer(true);
     await closing;
     assert.equal(ctx.stateOf('s1').currentTab?.diffId, 'replacement');
+  } finally { ctx.destroy(); }
+});
+
+// ── List/tree toggle (#828) ─────────────────────────────────────────
+
+function treeStatus(paths, overrides = {}) {
+  return {
+    ok: true,
+    kind: 'local',
+    branch: { head: 'main', upstream: null, ahead: 0, behind: 0 },
+    files: paths.map(p => ({ path: p, origPath: null, staged: false, unstaged: true, untracked: false, renamed: false, state: 'M', added: 1, deleted: 0 })),
+    totals: { files: paths.length, added: paths.length, deleted: 0, uncounted: 0 },
+    ...overrides,
+  };
+}
+
+function listRowLabels(ctx) {
+  return Array.from(ctx.document.querySelectorAll('#changes-list .changes-file-row, #changes-list .changes-folder-row'))
+    .map(row => (row.classList.contains('changes-folder-row') ? 'folder:' : 'file:') + row.querySelector('.changes-file-path, .changes-folder-name').textContent);
+}
+
+test('the Changes list opens flat; the view toggle switches to a tree, persists under its own key and asks git nothing', async () => {
+  const ctx = setupFilePanelDom();
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    const viewBtn = ctx.document.getElementById('changes-list-view-btn');
+    assert.ok(viewBtn, 'the toolbar carries a list/tree toggle');
+    assert.equal(viewBtn.dataset.view, 'list', 'the default is the flat list');
+    assert.equal(viewBtn.innerHTML, iconHtml(ctx, 'list'), 'the icon is the current view');
+    assert.match(viewBtn.title, /^List — click for tree/);
+    assert.equal(ctx.window.localStorage.getItem('changesListView'), null, 'the default is not written until chosen');
+    assert.equal(ctx.document.querySelectorAll('.changes-folder-row').length, 0);
+    assert.equal(ctx.document.querySelector('.changes-file-row[data-path="src/a.js"] .changes-file-path').textContent, 'src/a.js');
+
+    viewBtn.click();
+    await flush();
+    assert.equal(ctx.calls.status.length, 1, 'switching views re-renders what is loaded; it is not a refresh');
+    assert.equal(ctx.window.localStorage.getItem('changesListView'), 'tree');
+    assert.equal(viewBtn.dataset.view, 'tree');
+    assert.equal(viewBtn.innerHTML, iconHtml(ctx, 'tree'));
+    assert.match(viewBtn.title, /^Tree — click for list/);
+    assert.deepEqual(listRowLabels(ctx), ['folder:src', 'file:a.js', 'file:new.txt'], "folders first, then a folder's files indented, then root files");
+
+    const folder = ctx.document.querySelector('.changes-folder-row[data-folder="src"]');
+    assert.equal(folder.getAttribute('aria-expanded'), 'true');
+    assert.equal(folder.querySelector('.changes-folder-count').textContent, '1');
+    const nested = ctx.document.querySelector('.changes-file-row[data-path="src/a.js"]');
+    assert.equal(nested.style.getPropertyValue('--depth'), '1');
+    assert.equal(nested.title, 'src/a.js', 'the full path stays on the row as its tooltip');
+    assert.equal(ctx.document.querySelector('.changes-file-row[data-path="new.txt"]').style.getPropertyValue('--depth'), '0');
+
+    folder.click();
+    await flush();
+    assert.equal(ctx.calls.status.length, 1);
+    const collapsed = ctx.document.querySelector('.changes-folder-row[data-folder="src"]');
+    assert.equal(collapsed.getAttribute('aria-expanded'), 'false');
+    assert.equal(ctx.document.querySelector('.changes-file-row[data-path="src/a.js"]'), null, 'a collapsed folder hides its files');
+    assert.equal(ctx.document.activeElement, collapsed, 'focus stays on the folder that was toggled');
+
+    collapsed.click();
+    await flush();
+    assert.ok(ctx.document.querySelector('.changes-file-row[data-path="src/a.js"]'), 'expanding brings the files back');
+
+    viewBtn.click();
+    await flush();
+    assert.equal(ctx.window.localStorage.getItem('changesListView'), 'list');
+    assert.equal(viewBtn.dataset.view, 'list');
+    assert.deepEqual(listRowLabels(ctx), ['file:src/a.js', 'file:new.txt'], 'the list view is the flat view again');
+  } finally { ctx.destroy(); }
+});
+
+test('a stored tree view is honoured at load, single-child folder chains are compacted, and a collapsed folder stands in for its selected file', async () => {
+  const paths = ['top.txt', 'src/readme.md', 'src/b/two.js', 'deep/x/y/z.js', 'src/a10.js', 'src/b/one.js', 'src/a2.js'];
+  const ctx = setupFilePanelDom({ statusImpl: () => treeStatus(paths), seedStorage: { changesListView: 'tree' } });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    assert.equal(ctx.document.getElementById('changes-list-view-btn').dataset.view, 'tree');
+    assert.deepEqual(listRowLabels(ctx), [
+      'folder:deep/x/y', 'file:z.js',
+      'folder:src', 'folder:b', 'file:one.js', 'file:two.js', 'file:a2.js', 'file:a10.js', 'file:readme.md',
+      'file:top.txt',
+    ]);
+    const chain = ctx.document.querySelector('.changes-folder-row[data-folder="deep/x/y"]');
+    assert.ok(chain, 'a chain of single-child folders is one row keyed by its full path');
+    assert.equal(chain.style.getPropertyValue('--depth'), '0');
+    assert.equal(ctx.document.querySelector('.changes-file-row[data-path="deep/x/y/z.js"]').style.getPropertyValue('--depth'), '1');
+    const b = ctx.document.querySelector('.changes-folder-row[data-folder="src/b"]');
+    assert.equal(b.style.getPropertyValue('--depth'), '1');
+    assert.equal(b.querySelector('.changes-folder-count').textContent, '2');
+    assert.equal(ctx.document.querySelector('.changes-folder-row[data-folder="src"] .changes-folder-count').textContent, '5');
+
+    clickRow(ctx, 'src/b/one.js');
+    await flush();
+    assert.ok(ctx.document.querySelector('.changes-file-row[data-path="src/b/one.js"]').classList.contains('selected'));
+
+    ctx.document.querySelector('.changes-folder-row[data-folder="src"]').click();
+    await flush();
+    assert.deepEqual(listRowLabels(ctx), ['folder:deep/x/y', 'file:z.js', 'folder:src', 'file:top.txt']);
+    const src = ctx.document.querySelector('.changes-folder-row[data-folder="src"]');
+    assert.ok(src.classList.contains('selected'), 'the folder hiding the open file is highlighted in its place');
+    assert.equal(ctx.document.querySelector('.changes-folder-row[data-folder="deep/x/y"]').classList.contains('selected'), false);
+    assert.equal(ctx.editors.length, 1, 'folding a folder leaves the open editor alone');
+
+    ctx.document.getElementById('changes-refresh-btn').click();
+    await flush();
+    assert.equal(ctx.document.querySelector('.changes-folder-row[data-folder="src"]').getAttribute('aria-expanded'), 'false', 'a refresh keeps the folded state');
+  } finally { ctx.destroy(); }
+});
+
+test('subagent groups render as trees of their own, folded independently of the parent list', async () => {
+  const ctx = setupFilePanelDom({
+    statusImpl: () => makeStatusResult({ subagents: [subagentGroup()] }),
+    seedStorage: { changesListView: 'tree' },
+  });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await flush();
+
+    const folders = Array.from(ctx.document.querySelectorAll('.changes-folder-row[data-folder="src"]'));
+    assert.equal(folders.length, 2, 'the parent and the group each have their own src folder');
+    const groupFolder = folders.find(row => row.dataset.subagent === 'sub:s1:aaaa');
+    assert.ok(groupFolder);
+    assert.equal(subagentRows(ctx).length, 2);
+
+    groupFolder.click();
+    await flush();
+    assert.ok(ctx.document.querySelector('.changes-file-row[data-path="src/a.js"]:not([data-subagent])'), "the parent's file stays");
+    assert.equal(ctx.document.querySelector('.changes-file-row[data-path="src/a.js"][data-subagent]'), null, "the group's file is folded away");
+    assert.equal(ctx.document.querySelector('.changes-folder-row[data-folder="src"]:not([data-subagent])').getAttribute('aria-expanded'), 'true');
   } finally { ctx.destroy(); }
 });
