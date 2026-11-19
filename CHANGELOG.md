@@ -6,7 +6,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Changed
 - After a restart, the session you were working in opens first and is usable at once; the other sessions open behind it without stealing the focus, background sessions two at a time, and the tab order is restored once they are all open. (#546, #785)
-- The Send to background button now types the CLI's own `/bg` into the session, the same command that works when typed by hand, instead of exiting the terminal and relaunching the conversation's former job. While Claude is working, it first asks whether to send now, since `/bg` interrupts the running tool and finishes the turn in the background. (#661)
+- The Send to background button now types the CLI's own `/bg` into the session, the same command that works when typed by hand, instead of exiting the terminal and relaunching the conversation's former job; it still refuses when the conversation already runs in a background job and points you to the sidebar. While Claude is working, it first asks whether to send now, since `/bg` interrupts the running tool and finishes the turn in the background. (#661)
 
 ### Fixed
 - Clicking a background session in the sidebar attaches it directly, as the Agents view does, instead of going through the saved-entry checks that could refuse and send you to the Agents view. The `bg` badge now names the job (`bg · name`) when the row is titled after its original conversation. (#546)

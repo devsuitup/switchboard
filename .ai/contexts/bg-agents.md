@@ -1257,6 +1257,19 @@ exit batch (`runExitHandoffs`) never passes `force`: it keeps waiting for the
 turn to end, as decided on 2026-10-21. Tests: `test/bg-handoff.test.js`
 T20–T20d.
 
+**Continuations already hosted.** Before writing, main asks
+`bgAgents.continuationJobCheck(oldId)` through the `checkContinuations` port.
+A known live job hosting a continuation of this conversation refuses before any
+write, naming the job: a `/bg` there forks a second worker from the older
+transcript (the #1020 duplicate; the CLI does not check). Unknown liveness lets
+`/bg` go ahead with one info log line (`continuation liveness unknown`): a typed
+`/bg` would, and the unknown-liveness refusal was the main reason the button
+failed where typing worked. This keeps the pre-write boundary the retired
+`bg-recovery-1020fix` suite guarded for the live-fork case; proceeding on
+unknown liveness is the decided change. Tests: `bg-handoff` T29/T30,
+`bg-handoff-main` "the shipped handler refuses /bg before any write…" and
+"…lets /bg go when continuation liveness is unknown".
+
 ### Exit handoff batch (#546, H1)
 
 `runExitHandoffs(ids, deps)` in `session-exit.js` is the main-owned batch
