@@ -42,7 +42,7 @@ contextBridge.exposeInMainWorld('api', {
   getSessionsLiveElsewhere: (ids) => ipcRenderer.invoke('sessions-live-elsewhere', ids),
   getActiveTerminals: () => ipcRenderer.invoke('get-active-terminals'),
   stopSession: (id) => ipcRenderer.invoke('stop-session', id),
-  sendSessionToBackground: (id) => ipcRenderer.invoke('send-session-to-background', id),
+  sendSessionToBackground: (id, options) => ipcRenderer.invoke('send-session-to-background', id, options),
   exitBackground: (id, detail, ids) => ipcRenderer.invoke('exit-background', id, detail, ids),
   exitBackgroundCancel: (id, detail) => ipcRenderer.send('exit-background-cancel', id, detail),
   onExitBackgroundProgress: callback => ipcRenderer.on('exit-background-progress', (_event, attempt, progress) => callback(attempt, progress)),

@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Changed
+- The Send to background button now types the CLI's own `/bg` into the session, the same command that works when typed by hand, instead of exiting the terminal and relaunching the conversation's former job. While Claude is working, it first asks whether to send now, since `/bg` interrupts the running tool and finishes the turn in the background. (#661)
+
 ### Fixed
 - Opening a remote session whose process has ended and whose pid now belongs to another program is refused with an error saying the session is gone, instead of attaching to that program's tmux pane. (#1114)
 

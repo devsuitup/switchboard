@@ -1902,7 +1902,13 @@ async function sendSessionToBackground(sessionId) {
     const count = activeSubagentsByParent.get(sessionId)?.size || 0;
     if (count && !await appConfirm({ title: 'Send to background?', message: `${count} subagent${count === 1 ? '' : 's'} are running in this session. Claude may stop them when the session moves to the background. Send it anyway?`, confirmLabel: 'Send to background', cancelLabel: 'Cancel' })) return;
     if (openSessions.get(sessionId) !== oldEntry) return;
-    const result = await window.api.sendSessionToBackground(sessionId);
+    let result = await window.api.sendSessionToBackground(sessionId);
+    if (result?.code === 'busy') {
+      // see .ai/contexts/bg-agents.md ("Send to background")
+      if (!await appConfirm({ title: 'Send to background now?', message: 'Claude is working in this session. Sending /bg now interrupts the running tool: Claude sees it as killed and finishes the turn in the background. Wait for the turn to end, or send it now.', confirmLabel: 'Send now', cancelLabel: 'Wait' })) return;
+      if (openSessions.get(sessionId) !== oldEntry) return;
+      result = await window.api.sendSessionToBackground(sessionId, { force: true });
+    }
     if (!result?.ok) throw new Error(result?.error || 'The handoff backend is unavailable or returned no result');
     destination = { ...source, sessionId: result.sessionId };
     clearAppNotice(sessionActionNoticeId('Send to background', source));

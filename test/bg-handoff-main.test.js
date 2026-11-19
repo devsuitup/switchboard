@@ -356,36 +356,4 @@ for (const external of [false, true]) {
     assert.deepEqual(sends, []);
   });
 }
-
-
-test('S2-T9 shipped respawn handler releases the real PTY exit without persisting a continuation', { timeout: 20000 }, async t => {
-  const h = ipcSetup(t);
-  const calls = [];
-  let exit;
-  Object.assign(h.ctx, {
-    sendToBackground: (id, deps) => require('../src/main/bg-agents/bg-handoff').sendToBackground(id, { ...deps, timeoutMs: 1000, exitTimeoutMs: 300 }),
-    ptyGenerationCounter: 0, TRACE: { on: false }, ptyExitSignalName: () => null,
-    shutdownMcpServer() {}, appQuitting: false, exitedRemoteSessionIds: new Set(),
-    activityReporter: { sessionEnded() {} }, taskRecords: { ownerDied() {} },
-    resolveExitDrain() {},
-    bgAgents: {
-      findRestoreJob: () => ({ known: true, job: { id: 'aaaaaaaa', resumeTarget: 'old', sessionId: 'OLD' } }),
-      conversationCheck: async () => ({ known: true, state: 'stopped', workerLiveness: 'dead', sessionIds: ['OLD'] }),
-      liveJobCheck: () => ({ known: true, job: null }),
-      continuationJobCheck: async () => ({ known: true, job: null }),
-    },
-    unsubscribeBgAgents: { respawnForHandoff: async job => { calls.push(job.id); assert.equal(h.session.exited, true); return { ok: true, attached: true }; } },
-    detectSessionTransitions: () => assert.fail('respawn must not detect a new continuation'),
-    persistBackgroundHandoff: () => assert.fail('respawn must not persist a continuation'),
-    writePty: (_, text) => { h.writes.push(text); if (text === '\r') setTimeout(() => exit({ exitCode: 0 }), 10); return true; },
-  });
-  h.ctx.writer.releaseLiveSession = async () => false;
-  const { wireSessionPty } = loadAppFunctions(h.ctx, { functions: ['wireSessionPty'], sourcePath: path.join(__dirname, '../main.js') });
-  wireSessionPty(h.session, 'tab', { onData() {}, onExit: fn => { exit = fn; } });
-  const result = await h.handleSendToBackground({}, 'tab');
-  assert.equal(result.ok, true);
-  assert.equal(result.respawned, true);
-  assert.equal(h.ctx.activeSessions.has('tab'), false);
-  assert.deepEqual(calls, ['aaaaaaaa']);
-  assert.deepEqual(h.writes, ['/exit', '\r']);
-});
+

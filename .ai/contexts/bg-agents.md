@@ -1139,128 +1139,50 @@ id) in attributes through `agentsEscapeAttr`, which also escapes `"` and `'`:
 
 ## Send to background
 
-### Reusing the conversation's job (#785, S2)
+### The button types `/bg` (#661)
 
-Before writing, main calls the fresh `findRestoreJob(oldId, undefined,
-{ ignoreUnrelatedInvalid: true })` lookup. Only this opt-in lookup completes
-each record's raw sessionId, resumeSessionId and linkScanPath-derived identities
-with the session id the Agents view last listed for that job; if Switchboard has no such list yet, a record that does not name its conversation refuses — open the Agents view, then retry.
-This is the cached background roster, using the same `listed(id)` source as
-liveJobCheck; the decision path makes no CLI call. The roster fills after a
-subscription (opening Agents), a verb or dispatch. S1b restore keeps the
-default lookup semantics unchanged.
-The job exposes `resumeTarget`: the validated, lowercased raw
-`resumeSessionId ?? sessionId`, independent of the link-scan identity.
-`conversationCheck(job.id, { workerLiveness: 'all' })` classifies every state.
-Main checks `liveJobCheck` over the lowercased union of the source id and
-all `check.sessionIds`, using the same job-specific worker evidence as the
-checked respawn verb. For other processes it scans the lowercased, deduplicated
-union of the source id, raw resumeTarget and every check.sessionIds entry,
-bypassing the has-PTY shortcut and excluding only the source PTY's tree.
-Another live tab in this window is therefore an outside owner for this move.
+The tab's Send to background submits the CLI's own `/bg` command into the
+PTY and nothing else, then follows the session into the Agents model once the
+CLI has handed off: a new `continued-in` record on the source transcript plus
+a live `kind: "bg"` descriptor with a `jobId` for that target (`findHandoff`).
+Decided by Jean-Baptiste on 2026-11-19: the typed command works where the
+Switchboard sequence did not, so the button exploits it instead of reproducing
+it. The #785 S2 route (`/exit` then a checked `claude respawn` of the
+conversation's former job, with its ten pre-write guards) is retired:
+`sendToBackground` has no `decideRoute`/`respawnJob` port, main passes none,
+and the `bg-handoff-respawn` and `bg-recovery-1020fix` suites went with it.
+A conversation that once ran as a job therefore gets a new job from `/bg`, like
+a typed `/bg` would; the CLI may suffix its name on a collision (M1 Q7), which
+is the name rule's business (#785 Q-F), not the handoff's. The Agents-view
+Respawn verb and S1b restore keep `respawnForHandoff` unchanged.
 
-| Evidence | Route |
-| --- | --- |
-| No matching record after excluding readable records with nonempty unrelated completed identities (`missing`) | Existing `/bg` path |
-| Unknown lookup, ambiguous records or unreadable matching record | Refuse with lookup reason |
-| Raw resume target differs from the source, including an invalid target | Refuse and direct to the job in Agents |
-| Conversation classification or any owner check unknown | Refuse with its reason |
-| Any owner check names a hosted job | Refuse and name that job |
-| Worker live in any state, including done | Refuse and direct to Attach |
-| Running, working or blocked with liveness other than dead | Refuse and direct to Stop/check |
-| Elsewhere scan unknown or a live process found | Refuse, naming the pid when available |
-| Stopped/failed/done not live, or a dead worker in any state | `/exit` then checked respawn |
+**Busy sessions.** Measured 2026-11-19 (CLI 2.1.302, Windows 11, real
+`claude.exe` in a node-pty ConPTY, throwaway cwd, `--model haiku`, `/bg` then
+`` 300 ms later, during a running 40 s Bash tool; probe copied from the M4
+probe of 2026-10-15): the CLI did not defer. Timeline from Enter: job listed by
+`claude agents` +758 ms; tab descriptor removed +813 ms and `Backgrounding…`
+printed; `kind: "bg"` descriptor with `jobId` +2314 ms, without `status` for
+about 1.1 s; PTY exit 0 +3434 ms; job `busy` +3948 ms, `idle` +12129 ms. The
+in-flight Bash tool was **killed, not re-run**: the job's transcript holds one
+`tool_use` whose result reads exit code 137, the assistant reported "The
+command didn't finish", the output file never appeared, and the job ended
+`blocked` at its prompt. This differs from 2.1.300 (M4, 2026-10-15), where the
+job re-ran the tool. The hazard is now an interrupted tool and a turn that ends
+early in the job, not a duplicated side effect.
 
-The S2 lookup uses that completed identity for valid and invalid records alike.
-A readable record with no completed identity refuses because it cannot be
-excluded. An invalid record with a matching completed id also refuses; one
-whose completed ids all name other conversations is ignored. A valid match
-follows the existing-job checks. In particular, an id-less stopped record
-listed for the source is found, but its absent raw resumeTarget still refuses
-without writing; cached roster identity does not replace the raw resume-target guard.
-
-An unreadable/unparsable state.json or directory without state.json does not
-block a unique readable match at lookup. With no readable match, it refuses
-with a notice that a background job record could not be read, never the raw
-read/parse error or path. Ambiguous readable matches still refuse. With no
-matching record and no unidentifiable records, the route types /bg.
-This option does not relax liveJobCheck: a missing state file is skipped there,
-so a unique stopped match can respawn; an unparsable or unknown-state record
-can still make the owner check unknown and refuse before /exit, just as the
-verb would after exit. These checks predict the deterministic guards of the
-verb. A race between reads, or a working/blocked record whose session id comes
-only from the cached Agents-view list and is hidden by the interactive descriptor until exit,
-can still cause a refusal after exit.
-
-The route runs under the existing tab input lock, followed by a bound-tab and
-eligibility recheck. The same command-parameterized composer/300 ms/Enter guard
-handles `/bg` and `/exit`. The respawn path waits up to 15 seconds for
-`session.exited`, then observes the fresh transcript for another 10 seconds.
-Before writing either command, main checks existing continuations with worker
-evidence and excludes the source job. An existing live continuation refuses
-with a short notice directing the user to the sidebar, leaving the tab and
-foreground CLI untouched. Unknown or ambiguous ownership also refuses before
-`/exit`. Stopped and failed continuation jobs cannot be hosted and skip worker
-liveness sampling; they do not prevent manual Respawn while the daemon runs.
-At the 15-second exit timeout the
-same 10-second continuation observation still runs. It can adopt a confirmed
-fork even if the source has not exited. Adoption schedules the same 15-second
-cleanup as `/bg`, killing the old source only if it still has not exited.
-Once the original exit budget expires,
-this path can only adopt or refuse; even a later source exit cannot authorize
-respawn before its own post-exit grace. No exit budget was increased.
-The CLI fork link was measured at 5.5 seconds after `/exit` on 2026-11-07;
-the 10-second grace after detected exit allows that delay plus margin. Polling
-uses the injected clock and change waiter. A new continuation, excluding the
-pre-command snapshot, plus one matching live background descriptor confirms
-the handoff and adopts that job without respawning. A new link without a
-descriptor, multiple new links or an uncertain final read refuse respawn.
-Observed links remain held even if a later rewrite drops them. Only a complete
-final read with no new continuation permits the checked respawn. This is a
-bounded observation, not a CLI-level atomic writer lock; the shared guard
-re-reads continuations immediately before the CLI verb as another check.
-The reader retains sealed continuation evidence for an unparsable final line
-when its first complete key (including the colon) is not `type`, it carries a
-complete `parentUuid` or `message` key, or its leading complete `type` value
-proves it is not `continued-in`. CLI continuation records are type-first; the
-remaining key order varies by CLI version (2.1.302: `type`, `timestamp`, `sessionId`,
-`continuedInSessionId`). The torn-tail rule depends only on `type` being first; ordinary user and
-assistant records can start with `parentUuid` and put `type` after `message`.
-A tail cut inside the first key, such as `{"par`, stays uncertain until that
-key is complete. Every cut of a type-first continuation stays uncertain until
-the record is complete. Uncertainty prevents respawn; a nested type tag alone
-is not proof of an ordinary record.
-A nested `continued-in` tag cannot invalidate that ordinary-record proof.
-The tail is reconsidered when the file grows;
-the same reader recognizes the continuation once the record is completed.
-A malformed sealed continuation record still refuses.
-The helper exposed as `unsubscribeBgAgents.respawnForHandoff(job, extraSessionIds)`
-is shared with S1b's restore IPC: checked respawn, runVerb, then descriptor wait
-using the full job identity (including descriptors without jobId). S2 passes
-the source id and raw resumeTarget as extra ids; after exit, the verb checks
-their lowercased, deduplicated union with fresh check.sessionIds. The optional
-extra ids default to empty, preserving ordinary Agents-view Respawn/Delete
-and S1b restore identity guards. Restore retains its action shapes and automatic
-recovery for dead `working`, `done`, `running` and `failed`; dead `blocked` waits for Respawn.
-
-Respawn success sets `backgrounded` and returns the same conversation id with
-`respawned:true` and `attached`. Main skips transition detection and
-continuation persistence. The held source exit removes the active session
-before the handler resolves. The toolbar replaces it with one attach tab;
-the exit-batch same-id rekey keeps the entry so `markExitBackground` saves
-`bg:true` at its position.
-
-A pre-write refusal uses `refused`; a post-exit checked refusal or verb
-failure uses `respawn-failed` and releases the held exit unsuppressed. The
-exit batch counts that row as started and leaves other unwritten rows eligible.
-The checked-refusal notice says the job was not relaunched and strips the reason's
-trailing periods and whitespace before appending recovery guidance; a verb failure or
-60-second timeout says it may still start and directs the user to check Agents
-before respawning again. An exit timeout without a confirmed continuation uses
-`exit-timeout`, reports the continuation observation and never relaunches a live source.
-No rename-back workaround or pending-restore trigger wait
-(S4) is part of this slice.
-
+Rule derived from that measurement: `backgroundRefusal(session, status,
+{ force })` keeps refusing `waiting` (the Enter would answer the open dialog;
+M4 case 2, not re-measured) and `shell`, and an unknown status, with or
+without `force`. `busy` without `force` returns `{ ok: false, code: 'busy' }`
+and writes nothing; the renderer then asks once ("Send to background now?",
+naming the interrupted tool, Send now / Wait) and retries with
+`{ force: true }` through the same IPC (`send-session-to-background`,
+`sendSessionToBackground(id, { force })`). With `force`, `/bg` is submitted
+during the turn and the 300 ms post-write check no longer withholds Enter on
+`busy`; the proof and the 2-minute deadline are those of the idle case. The
+exit batch (`runExitHandoffs`) never passes `force`: it keeps waiting for the
+turn to end, as decided on 2026-10-21. Tests: `test/bg-handoff.test.js`
+T20–T20d.
 
 ### Exit handoff batch (#546, H1)
 

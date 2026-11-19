@@ -6,8 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const bg = require('../src/main/bg-agents/bg-agents');
 const { init } = require('../src/main/bg-agents/bg-agents-ipc');
-const { sendToBackground, createContinuationReader } = require('../src/main/bg-agents/bg-handoff');
-const { createComposerState } = require('../src/main/terminals/composer-state');
+const { createContinuationReader } = require('../src/main/bg-agents/bg-handoff');
 
 const SID = '11111111-1111-4111-8111-111111111111';
 const NEXT = '22222222-2222-4222-8222-222222222222';
@@ -70,55 +69,6 @@ function fixture(t, state = 'stopped') {
   };
   return { root, file, descriptors, fork, calls, checks, cliCalls, handlers, writeJob, cli, delivery, publishWorker };
 }
-
-function handoff(h, { exitAt = 600, forkAt = Infinity, uncertain = false, descriptor = true, prior = false, respawnResult } = {}) {
-  let now = 0, forked = false;
-  const session = { kind: 'local-pty', realSessionId: SID, cwd: h.root, composerState: createComposerState() };
-  if (prior) fs.appendFileSync(h.file, link(PRIOR));
-  const read = createContinuationReader(h.file, SID);
-  const advance = async ms => {
-    now += ms;
-    if (!forked && now >= forkAt) { h.fork(); forked = true; if (!descriptor) h.descriptors.length = 0; }
-    if (now >= exitAt) session.exited = true;
-  };
-  return sendToBackground(SID, {
-    getSession: () => session, getStatus: () => 'idle', write: () => true, tapOutput: () => () => {},
-    readContinuationIds: () => uncertain && session.exited ? null : read(), readDescriptors: () => h.descriptors,
-    now: () => now, delay: advance, waitForChange: advance,
-    decideRoute: async () => ({ route: 'respawn', job: { id: 'aaaaaaaa' } }),
-    respawnJob: async () => { h.calls.push(['respawn']); return respawnResult || { ok: true, attached: true }; },
-  }).then(result => ({ result, now }));
-}
-
-for (const [label, exitAt, forkAt] of [['before exit detection', 6500, 5800], ['just after exit', 600, 5800]]) {
-  test('1020 handoff adopts fork ' + label, async t => {
-    const h = fixture(t);
-    const { result } = await handoff(h, { exitAt, forkAt, prior: true });
-    assert.deepEqual(h.calls, [], 'a CLI continuation must prevent a second writer');
-    assert.equal(result.ok, true);
-    assert.equal(result.jobId, 'bbbbbbbb');
-    assert.equal(result.sessionId, NEXT);
-    assert.notEqual(result.respawned, true);
-  });
-}
-
-for (const options of [{ uncertain: true }, { forkAt: 5800, descriptor: false }]) {
-  test('1020 handoff refuses uncertain exit ' + JSON.stringify(options), async t => {
-    const h = fixture(t);
-    const { result } = await handoff(h, options);
-    assert.deepEqual(h.calls, [], 'uncertainty must never create a writer');
-    assert.equal(result.ok, false);
-    assert.match(result.error, /not.*respawn|nothing.*relaunch|not.*relaunch/i);
-  });
-}
-
-test('1020 handoff waits a bounded grace then respawns with a readable unchanged transcript', async t => {
-  const h = fixture(t);
-  const { result, now } = await handoff(h, { prior: true });
-  assert.ok(now >= 10600 && now <= 15600, 'allow the measured 5.5 second fork plus margin');
-  assert.equal(result.respawned, true);
-  assert.deepEqual(h.calls, [['respawn']]);
-});
 
 for (const channel of ['check-bg-agent-verb', 'bg-agent-verb']) {
   test('1020 ' + channel + ' refuses a live continuation', async t => {
@@ -495,26 +445,6 @@ test('1033fix a rejection escaping checkVerb is not held', async t => {
   assert.equal((await click()).ok, true, 'a rejected check permits an immediate retry');
   assert.equal(h.checks.length, 2);
   assert.equal(h.calls.length, 1);
-});
-
-test('1033fix handoff keeps unknown-result advice once with no double period', async t => {
-  const h = fixture(t);
-  const { result } = await handoff(h, { respawnResult: { ok: false,
-    error: 'Respawn result is unknown (timeout). Check the Agents view before retrying.' } });
-  assert.doesNotMatch(result.error, /\.\./, 'handoff must not duplicate the final period');
-  assert.equal((result.error.match(/check the Agents view/ig) || []).length, 1, 'handoff must give the recovery advice only once');
-});
-
-test('1033fix2 refused handoff strips the final period of a real checkVerb error', async t => {
-  const h = fixture(t, 'running');
-  h.cli.readWorkerProcessEvidence = () => ({ processTableFresh: false });
-  const refusal = await h.handlers.get('check-bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
-  assert.equal(refusal.ok, false);
-  assert.match(refusal.error, /Check the Agents view, then retry\.$/);
-  const { result } = await handoff(h, { respawnResult: { ...refusal, refused: true } });
-  assert.equal(result.code, 'respawn-failed');
-  assert.doesNotMatch(result.error, /\.\./, 'a real checkVerb refusal must not duplicate the final period');
-  assert.ok(result.error.includes(refusal.error + ' Respawn it from the Agents view'));
 });
 
 for (const state of ['stopped', 'failed']) {
