@@ -167,8 +167,8 @@ async function drain() {
       assertWorkflow(message);
       if (!message.started) { message.started = true; parentPort.postMessage({ id: message.id, started: true }); }
       message.iterator ||= commandUnits(message);
-      const unit = message.deferred || message.iterator.next();
-      message.deferred = null;
+      message.pending ||= [];
+      const unit = message.pending[0] || message.iterator.next();
       if (unit.done) {
         pendingDeletionHistory.delete(message);
         parentPort.postMessage({ id: message.id, ...(message.producerError ? { error: { message: message.producerError.message, code: message.producerError.code } }
@@ -190,11 +190,10 @@ async function drain() {
           if (message.command === 'effects' && message.committedRevision !== undefined && before !== message.committedRevision) {
             throw Object.assign(new Error('cache snapshot changed between writer effect batches'), { code: 'WRITER_STALE' });
           }
-          const buffered = [unit];
-          let deferred;
+          const buffered = message.pending.length ? message.pending : [unit];
+          let committed = 0;
           const acknowledgment = await transaction(message.command, () => {
             assertWorkflow(message);
-            deferred = null;
             let next = unit, result, count = 0, elapsed = 0;
             while (!next.done) {
               const execute = () => {
@@ -208,17 +207,18 @@ async function drain() {
               const started = performance.now();
               const applied = db.chunkUnit(execute, count);
               elapsed += performance.now() - started;
-              if (applied.deferred) { deferred = next; break; }
+              if (applied.deferred) break;
               result = applied.result;
               count++;
               if (count >= db.nextChunkSize() || elapsed >= chunkWallTimeMs) break;
               next = buffered[count] ||= message.iterator.next();
             }
+            committed = count;
             return result;
           });
           message.result = acknowledgment.result;
           message.committedRevision = acknowledgment.committedRevision;
-          message.deferred = deferred;
+          message.pending = buffered.slice(committed);
           message.mutated ||= (db.getSetting('_writer_revision') || 0) !== before;
         }
         if (backgroundCommands.has(message.command)) queue.unshift(message);

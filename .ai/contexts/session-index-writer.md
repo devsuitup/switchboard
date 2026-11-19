@@ -366,8 +366,15 @@ one unit; the store's statement-time adaptation is unchanged.
 with `test/fixtures/writer-slow-units.cjs` (15 ms per unit): 32 slow rows
 commit as 32 transactions, and a journal query posted behind them is answered
 in under 200 ms and before queued `setSetting` commands. A chunk buffers each
-consumed iterator unit so a BUSY rollback replays
-the same units, including any savepoint-deferred unit, before advancing further.
+consumed iterator unit so a BUSY rollback replays the same units before
+advancing further. Units the chunk consumed but did not commit, because a
+savepoint deferred one or because the retry closed on the wall-time cap
+earlier than the failed attempt, stay on the message as `pending` and are
+served ahead of the iterator by the next chunk, so each unit is committed
+exactly once, in order. `test/session-index-writer-busy-short-retry.test.js`
+drives the shipped worker with `test/fixtures/writer-busy-short-retry.cjs`,
+which injects SQLITE_BUSY after the third unit and a 15 ms jump after the
+first replayed one: all five rows commit, in iterator order.
 
 Metrics retain the existing session_metrics table, its index and legacy SQL contract.
 A per-session replacement is one atomic delete/insert transaction. Such a publication
