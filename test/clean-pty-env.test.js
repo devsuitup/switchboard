@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const { cleanEnv } = require('../src/main/shared/clean-env');
+const { cleanEnv, scrubSessionEnv } = require('../src/main/shared/clean-env');
 
 const SESSION_MARKERS = [
   'CLAUDECODE',
@@ -60,6 +60,32 @@ test('GIVEN mixed-case session markers WHEN cleaned THEN Windows cannot inherit 
   const env = { Claude_Code_Session_Id: 'parent', claude_job_dir: 'parent-job', TraceParent: 'parent-trace', tracestate: 'parent-state', Path: '/bin' };
   assert.deepStrictEqual(cleanEnv(env, { locale: false }), { Path: '/bin' });
   assert.strictEqual(env.Claude_Code_Session_Id, 'parent');
+});
+
+test('GIVEN GIT_EDITOR=true beside a session marker WHEN the env is cleaned THEN the CLI residue is gone', () => {
+  const out = cleanEnv({ CLAUDECODE: '1', GIT_EDITOR: 'true', PATH: '/bin' }, { locale: false });
+  assert.deepStrictEqual(out, { PATH: '/bin' });
+});
+
+test('GIVEN GIT_EDITOR=true with no session marker WHEN the env is cleaned THEN the user setting survives', () => {
+  const out = cleanEnv({ GIT_EDITOR: 'true', PATH: '/bin' }, { locale: false });
+  assert.deepStrictEqual(out, { GIT_EDITOR: 'true', PATH: '/bin' });
+});
+
+test('GIVEN a user GIT_EDITOR beside a session marker WHEN the env is cleaned THEN the user setting survives', () => {
+  const out = cleanEnv({ CLAUDE_CODE_SESSION_ID: 'parent', GIT_EDITOR: 'vim', PATH: '/bin' }, { locale: false });
+  assert.deepStrictEqual(out, { GIT_EDITOR: 'vim', PATH: '/bin' });
+});
+
+test('GIVEN mixed-case GIT_EDITOR=true beside a mixed-case marker WHEN cleaned THEN Windows cannot inherit the residue', () => {
+  const out = cleanEnv({ ClaudeCode: '1', Git_Editor: 'true', Path: '/bin' }, { locale: false });
+  assert.deepStrictEqual(out, { Path: '/bin' });
+});
+
+test('GIVEN GIT_EDITOR=true beside a session marker WHEN the startup scrub runs THEN the residue leaves process.env too', () => {
+  const env = { CLAUDE_PID: '1', GIT_EDITOR: 'true', PATH: '/bin' };
+  assert.strictEqual(scrubSessionEnv(env), env);
+  assert.deepStrictEqual(env, { PATH: '/bin' });
 });
 
 test('GIVEN Electron internals WHEN the env is cleaned THEN they are still stripped', () => {

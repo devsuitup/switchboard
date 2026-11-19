@@ -27,7 +27,7 @@ so they go to separate buckets:
 
 **Attention** counts a session while its terminal is on screen, the window has
 focus, and there has been input in the last 3 minutes. It stops while Settings,
-Agent Files, Work Files, Stats or a transcript viewer replaces the terminals.
+Agent Files, Stats or a transcript viewer replaces the terminals.
 
 **What ran** counts every Claude session launched by Switchboard, scheduled runs
 included (named `Scheduled: <schedule name>`), whether or not you looked at it.

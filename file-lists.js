@@ -30,36 +30,6 @@ function folderToShortPath(folder) {
 }
 
 
-const WORK_FILES_CAP = 200;
-
-function walkWorkFiles(dir, baseDir, results) {
-  let entries;
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const e of entries) {
-    const fullPath = path.join(dir, e.name);
-    if (e.isDirectory()) {
-      walkWorkFiles(fullPath, baseDir, results);
-    } else if (e.isFile()) {
-      try {
-        const stat = fs.statSync(fullPath);
-        const relativePath = path.relative(baseDir, fullPath);
-        results.push({
-          filename: e.name,
-          filePath: fullPath,
-          relativePath,
-          modified: stat.mtime.toISOString(),
-          size: stat.size,
-        });
-      } catch {}
-    }
-  }
-}
-
-
 function listMemories(options, readContent) {
   const CLAUDE_DIR = options.claudeDir;
   const PROJECTS_DIR = options.projectsDir;
@@ -156,56 +126,4 @@ function listMemories(options, readContent) {
   return { view: result, files: [...globalFiles.map(f => ({ ...f, title: 'Global ' + f.filename })), ...projects.flatMap(project => project.files.map(f => ({ ...f, title: project.shortName + ' ' + f.filename })))], bodies };
 }
 
-function listWorkFiles(options) {
-  const PROJECTS_DIR = options.projectsDir;
-
-  const hidden = projectHiddenMatcher(options.hiddenProjects, options.hiddenProjectScopes);
-  const seen = new Set();
-  const projects = [];
-
-  try {
-    if (fs.existsSync(PROJECTS_DIR)) {
-      const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
-        .filter(d => d.isDirectory() && d.name !== '.git')
-        .map(d => d.name);
-
-      for (const folder of folders) {
-        const folderPath = path.join(PROJECTS_DIR, folder);
-        const projectPath = deriveProjectPath(folderPath, folder);
-        if (!projectPath) continue;
-        if (hidden(null, projectPath)) continue;
-        if (seen.has(projectPath)) continue;
-        seen.add(projectPath);
-
-        const workFilesDir = path.join(projectPath, '.work-files');
-        if (!fs.existsSync(workFilesDir)) continue;
-
-        const shortName = projectPath.split('/').filter(Boolean).slice(-2).join('/');
-
-        const allFiles = [];
-        walkWorkFiles(workFilesDir, workFilesDir, allFiles);
-
-        allFiles.sort((a, b) => new Date(b.modified) - new Date(a.modified));
-
-        const totalCount = allFiles.length;
-        const files = allFiles.slice(0, WORK_FILES_CAP);
-
-        if (files.length > 0) {
-          projects.push({ projectPath, shortName, files, totalCount });
-        }
-      }
-    }
-  } catch (err) {
-    console.error('Error scanning work-files:', err);
-  }
-
-  projects.sort((a, b) => {
-    const aMax = a.files.length > 0 ? new Date(a.files[0].modified).getTime() : 0;
-    const bMax = b.files.length > 0 ? new Date(b.files[0].modified).getTime() : 0;
-    return bMax - aMax;
-  });
-
-  return { view: { projects }, files: projects.flatMap(project => project.files.map(f => ({ ...f, title: project.shortName + ' ' + f.relativePath }))) };
-}
-
-module.exports = { listMemories, listWorkFiles };
+module.exports = { listMemories };

@@ -27,7 +27,6 @@ test('save invalidation only marks the changed file for reindexing', () => {
   assert.equal(vm.runInContext("fileListStates.get('memory').indexed.get('a.md')", ctx, { filename: path.join(__dirname, '..', 'main.js') }), null);
   assert.equal(vm.runInContext("fileListStates.get('memory').indexed.get('b.md')", ctx, { filename: path.join(__dirname, '..', 'main.js') }), b);
   assert.equal(vm.runInContext("fileListStates.get('memory').epoch", ctx), 1);
-  assert.equal(vm.runInContext("fileListStates.get('work-file').epoch", ctx), 0);
 });
 
 function panelSaveHarness() {
@@ -58,24 +57,12 @@ test('save-memory invalidates the "memory" signature after writing', () => {
   } finally { h.cleanup(); }
 });
 
-test('main.js delete-work-file handler calls invalidateFtsSignature("work-file")', () => {
-  const dwfStart = mainSrc.indexOf("ipcMain.handle('delete-work-file'");
-  assert.ok(dwfStart !== -1, "delete-work-file handler not found in main.js");
-  const nextHandler = mainSrc.indexOf('ipcMain.handle(', dwfStart + 1);
-  const handlerBody = mainSrc.slice(dwfStart, nextHandler !== -1 ? nextHandler : dwfStart + 2000);
-  assert.match(
-    handlerBody,
-    /invalidateFtsSignature\s*\(\s*['"]work-file['"]/,
-    "delete-work-file must call invalidateFtsSignature('work-file') after deletion"
-  );
-});
-
-test('save-file-for-panel invalidates "work-file" for a .work-files/ path', () => {
+test('save-file-for-panel still saves a .work-files document without retired FTS indexing', () => {
   const h = panelSaveHarness();
   try {
     const f = h.file('.work-files/notes.txt');
     assert.deepEqual(h.handlers.saveFileForPanel(f, 'new\n', 'old\n'), { ok: true });
-    assert.deepEqual(h.invalidated, [{ kind: 'work-file', filePath: f }]);
+    assert.deepEqual(h.invalidated, []);
   } finally { h.cleanup(); }
 });
 
@@ -88,19 +75,4 @@ test('save-file-for-panel invalidates "memory" for a .md path, and nothing when 
     assert.equal(h.handlers.saveFileForPanel(f, 'again\n', 'old\n').reason, 'stale');
     assert.deepEqual(h.invalidated, [{ kind: 'memory', filePath: f }], 'a refused save wrote nothing to reindex');
   } finally { h.cleanup(); }
-});
-
-test('save-file-for-panel recognises a .work-files directory whatever the path separator', () => {
-  const { createPanelSaveHandlers } = require('../viewer-save-guard');
-  const invalidated = [];
-  const h = createPanelSaveHandlers({
-    isSensitivePath: () => false,
-    resolveAllowedMemoryPath: (p) => p,
-    invalidateFtsSignature: (kind) => invalidated.push(kind),
-    existsSync: () => true,
-    readFile: () => 'old\n',
-    writeFile: () => {},
-  });
-  assert.deepEqual(h.saveFileForPanel('C:\\repo\\.work-files\\notes.txt', 'new\n', 'old\n'), { ok: true });
-  assert.deepEqual(invalidated, ['work-file'], 'a Windows path under .work-files is a work file too');
 });

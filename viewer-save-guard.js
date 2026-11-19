@@ -67,7 +67,6 @@ function createPanelSaveHandlers(deps) {
         ...io,
         version,
         afterWrite: () => {
-          if (/[\\/]\.work-files[\\/]/.test(resolved)) deps.invalidateFtsSignature('work-file', resolved);
           if (resolved.endsWith('.md')) deps.invalidateFtsSignature('memory', resolved);
         },
       });

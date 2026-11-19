@@ -67,8 +67,7 @@ execution environment. Rules of thumb:
   commands, or `xargs` for a single-command iteration.
 - **Use `jq` for JSON parsing**, not inline `python3 -c "import json; ..."` — cleaner and less
   fragile to quote.
-- **Use `.work-files/`, not `/tmp/`, for scratch files** — it's gitignored, project-scoped, and
-  visible in the Work Files sidebar tab for debugging.
+- **Use `.work-files/`, not `/tmp/`, for scratch files** — it's gitignored, project-scoped scratch space. Open reports through Touched or terminal path links.
 - **No `sleep N && command` to wait for background work** — if a task runs in the background,
   react to its completion signal; don't poll with a fixed sleep.
 - **`test/trigger-watcher.test.js` flaking under load is a known, tolerated pattern, not a
