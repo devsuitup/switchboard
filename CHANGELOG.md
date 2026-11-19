@@ -8,6 +8,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Removed the per-project Work Files sidebar tab. Open session files from Touched or terminal path links; files in `.work-files/` stay on disk. (#1018)
 
 ### Fixed
+- The Delete worktree dialog accepts a worktree whose folder name is spelled in Windows short (8.3) form, and deletes it; it opens without waiting on sessions whose working directory is on an unreachable drive or share; a path containing a `.` or `..` segment is refused before the dialog. (#855)
 - File triggers recover after a successful project reload even if every startup load failed, instead of remaining stuck with "renderer not ready" until the window restarts. (#1123)
 - Opening a remote session whose process has ended and whose pid now belongs to another program is refused with an error saying the session is gone, instead of attaching to that program's tmux pane. (#1114)
 

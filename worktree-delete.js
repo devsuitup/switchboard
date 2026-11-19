@@ -146,27 +146,50 @@ function comparablePath(value) {
   return /^[a-z]:\//i.test(normalized) ? path.posix.normalize(normalized).toLowerCase() : path.posix.normalize(normalized);
 }
 
-async function canonicalPath(value) {
-  return comparablePath(await fs.promises.realpath(value).catch(() => value));
-}
-
+// see .ai/contexts/ipc-bridge.md, "worktree-status": registration match and session cwd resolution
 async function registeredPath(value, memo = new Map()) {
   const absolute = path.resolve(value);
-  const parent = path.dirname(absolute);
-  if (!memo.has(parent)) memo.set(parent, fs.promises.realpath(parent).catch(() => parent));
-  return comparablePath(path.join(await memo.get(parent), path.basename(absolute)));
+  if (!memo.has(absolute)) {
+    memo.set(absolute, (async () => {
+      const stat = await fs.promises.lstat(absolute).catch(() => null);
+      const real = stat && !stat.isSymbolicLink() ? await fs.promises.realpath(absolute).catch(() => null) : null;
+      if (real) return real;
+      const parent = path.dirname(absolute);
+      if (!memo.has(parent)) memo.set(parent, fs.promises.realpath(parent).catch(() => parent));
+      return path.join(await memo.get(parent), path.basename(absolute));
+    })());
+  }
+  return comparablePath(await memo.get(absolute));
 }
 
-async function runningSessions(worktreePath, activeSessions, descriptors) {
-  const root = await canonicalPath(worktreePath);
+const CWD_RESOLVE_MS = 1000;
+
+function pathRoot(comparable) {
+  return (comparable.match(/^[a-z]:/) || [''])[0];
+}
+
+async function resolveWithin(realpath, value, timeoutMs) {
+  let timer;
+  const expiry = new Promise(resolve => { timer = setTimeout(resolve, timeoutMs, null); });
+  try { return comparablePath(await Promise.race([realpath(value).catch(() => null), expiry]) || value); }
+  finally { clearTimeout(timer); }
+}
+
+async function runningSessions(worktreePath, activeSessions, descriptors, { realpath = fs.promises.realpath, timeoutMs = CWD_RESOLVE_MS } = {}) {
+  const candidates = [...activeSessions, ...descriptors.map(s => [s.sessionId, s])]
+    .filter(([, session]) => session && !session.exited && !session.host && session.cwd);
+  const root = await resolveWithin(realpath, worktreePath, timeoutMs);
+  const roots = new Set([comparablePath(worktreePath), root].map(pathRoot));
+  const cwds = await Promise.all(candidates.map(([, session]) => {
+    const literal = comparablePath(session.cwd);
+    return roots.has(pathRoot(literal)) ? resolveWithin(realpath, session.cwd, timeoutMs) : literal;
+  }));
   const sessions = new Map();
-  for (const [key, session] of [...activeSessions, ...descriptors.map(s => [s.sessionId, s])]) {
-    if (!session || session.exited || session.host || !session.cwd) continue;
-    const cwd = await canonicalPath(session.cwd);
-    if (cwd !== root && !cwd.startsWith(root + '/')) continue;
+  candidates.forEach(([key, session], i) => {
+    if (cwds[i] !== root && !cwds[i].startsWith(root + '/')) return;
     const sessionId = session.realSessionId || session.sessionId || key;
     sessions.set(sessionId, { sessionId, cwd: session.cwd });
-  }
+  });
   return [...sessions.values()];
 }
 
@@ -311,7 +334,8 @@ async function readStatus(worktreePath, parentRepo, runGit, readFile = fs.promis
   const memo = inventory.resolutions ||= new Map();
   const requestedPath = await registeredPath(worktreePath, memo);
   const registeredPaths = inventory.registeredPaths ||= await Promise.all(registered.map(record => registeredPath(record.path, memo)));
-  const fields = registered[registeredPaths.indexOf(requestedPath)]?.fields;
+  const record = registered[registeredPaths.indexOf(requestedPath)];
+  const fields = record?.fields;
   if (!fields) throw new Error('This path is no longer a registered worktree. Refresh the project list before trying Delete again.');
   if (requestedPath === registeredPaths[0]) throw new Error('The main worktree cannot be deleted. Select a linked worktree instead.');
   const branch = fields.find(line => line.startsWith('branch '))?.slice(7).replace(/^refs\/heads\//, '') || '(detached HEAD)';
@@ -335,7 +359,7 @@ async function readStatus(worktreePath, parentRepo, runGit, readFile = fs.promis
   const fingerprint = createHash('sha256').update(JSON.stringify([
     comparablePath(worktreePath), fields, locked, lockReason, snapshot,
   ])).digest('hex');
-  return { ok: true, path: worktreePath, branch, locked, lockReason, dirty, total: dirty.length,
+  return { ok: true, path: worktreePath, registeredPath: record.path, branch, locked, lockReason, dirty, total: dirty.length,
     ignoredCount: ignored.length, submodules, fingerprint };
 }
 
@@ -353,7 +377,7 @@ async function removeWorktree(worktreePath, parentRepo, shown, read, runGit) {
   const args = ['-C', parentRepo, 'worktree', 'remove'];
   if (current.locked) args.push('-f', '-f');
   else if (current.dirty.length > 0 || current.submodules?.length) args.push('-f');
-  args.push('--', worktreePath);
+  args.push('--', current.registeredPath || worktreePath);
   await refuseDirectoryLinks(worktreePath);
   try {
     await runGit(args);

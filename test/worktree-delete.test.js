@@ -182,6 +182,39 @@ test('Windows cwd matching handles separators, case, descendants and duplicate l
   assert.deepEqual(result, [{ sessionId: 'live', cwd: 'c:/repo/.worktrees/task/sub' }]);
 });
 
+const settle = async () => { for (let i = 0; i < 3; i++) await new Promise(resolve => setImmediate(resolve)); };
+
+test('running sessions resolve the worktree, then every same-drive cwd in parallel, and never a cwd on another drive', { skip: process.platform !== 'win32' && 'drive roots are a Windows notion' }, async () => {
+  const root = 'C:\\repo\\.worktrees\\task';
+  const pending = new Map();
+  const realpath = value => new Promise(resolve => pending.set(value, resolve));
+  const result = deletion.runningSessions(root,
+    new Map([['a', { cwd: root + '\\a' }], ['b', { cwd: 'c:/repo/.worktrees/task/b' }], ['gone', { exited: true, cwd: root }]]),
+    [{ sessionId: 'far', cwd: 'D:\\elsewhere\\task' }, { sessionId: 'unc', cwd: '\\\\server\\share\\repo\\.worktrees\\task' }],
+    { realpath, timeoutMs: 5000 });
+  await settle();
+  assert.deepEqual([...pending.keys()], [root], 'the worktree resolves first');
+  pending.get(root)(root);
+  pending.delete(root);
+  await settle();
+  assert.deepEqual([...pending.keys()].sort(), [root + '\\a', 'c:/repo/.worktrees/task/b'], 'both candidate cwds are in flight before either resolves');
+  for (const [value, resolve] of pending) resolve(value);
+  assert.deepEqual((await result).map(session => session.sessionId).sort(), ['a', 'b']);
+});
+
+test('an unresolvable cwd is bounded by the timeout and falls back to the string comparison', async () => {
+  const root = process.platform === 'win32' ? 'C:\\repo\\.worktrees\\task' : '/repo/.worktrees/task';
+  const inside = path.join(root, 'hang'), outside = path.join(path.dirname(path.dirname(root)), 'other', 'hang');
+  const asked = [];
+  const realpath = value => { asked.push(value); return value.endsWith('hang') ? new Promise(() => {}) : Promise.resolve(value); };
+  const started = Date.now();
+  const result = await deletion.runningSessions(root, new Map([['pty', { cwd: inside }]]),
+    [{ sessionId: 'far', cwd: outside }], { realpath, timeoutMs: 50 });
+  assert.ok(Date.now() - started < 2000, 'both hanging resolutions are cut by one 50 ms bound');
+  assert.deepEqual(asked.sort(), [root, inside, outside].sort(), 'each same-drive cwd was offered to the resolver');
+  assert.deepEqual(result, [{ sessionId: 'pty', cwd: inside }]);
+});
+
 test('running sessions match an alias ancestor in either the requested path or recorded cwd', async t => {
   const fs = require('node:fs');
   const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'sb-delete-sessions-'));
