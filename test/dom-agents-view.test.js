@@ -12,9 +12,9 @@ const PUBLIC = path.join(__dirname, '..', 'public');
 const HTML = `<!DOCTYPE html><html><body>
   <div id="placeholder"></div>
   <div id="terminal-area"><div id="terminal-header"></div><div id="grid-viewer"></div><div id="terminals"></div></div>
-  <div id="stats-viewer"></div><div id="memory-viewer"></div><div id="work-files-viewer"></div><div id="jsonl-viewer"></div>
+  <div id="stats-viewer"></div><div id="memory-viewer"></div><div id="jsonl-viewer"></div>
   <div id="settings-viewer"><div id="settings-viewer-title"></div><div id="settings-viewer-body"></div></div>
-  <div id="memory-content"></div><div id="work-files-content"></div>
+  <div id="memory-content"></div>
   <div id="agents-viewer" style="display:none;">
     <div id="agents-viewer-header"><span id="agents-viewer-title">Agents</span><span id="agents-viewer-count"></span>
       <label id="agents-finished-toggle"><input type="checkbox" id="agents-show-finished" checked> Finished</label>
@@ -88,7 +88,6 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
     openExternal: async (href) => calls.external.push(href),
     stopSession: async (id) => { calls.stopped.push(id); return { ok: true }; },
     readMemory: async () => 'memory text',
-    readWorkFile: async () => 'work file text',
     getSetting: async () => ({}),
     setSetting: async () => ({ ok: true }),
     getShellProfiles: async () => [],
@@ -103,15 +102,12 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
     gridViewer: window.document.getElementById('grid-viewer'),
     statsViewer: window.document.getElementById('stats-viewer'),
     memoryViewer: window.document.getElementById('memory-viewer'),
-    workFilesViewer: window.document.getElementById('work-files-viewer'),
     settingsViewer: window.document.getElementById('settings-viewer'),
     jsonlViewer: window.document.getElementById('jsonl-viewer'),
     resortBtn: window.document.getElementById('resort-btn'),
     memoryContent: window.document.getElementById('memory-content'),
-    workFilesContent: window.document.getElementById('work-files-content'),
     CSS: { escape: (s) => String(s).replace(/["\\]/g, '\\$&') },
     memoryPanel: { open: () => {} },
-    workFilesPanel: { open: () => {} },
     openSessions: new Map(),
     sessionMap: new Map(),
     localMergedMemberRows: new Map(),
@@ -1145,15 +1141,6 @@ test('opening a memory file closes the agents view', async (t) => {
   assert.equal(ctx.read('agentsViewActive'), false);
   assert.equal(ctx.document.getElementById('agents-viewer').style.display, 'none');
   assert.equal(ctx.window.memoryViewer.style.display, 'flex');
-});
-
-test('opening a work file closes the agents view', async (t) => {
-  const ctx = setup(); t.after(() => ctx.destroy());
-  await ctx.window.showAgentsView();
-  await ctx.window.openWorkFile({ filePath: '/w/.work-files/a.md', filename: 'a.md' });
-  assert.equal(ctx.read('agentsViewActive'), false);
-  assert.equal(ctx.document.getElementById('agents-viewer').style.display, 'none');
-  assert.equal(ctx.window.workFilesViewer.style.display, 'flex');
 });
 
 test('opening the settings closes the agents view', async (t) => {

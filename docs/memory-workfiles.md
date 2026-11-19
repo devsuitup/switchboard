@@ -1,8 +1,7 @@
-# Agent Files and Work Files
+# Agent Files and session files
 
-Two sidebar tabs list files that Claude Code reads or that sessions leave
-behind, and open them in a CodeMirror editor in the main area. Each tab's list
-is read when the tab is clicked.
+The Agent Files sidebar tab lists instruction and memory files and opens them
+in a CodeMirror editor in the main area. Its list is read when the tab is clicked.
 
 ## Agent Files
 
@@ -71,25 +70,16 @@ statements do not read page elements and remain allowed. SVG output also drops
 scripts, event handlers, embedded HTML, images, animations, non-fragment links,
 resource attributes and CSS containing external resources or escapes.
 
-## Work Files
+## Session files
 
-The **Work Files** tab (folder icon) lists, per project, the files under
-`<project>/.work-files/`, recursively, most recent first, at most 200 per
-project. `.work-files/` is a scratch directory for session notes, plans and
-agent reports that belong with a project without being committed; add it to
-the project's `.gitignore`.
-
-The Work Files editor has no save; it offers:
-
-- **Format**, for `.json` and `.jsonl` files: pretty-prints the content in the
-  editor, without writing to disk;
-- **Copy path** and **Copy content**;
-- **Delete**, which removes the file from disk after the confirmation
-  *Delete "&lt;name&gt;"? This cannot be undone.*;
-- **Close**.
+The per-project Work Files tab has been removed. `.work-files/` remains a
+scratch directory for session notes, plans and agent reports; its files stay
+on disk. Open files a session touched from **Touched**, or click a path in
+terminal output. These paths open the file panel with its usual read/write
+and path checks. Agent Files retains its own instruction and memory listing;
+it does not recursively list `.work-files/`.
 
 ## Search
 
-The search field searches the tab that is open: Agent Files searches the listed
-agent files, Work Files the work files — see
+Agent Files searches the listed agent files — see
 [Session browser](session-browser.md#search).

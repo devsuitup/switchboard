@@ -3,7 +3,7 @@
 // see .ai/contexts/viewer-panel.md (File list workers)
 const { parentPort, workerData } = require('node:worker_threads');
 const fs = require('node:fs');
-const { listMemories, listWorkFiles } = require('../file-lists');
+const { listMemories } = require('../file-lists');
 const { fileListPathKey } = require('../src/main/viewer/file-lists-path');
 const memoryBodies = new Map();
 let previousEpoch;
@@ -31,23 +31,17 @@ function build(message) {
     }
     return cached;
   };
-  const listing = message.kind === 'memory' ? listMemories(options, readContent) : listWorkFiles(options);
+  const listing = listMemories(options, readContent);
   for (const file of memoryBodies.keys()) if (!touched.has(file)) memoryBodies.delete(file);
   const manifest = new Map();
   const upserts = new Map();
   for (const file of listing.files) {
-    let signature;
-    if (message.kind === 'memory') signature = JSON.stringify([memoryBodies.get(file.filePath)?.signature, file.title]);
-    else signature = JSON.stringify([file.modified, file.size, file.title]);
+    const signature = JSON.stringify([memoryBodies.get(file.filePath)?.signature, file.title]);
     manifest.set(file.filePath, signature);
-    const target = message.kind === 'memory' ? JSON.parse(memoryBodies.get(file.filePath).signature)[2] : file.filePath;
+    const target = JSON.parse(memoryBodies.get(file.filePath).signature)[2];
     if (!message.invalidateAll && !invalidated.has(fileListPathKey(target)) && !invalidated.has(fileListPathKey(file.filePath)) && indexed.get(file.filePath) === signature) continue;
-    let body = '';
-    if (message.kind === 'memory') body = listing.bodies.get(file.filePath) ?? '';
-    else if (!file.relativePath.endsWith('.jsonl') && file.size <= 64 * 1024) {
-      try { body = fs.readFileSync(file.filePath, 'utf8'); } catch {}
-    }
-    upserts.set(file.filePath, { id: file.filePath, type: message.kind, folder: null, title: file.title, body: body.slice(0, 32768) });
+    const body = listing.bodies.get(file.filePath) ?? '';
+    upserts.set(file.filePath, { id: file.filePath, type: 'memory', folder: null, title: file.title, body: body.slice(0, 32768) });
   }
   return {
     view: listing.view, entries: listing.files.length, manifest: [...manifest], upserts: [...upserts.values()],

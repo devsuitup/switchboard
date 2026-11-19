@@ -24,7 +24,7 @@ function setup(t, activeTab = 'sessions') {
   const requests = [], renders = [], frames = new Map(), timers = new Map();
   const delays = [];
   let nextId = 1;
-  for (const name of ['searchInput', 'searchBar', 'workFilesContent', 'sessionFilters',
+  for (const name of ['searchInput', 'searchBar', 'sessionFilters',
     'terminalHeader', 'gridViewer', 'terminalArea', 'memoryViewer', 'settingsViewer', 'statsViewer']) {
     window[name] = document.createElement(name === 'searchInput' ? 'input' : 'div');
     document.body.append(window[name]);
@@ -34,7 +34,7 @@ function setup(t, activeTab = 'sessions') {
     button.id = id;
     document.body.append(button);
   }
-  for (const name of ['sessions', 'memory', 'schedules', 'work-files', 'stats']) {
+  for (const name of ['sessions', 'memory', 'schedules', 'stats']) {
     const button = document.createElement('button');
     button.className = 'sidebar-tab';
     button.dataset.tab = name;
@@ -49,8 +49,7 @@ function setup(t, activeTab = 'sessions') {
     ],
     renderProjects: projects => renders.push({ tab: 'sessions', projects }),
     renderMemories: ids => renders.push({ tab: 'memory', ids }),
-    renderWorkFiles: ids => renders.push({ tab: 'work-files', ids }),
-    loadMemories() {}, loadWorkFiles() {}, loadStats() {}, hideAllViewers() {}, fitAndScroll() {},
+    loadMemories() {}, loadStats() {}, hideAllViewers() {}, fitAndScroll() {}, refitOpenTerminals() {},
     setTimeout: (cb, ms) => { const id = nextId++; delays.push(ms); timers.set(id, cb); return id; },
     clearTimeout: id => timers.delete(id),
     requestAnimationFrame: cb => { const id = nextId++; frames.set(id, cb); return id; },
@@ -112,7 +111,7 @@ function ids(ctx) {
   return ctx.window.searchMatchIds === null ? null : Array.from(ctx.window.searchMatchIds);
 }
 
-for (const tab of ['sessions', 'memory', 'work-files']) {
+for (const tab of ['sessions', 'memory']) {
   for (const action of ['clear', 'shorten', 'reset']) {
     test(`${tab}: a late reply after ${action} leaves the filter cleared`, async t => {
       const ctx = setup(t, tab);
@@ -272,7 +271,7 @@ test('rebuild searches the current text and does not revive the query it interru
   assert.equal(ctx.renders.length, count);
 });
 
-test('Schedules tab drives the real listing lifecycle, hides search and leaves Work Files available', async t => {
+test('Schedules tab drives the real listing lifecycle, hides search and stops refreshing after leaving', async t => {
   const ctx = setup(t);
   ctx.window.schedulesTabEnabled = true;
   Object.defineProperty(ctx.document, 'hidden', { configurable: true, value: false });
@@ -289,9 +288,9 @@ test('Schedules tab drives the real listing lifecycle, hides search and leaves W
   ctx.flushTimers();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(listed, 2, 'a visible minute refresh lists again');
-  ctx.switchTab('work-files');
+  ctx.switchTab('memory');
   assert.equal(ctx.document.getElementById('schedules-content').style.display, 'none');
-  assert.equal(ctx.window.workFilesContent.style.display, '');
+  assert.equal(ctx.window.memoryContent.style.display, '');
   ctx.flushTimers();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(listed, 2, 'leaving the tab stops its refresh');

@@ -9,7 +9,7 @@ const { EventEmitter } = require('node:events');
 const { setImmediate: nextTurn } = require('node:timers/promises');
 const { createFileListsWorkerClient } = require('../file-lists-worker-client');
 
-for (const [channel, kind] of [['get-memories', 'memory'], ['get-work-files', 'work-file']]) {
+for (const [channel, kind] of [['get-memories', 'memory']]) {
   function handler(on, request, events) {
     const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
     const start = source.indexOf(`ipcMain.handle('${channel}'`);

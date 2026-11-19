@@ -62,7 +62,7 @@ fragment every event it sits in.
 - Attention is a session's **terminal** on screen, in a focused window, with
   someone at the keyboard. Each condition ends the event when it stops holding:
   - Window blur is a focus change to nothing: the event ends at the blur.
-  - Settings, Memory, Work Files, Stats, the transcript viewer and the trace
+  - Settings, Memory, Stats, the transcript viewer and the trace
     viewer replace the terminals by hiding `#terminal-area`. The renderer
     observes that element's `style`, so every such viewer — including one added
     later — reports no focus while it is shown, without a call at each opener.

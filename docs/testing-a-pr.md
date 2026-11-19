@@ -249,7 +249,7 @@ path. Read the PR diff before either mode.
 ### The CodeMirror bundle
 
 `public/codemirror-bundle.js` is generated, not committed, so a fresh worktree
-has none, and without it the editors — Agent Files, Work Files, the file panel,
+has none, and without it the editors — Agent Files, the file panel,
 the Changes editor — do not load. `task test-pr` builds it, and
 `public/mermaid-bundle.js` when declared, before every launch (see
 [From source, not a build](#from-source-not-a-build)), so no manual build is
