@@ -24,6 +24,7 @@ const {
   buildRemoteCommandArgs,
   buildClientCountProbeCommand,
   shellSingleQuote,
+  buildProcCmdlineCheck,
 } = require('../src/main/remote/remote-attach');
 const { classifyTitleActivity } = require('../classify-title-activity');
 
@@ -815,6 +816,17 @@ test('buildRemoteCommandArgs adds ConnectTimeout=5 alongside BatchMode, alias la
 });
 
 // --- F6 (audit-fable-2026-09-11): pid-reuse guard before a tmux attach -----
+
+test('buildProcCmdlineCheck opens every case pattern with a parenthesis, so bash 3.2 parses it inside $( )', () => {
+  const check = buildProcCmdlineCheck(1234);
+  const arms = [...check.matchAll(/case [^;]* in (.*?) esac/g)].map(m => m[1]);
+  assert.ok(arms.length > 0, check);
+  for (const body of arms) {
+    for (const arm of body.split(';;').map(a => a.trim()).filter(Boolean)) {
+      assert.match(arm, /^\(/, `unparenthesised case pattern in: ${check}`);
+    }
+  }
+});
 
 test('parseDiscoveryProbeOutput reads the trailing cmdline-check segment as cmdlineHasClaude', () => {
   const fields = (cmdline) => {

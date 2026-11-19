@@ -2241,10 +2241,16 @@ Launching a new remote session (#222) and injection over the messaging socket
     newline `echo` prints, give `true` or `false`; anything else, an empty
     field and a probe without the segment give `null`. An unreadable command
     line (`/proc` mounted with `hidepid`, a process already gone) or a failed
-    `grep` is unknown, not proof of reuse, so it does not refuse. Only `false` refuses, with
-    `pid <n> now belongs to a process that is not a claude CLI — the session
-    is gone`, before any `spawnPty` call. There is no `descriptor.procStart`
-    gate.
+    `grep` is unknown, not proof of reuse, so it does not refuse. Only
+    `false` refuses, with `pid <n> now belongs to a process that is not a
+    claude CLI — the session is gone`, before any `spawnPty` call. A CLI
+    started through a renamed binary or a symlink whose command line carries
+    no `claude` is refused the same way, as send and stop already treat it.
+    There is no `descriptor.procStart` gate.
+  - Send and stop embed the same check inside `alive=$( ... )`. Its `case`
+    patterns open with a parenthesis (`(0)`, `(1)`): bash before 4.0 (the
+    `/bin/sh` of macOS) reads the `)` of a bare pattern as the end of the
+    command substitution and fails with a syntax error.
   Neither check compares a process start time. The one measured `procStart`
   sample (`.ai/contexts/cli-session-state.md`) is on a Windows `FILETIME`
   scale, and whether the remote/Linux CLI writes the same units as

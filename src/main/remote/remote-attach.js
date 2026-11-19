@@ -140,7 +140,7 @@ function parseProbeOutput(stdout) {
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", pid-reuse guard)
 function buildProcCmdlineCheck(pid) {
-  return `if cmdline=$(tr '\\0' ' ' 2>/dev/null < /proc/${pid}/cmdline); then printf '%s' "$cmdline" | grep -qi claude; case $? in 0) echo 1 ;; 1) echo 0 ;; esac; fi`;
+  return `if cmdline=$(tr '\\0' ' ' 2>/dev/null < /proc/${pid}/cmdline); then printf '%s' "$cmdline" | grep -qi claude; case $? in (0) echo 1 ;; (1) echo 0 ;; esac; fi`;
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach", socket discovery)
