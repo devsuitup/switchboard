@@ -208,23 +208,33 @@ entry first (`activeItem`; a fresh, transcript-less entry is excluded because
 `launchNewSession` owns its activation) and only then the rest in saved order,
 interactive tabs still one at a time with `RESTORE_STAGGER_MS` between them.
 Every open during the run, fresh entries through `launchNewSession`'s flags
-included, passes `activate: !activeSessionId, activeFrom: activeSessionId`, both
+included, passes `activate: nothingShown(), activeFrom: activeSessionId`, both
 read when the open starts: `mayShow` (in `openSessionNow` and in
 `launchNewSession`, success and failure paths alike) then shows the tab only if
 nothing is shown when its terminal comes up, so no open or attach, however
 delayed, takes a tab the user selected meanwhile, and the active entry (opened
-first) is the one that fills the empty screen. A saved active background entry
-is queued first and gates the interactive and fresh entries (`activeGate`): they
-wait until its attach has opened or `RESTORE_ACTIVE_WAIT_MS` (20 s) has passed;
-other background entries do not wait and keep the two slots, so a rejected peer
-still reports at once, but while the gate is pending a peer's `activate` is
-false, so it cannot take the foreground before the saved active entry. The
-final show runs only when nothing is shown at all: it shows the saved active
-entry (fresh ones included, under their started id), else the first open
-restored tab, so a refused or slow active entry still leaves a tab on screen.
-Fallback when the active entry is slow: after the bound the rest opens, the
-first tab to open fills the empty screen, and the late active attach opens
-behind it without taking the focus. Background entries run
+first) is the one that fills the empty screen. `nothingShown` is a selection
+test, not a liveness test: the screen is empty when no session is active or the
+active id is not in `openSessions` (a stale id from the saved state). An exited
+Claude terminal stays mounted with its exit banner (`entry.closed`), and the
+user may have selected it to read its output, so a closed active entry is not
+an empty screen and the restore never replaces it. A saved active background
+entry is queued first and gates the interactive and fresh entries
+(`activeGate`): they wait until its attach has opened or
+`RESTORE_ACTIVE_WAIT_MS` (20 s) has passed; other background entries do not
+wait and keep the two slots, so a rejected peer still reports at once, but while
+the gate is pending a peer's `activate` is false, so it cannot take the
+foreground before the saved active entry. `fillEmptyScreen` runs when nothing is
+shown at all and shows `restoredFallbackId()`: the saved active entry (fresh
+ones included, under their started id) if it is open, else the first open,
+not-closed restored tab. It runs twice: when the gate expires on the timer (so
+a peer that opened while the gate was pending is shown at the bound, without
+waiting for the pending active task — a saved set of background entries only
+has no later open to make that decision) and at the end of the run, so a
+refused or slow active entry still leaves a tab on screen. Fallback when the
+active entry is slow: after the bound the rest opens, the first tab to open
+fills the empty screen, and the late active attach opens behind it without
+taking the focus. Background entries run
 as concurrent tasks, but at most `RESTORE_BACKGROUND_CONCURRENCY` (2, local to
 `runRestore`) hold a slot from `prepareBackgroundRestore` through their
 `openSession`; the others wait for a release. After each interactive open and

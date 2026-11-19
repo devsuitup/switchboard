@@ -350,3 +350,83 @@ test('completing an interactive restore preserves a user selection made during t
   assert.equal(h.active(), 'a', 'the final restoration respects the user selection');
   assert.deepEqual(h.shown(), ['b', 'a']);
 });
+
+test('a stale active id that is not an open tab is replaced by the restored tab', async (t) => {
+  const h = setup({ savedSet: [{ sessionId: 'a', projectPath: '/pa', active: true }] });
+  vm.runInContext("activeSessionId = 'gone'", h.ctx);
+  const done = h.restore();
+  t.after(async () => { await drain(h, done); h.dom.window.close(); });
+  await h.settle();
+  h.pendingOpens.shift().resolve();
+  await done;
+  assert.equal(h.active(), 'a', 'an id absent from the open tabs is an empty screen');
+});
+
+test('a restored tab never replaces a selected exited terminal', async (t) => {
+  const h = setup({ savedSet: [{ sessionId: 'a', projectPath: '/pa', active: true }] });
+  vm.runInContext("openSessions.set('reading-output', { closed: true }); showSession('reading-output');", h.ctx);
+  const done = h.restore();
+  t.after(async () => { await drain(h, done); h.dom.window.close(); });
+  await h.settle();
+  h.pendingOpens.shift().resolve();
+  await done;
+  assert.equal(h.active(), 'reading-output', 'a mounted exited terminal the user selected is not an empty screen');
+  assert.deepEqual(h.shown(), ['reading-output']);
+});
+
+test('the final show preserves a terminal selected and exited while the last open was pending', async (t) => {
+  const h = setup({ savedSet: [{ sessionId: 'a', projectPath: '/pa', active: true }] });
+  const done = h.restore();
+  t.after(async () => { await drain(h, done); h.dom.window.close(); });
+  await h.settle();
+  vm.runInContext("openSessions.set('reading-output', { closed: true }); showSession('reading-output');", h.ctx);
+  h.pendingOpens.shift().resolve();
+  await done;
+  assert.equal(h.active(), 'reading-output', 'the final show does not replace the selected exited terminal');
+  assert.deepEqual(h.shown(), ['reading-output']);
+});
+
+test('an already open background peer fills the empty screen when the active wait expires', async (t) => {
+  const h = setup({ activeWaitMs: 1000, savedSet: [
+    { sessionId: 'active-bg', projectPath: '/pa', bg: true, active: true, attachJobId: '1234abcd' },
+    { sessionId: 'peer-bg', projectPath: '/pb', bg: true, attachJobId: '1234abcd' },
+  ] });
+  const done = h.restore();
+  t.after(async () => { await drain(h, done); h.dom.window.close(); });
+  await h.settle();
+  h.pendingRestores.splice(1, 1)[0].resolve();
+  await h.settle();
+  h.pendingOpens.shift().resolve();
+  await h.settle();
+  assert.equal(h.active(), null, 'the peer stays behind the active gate');
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  await h.settle();
+  assert.equal(h.pendingRestores.length, 1, 'the active preparation is still pending');
+  assert.deepEqual(h.tabs(), ['peer-bg'], 'only the peer is open');
+  assert.equal(h.active(), 'peer-bg', 'the expired wait shows the open peer without awaiting the active task');
+  h.pendingRestores.shift().resolve();
+  await h.settle();
+  h.pendingOpens.shift().resolve();
+  await done;
+  assert.equal(h.active(), 'peer-bg', 'the late active attach opens behind the shown peer');
+  assert.deepEqual(h.tabs(), ['active-bg', 'peer-bg']);
+});
+
+test('the expired active wait does not replace a tab the user selected meanwhile', async (t) => {
+  const h = setup({ activeWaitMs: 1000, savedSet: [
+    { sessionId: 'active-bg', projectPath: '/pa', bg: true, active: true, attachJobId: '1234abcd' },
+    { sessionId: 'peer-bg', projectPath: '/pb', bg: true, attachJobId: '1234abcd' },
+  ] });
+  const done = h.restore();
+  t.after(async () => { await drain(h, done); h.dom.window.close(); });
+  await h.settle();
+  h.pendingRestores.splice(1, 1)[0].resolve();
+  await h.settle();
+  h.pendingOpens.shift().resolve();
+  await h.settle();
+  vm.runInContext("openSessions.set('chosen', { closed: false }); showSession('chosen');", h.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  await h.settle();
+  assert.equal(h.active(), 'chosen', 'the expired wait respects the user selection');
+  assert.deepEqual(h.shown(), ['chosen']);
+});

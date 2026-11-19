@@ -452,8 +452,19 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
     const RESTORE_BACKGROUND_CONCURRENCY = 2;
     const activeWaitMs = typeof RESTORE_ACTIVE_WAIT_MS === 'number' ? RESTORE_ACTIVE_WAIT_MS : 20000;
     let activeGate = null, activeGatePending = false;
-    const nothingShown = () => !activeSessionId || !openSessions.has(activeSessionId) || openSessions.get(activeSessionId).closed;
+    const nothingShown = () => !activeSessionId || !openSessions.has(activeSessionId);
     const showWhenOpened = item => ({ activate: nothingShown() && (!activeGatePending || item === activeItem), activeFrom: activeSessionId });
+    const restoredFallbackId = () => {
+      const shownItem = savedActive || list[list.length - 1];
+      const activeId = shownItem && (startedAs.get(shownItem.sessionId) || shownItem.sessionId);
+      const restoredIds = new Set([...list.map(item => startedAs.get(item.sessionId) || item.sessionId), ...skippedWorkingSetEntries.keys()]);
+      return activeId && openSessions.has(activeId) ? activeId
+        : [...openSessions.keys()].find(id => restoredIds.has(id) && !openSessions.get(id).closed);
+    };
+    const fillEmptyScreen = () => {
+      const fallbackId = restoredFallbackId();
+      if (fallbackId && nothingShown()) showSession(fallbackId);
+    };
     let backgroundSlots = 0;
     const backgroundWaiters = [];
     const acquireBackgroundSlot = () => backgroundSlots < RESTORE_BACKGROUND_CONCURRENCY
@@ -513,7 +524,12 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           if (item === activeItem) {
             let timer;
             activeGatePending = true;
-            activeGate = Promise.race([task.catch(() => {}), new Promise(resolve => { timer = setTimeout(resolve, activeWaitMs); })]).finally(() => { activeGatePending = false; clearTimeout(timer); });
+            const expired = new Promise(resolve => { timer = setTimeout(() => resolve(true), activeWaitMs); });
+            activeGate = Promise.race([task.then(() => false, () => false), expired]).then(timedOut => {
+              activeGatePending = false;
+              clearTimeout(timer);
+              if (timedOut) fillEmptyScreen();
+            });
           }
           continue;
         }
@@ -591,14 +607,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
     if (!indexingRetried && retryAfterIndexing && restoreIndexingDone && skippedNow.some(item => item.continuation)) {
       await markRestoreIndexingDone();
     }
-    const shownItem = savedActive || list[list.length - 1];
-    const activeId = shownItem && (startedAs.get(shownItem.sessionId) || shownItem.sessionId);
-    const restoredIds = new Set([...list.map(item => startedAs.get(item.sessionId) || item.sessionId), ...skippedWorkingSetEntries.keys()]);
-    const fallbackId = activeId && openSessions.has(activeId) ? activeId
-      : [...openSessions.keys()].find(id => restoredIds.has(id) && !openSessions.get(id).closed);
-    if (fallbackId && nothingShown()) {
-      showSession(fallbackId);
-    }
+    fillEmptyScreen();
   } finally {
     try { await Promise.allSettled(backgroundTasks); }
     finally { restoreRunDepth--; }
