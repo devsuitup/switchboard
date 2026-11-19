@@ -124,7 +124,9 @@ test('the PowerShell helper falls back to the command PowerShell resolves and ne
   const source = helperSource();
   assert.ok(source.startsWith('function __switchboard_launch{param([string]$n)'), source);
   assert.ok(!source.includes('function claude'));
-  assert.ok(source.includes("Get-Command $n -ErrorAction Stop|Select-Object -First 1;if($c.CommandType -ne 'Application'){& $c @args;return};"), source);
+  assert.ok(source.includes("Get-Command $n -ErrorAction Stop|Select-Object -First 1;if($c.CommandType -eq 'ExternalScript'){"), source);
+  assert.ok(source.includes("[IO.Path]::GetDirectoryName($_.Source) -eq [IO.Path]::GetDirectoryName($c.Source) -and $x -contains [IO.Path]::GetExtension($_.Source)}|Select-Object -First 1;if($a){$c=$a}};"), source);
+  assert.ok(source.includes("if($c.CommandType -ne 'Application'){& $c @args;return};"), source);
   assert.ok(source.endsWith('$p=[Diagnostics.Process]::Start($i);$p.WaitForExit();exit $p.ExitCode};'), source);
 });
 test('the PowerShell helper chooses the cmd escape depth from the resolved Source extension', () => {
@@ -199,14 +201,32 @@ for (const shell of boundaryShells) {
 }
 for (const shell of ['pwsh.exe', 'powershell.exe']) {
   test(`${shell} with a launch prefix and IDE emulation falls back to the exact baseline command at the limit`, async () => {
-    const baseline = prompt => `wrapper.exe -- claude '--resume' '${ID}' '--add-dir' 'C:\\space dir\\' '--append-system-prompt' '${prompt}' --ide`;
+    const baseline = prompt => `wrapper.exe -- claude '--resume' '${ID}' '--add-dir' 'C:\\space dir' '--append-system-prompt' '${prompt}' --ide`;
     const size = command => argsToCommandLine(shell, profiles.shellArgs(shell, command, [], { pty: true, windows: true })).length + 1;
     const prompt = 'x'.repeat(LIMIT - size(baseline('')));
     assert.equal(size(baseline(prompt)), LIMIT);
-    const spawned = await resumeWith(shell, prompt, { mcpEmulation: true, preLaunchCmd: 'wrapper.exe --', addDirs: 'C:\\space dir\\' });
+    const spawned = await resumeWith(shell, prompt, { mcpEmulation: true, preLaunchCmd: 'wrapper.exe --', addDirs: 'C:\\space dir' });
     assert.equal(spawned.args[2], baseline(prompt));
-    const shorter = await resumeWith(shell, prompt.slice(0, -1), { mcpEmulation: true, preLaunchCmd: 'wrapper.exe --', addDirs: 'C:\\space dir\\' });
+    const shorter = await resumeWith(shell, prompt.slice(0, -1), { mcpEmulation: true, preLaunchCmd: 'wrapper.exe --', addDirs: 'C:\\space dir' });
     assert.equal(shorter.args[2], baseline(prompt.slice(0, -1)));
+  });
+}
+// see .ai/contexts/trigger-watcher.md ("Naming a new session"): PowerShell re-serializes the plain form itself
+const LOSSY = [['a quote', 'say "hi"'], ['a trailing backslash after whitespace', 'C:\\space dir\\'], ['a cmd metacharacter', 'a&b'], ['a percent sign', '100%']];
+const REFUSAL = /too long for PowerShell to pass its arguments exactly.*shorten the system prompt/;
+for (const shell of ['pwsh.exe', 'powershell.exe']) {
+  for (const [label, value] of LOSSY) {
+    test(`${shell} refuses a launch that only fits without the helper when ${label} would not survive the plain form`, async () => {
+      await assert.rejects(resumeWith(shell, 'x'.repeat(32300), { addDirs: value }), REFUSAL);
+    });
+  }
+  test(`${shell} refuses a launch that only fits without the helper when an empty argument would be dropped`, () => {
+    assert.throws(() => profiles.claudeCommand(shell, ['--resume', ID, '--name', '', '--append-system-prompt', 'x'.repeat(32300)], { windows: true }), REFUSAL);
+  });
+  test(`${shell} keeps the plain form at the limit when every argument survives it`, async () => {
+    const prompt = 'x'.repeat(32200);
+    const spawned = await resumeWith(shell, prompt, { addDirs: 'C:\\space dir' });
+    assert.equal(spawned.args[2], `claude '--resume' '${ID}' '--add-dir' 'C:\\space dir' '--append-system-prompt' '${prompt}'`);
   });
 }
 test('IDE emulation adds --ide to the argv before it is serialized, for every shell', async () => {

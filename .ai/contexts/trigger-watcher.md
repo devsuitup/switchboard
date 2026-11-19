@@ -325,20 +325,34 @@ every token wrapped), and when the resolved `Source` ends in `.cmd` or `.bat`
 the depth follows the file that will run, not a prediction from PATH. That line
 is the process's `Arguments`, so nothing re-serializes it; `UseShellExecute=$false`
 keeps the console, input is not redirected, and the helper waits and exits with
-the child's status. Anything else (a profile function or alias named `claude`, a
-`claude.ps1` that PowerShell prefers over a neighbouring `.cmd`, a script alone on
+the child's status. When PowerShell resolves an `ExternalScript` (a `claude.ps1`,
+which it prefers over a neighbouring `.cmd`), the helper looks for an
+`Application` of the same name in the same directory whose extension is in
+`PATHEXT` (`Get-Command -CommandType Application`, filtered: it also lists the
+extensionless sh shim npm leaves there) and starts that instead, through the same
+`ProcessStartInfo` path — npm's `claude.ps1` forwards `$args` to Node through
+PowerShell's own serializer, which is what loses quotes and boundaries (#1107);
+the `.cmd` beside it receives the caret-escaped line and re-parses it exactly.
+Anything else (a profile function or alias named `claude`, a script alone on
 PATH) is run as PowerShell would run it, `& $c @tokens`; what a script then does
 with `$args` is its own. A launch prefix (letters, digits, spaces and
 `- _ . / \ : =`) is encoded like any other argument for an executable or a batch
 prefix; what the prefix program does when it starts `claude` is its own. The
 payload crosses the process command line once (a 20,000 character system prompt
-stays under the 32,767 limit). The helper's fixed cost is about 700 characters: when the
+stays under the 32,767 limit). The helper's fixed cost is about 1,000 characters: when the
 helper form serialized by node-pty would exceed 32,767 (NUL counted) while the plain form
 (`claude '<token>'...`, no preamble, as before the helper) fits, `claudeCommand` uses the
-plain form for that launch, so no launch that fit before stops fitting. `--ide` joins the argv before this serialization.
+plain form for that launch only when every argv token survives PowerShell's own
+re-serialization — non-empty, no `"`, none of `& | < > ^ % !` (a `.cmd` shim's
+`%*` re-parses the line), and no trailing `\` on a token with whitespace (the
+quote PowerShell adds would be escaped by it). Otherwise `claudeCommand` throws
+`the launch is too long for PowerShell to pass its arguments exactly: ...`, which
+`open-terminal` returns as its error, since the plain form would hand claude a
+changed argument (#1107, point 3) and nothing shorter carries the preamble. `--ide` joins the argv before this serialization.
 Off Windows, PowerShell keeps one plain single-quoted literal per token, the bare
-`claude` and no helper. The schedule runner does not use the helper: its
-PowerShell tokens stay single-quoted literals.
+`claude` and no helper. The schedule runner does not use the helper: on Windows it
+starts the resolved `claude` without a shell (`schedule-runner.md`, "Windows
+launches"); elsewhere its PowerShell tokens stay single-quoted literals.
 
 The MCP server that IDE emulation starts belongs to the `open-terminal` call from
 the moment it starts until the session is registered: a `finally` shuts it down on
@@ -357,7 +371,7 @@ node-pty's `argsToCommandLine`, starts `cmd.exe` with that exact command line an
 compares the argv a disposable echo executable and `claude.cmd` / `claude.bat` shims received, including a launch-directory executable shadowing a PATH shim and the reverse, a whitespace-only prefix, and a native wrapper prefix over resume and fork options,
 with the input. `test/trigger-name-transport-powershell-windows.test.js` does the
 same through `powershell.exe` and, when installed, `pwsh.exe`, into an echo
-`claude.exe`, a `claude.cmd` shim, a `claude.ps1` alone and beside a `claude.cmd`, a profile function named `claude`, a native and a batch (`wrap`, `wrap.cmd`, absolute) launch prefix, a 20,000 character argument, with quotes, backslashes, an empty-looking
+`claude.exe`, a `claude.cmd` shim, a `claude.ps1` alone (run as a script) and beside a `claude.cmd` (the shim runs), an npm layout whose `claude.ps1` forwards to Node (the shim runs, the forwarding is bypassed), a profile function named `claude`, a native and a batch (`wrap`, `wrap.cmd`, absolute) launch prefix, a 20,000 character argument, with quotes, backslashes, an empty-looking
 quote pair, `$env:PATH`, backticks, `;`, `&`, `%PATH%`, typographic quotes and
 unicode. It also runs the launch plan under node-pty against a probe `claude.exe` that checks it has a console, reads a line from standard input and exits with a chosen status. It also writes Ctrl+C to the pseudo console and asserts that the probe reports it. On Linux, string tests pin the helper source and the launch literals; the encoder inside the helper is exercised only by the Windows file. Neither file is a live Claude Code or ConPTY qualification;
 nushell remains unexecuted.

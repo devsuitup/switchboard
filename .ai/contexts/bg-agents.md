@@ -1472,7 +1472,9 @@ escaped arguments as a last resort (a multi-line argument is refused there).
 A shim whose target is a `.exe` (the current `bin\claude.exe` shape) runs
 that `.exe` directly. Only `PATHEXT` names are tried, since npm also leaves an
 extensionless sh shim. `resolveWindowsClaude` returns
-`{ program, args, verbatim }` or `{ error }`.
+`{ program, args, verbatim }` or `{ error }`. The schedule runner reaches the
+same resolver through `headlessClaudeLaunch` (`shell-profiles.js`; see
+`schedule-runner.md`, "Windows launches").
 A timeout kills the whole process tree (`taskkill /T` on Windows, the process
 group elsewhere), except for `--bg`: it may have started the daemon, so only
 the client is killed. The call resolves on `close` so stdout is drained, or
