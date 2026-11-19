@@ -201,6 +201,26 @@ ready wait, marker callback and action ACK. No window is created or focused.
 The main caller must supply already resolved local metadata and persist its
 action marker before dispatch, using the awaited `beforeDispatch` callback.
 
+Startup owns the readiness handshake until its session restoration and handshake
+attempt finish, or its bounded project retries are exhausted (#1123). During
+initial loads, delayed retries and pending restoration, `reloadProjects` does not
+announce readiness. Every successful startup path, including a delayed retry,
+awaits restoration before announcing. After startup hands over, the first accepted
+`reloadProjects` announces readiness, including manual and watcher reloads;
+subsequent accepted reloads may repeat it. Rejected loads do not announce it.
+Announcement failures are logged without failing an accepted reload or skipping
+its working-set recovery. The bounded retry policy is unchanged.
+Repeated handshakes keep the document epoch and do not dispatch pending work
+twice. Navigation still revokes readiness and requires a new document handshake.
+Main injects its logger into the broker, which logs the first accepted readiness
+handshake at info level. Each completed v1 action refused with `renderer not ready`
+also logs one info line from `trigger-actions`: JSON-encoded action, requestedName
+(null for existing sessions or stop), and reason only. Prompts, notes, paths and
+session IDs are excluded. Logger failures cannot change the action result.
+Tests: `app-projects-failure.test.js`, `trigger-renderer-bridge.test.js` and
+`trigger-actions-logging.test.js`. Removing an input file still does not cancel
+an outstanding ready wait; cancellation is a separate follow-up.
+
 `request(operation, beforeDispatch)` keeps the requested ID, exact map key and
 pinned generation separate. Reattach pins the actual entry and PTY before
 dispatch; ACK acceptance rechecks them. Resume/new require a single-use

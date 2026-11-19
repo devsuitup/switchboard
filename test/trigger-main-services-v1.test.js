@@ -14,7 +14,7 @@ test('the outer exit guard reaches the broker instantiated inside startApplicati
   const variable = (nodes, name) => nodes.find(node => node.type === 'VariableDeclaration' && node.declarations.some(d => d.id.name === name));
   const startup = ast.body.find(node => node.type === 'FunctionDeclaration' && node.id.name === 'startApplication').body.body;
   const calls = [];
-  const context = vm.createContext({ ipcMain: {}, createUnsavedGuard: options => options,
+  const context = vm.createContext({ ipcMain: {}, log: { info() {} }, createUnsavedGuard: options => options,
     require: () => ({ createTriggerRendererBridge: () => ({ suspend: (...args) => calls.push(['suspend', ...args]),
       restore: (...args) => calls.push(['restore', ...args]) }) }) });
   const assignment = name => startup.find(node => node.type === 'ExpressionStatement' && node.expression.left?.name === name);
