@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- Codex CLI sessions found under `~/.codex/sessions` (or `$CODEX_HOME`) now appear in the sidebar under their project, with a "Codex" badge, and can be searched and read in the message viewer; they count in the heatmap and stats. Codex thread names are shown as titles. Deleting a Codex session from Switchboard is refused; new rollouts are picked up as Codex writes them. (#821)
+
 ### Fixed
 - Opening a remote session whose process has ended and whose pid now belongs to another program is refused with an error saying the session is gone, instead of attaching to that program's tmux pane. (#1114)
 

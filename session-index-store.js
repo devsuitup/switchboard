@@ -407,6 +407,7 @@ db.exec(`
 
 db.exec('CREATE INDEX IF NOT EXISTS idx_search_map_type_id ON search_map(type, id)');
 
+let cacheUpsertStatement = null;
 const stmts = {
   get: db.prepare('SELECT * FROM session_meta WHERE sessionId = ?'),
   getAll: db.prepare('SELECT * FROM session_meta'),
@@ -427,10 +428,12 @@ const stmts = {
   
   cacheCount: db.prepare('SELECT COUNT(*) as cnt FROM session_cache'),
   cacheGetAll: db.prepare('SELECT * FROM session_cache'),
-  cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description, fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint, scheduleSlug, continuationIndex, customTitle, fileSize, workflowRunId, messageCountIndex)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  // Prepared on first use: a readonly open of a pre-#820 schema has no runtime column yet.
+  get cacheUpsert() { return cacheUpsertStatement || (cacheUpsertStatement = db.prepare(`
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description, fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint, scheduleSlug, continuationIndex, customTitle, fileSize, workflowRunId, messageCountIndex, runtime, sessionFile)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 'claude'), ?)
     ON CONFLICT(sessionId) DO UPDATE SET
+      runtime = COALESCE(?, session_cache.runtime), sessionFile = COALESCE(excluded.sessionFile, session_cache.sessionFile),
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
       created = excluded.created, modified = excluded.modified,
@@ -445,7 +448,7 @@ const stmts = {
       mergedIntoSessionId = excluded.mergedIntoSessionId,
       entrypoint = excluded.entrypoint, scheduleSlug = excluded.scheduleSlug,
       continuationIndex = excluded.continuationIndex, customTitle = COALESCE(excluded.customTitle, session_cache.customTitle)
-  `),
+  `)); },
   cacheGetByParent: db.prepare('SELECT * FROM session_cache WHERE parentSessionId = ? ORDER BY created ASC'),
 
   cacheGetByFolder: db.prepare('SELECT * FROM session_cache WHERE folder = ?'),
@@ -618,7 +621,8 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
       s.subagentType || null, s.description || null,
       s.fileMtime || null, s.bridgeSessionId || null, s.mergedIntoSessionId || null,
       typeof s.entrypoint === 'string' ? s.entrypoint : null,
-      s.scheduleSlug || null, s.continuationIndex || null, s.customTitle ?? null, s.fileSize ?? null, s.workflowRunId || null, s.messageCountIndex || null
+      s.scheduleSlug || null, s.continuationIndex || null, s.customTitle ?? null, s.fileSize ?? null, s.workflowRunId || null, s.messageCountIndex || null,
+      s.runtime || null, s.sessionFile || null, s.runtime || null
     );
     if (next !== previous) metaFieldSet.run(s.sessionId, 'name', previous.nameRevision ?? 0, 'user', next.nameTranscriptTitle);
   }

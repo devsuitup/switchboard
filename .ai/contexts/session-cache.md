@@ -3022,3 +3022,49 @@ These are shipped-source dependencies, not duplicate test implementations.
 The shared global save merges unrelated current keys but removes legacy `chrome`
 when the patch supplies `browserMode`, so merging cannot undo the Settings
 panel's migration. Patches unrelated to Browser leave that migration untouched.
+
+## Harness folders (#821)
+
+A folder key with a harness prefix (`codex/2026/08/26`) belongs to a CLI whose
+store is not `~/.claude/projects`; `harnessForFolder` (`harnesses/index.js`)
+picks the adapter. `refreshFolder` dispatches such a key to
+`refreshHarnessFolder(harness, folder)` before any continuation preparation:
+it resolves the directory with `harness.folderPath` (null for a malformed key,
+treated as vanished → `dropFolderRows(folder, { search: true })`), lists
+transcripts with `harness.listTranscripts`, and re-reads a transcript only when
+its mtime, size or external title (`harness.readSessionTitles()`) differs from
+the cached row. Rows of vanished transcripts are deleted unless
+`keepIfRunning` retains them ("A running session keeps its row" applies as
+is); `setFolderMeta(folder, null, stamp)` records a null project, because the
+folder spans projects. The stamp is `harnessFolderIndexMtimeMs` (directory
+mtime, newest transcript mtime, and the harness's `titleIndexMtimeMs()` when
+it has one), from `getTranscriptsIndexMtimeMs` in `folder-index-state.js`.
+
+`reconciliationFolders` appends `harnessReconciliationFolders(metaMap)`: every
+listed folder of every available prefixed harness, refreshed when its stamp
+beats `cache_meta.indexMtimeMs`, plus every `cache_meta` key under the prefix
+that is no longer listed, refreshed so its rows drop. The projects query worker
+runs this too, through the same `session-cache.js`.
+
+The cold scan (`workers/scan-projects.js`) walks the harness folders after the
+Claude folders (not for a `folders`-restricted retry nor a remote mirror) and
+posts the same `{type:'folder', result}` message, built by `readHarnessFolder`;
+`writeScannedFolder` needs no change. A first scan of 707 MB / 234 rollouts
+took 11.8 s in the worker on this machine; the per-folder stamp then costs
+24 ms for 13 folders. Watching is `startHarnessWatchers()` in `main.js`: one
+recursive `fs.watch` per prefixed harness root, events mapped to a key by
+`harness.watchFolderKey(parts)`, debounced 500 ms, flushed through
+`writer.refreshFolder(key)`. The writer's `prepareContinuationRefresh` finds no
+linked continuation on these rows and is inert.
+
+Kept as #821 required: the Claude cwd trust (#385) is not applied — a date
+folder cannot encode a cwd — and the transcript's own cwd is the project;
+`buildProjectsFromCache` files the row under that cwd next to Claude rows and
+the continuation rollup only sees rows whose harness has
+`capabilities.continuations`; subagent rollups key on `parentSessionId`, which
+these rows never have; project remap rewrites files under a Claude folder and
+never touches a rollout, so a remapped project keeps its Codex rows under the
+old cwd; delete refuses the row (see `cli-harnesses.md`). `cacheUpsert` now
+writes `runtime` (`COALESCE(?, 'claude')` on insert, the stored value kept when
+an upsert omits it) and `sessionFile` (kept when omitted); the statement is
+prepared on first use so a readonly open of a pre-#820 schema still works.

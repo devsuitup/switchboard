@@ -13,7 +13,9 @@
  */
 /**
  * @typedef {Object} TranscriptParser
- * @property {function(string, string, string, Object=): (Object|null)} readSessionFile Absolute transcript path, folder key, project path and optional previous row to metadata.
+ * @property {function(string, string, string, Object=): (Object|null)} readSessionFile Absolute transcript path, folder key, project path and adapter-specific options to metadata.
+ * @property {function(Object[]): Object[]} toViewerEntries Raw transcript records to the records the message viewer renders.
+ * @property {function(Object): (Object|null)} toViewerEntry One raw transcript record to its viewer record, or null when it is not shown.
  * @property {function(string): (string|null)} deriveProjectPath Absolute folder directory to project path; null for ungrouped stores.
  * @property {function(string): string} resolveWorktreePath Absolute worktree path to repository path.
  */
@@ -41,6 +43,7 @@
  * @property {boolean} sandbox
  * @property {boolean} schedule
  * @property {boolean} remote
+ * @property {boolean} deleteTranscript Whether Switchboard may delete this CLI's transcripts from disk.
  */
 /**
  * @typedef {TranscriptStore & TranscriptParser & Launcher & ActivityClassifier & {
@@ -49,10 +52,10 @@
  * }} Harness
  */
 
-const CAPABILITIES = Object.freeze(['subagents', 'continuations', 'liveElsewhere', 'bgJobs', 'ideBridge', 'sandbox', 'schedule', 'remote']);
+const CAPABILITIES = Object.freeze(['subagents', 'continuations', 'liveElsewhere', 'bgJobs', 'ideBridge', 'sandbox', 'schedule', 'remote', 'deleteTranscript']);
 const REQUIRED_METHODS = ['available', 'sessionsRoot', 'listFolders', 'folderPath', 'folderForProject',
   'listTranscripts', 'transcriptPath', 'readSessionFile', 'deriveProjectPath', 'resolveWorktreePath',
-  'buildLaunchArgs', 'classifyTitleActivity', 'sessionIdFromPath', 'needsIdDetection'];
+  'buildLaunchArgs', 'classifyTitleActivity', 'sessionIdFromPath', 'needsIdDetection', 'toViewerEntries', 'toViewerEntry'];
 
 function assertHarness(harness) {
   for (const key of ['id', 'label', 'binary']) {

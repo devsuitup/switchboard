@@ -247,6 +247,7 @@ test('window close releases the Agents subscriber and app quit stops the job wat
   assert.equal(unsubscribed, 1);
   assert.equal(stopped, 0, 'closing the window keeps the jobs cache active');
   context.stopScheduler = () => {};
+  context.stopHarnessWatchers = () => {};
   context.flushProjectsBeforeExit = context.flushWindowBounds = async () => {};
   context.sessionCache = { shutdownProducers: async () => {} };
   context.sessionTransitions = { drainMetadataWrites: async () => {} };

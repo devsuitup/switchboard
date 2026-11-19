@@ -28,8 +28,9 @@ test('every registered adapter conforms and invalid ports are rejected', () => {
   assert.equal(getHarness(), getHarness('claude'));
   assert.equal(getHarness('unknown'), getHarness('claude'));
   assert.equal(getHarness('toString'), getHarness('claude'));
-  const original = HARNESSES.claude;
+  const original = HARNESSES.claude, originalCodex = HARNESSES.codex;
   HARNESSES.claude = { ...original, available: () => false };
+  HARNESSES.codex = { ...originalCodex, available: () => false };
   const fake = { ...getHarness(), id: 'test', folderPrefix: 'test:', available: () => true };
   HARNESSES.test = fake;
   try {
@@ -40,7 +41,7 @@ test('every registered adapter conforms and invalid ports are rejected', () => {
     assert.equal(harnessForFolder(null), getHarness());
     assert.deepEqual(availableHarnesses(), [fake]);
     assert.equal(transcriptPath({ runtime: 'test', sessionFile: '/authoritative.jsonl' }), '/authoritative.jsonl');
-  } finally { delete HARNESSES.test; HARNESSES.claude = original; }
+  } finally { delete HARNESSES.test; HARNESSES.claude = original; HARNESSES.codex = originalCodex; }
 });
 
 for (const method of ['sessionIdFromPath', 'needsIdDetection']) {

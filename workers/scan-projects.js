@@ -6,6 +6,7 @@ const { deriveProjectPath } = require('../derive-project-path');
 const { setRemappedProjectReader } = require('../encode-project-path');
 const { readSessionFile, enumerateSessionFiles, mergeBridgeGroups, subagentSessionId, isCanonicalWorkflowPath } = require('../read-session-file');
 const { classifyTranscriptPath } = require('../subagent-attribution');
+const { prefixedHarnesses, readHarnessFolder } = require('../harnesses');
 
 const PROJECTS_DIR = workerData.projectsDir;
 const REMAPS = workerData.remaps && typeof workerData.remaps === 'object' ? workerData.remaps : {};
@@ -121,7 +122,10 @@ try {
 
   // see .ai/contexts/session-cache.md ("Remote hosts file-level rescan")
   const targets = Array.isArray(workerData.targets) ? workerData.targets : [];
-  const total = folders.length + targets.length;
+  // see .ai/contexts/session-cache.md ("Harness folders")
+  const harnessFolders = Array.isArray(workerData.folders) || FOLDER_PREFIX !== '' ? []
+    : prefixedHarnesses().flatMap(harness => harness.listFolders().map(folder => ({ harness, folder })));
+  const total = folders.length + harnessFolders.length + targets.length;
   let current = 0;
   const failedFolders = [];
 
@@ -135,6 +139,15 @@ try {
     } catch (error) {
       failedFolders.push(folders[i]);
       parentPort.postMessage({ type: 'folder', folder: folders[i], error: error.message, current, total });
+    }
+  }
+  for (const { harness, folder } of harnessFolders) {
+    current++;
+    try {
+      parentPort.postMessage({ type: 'folder', result: readHarnessFolder(harness, folder), current, total });
+    } catch (error) {
+      failedFolders.push(folder);
+      parentPort.postMessage({ type: 'folder', folder, error: error.message, current, total });
     }
   }
   for (const t of targets) {

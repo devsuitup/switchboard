@@ -44,7 +44,7 @@ function createClaudeHarness({ projectsDir = path.join(os.homedir(), '.claude', 
   return {
     id: 'claude', label: 'Claude', binary: 'claude', folderPrefix: null, groupsByProject: true,
     capabilities: Object.freeze({ subagents: true, continuations: true, liveElsewhere: true, bgJobs: true,
-      ideBridge: true, sandbox: true, schedule: true, remote: true }),
+      ideBridge: true, sandbox: true, schedule: true, remote: true, deleteTranscript: true }),
     sessionsRoot: () => projectsDir,
     available: () => fs.existsSync(projectsDir),
     listFolders() {
@@ -65,6 +65,7 @@ function createClaudeHarness({ projectsDir = path.join(os.homedir(), '.claude', 
     resolveWindowsLaunch: resolveWindowsClaude,
     needsIdDetection: ({ options }) => !!options?.forkFrom,
     classifyTitleActivity, buildLaunchArgs, parseAddDirs,
+    toViewerEntries: entries => entries, toViewerEntry: entry => entry,
   };
 }
 

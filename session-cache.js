@@ -26,6 +26,7 @@ async function shutdownProducers() {
 }
 
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
+const { getHarness, DEFAULT_HARNESS, harnessForFolder, prefixedHarnesses, harnessFolderIndexMtimeMs } = require('./harnesses');
 const { setRemappedProjectReader } = require('./encode-project-path');
 const { deriveProjectPath, storedProjectPathMatchesFolder } = require('./derive-project-path');
 const { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkEntrypoint, enumerateSessionFiles, resolveJsonlPath, mergeBridgeGroups, isCanonicalWorkflowPath } = require('./read-session-file');
@@ -400,7 +401,70 @@ function sidebarRowState(row) {
   ]);
 }
 
+// see .ai/contexts/session-cache.md ("Harness folders")
+function refreshHarnessFolder(harness, folder) {
+  const dir = harness.folderPath(folder);
+  if (!dir || !fs.existsSync(dir)) return dropFolderRows(folder, { search: true });
+  const cached = new Map(getCachedByFolder(folder).map(row => [row.sessionId, row]));
+  const titles = harness.readSessionTitles ? harness.readSessionTitles() : null;
+  const files = harness.listTranscripts(dir);
+  const current = new Set();
+  const sessionsToUpsert = [];
+  const searchEntriesToUpsert = [];
+  for (const file of files) {
+    const sessionId = harness.sessionIdFromPath(file);
+    if (!sessionId) continue;
+    current.add(sessionId);
+    let stat;
+    try { stat = fs.statSync(file); } catch { continue; }
+    const row = cached.get(sessionId);
+    const title = titles instanceof Map ? titles.get(sessionId) || null : row?.aiTitle || null;
+    if (row && row.fileMtime === stat.mtime.toISOString() && (row.fileSize ?? null) === stat.size && (row.aiTitle || null) === title) continue;
+    const session = harness.readSessionFile(file, folder, null);
+    if (!session) continue;
+    sessionsToUpsert.push(session);
+    const name = getMeta(session.sessionId)?.name || session.customTitle || session.aiTitle || '';
+    searchEntriesToUpsert.push({ id: session.sessionId, type: 'session', folder,
+      title: (name ? name + ' ' : '') + session.summary, body: session.textContent });
+  }
+  let changed = false;
+  if (sessionsToUpsert.length) {
+    upsertCachedSessions(sessionsToUpsert);
+    for (const session of sessionsToUpsert) if (session.dailyMetrics) replaceSessionMetrics(session.sessionId, session.dailyMetrics);
+    for (const entry of searchEntriesToUpsert) deleteSearchSession(entry.id);
+    upsertSearchEntries(searchEntriesToUpsert);
+    changed = true;
+  }
+  for (const sessionId of cached.keys()) {
+    if (current.has(sessionId) || keepIfRunning(sessionId, folder)) continue;
+    deleteCachedSession(sessionId);
+    deleteSearchSession(sessionId);
+    changed = true;
+  }
+  setFolderMeta(folder, null, harnessFolderIndexMtimeMs(harness, dir, files));
+  return changed;
+}
+
+function harnessReconciliationFolders(metaMap) {
+  const out = [];
+  for (const harness of prefixedHarnesses()) {
+    const listed = new Set(harness.listFolders());
+    for (const folder of metaMap.keys()) {
+      if (folder.startsWith(harness.folderPrefix) && !listed.has(folder)) out.push({ folder, refresh: true });
+    }
+    for (const folder of listed) {
+      const meta = metaMap.get(folder);
+      const dir = harness.folderPath(folder);
+      const refresh = !meta || !dir || harnessFolderIndexMtimeMs(harness, dir, harness.listTranscripts(dir)) > (meta.indexMtimeMs || 0);
+      out.push({ folder, refresh });
+    }
+  }
+  return out;
+}
+
 function refreshFolder(folder, opts = {}) {
+  const harness = harnessForFolder(folder);
+  if (harness.folderPrefix) return refreshHarnessFolder(harness, folder);
   opts = continuationRefreshScope(folder, opts);
   const collector = opts.continuationCollector || { deferred: new Set(), accounted: new Set() };
   const clearDeferred = () => {
@@ -804,7 +868,8 @@ function reconciliationFolders(throttle) {
       const refresh = ghostFolders.has(folder) || !meta || getFolderIndexMtimeMs(path.join(PROJECTS_DIR, folder)) > (meta.indexMtimeMs || 0)
         || (meta.projectPath && !storedProjectPathMatchesFolder(meta.projectPath, folder));
       return { folder, refresh: refresh && !pendingRepairFolders().includes(folder) };
-    });
+    })
+    .concat(harnessReconciliationFolders(metaMap));
 }
 
 async function reconcileCacheFromFilesystemAsync({ onFolder, throttle = true } = {}) {
@@ -1020,7 +1085,8 @@ function buildProjectsFromCache(showArchived) {
     mergedChildrenByParent.get(row.mergedIntoSessionId).push(row);
   }
 
-  const rollup = continuationRollup(cachedRows, { initialScanComplete: isInitialScanComplete?.() === true });
+  const rollup = continuationRollup(cachedRows.filter(row => getHarness(row.runtime).capabilities.continuations),
+    { initialScanComplete: isInitialScanComplete?.() === true });
   for (const row of cachedRows) {
     const rootId = rollup.get(row.mergedIntoSessionId || row.sessionId);
     if (!rootId) continue;
@@ -1098,6 +1164,9 @@ function buildProjectsFromCache(showArchived) {
       modified,
       messageCount,
       projectPath: row.projectPath,
+      runtime: row.runtime || DEFAULT_HARNESS,
+      runtimeLabel: (row.runtime || DEFAULT_HARNESS) === DEFAULT_HARNESS ? null : getHarness(row.runtime).label,
+      canLaunch: (row.runtime || DEFAULT_HARNESS) === DEFAULT_HARNESS,
       slug: row.slug || null,
       scheduleSlug: row.scheduleSlug || null,
       aiTitle: row.aiTitle || null,

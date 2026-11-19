@@ -616,7 +616,7 @@ ipcMain.handle('whats-new-dismissed', async () => await whatsNew.dismissed());
 // --- Session cache helpers ---
 
 const { resolveSessionRealCwd, sessionTranscriptExists, isGitRepo } = require('./derive-project-path');
-const { getHarness } = require('./harnesses');
+const { getHarness, prefixedHarnesses } = require('./harnesses');
 const { resolveRowDeletionTargets } = require('./delete-session-target');
 
 // Session cache → session-cache.js
@@ -2415,13 +2415,17 @@ const transcriptFollower = require('./src/main/viewer/transcript-follower').crea
 
 ipcMain.handle('read-session-jsonl', (_event, sessionId, options) => {
   if (options?.mode === 'stop') return transcriptFollower.close(sessionId, options.token, options.park === true);
-  const folder = getCachedFolder(sessionId);
+  const row = getCachedSession(sessionId);
+  const folder = row?.folder;
   if (!folder) return { error: 'Session not found in cache' };
   const folderDir = projectsDirForFolder(folder);
   if (!folderDir) return { error: 'Session belongs to a host that is no longer declared' };
-  const jsonlPath = path.join(folderDir, sessionId + '.jsonl');
+  // see .ai/contexts/cli-harnesses.md ("The message viewer")
+  const harness = getHarness(row.runtime);
+  const jsonlPath = row.sessionFile ? harness.transcriptPath(row) : path.join(folderDir, sessionId + '.jsonl');
+  if (!jsonlPath) return { error: 'Session transcript location is unknown' };
   try {
-    if (options?.mode === 'follow') return transcriptFollower.open(sessionId, jsonlPath, options.checkpoint);
+    if (options?.mode === 'follow') return transcriptFollower.open(sessionId, jsonlPath, options.checkpoint, harness.toViewerEntry);
     if (options?.mode === 'next') return transcriptFollower.read(sessionId, options.token, jsonlPath, options.final === true);
     const content = fs.readFileSync(jsonlPath, 'utf-8');
     const entries = [];
@@ -2429,7 +2433,7 @@ ipcMain.handle('read-session-jsonl', (_event, sessionId, options) => {
       if (!line.trim()) continue;
       try { entries.push(JSON.parse(line)); } catch {}
     }
-    return { entries };
+    return { entries: harness.toViewerEntries(entries) };
   } catch (err) {
     return { error: err.message };
   }
@@ -3889,7 +3893,7 @@ function getMergedMemberIds(id) {
 
 const deleteSessionGuard = makeDeleteSessionGuard({
   activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids,
-  getMergedMemberIds,
+  getMergedMemberIds, getCachedSession, getHarness,
 });
 
 // --- fs.watch on projects directory ---
@@ -4024,6 +4028,47 @@ function startProjectsWatcher() {
   }
 }
 
+// see .ai/contexts/session-cache.md ("Harness folders")
+const harnessWatchers = [];
+function startHarnessWatchers() {
+  for (const harness of prefixedHarnesses()) {
+    const root = harness.sessionsRoot();
+    if (!fs.existsSync(root)) continue;
+    const pendingFolders = new Set();
+    let debounceTimer = null;
+    const flush = async () => {
+      debounceTimer = null;
+      const folders = [...pendingFolders];
+      pendingFolders.clear();
+      let changed = false;
+      for (const folder of folders) {
+        try { if (await writer.refreshFolder(folder)) changed = true; }
+        catch (err) { log.error(`[harness-watch] ${harness.id} ${folder}:`, err.message); }
+      }
+      if (changed) notifyRendererProjectsChanged('watcher');
+    };
+    try {
+      const watcher = fs.watch(root, { recursive: true }, (_eventType, filename) => {
+        if (!filename) return;
+        const folder = harness.watchFolderKey(filename.split(path.sep));
+        if (!folder) return;
+        pendingFolders.add(folder);
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => flush().catch(err => log.error(`[harness-watch] ${harness.id} refresh failed:`, err.message)), 500);
+      });
+      watcher.on('error', err => log.error(`[harness-watch] ${harness.id}:`, err.message));
+      harnessWatchers.push(watcher);
+      log.info(`[harness-watch] watching ${harness.id} at ${root}`);
+    } catch (err) {
+      log.error(`[harness-watch] failed to watch ${harness.id}:`, err.message);
+    }
+  }
+}
+
+function stopHarnessWatchers() {
+  for (const watcher of harnessWatchers.splice(0)) watcher.close();
+}
+
 // --- IPC: app version ---
 ipcMain.handle('get-app-version', () => app.getVersion());
 
@@ -4138,6 +4183,7 @@ if (!app.isPackaged) {
     buildMenu();
     createWindow();
     startProjectsWatcher();
+    startHarnessWatchers();
     // No declared host => no timer and no ssh call. see .ai/contexts/session-cache.md ("Remote SSH hosts")
     remoteIndexer.start();
     syncRemoteWatchers();
@@ -4373,6 +4419,7 @@ function stopNonDatabaseResources(closeTrace = false) {
     () => localTranscriptTracker.dispose(), () => unsubscribeTaskJobs(),
     () => { taskRecordsStopped = Promise.resolve().then(() => taskRecords.dispose()); return taskRecordsStopped; },
     () => { if (projectsWatcher) { projectsWatcher.close(); projectsWatcher = null; } },
+    () => stopHarnessWatchers(),
     () => projectDeleteMain.dispose(),
     () => cliSessionState.stop(), () => bgAgents.stop(), () => remoteIndexer.dispose(),
     () => remoteWatcher.stopAll(), () => remoteActivityTracker.dispose(),

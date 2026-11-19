@@ -1,10 +1,12 @@
 // delete-session-guard.js — see .ai/contexts/bg-agents.md ("Invariants")
 'use strict';
 
-async function deleteSessionRefusal(sessionId, { activeSessions, liveJobCheck, liveElsewhereChecked, describeLiveProcess = false }) {
+async function deleteSessionRefusal(sessionId, { activeSessions, liveJobCheck, liveElsewhereChecked, describeLiveProcess = false, transcriptRefusal = () => null }) {
   const id = String(sessionId || '');
   const key = id.toLowerCase();
   const same = (v) => typeof v === 'string' && v.toLowerCase() === key;
+  const notDeletable = transcriptRefusal(id);
+  if (notDeletable) return notDeletable;
   for (const [sid, session] of activeSessions || []) {
     if (!session || session.exited) continue;
     if (same(sid) || same(session.realSessionId)) return 'session is still running in this window — use Stop on its row in the sidebar, then retry Delete';
@@ -18,11 +20,22 @@ async function deleteSessionRefusal(sessionId, { activeSessions, liveJobCheck, l
   return null;
 }
 
-function makeDeleteSessionGuard({ activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids, getMergedMemberIds = () => [] }) {
+// see .ai/contexts/cli-harnesses.md ("Deleting a transcript")
+function harnessTranscriptRefusal(getCachedSession, getHarness) {
+  return id => {
+    const harness = getHarness(getCachedSession(id)?.runtime);
+    if (harness.capabilities.deleteTranscript) return null;
+    return `${harness.label} transcripts are not deleted by Switchboard — remove the file under ${harness.sessionsRoot()} yourself`;
+  };
+}
+
+function makeDeleteSessionGuard({ activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids, getMergedMemberIds = () => [],
+  getCachedSession = () => null, getHarness }) {
+  const transcriptRefusal = getHarness ? harnessTranscriptRefusal(getCachedSession, getHarness) : () => null;
   return async (sessionId, partIds = [sessionId, ...getMergedMemberIds(sessionId)]) => {
     for (const id of partIds) {
       const refusal = await deleteSessionRefusal(id, {
-        activeSessions,
+        activeSessions, transcriptRefusal,
         liveJobCheck: (sid) => bgAgents.liveJobCheck(sid),
         liveElsewhereChecked: (sid) => cliSessionState.liveElsewhereChecked(sid, sessionHasPty, ptyPids),
       });
@@ -32,4 +45,4 @@ function makeDeleteSessionGuard({ activeSessions, bgAgents, cliSessionState, ses
   };
 }
 
-module.exports = { deleteSessionRefusal, makeDeleteSessionGuard };
+module.exports = { deleteSessionRefusal, makeDeleteSessionGuard, harnessTranscriptRefusal };

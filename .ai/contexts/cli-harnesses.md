@@ -100,3 +100,106 @@ migrate. Tests skip when neither backend is supported, including Node 20 with
 an incompatible native ABI. The SDK-entrypoint migration also uses this fixture
 instead of launching Electron. These tests exercise real SQLite and the
 writable-store reconciliation, not the worker transport or Electron's binding.
+
+## Codex adapter (#821)
+
+`harnesses/codex.js` is a port of Ali Basiri's upstream adapter (doctly/switchboard
+`896783ba`, `e71e6f0c`, the title index of `fe7fba01`, the viewer half of
+`966715db`, the argv builder of the final `upstream/main:harnesses/codex.js`),
+re-shaped for the fork's contract. Measured against 237 rollouts on
+2026-11-19 (codex-cli 0.160.0), which settled the deviations from upstream.
+
+- Store: `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`. Folder
+  key `codex/YYYY/MM/DD`; `groupsByProject` false; the project is
+  `session_meta.payload.cwd`, read per transcript and trusted as is (the #385
+  cwd check is Claude's folder-name check and cannot apply to a date folder).
+  `folderPath(key)` accepts the key with or without the prefix and returns
+  null for anything that is not exactly `YYYY/MM/DD`, so a stored key can never
+  resolve outside the sessions root. `watchFolderKey(parts)` maps a watcher's
+  relative path to its folder key, null for anything shallower than
+  `Y/M/D/rollout-*.jsonl`.
+- Identity: the file name's uuid (`sessionIdFromPath`). `session_meta.session_id`
+  is the lineage root repeated by every resume. `transcriptPath(row)` is
+  `row.sessionFile` or null: a Codex path cannot be rebuilt from an id.
+- Parser: only `response_item` messages count (older versions duplicate them as
+  `event_msg`); developer-role messages and injected user turns are skipped.
+  Injected means tag-wrapped (`<environment_context>`, `<recommended_plugins>`,
+  `<turn_aborted>`, `<transcript>`) **or** starting with
+  `# AGENTS.md instructions` — 237/237 rollouts here open with that record and
+  upstream's tag rule alone would make it every summary. Subagent rollouts
+  (`thread_source==='subagent'`, `parent_thread_id`, `agent_path`,
+  `agent_nickname`) return null: Codex refuses to resume them. `created` and
+  `modified` come from conversation records, not settings or usage records
+  (`e71e6f0c`). The row carries `runtime: 'codex'`, `sessionFile`, `fileSize`,
+  `customTitle: ''` and `entrypoint: ''` (known-empty, so the Claude title and
+  SDK backfills never open a rollout through a Claude path), and
+  `dailyMetrics` per date × model from `turn_context.payload.model` and
+  `token_usage_record.payload.usage` (`cached_input_tokens` → cacheRead,
+  `cache_write_input_tokens` → cacheCreation; tool calls counted from
+  `custom_tool_call`/`function_call`), so Codex sessions count in the heatmap
+  and stats (decided by JB, 2026-10-28). The file is scanned one line at a
+  time through `jsonl-scan.js` (`scanLines`), never read whole.
+- Titles: `$CODEX_HOME/session_index.jsonl` (`{id, thread_name, updated_at}`,
+  newest record wins, an empty newest clears). The adapter writes the name into
+  `aiTitle` at read time so a Switchboard rename still wins; `titleIndexMtimeMs()`
+  joins the folder freshness stamp so a `/rename` with no transcript change is
+  picked up by the next reconcile pass, not by the watcher (the index sits
+  outside the sessions root).
+- Capabilities: all false, plus `deleteTranscript: false` (new flag, Claude
+  true). Launch and activity methods exist for the contract; routing them into
+  main is #822/#823.
+
+### Streaming transcript scan
+
+`jsonl-scan.js` (root, listed in `test/fixtures/root-app-modules.json`) is
+upstream's `scanLines(filePath, startByte, onLine, endByte)` / `readHead`. It
+holds one 256 KiB chunk plus the current line; `onLine` may return false to
+stop. Tool output makes rollouts reach hundreds of MB, and a JS string costs
+twice the file size.
+
+### Harness folders in the index
+
+`session-cache.js` keeps Claude's `refreshFolder` untouched and dispatches on
+`harnessForFolder(folder).folderPrefix`: a prefixed key goes to
+`refreshHarnessFolder(harness, folder)`. See `.ai/contexts/session-cache.md`
+("Harness folders") for the scan, watcher and reconcile paths.
+
+### The message viewer
+
+`read-session-jsonl` resolves the row with `getCachedSession`, takes
+`harness.transcriptPath(row)` when the row has a `sessionFile` and the Claude
+path otherwise, and maps records through the harness: `toViewerEntries(entries)`
+for the whole-file read, `toViewerEntry` handed to
+`createTranscriptFollower().open(id, file, checkpoint, transform)` for the
+follow/next modes, where it runs before the visibility filter and survives a
+park/resume. Claude's mapping is identity. Codex's rewrites a message into a
+`text` block, a `reasoning` summary into `thinking`, `custom_tool_call` /
+`function_call` into `tool_use` keyed by `call_id`, and their outputs into
+`tool_result` with the same id; developer messages and injected user turns are
+dropped. The renderer never learns which CLI wrote the file.
+
+### Deleting a transcript
+
+`delete-session-guard.js` takes a `transcriptRefusal(id)` hook, built by
+`harnessTranscriptRefusal(getCachedSession, getHarness)`: a row whose harness
+has `deleteTranscript: false` is refused before any live check, naming the
+sessions root to clean by hand. `delete-session-target.js` is Claude-layout
+code and never sees a Codex row.
+
+### The sidebar badge
+
+`buildProjectsFromCache` projects `runtime` (defaulting to `DEFAULT_HARNESS`)
+and `runtimeLabel`, null for the default harness and the adapter's `label`
+otherwise. `buildSessionItem` (`public/sidebar.js`) and the grid card
+(`public/grid-view.js`) prepend a `.runtime-badge` when `runtimeLabel` is set;
+the renderer compares nothing to a runtime name.
+
+### Tests
+
+`harness-codex.test.js` (parser, fixtures from upstream plus the AGENTS.md
+rule, titles, metrics, folder keys, viewer mapping), `codex-index.test.js`
+(`refreshFolder` over a fake `CODEX_HOME`, reconcile listing, projection,
+rollup exclusion, scan worker, store columns), `codex-viewer-and-guard.test.js`
+(follower transform, delete refusal, badge, main wiring). Running the suite on
+a machine with a real `~/.codex` indexes it: point `CODEX_HOME` at an empty
+directory first.

@@ -25,6 +25,7 @@ function transcriptFixture(t) {
   vm.runInNewContext(source.slice(start, end), {
     fs, path, Buffer, transcriptFollower: follower,
     getCachedFolder: () => 'fixture', projectsDirForFolder: () => root,
+    getCachedSession: () => ({ folder: 'fixture' }), getHarness: require('../harnesses').getHarness,
     ipcMain: { handle: (name, handler) => { assert.equal(name, 'read-session-jsonl'); invoke = handler; } },
   }, { filename, lineOffset: source.slice(0, start).split('\n').length - 1 });
   const file = path.join(root, 'run.jsonl');
