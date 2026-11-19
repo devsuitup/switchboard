@@ -668,6 +668,9 @@ const projectsClient = createProjectsWorkerClient({
     if (!delivered) notifyRendererProjectsChanged('reconcile');
   },
 });
+// see .ai/contexts/ipc-bridge.md ("Last known projects")
+const { createLastKnownProjectsStore } = require('./src/main/projects/last-known-projects');
+const lastKnownProjects = createLastKnownProjectsStore({ dir: app.getPath('userData'), appVersion: app.getVersion(), log });
 
 const { resolveJsonlPath, readSubagentMeta } = require('./read-session-file');
 
@@ -1405,6 +1408,7 @@ ipcMain.handle('rebuild-cache', async () => {
 });
 
 ipcMain.handle('get-indexing-state', () => ({ finished: isIndexingFinished() }));
+ipcMain.handle('get-last-known-projects', () => lastKnownProjects.load());
 
 async function getProjectsSnapshot(showArchived) {
   const started = TRACE.on ? performance.now() : null;
@@ -1458,7 +1462,7 @@ async function getProjectsSnapshot(showArchived) {
     if (result.stale) {
       notifyRendererProjectsChanged('conflict');
       if (showArchived === 'both') reply.projectsStale = true;
-    }
+    } else if (showArchived === 'both') lastKnownProjects.remember({ defaultProjects: reply.defaultProjects, allProjects: reply.allProjects });
     return reply;
   } catch (err) {
     if (err.code === 'PROJECTS_SNAPSHOT_CONFLICT') {

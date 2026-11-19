@@ -604,6 +604,7 @@ An unknown remote target never falls back to local disk IO.
 | `read-clipboard` / `clipboard-has-image` | Main-process clipboard reads (text; whether an image is on it) |
 | `toggle-full-screen` / `popup-app-menu` | The frameless window's strip and ☰ menu — see window-frame.md |
 | `get-indexing-state` | `{finished}` — whether the first index pass is done; `indexing-finished` pushes the same news. See session-cache.md |
+| `get-last-known-projects` | `{defaultProjects, allProjects, savedAt}` or `null` — the last accepted paired `get-projects` reply persisted by main, for the provisional sidebar at startup. See "Last known projects (#1125)" |
 | `get-task-snapshots` | The task registry's snapshots for live sessions; pushes follow on `task-snapshot` / `task-rekey`. See session-state.md |
 | `get-activity-trace-state` | Debug-mode state for Settings → Diagnostics; `activity-trace-state` pushes changes. See `docs/activity-trace.md` |
 | `get-activity-reporting-state` / `set-activity-reporting-enabled` | ActivityWatch reporting — see activitywatch.md |
@@ -1396,6 +1397,58 @@ raw prompts, names, CLI strings, paths, sockets, keys or liveVersion. Lists are
 capped at 128 with complete counts/truncation flags; oversized legitimate records
 compact before transport and remain below 64 KiB after main's timestamp. Invalid
 records or transport failures cannot break publication.
+
+## Last known projects (#1125)
+
+On a cold start with about a thousand sessions the first accepted load can
+take a minute or more, and the user saw an empty, then frozen, sidebar. The
+renderer now paints the sidebar at once from the payload the previous run
+last showed, marked provisional, and the first accepted `loadProjects` replaces
+it; the real load runs in parallel from the first millisecond and is never
+delayed by the paint.
+
+Main side, `src/main/projects/last-known-projects.js` owns the file
+`last-known-projects.json` under `app.getPath('userData')` — the same place as
+`remote-attach-profile-id`, under `SWITCHBOARD_DATA_DIR` in dev and test, never
+the user DB schema. `getProjectsSnapshot('both')` calls `remember` with the
+assembled `defaultProjects` and `allProjects` of every accepted reply (not a
+stale delivery, not a boolean reply, never the `projection`); the store
+coalesces writes two seconds apart, serializes off the IPC path, refuses a
+payload above 8 MiB (and removes the previous file, so a list that outgrew the
+cap is not shown months later), and writes `tmp` then `rename` so a crash
+leaves either the old file or the new one. The record carries a format
+version and the app version; `load` returns `null` and removes the file on a
+parse error, a foreign format, another app version (row shapes change between
+releases), or a row without `projectPath`/`sessionId` — a missing file is
+`null` without a warning. Nothing flushes at quit: the last two seconds of
+reloads may be lost, and the previous write still describes the sidebar as it
+was. `get-last-known-projects` returns `load()`.
+
+Renderer side, `paintLastKnownProjects` (app.js) runs from
+`loadStartupProjects` without being awaited. It gives up when the reply is not
+two arrays, when a real load has already committed, or when either cache is
+already filled; otherwise it fills `cachedProjects`/`cachedAllProjects`, runs
+`dedup`, sets the `Refreshing…` status and calls `refreshSidebar`. The
+provisional state is the class `projects-provisional` on `#sidebar-content`,
+nowhere else: `loadProjects` removes it when a load commits, and its failure
+branch shows "Could not load projects" while it is present even though the
+caches are not empty.
+
+Provisional rows are inert, not routed. A capture-phase listener on
+`#sidebar-content` swallows `click`, `auxclick`, `dblclick`, `contextmenu` and
+Enter/Space `keydown` while the class is present; the rows and headers render
+at 0.7 opacity with a progress cursor. The alternative — letting a click run
+through `openSessionNow`'s guards — was rejected: those guards assume rows from
+an accepted snapshot, so a row deleted or archived since the last run would
+still spawn `claude --resume` against a missing transcript or open a popover
+on a project that no longer exists, and the wait is a few seconds. Restore,
+trigger readiness and the background-agent paths never see provisional rows:
+they run only after `loadStartupProjects` has an accepted load, as before.
+
+Tests: `test/last-known-projects.test.js` (store), `test/app-last-known-projects.test.js`
+(paint, inertness, replacement, the race where the real load lands first, the
+all-failed startup) and the remembered-reply case in
+`test/get-projects-worker-wiring.test.js`.
 
 Schedules reuse `run-schedule-now`, `read-memory`, `save-memory` and
 `schedule-run-exit` unchanged. Slice B adds deletion through the Electron-free

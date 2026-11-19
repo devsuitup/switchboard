@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Changed
+- At startup the sidebar shows the projects and sessions from your previous run right away, greyed out and not yet clickable, instead of an empty list while the index loads; it is replaced by the current list as soon as the first load finishes, within seconds on a warm start. (#1125)
+
 ### Fixed
 - While the index is being built at startup, the sidebar no longer fails reload after reload with "Projects changed while loading" as sessions start and stop: it shows the latest snapshot and refreshes at the next change. The first load after indexing no longer runs a full sweep that could time out, and a sweep that outlives its wait now refreshes the sidebar when it finishes. (#1125)
 - File triggers recover after a successful project reload even if every startup load failed, instead of remaining stuck with "renderer not ready" until the window restarts. (#1123)

@@ -235,3 +235,22 @@ test('a caller timeout logs the job options and dispatch count, or unknown when 
   await assert.rejects(invoke(null, 'both'), /timed out/);
   assert.equal(warnings[1], '[projects] get-projects timed out after 30000 ms: reconcile=unknown dispatches=unknown');
 });
+
+test('an accepted paired reply is remembered as the last known projects; stale and boolean replies are not', async () => {
+  const remembered = [];
+  const projects = [{ projectPath: '/fixture', sessions: [] }];
+  let stale = false;
+  const invoke = handler({
+    lastKnownProjects: { remember: payload => remembered.push(payload) },
+    projectsClient: { request: async () => ({ defaultProjects: projects, allProjects: projects, projection: { buildId: 1 }, ...(stale ? { stale: true } : {}) }) },
+  });
+  await invoke(null, false);
+  assert.equal(remembered.length, 0, 'a boolean reply is not the sidebar payload');
+  await invoke(null, 'both');
+  assert.equal(remembered.length, 1, 'an accepted paired reply is remembered');
+  assert.deepEqual(Object.keys(remembered[0]).sort(), ['allProjects', 'defaultProjects'], 'the projection is not persisted');
+  assert.deepEqual(remembered[0].defaultProjects, projects);
+  stale = true;
+  await invoke(null, 'both');
+  assert.equal(remembered.length, 1, 'a stale delivery is never remembered');
+});

@@ -89,7 +89,7 @@ async function run() {
       mergePlaceholderSessions: projects => projects, annotateRemoteAttachable: projects => projects,
       cliSessionState: require('../../cli-session-state'),
       normalizeHosts: () => [], parseFolderKey: require('../../src/main/remote/remote-hosts').parseFolderKey,
-      notifyRendererProjectsChanged() {}, log: { warn() {} },
+      notifyRendererProjectsChanged() {}, log: { warn() {} }, lastKnownProjects: { remember() {} },
     });
     const start = source.indexOf("ipcMain.handle('get-projects'");
     const end = source.indexOf('\n});', start) + 4;

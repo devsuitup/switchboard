@@ -18,7 +18,7 @@ module.exports = function loadGetProjectsHandler(context) {
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
   const sandbox = {
     console, performance, structuredClone, Buffer, cliSessionState, require: createRequire(filename),
-    log: { warn() {}, info() {}, error() {} }, notifyRendererProjectsChanged() {}, ...context,
+    log: { warn() {}, info() {}, error() {} }, notifyRendererProjectsChanged() {}, lastKnownProjects: { remember() {} }, ...context,
     ipcMain: { handle: (name, callback) => { assert.equal(name, 'get-projects'); handler = callback; } },
   };
   vm.createContext(sandbox);

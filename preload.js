@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('api', {
   readWorkFile: (filePath) => ipcRenderer.invoke('read-work-file', filePath),
   deleteWorkFile: (filePath) => ipcRenderer.invoke('delete-work-file', filePath),
   getIndexingState: () => ipcRenderer.invoke('get-indexing-state'),
+  getLastKnownProjects: () => ipcRenderer.invoke('get-last-known-projects'),
   getProjects: async (showArchived) => {
     const reply = await ipcRenderer.invoke('get-projects', showArchived);
     if (reply?.projectsError?.code === 'PROJECTS_SNAPSHOT_CONFLICT'
