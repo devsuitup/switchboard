@@ -18,6 +18,14 @@ function parseAddDirs(value) {
   return String(value).split(',').map(dir => dir.trim()).filter(Boolean);
 }
 
+// The renderer's historical OSC 9 rules — see .ai/contexts/cli-harnesses.md ("Busy and attention per harness")
+function classifyNotification(message) {
+  const text = String(message || '');
+  if (/attention|approval|permission|needs your|wants to enter/i.test(text)) return 'attention';
+  if (/waiting for your input/i.test(text)) return 'idle';
+  return null;
+}
+
 function launchName(name) {
   return typeof name === 'string' && name ? ['--name', name] : [];
 }
@@ -64,7 +72,7 @@ function createClaudeHarness({ projectsDir = path.join(os.homedir(), '.claude', 
     resolveContinuations, resolveContinuationsSync, liveElsewhere, getCachedJobs,
     resolveWindowsLaunch: resolveWindowsClaude,
     needsIdDetection: ({ options }) => !!options?.forkFrom,
-    classifyTitleActivity, buildLaunchArgs, parseAddDirs,
+    classifyTitleActivity, classifyNotification, buildLaunchArgs, parseAddDirs,
     toViewerEntries: entries => entries, toViewerEntry: entry => entry,
   };
 }

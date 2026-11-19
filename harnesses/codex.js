@@ -277,8 +277,57 @@ function classifyTitleActivity(title) {
   return { busy: state === 'busy', idle: state === 'idle', attention: state === 'attention', via: state ? 'codex-title' : null };
 }
 
+function classifyNotification(message) {
+  const text = String(message || '').trim();
+  if (!text) return null;
+  return /^approval requested\b/i.test(text) ? 'attention' : 'idle';
+}
+
 function needsIdDetection({ isNew }) {
   return !!isNew;
+}
+
+function originatorTag(tempId) {
+  return 'switchboard_' + String(tempId).replace(/[^a-zA-Z0-9]/g, '');
+}
+
+function launchEnv(tempId) {
+  return { CODEX_INTERNAL_ORIGINATOR_OVERRIDE: originatorTag(tempId) };
+}
+
+function readLaunchSignals(filePath) {
+  const head = readHead(filePath, 65536);
+  const newline = head.indexOf('\n');
+  if (newline === -1) return null;
+  let entry;
+  try { entry = JSON.parse(head.slice(0, newline)); } catch { return null; }
+  if (!entry || entry.type !== 'session_meta') return null;
+  const payload = entry.payload || {};
+  return {
+    sessionId: sessionIdFromPath(filePath),
+    originator: payload.originator || null,
+    forkedFrom: payload.forked_from_id || null,
+    cwd: payload.cwd || null,
+    startedAt: payload.timestamp || entry.timestamp || null,
+    isSubagent: isSubagentMeta(payload),
+  };
+}
+
+const SPAWN_SKEW_MS = 5000;
+
+function startedAfterSpawn(signals, spawnedAt) {
+  if (!signals.startedAt) return false;
+  const started = Date.parse(signals.startedAt);
+  return Number.isFinite(started) && started >= spawnedAt - SPAWN_SKEW_MS;
+}
+
+function matchesLaunch(signals, { tag, forkFrom, projectPath, spawnedAt }) {
+  if (!signals || signals.isSubagent || !signals.sessionId) return false;
+  if (forkFrom) return signals.forkedFrom === forkFrom && startedAfterSpawn(signals, spawnedAt);
+  if (tag && signals.originator === tag) return true;
+  if (signals.originator && /^switchboard_/.test(signals.originator)) return false;
+  if (!projectPath || signals.cwd !== projectPath) return false;
+  return startedAfterSpawn(signals, spawnedAt);
 }
 
 function readModelCatalog() {
@@ -334,6 +383,7 @@ module.exports = {
   listTranscripts, sessionIdFromPath, transcriptPath, isSubagentMeta, readSessionFile,
   titleIndexPath, readSessionTitles, titleIndexMtimeMs,
   toViewerEntry, toViewerEntries,
-  parseTitleState, classifyTitleActivity,
+  parseTitleState, classifyTitleActivity, classifyNotification,
   buildLaunchArgs, needsIdDetection, readModelCatalog,
+  originatorTag, launchEnv, readLaunchSignals, matchesLaunch,
 };

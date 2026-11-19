@@ -27,7 +27,8 @@
  */
 /**
  * @typedef {Object} ActivityClassifier
- * @property {function(string, Object=): {busy: boolean, idle: boolean, via: (string|null)}} classifyTitleActivity Terminal title and optional classifier context to activity signals.
+ * @property {function(string, Object=): {busy: boolean, idle: boolean, attention: (boolean|undefined), via: (string|null)}} classifyTitleActivity Terminal title and optional classifier context to activity signals.
+ * @property {function(string): ('attention'|'idle'|null)} classifyNotification OSC 9 notification text to the state it announces; null when it says nothing about state.
  */
 /**
  * @typedef {Object} UsageProvider
@@ -55,7 +56,7 @@
 const CAPABILITIES = Object.freeze(['subagents', 'continuations', 'liveElsewhere', 'bgJobs', 'ideBridge', 'sandbox', 'schedule', 'remote', 'deleteTranscript']);
 const REQUIRED_METHODS = ['available', 'sessionsRoot', 'listFolders', 'folderPath', 'folderForProject',
   'listTranscripts', 'transcriptPath', 'readSessionFile', 'deriveProjectPath', 'resolveWorktreePath',
-  'buildLaunchArgs', 'classifyTitleActivity', 'sessionIdFromPath', 'needsIdDetection', 'toViewerEntries', 'toViewerEntry'];
+  'buildLaunchArgs', 'classifyTitleActivity', 'classifyNotification', 'sessionIdFromPath', 'needsIdDetection', 'toViewerEntries', 'toViewerEntry'];
 
 function assertHarness(harness) {
   for (const key of ['id', 'label', 'binary']) {

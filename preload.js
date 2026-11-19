@@ -174,7 +174,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('remote-resize-allowed', (_event, sessionId) => callback(sessionId));
   },
   onTerminalNotification: (callback) => {
-    ipcRenderer.on('terminal-notification', (_event, sessionId, message) => callback(sessionId, message));
+    ipcRenderer.on('terminal-notification', (_event, sessionId, message, kind) => callback(sessionId, message, kind));
   },
   onCliBusyState: (callback) => {
     ipcRenderer.on('cli-busy-state', (_event, sessionId, busy) => callback(sessionId, busy));

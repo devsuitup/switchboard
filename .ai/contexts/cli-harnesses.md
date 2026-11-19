@@ -229,6 +229,48 @@ cases, head reading, the shell binary, the extracted launch block against a
 Codex row with and without its rollout, the re-key through
 `session-transitions`).
 
+## Busy and attention per harness (#823)
+
+Port of Ali Basiri's `eddc0d60` and the activity half of `e0cd4dde`. The
+contract now requires `classifyNotification(message)` →
+`'attention' | 'idle' | null` next to `classifyTitleActivity`, whose result may
+carry `attention: true`.
+
+- `wireSessionPty` (`main.js`) resolves `const sessionHarness =
+  getHarness(session.runtime)` once per data chunk that contains an OSC and
+  classifies the OSC 0 title through it. Claude's classifier is the fork's
+  `classify-title-activity.js` unchanged (idle glyph, spinner ranges, the
+  fallback a plain terminal does not get). Codex's reads the `activity` item
+  the launch pins into the title: a braille frame is busy, "Action Required"
+  is attention, anything else is idle; there is no idle glyph.
+- Attention from a title is forwarded on its rising edge only
+  (`session._titleAttention`) as `terminal-notification(id, title,
+  'attention')`, so a title that repeats every frame raises one notification.
+  An attention title is neither busy nor idle, so the busy state it interrupts
+  stays as it was until the next spinner or plain title.
+- OSC 9: the `9;4` progress branch is unchanged and harness-agnostic, and
+  `4;0` stays ignored (decided by JB, 2026-10-28; Codex emits no `9;4`,
+  assumed from upstream, not measured). Any other OSC 9 is sent as
+  `terminal-notification(id, message, kind)` with `kind =
+  sessionHarness.classifyNotification(message)`. Claude's rule is the
+  renderer's historical regex (`attention|approval|permission|needs your|wants
+  to enter` → attention, `waiting for your input` → idle, else null); Codex's
+  is `Approval requested…` → attention, anything else → idle, because Codex
+  sends exactly those two kinds (its final message when a turn completes).
+- `preload.js` forwards the third argument. The renderer's
+  `terminalNotificationState(message, kind)` (`public/app.js`) takes an
+  explicit kind first and falls back to the regex when main sent none, so an
+  older main or a Claude message without a kind behaves as before; `attention`
+  sets `setAttention` when the session is not the active one, `idle` marks it
+  response-ready through `setActivity(false)`. The activity trace records
+  `kind` on `osc.notify` and `attention` on `osc.title`.
+- The trigger watcher's idle wait reads the same `_cliBusy` state, so a Codex
+  session's busy/idle now reaches it without further work.
+
+Tests: `harness-activity.test.js` (title and notification tables for both
+adapters, the renderer function through `loadAppFunctions`, the extracted
+`wireSessionPty` fed Codex titles and OSC 9 messages).
+
 ### Streaming transcript scan
 
 `jsonl-scan.js` (root, listed in `test/fixtures/root-app-modules.json`) is

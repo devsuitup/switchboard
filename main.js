@@ -43,7 +43,6 @@ let powerLog;
 const activityTrace = require('./src/main/shared/activity-trace');
 const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDecision } = activityTrace;
 
-const { classifyTitleActivity } = require('./classify-title-activity');
 const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./src/main/app/window-frame');
 const { createUnsavedGuard } = require('./src/main/app/unsaved-guard');
 const { inventory, runExitHandoffs } = require('./src/main/app/session-exit');
@@ -2769,16 +2768,23 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     // Parse OSC sequences (title changes, progress, notifications, etc.)
     if (data.includes('\x1b]')) {
       const oscMatches = data.matchAll(/\x1b\](\d+);([^\x07\x1b]*)(?:\x07|\x1b\\)/g);
+      // see .ai/contexts/cli-harnesses.md ("Busy and attention per harness")
+      const sessionHarness = getHarness(session.runtime);
       for (const m of oscMatches) {
         const code = m[1];
         const payload = m[2].slice(0, 120);
-        // Detect Claude CLI busy state from the OSC 0 title — see .ai/contexts/ipc-bridge.md
+        // Detect the CLI's busy state from the OSC 0 title — see .ai/contexts/ipc-bridge.md
         if (code === '0') {
-          const { busy: isBusy, idle: isIdle, via } = classifyTitleActivity(payload, { allowFallback: !session.isPlainTerminal });
+          const { busy: isBusy, idle: isIdle, attention: isAttention = false, via } = sessionHarness.classifyTitleActivity(payload, { allowFallback: !session.isPlainTerminal });
           if (isBusy) session._statusOsc.busyAt = Date.now();
           else if (isIdle) session._statusOsc.idleAt = Date.now();
-          if (LOG_DEBUG_ON) log.debug(`[OSC 0] session=${currentId} cp=${codePoints(payload, 1)} rule=${via} busy=${isBusy} idle=${isIdle} wasBusy=${!!session._cliBusy}`);
-          if (TRACE.on) trace('osc.title', currentId, { cp: codePoints(payload, 3), title: payload.slice(0, 60), busy: isBusy, idle: isIdle, rule: via, was: !!session._cliBusy, decision: busyDecision(isBusy, isIdle, !!session._cliBusy) });
+          if (LOG_DEBUG_ON) log.debug(`[OSC 0] session=${currentId} cp=${codePoints(payload, 1)} rule=${via} busy=${isBusy} idle=${isIdle} attention=${isAttention} wasBusy=${!!session._cliBusy}`);
+          if (TRACE.on) trace('osc.title', currentId, { cp: codePoints(payload, 3), title: payload.slice(0, 60), busy: isBusy, idle: isIdle, attention: isAttention, rule: via, was: !!session._cliBusy, decision: busyDecision(isBusy, isIdle, !!session._cliBusy) });
+          if (isAttention && !session._titleAttention) {
+            if (TRACE.on) trace('osc.notify', currentId, { message: payload.slice(0, 120), kind: 'attention', via: 'osc0', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('terminal-notification', currentId, payload, 'attention');
+          }
+          session._titleAttention = isAttention;
           if (isBusy && !session._cliBusy) {
             session._cliBusy = true;
             session._oscIdle = false;
@@ -2820,10 +2826,11 @@ function wireSessionPty(session, sessionId, ptyProcess) {
           }
         } else {
           // Regular notification (attention, permission, etc.)
-          log.info(`[OSC 9] session=${currentId} message="${payload}"`);
-          if (TRACE.on) trace('osc.notify', currentId, { message: payload.slice(0, 120), sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+          const kind = sessionHarness.classifyNotification(payload);
+          log.info(`[OSC 9] session=${currentId} kind=${kind} message="${payload}"`);
+          if (TRACE.on) trace('osc.notify', currentId, { message: payload.slice(0, 120), kind, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
           if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('terminal-notification', currentId, payload);
+            mainWindow.webContents.send('terminal-notification', currentId, payload, kind);
           }
         }
       }

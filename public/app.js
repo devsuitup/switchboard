@@ -1177,18 +1177,21 @@ window.api.onRemoteResizeAllowed((sessionId) => {
 });
 
 // --- Terminal notifications (iTerm2 OSC 9 — "needs attention") ---
-window.api.onTerminalNotification((sessionId, message) => {
-  if (window.ATRACE) window.atrace('recv.terminal-notification', sessionId, { message: String(message).slice(0, 120), active: sessionId === activeSessionId });
-  // Only mark as needing attention for "attention" messages, not "waiting for input"
-  // Matches all four CLI notification types:
-  // 1. "Claude Code needs your attention"         → attention
-  // 2. "Claude Code needs your approval for the plan" → approval, needs your
-  // 3. "Claude needs your permission to use {tool}"   → permission, needs your
-  // 4. "Claude Code wants to enter plan mode"         → wants to enter
-  if (/attention|approval|permission|needs your|wants to enter/i.test(message) && sessionId !== activeSessionId) {
+// see .ai/contexts/cli-harnesses.md ("Busy and attention per harness")
+function terminalNotificationState(message, kind) {
+  if (kind === 'attention' || kind === 'idle') return kind;
+  if (/attention|approval|permission|needs your|wants to enter/i.test(message)) return 'attention';
+  if (/waiting for your input/i.test(message)) return 'idle';
+  return null;
+}
+
+window.api.onTerminalNotification((sessionId, message, kind) => {
+  if (window.ATRACE) window.atrace('recv.terminal-notification', sessionId, { message: String(message).slice(0, 120), kind: kind || null, active: sessionId === activeSessionId });
+  const state = terminalNotificationState(message, kind);
+  if (state === 'attention' && sessionId !== activeSessionId) {
     setAttention(sessionId, true, 'onTerminalNotification');
-  } else if (/waiting for your input/i.test(message)) {
-    // "Claude is waiting for your input" — delayed idle notification, mark response-ready
+  } else if (state === 'idle') {
+    // A delayed "turn finished" notification: mark response-ready
     setActivity(sessionId, false, 'onTerminalNotification');
   }
 
