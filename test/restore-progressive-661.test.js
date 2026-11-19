@@ -104,7 +104,16 @@ function setup({ savedSet, activeWaitMs = 20000 }) {
     vm.runInContext('restoringWorkingSet = true;', ctx);
     return vm.runInContext(`runRestore(${JSON.stringify(savedSet)})`, ctx).finally(() => vm.runInContext('restoringWorkingSet = false;', ctx));
   };
-  const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
+  const snapshot = () => JSON.stringify([events.length, pendingOpens.length, pendingRestores.length, vm.runInContext('activeSessionId', ctx)]);
+  const settle = async () => {
+    let before = snapshot();
+    for (let i = 0; i < 40; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const after = snapshot();
+      if (after === before && i >= 1) return;
+      before = after;
+    }
+  };
   return { dom, ctx, events, pendingOpens, pendingRestores, restore, settle,
     active: () => vm.runInContext('activeSessionId', ctx), shown: () => JSON.parse(JSON.stringify(vm.runInContext('shown', ctx))),
     tabs: () => JSON.parse(JSON.stringify(vm.runInContext('[...openSessions.keys()]', ctx))) };
