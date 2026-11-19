@@ -2036,7 +2036,8 @@ async function handleSendToBackground(_event, sessionId, options) {
     kill: entry => killPty(entry, sessionId),
     checkContinuations: async id => {
       const continuation = await bgAgents.continuationJobCheck(id);
-      if (continuation.known && continuation.job) return { refuse: 'This conversation already runs in background job ' + continuation.job.id + '. Open it from the sidebar instead.' };
+      const owners = continuation.jobs || (continuation.known && continuation.job ? [continuation.job] : []);
+      if (owners.length) return { refuse: 'This conversation already runs in background job' + (owners.length > 1 ? 's ' : ' ') + owners.map(job => job.id).join(', ') + '. Open it from the sidebar instead.' };
       if (!continuation.known) log.info(`[bg-handoff] ${id} continuation liveness unknown (${continuation.reason}); /bg goes ahead`);
       return null;
     },

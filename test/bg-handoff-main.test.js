@@ -378,3 +378,15 @@ test('the shipped handler lets /bg go when continuation liveness is unknown, and
   assert.deepEqual(h.writes, ['/bg', '\r']);
   assert.ok(infos.some(line => /continuation liveness unknown/.test(line)));
 });
+
+test('the shipped handler refuses /bg when the check found several live continuation owners', async t => {
+  const h = ipcSetup(t);
+  h.ctx.log.info = () => assert.fail('a found conflict is not unknown liveness');
+  h.ctx.bgAgents.continuationJobCheck = async () => ({ known: false, reason: 'multiple live continuation jobs; check the Agents view',
+    jobs: [{ id: 'bbbbbbbb', state: 'working' }, { id: 'cccccccc', state: 'working' }] });
+  const result = await h.handleSendToBackground({}, 'tab');
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'refused');
+  assert.match(result.error, /bbbbbbbb, cccccccc/);
+  assert.deepEqual(h.writes, [], 'known live conflicts never become permission to submit /bg');
+});

@@ -433,7 +433,7 @@ async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = 
     if (!ids) return { known: false, reason: 'cannot read conversation continuations for ' + id };
     pending.push(...ids);
   }
-  if (owners.size > 1) return { known: false, reason: 'multiple live continuation jobs; check the Agents view' };
+  if (owners.size > 1) return { known: false, reason: 'multiple live continuation jobs; check the Agents view', jobs: [...owners.values()] };
   return { known: true, job: owners.values().next().value || null };
 }
 

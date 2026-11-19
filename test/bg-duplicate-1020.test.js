@@ -518,3 +518,16 @@ test('1020fix blocked restore notice Respawn click reaches the verb and attaches
   assert.equal(opened.length, 1, 'recovery attaches the resulting live fork');
   assert.equal(opened[0][2].backgroundRestoreJobId, 'aaaaaaaa');
 });
+
+test('1020 continuationJobCheck lists every live owner when the continuations are ambiguous', async t => {
+  const h = fixture(t);
+  h.fork();
+  fs.appendFileSync(h.file, line({ type: 'continued-in', sessionId: SID, continuedInSessionId: PRIOR }));
+  fs.writeFileSync(path.join(h.root, PRIOR + '.jsonl'), line({ type: 'user', sessionId: PRIOR }));
+  h.writeJob('cccccccc', PRIOR, 'working');
+  h.descriptors.push({ kind: 'bg', sessionId: PRIOR, jobId: 'cccccccc', cwd: h.root });
+  const result = await bg.continuationJobCheck(SID);
+  assert.equal(result.known, false);
+  assert.match(result.reason, /multiple live continuation jobs/);
+  assert.deepEqual(result.jobs.map(job => job.id).sort(), ['bbbbbbbb', 'cccccccc'], 'the conflict names its owners instead of reading as unknown');
+});
