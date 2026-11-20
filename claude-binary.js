@@ -37,7 +37,7 @@ function resolveWindowsClaude(argv, env = {}, deps = {}) {
 
   let shim = '';
   try { shim = readFile(found); } catch {}
-  const m = /"%dp0%\\([^"]+\.(?:js|exe))"/i.exec(shim);
+  const m = /"%dp0%\\([^"]+\.(?:js|exe))"\s+%\*/i.exec(shim);
   if (m) {
     const dir = path.win32.dirname(found);
     const script = path.win32.join(dir, m[1]);

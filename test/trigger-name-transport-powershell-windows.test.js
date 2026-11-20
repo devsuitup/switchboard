@@ -11,6 +11,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { launch, ID } = require('./fixtures/trigger-name-launch.cjs');
 const profiles = require('../src/main/terminals/shell-profiles');
+const { writeNpmClaude } = require('./fixtures/npm-claude.cjs');
 
 const win = process.platform === 'win32';
 const skip = !win && 'requires Windows PowerShell and node-pty command-line serialization';
@@ -58,17 +59,6 @@ class W {
   }
 }`;
 const RECORD = suffix => `[IO.File]::WriteAllText($env:SB_ARGV_OUT + '.${suffix}', (ConvertTo-Json -Compress -InputObject @($args)))`;
-const NPM_PS1 = [
-  '#!/usr/bin/env pwsh', '$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent', '',
-  '$exe=""', 'if ($PSVersionTable.PSVersion -lt "6.0" -or $IsWindows) {', '  $exe=".exe"', '}', '$ret=0',
-  '$env:SB_ARGV_OUT="$env:SB_ARGV_OUT.ps1"',
-  'if (Test-Path "$basedir/node$exe") {',
-  '  if ($MyInvocation.ExpectingInput) {', '    $input | & "$basedir/node$exe"  "$basedir/echo.js" $args',
-  '  } else {', '    & "$basedir/node$exe"  "$basedir/echo.js" $args', '  }', '  $ret=$LASTEXITCODE',
-  '} else {',
-  '  if ($MyInvocation.ExpectingInput) {', '    $input | & "node$exe"  "$basedir/echo.js" $args',
-  '  } else {', '    & "node$exe"  "$basedir/echo.js" $args', '  }', '  $ret=$LASTEXITCODE',
-  '}', 'exit $ret', ''].join('\r\n');
 
 const bins = {};
 function compile(dir, source, exe) {
@@ -84,15 +74,12 @@ function makeBin(kind) {
   if (kind === 'pty') compile(dir, PROBE_CS, 'claude');
   if (kind === 'wrapper') compile(dir, WRAPPER_CS, 'wrapper');
   if (kind === 'wrapcmd') fs.writeFileSync(path.join(dir, 'wrap.cmd'), '@echo off\r\n%*\r\n');
-  if (kind === 'cmd' || kind === 'ps1cmd' || kind === 'npm') {
+  if (kind === 'cmd' || kind === 'ps1cmd') {
     fs.writeFileSync(path.join(dir, 'echo.js'), ECHO_JS);
     fs.writeFileSync(path.join(dir, 'claude.cmd'), `@echo off\r\n"${process.execPath}" "%~dp0echo.js" %*\r\n`);
   }
   if (kind === 'ps1' || kind === 'ps1cmd') fs.writeFileSync(path.join(dir, 'claude.ps1'), RECORD('ps1') + '\r\n');
-  if (kind === 'npm') {
-    fs.writeFileSync(path.join(dir, 'claude.ps1'), NPM_PS1);
-    fs.writeFileSync(path.join(dir, 'claude'), '#!/bin/sh\nexec node "$0.js" "$@"\n');
-  }
+  if (kind === 'npm') writeNpmClaude(dir);
   return dir;
 }
 const KINDS = ['exe', 'cmd', 'ps1', 'ps1cmd', 'npm', 'pty', 'wrapper', 'wrapcmd'];
@@ -127,6 +114,7 @@ async function run(shell, kind, request, expected) {
   assert.deepEqual(read(outputOf(kind, viaScript ? '.ps1' : '')), expected);
   if (kind === 'ps1') assert.equal(viaScript, true, 'a claude.ps1 alone on PATH runs as PowerShell runs it');
   if (BESIDE_SHIM.has(kind)) assert.equal(viaScript, false, 'the claude.ps1 ran although a claude.cmd sits beside it');
+  if (kind === 'npm') assert.equal(fs.existsSync(outputOf(kind, '.cmd')), false, 'the npm batch shim must not run');
 }
 
 const NAMES = ['smithy hardening', 'say "hi"', 'a" b', 'a b" c', 'a\\', 'C:\\dir\\', 'a\\b c', 'a b\\\\', 'say "hi\\"', '\\"', '"', '""', ' "a" "b" ', 'a"b',

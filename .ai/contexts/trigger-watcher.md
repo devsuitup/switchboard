@@ -329,17 +329,24 @@ the child's status. When PowerShell resolves an `ExternalScript` (a `claude.ps1`
 which it prefers over a neighbouring `.cmd`), the helper looks for an
 `Application` of the same name in the same directory whose extension is in
 `PATHEXT` (`Get-Command -CommandType Application`, filtered: it also lists the
-extensionless sh shim npm leaves there) and starts that instead, through the same
-`ProcessStartInfo` path — npm's `claude.ps1` forwards `$args` to Node through
-PowerShell's own serializer, which is what loses quotes and boundaries (#1107);
-the `.cmd` beside it receives the caret-escaped line and re-parses it exactly.
+extensionless sh shim npm leaves there). For an npm batch shim, it reads the
+`"%dp0%\<target.js or target.exe>" %*` invocation, ignoring the earlier bundled
+Node existence probe. A native target runs directly; a JavaScript target runs
+with the neighbouring `node.exe`, or `node.exe` resolved from the profile's PATH,
+with the script prepended to argv. `ProcessStartInfo` starts this target without
+executing either npm shim. A missing declared target or Node fails the launch.
+This preserves multiline and 12,000-character prompts as well as quotes and
+empty tokens: routing them through `.cmd` truncated at a newline or hit cmd's
+shorter command-line limit, even when the PowerShell launch itself fit (#1107).
+Unrecognised batch wrappers retain the caret transport and its batch limitations;
+they do not acquire the npm direct-target guarantee.
 Anything else (a profile function or alias named `claude`, a script alone on
 PATH) is run as PowerShell would run it, `& $c @tokens`; what a script then does
 with `$args` is its own. A launch prefix (letters, digits, spaces and
 `- _ . / \ : =`) is encoded like any other argument for an executable or a batch
 prefix; what the prefix program does when it starts `claude` is its own. The
 payload crosses the process command line once (a 20,000 character system prompt
-stays under the 32,767 limit). The helper's fixed cost is about 1,000 characters: when the
+stays under the 32,767 limit). The helper's fixed cost is included in the size check: when the
 helper form serialized by node-pty would exceed 32,767 (NUL counted) while the plain form
 (`claude '<token>'...`, no preamble, as before the helper) fits, `claudeCommand` uses the
 plain form for that launch only when every argv token survives PowerShell's own
@@ -371,10 +378,15 @@ node-pty's `argsToCommandLine`, starts `cmd.exe` with that exact command line an
 compares the argv a disposable echo executable and `claude.cmd` / `claude.bat` shims received, including a launch-directory executable shadowing a PATH shim and the reverse, a whitespace-only prefix, and a native wrapper prefix over resume and fork options,
 with the input. `test/trigger-name-transport-powershell-windows.test.js` does the
 same through `powershell.exe` and, when installed, `pwsh.exe`, into an echo
-`claude.exe`, a `claude.cmd` shim, a `claude.ps1` alone (run as a script) and beside a `claude.cmd` (the shim runs), an npm layout whose `claude.ps1` forwards to Node (the shim runs, the forwarding is bypassed), a profile function named `claude`, a native and a batch (`wrap`, `wrap.cmd`, absolute) launch prefix, a 20,000 character argument, with quotes, backslashes, an empty-looking
+`claude.exe`, a custom `claude.cmd` shim, a `claude.ps1` alone (run as a script) and beside a custom `claude.cmd` (the shim runs), an npm layout (the target runs directly), a profile function named `claude`, a native and a batch (`wrap`, `wrap.cmd`, absolute) launch prefix, a 20,000 character argument, with quotes, backslashes, an empty-looking
 quote pair, `$env:PATH`, backticks, `;`, `&`, `%PATH%`, typographic quotes and
 unicode. It also runs the launch plan under node-pty against a probe `claude.exe` that checks it has a console, reads a line from standard input and exits with a chosen status. It also writes Ctrl+C to the pseudo console and asserts that the probe reports it. On Linux, string tests pin the helper source and the launch literals; the encoder inside the helper is exercised only by the Windows file. Neither file is a live Claude Code or ConPTY qualification;
-nushell remains unexecuted.
+nushell remains unexecuted. `test/trigger-name-transport-npm-windows.test.js`
+uses real npm-shaped shims with the bundled Node probe and the final `%*`
+invocation, plus an extensionless POSIX shim. It compares received argv for
+bundled Node, PATH Node, multiline and 12,000-character prompts and a native
+target, and asserts that neither npm shim executed. The same fixture checks
+that the headless resolver selects the CLI invocation rather than the Node probe.
 
 A name with an unpaired surrogate is schema-valid but cannot survive UTF-8, so
 `executeOpen` refuses it right after the first cancellation/deadline check, before

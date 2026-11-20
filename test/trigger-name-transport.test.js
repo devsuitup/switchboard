@@ -131,7 +131,7 @@ test('the PowerShell helper falls back to the command PowerShell resolves and ne
 });
 test('the PowerShell helper chooses the cmd escape depth from the resolved Source extension', () => {
   const source = helperSource();
-  assert.ok(source.includes("$d=if($c.Source -match '\\.(cmd|bat)$'){2}else{0};"), source);
+  assert.ok(source.includes("$d=if($f -match '\\.(cmd|bat)$'){2}else{0};"), source);
   assert.ok(source.includes("for($k=0;$k -lt $d;$k++){$s=[regex]::Replace($s,'([()\\]\\[%!^\"`<>&|;, *?])','^$1')}"), source);
   assert.ok(source.includes("[regex]::Replace([regex]::Replace($_,'(\\\\*)\"','$1$1\\\"'),'(\\\\*)\\z','$1$1')"), source);
 });
@@ -332,13 +332,13 @@ test('a native Windows executable receives the name as one untouched argument', 
   assert.deepEqual(plan, { program: 'C:\\bin\\claude.exe', args: argv, verbatim: false });
 });
 test('a recognized npm JavaScript shim runs node with the script and the untouched argument', () => {
-  const shim = '"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js"';
+  const shim = '"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*';
   files.clear(); files.add('C:\\bin\\node_modules\\@anthropic-ai\\claude-code\\cli.js'); files.add('C:\\bin\\node.exe');
   const plan = resolveWindowsClaude(argv, env, deps('C:\\bin\\claude.cmd', shim));
   assert.deepEqual(plan, { program: 'C:\\bin\\node.exe', args: ['C:\\bin\\node_modules\\@anthropic-ai\\claude-code\\cli.js', ...argv], verbatim: false });
 });
 test('a recognized npm executable shim runs the executable with the untouched argument', () => {
-  const shim = '"%dp0%\\node_modules\\claude\\claude.exe"';
+  const shim = '"%dp0%\\node_modules\\claude\\claude.exe" %*';
   files.clear(); files.add('C:\\bin\\node_modules\\claude\\claude.exe');
   const plan = resolveWindowsClaude(argv, env, deps('C:\\bin\\claude.cmd', shim));
   assert.deepEqual(plan, { program: 'C:\\bin\\node_modules\\claude\\claude.exe', args: argv, verbatim: false });

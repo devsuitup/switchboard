@@ -1470,7 +1470,9 @@ the shell would mangle quotes, `&` and newlines of a prompt, so
 `.cmd`), the `node` + `cli.js` the shim points to, or `cmd.exe /d /s /c` with
 escaped arguments as a last resort (a multi-line argument is refused there).
 A shim whose target is a `.exe` (the current `bin\claude.exe` shape) runs
-that `.exe` directly. Only `PATHEXT` names are tried, since npm also leaves an
+that `.exe` directly. The target is the quoted `%dp0%` path followed by `%*`,
+so the earlier bundled `node.exe` existence probe is not mistaken for the CLI.
+Only `PATHEXT` names are tried, since npm also leaves an
 extensionless sh shim. `resolveWindowsClaude` returns
 `{ program, args, verbatim }` or `{ error }`. The schedule runner reaches the
 same resolver through `headlessClaudeLaunch` (`shell-profiles.js`; see
