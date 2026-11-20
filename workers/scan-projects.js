@@ -6,6 +6,7 @@ const { deriveProjectPath } = require('../derive-project-path');
 const { setRemappedProjectReader } = require('../encode-project-path');
 const { readSessionFile, enumerateSessionFiles, mergeBridgeGroups, subagentSessionId, isCanonicalWorkflowPath } = require('../read-session-file');
 const { classifyTranscriptPath } = require('../subagent-attribution');
+const { prefixedHarnesses, readHarnessFolder } = require('../harnesses');
 
 const PROJECTS_DIR = workerData.projectsDir;
 const REMAPS = workerData.remaps && typeof workerData.remaps === 'object' ? workerData.remaps : {};
@@ -113,15 +114,24 @@ function readFolderFileSubsetFromFilesystem(folder, files, existingRows) {
 // caller write + notify after every folder instead.
 try {
   // workerData.folders restricts the sweep to a subset; absent, walk the root.
-  const folders = Array.isArray(workerData.folders)
+  const listProjectFolders = () => {
+    try {
+      return fs.readdirSync(PROJECTS_DIR, { withFileTypes: true }).filter(d => d.isDirectory() && d.name !== '.git').map(d => d.name);
+    } catch (error) {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    }
+  };
+  const folders = workerData.disabledHarnesses?.includes('claude') ? [] : Array.isArray(workerData.folders)
     ? workerData.folders.filter(f => typeof f === 'string' && f && f !== '.git' && f !== '.' && f !== '..' && !/[\\/]/.test(f))
-    : fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
-      .filter(d => d.isDirectory() && d.name !== '.git')
-      .map(d => d.name);
+    : listProjectFolders();
 
   // see .ai/contexts/session-cache.md ("Remote hosts file-level rescan")
-  const targets = Array.isArray(workerData.targets) ? workerData.targets : [];
-  const total = folders.length + targets.length;
+  const targets = workerData.disabledHarnesses?.includes('claude') ? [] : Array.isArray(workerData.targets) ? workerData.targets : [];
+  // see .ai/contexts/session-cache.md ("Harness folders")
+  const harnessFolders = Array.isArray(workerData.folders) || FOLDER_PREFIX !== '' ? []
+    : prefixedHarnesses(workerData.disabledHarnesses).flatMap(harness => harness.listFolders().map(folder => ({ harness, folder })));
+  const total = folders.length + harnessFolders.length + targets.length;
   let current = 0;
   const failedFolders = [];
 
@@ -135,6 +145,15 @@ try {
     } catch (error) {
       failedFolders.push(folders[i]);
       parentPort.postMessage({ type: 'folder', folder: folders[i], error: error.message, current, total });
+    }
+  }
+  for (const { harness, folder } of harnessFolders) {
+    current++;
+    try {
+      parentPort.postMessage({ type: 'folder', result: readHarnessFolder(harness, folder), current, total });
+    } catch (error) {
+      failedFolders.push(folder);
+      parentPort.postMessage({ type: 'folder', folder, error: error.message, current, total });
     }
   }
   for (const t of targets) {

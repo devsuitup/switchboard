@@ -11,6 +11,11 @@ const LINE_LIMIT = 4 * 1024 * 1024;
 const CHUNK_BYTES = 256 * 1024;
 const TYPES = new Set(['user', 'assistant', 'message', 'system', 'progress', 'custom-title']);
 const visible = entry => entry && (TYPES.has(entry.type) || entry._localCmd);
+// transform is the harness's toViewerEntry — see .ai/contexts/cli-harnesses.md ("The message viewer")
+const shown = (record, entry) => {
+  const mapped = record.transform ? record.transform(entry) : entry;
+  return visible(mapped) ? mapped : null;
+};
 const identity = stat => `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
 
 function ranges(offset) {
@@ -33,13 +38,13 @@ function createTranscriptFollower() {
     parked = null;
   }
 
-  function open(id, file, checkpoint) {
+  function open(id, file, checkpoint, transform = null) {
     if (checkpoint) {
       const saved = parked;
       dispose();
       const matches = saved && saved.id === id && saved.token === checkpoint;
-      if (!matches) return { ...open(id, file), reset: true };
-      current = { id, file: saved.file, token: randomUUID(), closed: false, busy: false,
+      if (!matches) return { ...open(id, file, undefined, transform), reset: true };
+      current = { id, file: saved.file, token: randomUUID(), closed: false, busy: false, transform: saved.transform || transform,
         cursor: { ...saved.cursor, finalSize: null } };
       return read(id, current.token, file, false, true);
     }
@@ -51,18 +56,19 @@ function createTranscriptFollower() {
       const entries = [];
       const lines = buffer.toString('utf8').split('\n');
       let offset = buffer.length;
+      const record = { transform };
       for (let i = 0; i < lines.length; i++) {
         if (!lines[i].trim()) continue;
         try {
-          const entry = JSON.parse(lines[i]);
-          if (visible(entry)) entries.push(entry);
+          const entry = shown(record, JSON.parse(lines[i]));
+          if (entry) entries.push(entry);
         } catch {
           if (i === lines.length - 1) offset = buffer.lastIndexOf(10) + 1;
         }
       }
       const samples = ranges(offset).map(range => ({ start: range.start,
         data: Buffer.from(buffer.subarray(range.start, range.start + range.length)) }));
-      current = { id, file, token: randomUUID(), closed: false, busy: false, cursor: cursor(stat, offset, samples) };
+      current = { id, file, token: randomUUID(), closed: false, busy: false, transform, cursor: cursor(stat, offset, samples) };
       return { entries, token: current.token, more: offset < Number(stat.size) };
     } finally { fs.closeSync(fd); }
   }
@@ -100,7 +106,7 @@ function createTranscriptFollower() {
           if (!readRange(file, sample.start, sample.data.length, stat).equals(sample.data)) { reset = true; break; }
         }
       }
-      if (reset && fullReset) return { ...open(id, file), reset: true };
+      if (reset && fullReset) return { ...open(id, file, undefined, record.transform), reset: true };
       if (reset) work = cursor(stat, 0, []);
       if (final && work.finalSize === null) work.finalSize = Number(stat.size);
       const target = Math.min(Number(stat.size), work.finalSize ?? Number(stat.size));
@@ -128,8 +134,8 @@ function createTranscriptFollower() {
             if (work.dropped) skipped++;
             else if (!work.api && work.bytes) {
               try {
-                const entry = JSON.parse(Buffer.concat(work.pending, work.bytes).toString('utf8'));
-                if (visible(entry)) { entries.push(entry); replyBytes += work.bytes; }
+                const entry = shown(record, JSON.parse(Buffer.concat(work.pending, work.bytes).toString('utf8')));
+                if (entry) { entries.push(entry); replyBytes += work.bytes; }
               } catch {}
             }
             work.pending = []; work.bytes = 0; work.head = Buffer.alloc(0); work.api = false; work.dropped = false;
@@ -144,8 +150,8 @@ function createTranscriptFollower() {
         if (work.dropped) { skipped++; work.dropped = false; }
         else if (!work.api && work.bytes) {
           try {
-            const entry = JSON.parse(Buffer.concat(work.pending, work.bytes).toString('utf8'));
-            if (visible(entry)) entries.push(entry);
+            const entry = shown(record, JSON.parse(Buffer.concat(work.pending, work.bytes).toString('utf8')));
+            if (entry) entries.push(entry);
             work.pending = []; work.bytes = 0; work.head = Buffer.alloc(0);
           } catch {}
         }

@@ -34,7 +34,7 @@ for (const [name, isNew, exists, git, options, expected] of cases) {
     const source = fs.readFileSync(filename, 'utf8');
     const start = source.indexOf('const claudeArgs = []', source.indexOf("ipcMain.handle('open-terminal'"));
     assert.ok(start > 0);
-    const end = source.indexOf('if (!isAttach && sessionOptions?.sandbox && process.platform', start);
+    const end = source.indexOf('if (launchSandbox && process.platform', start);
     assert.ok(end > start);
     const context = {
       sessionId: 'session', isNew, sessionOptions: Object.freeze(options), spawnCwd: '/project',
@@ -44,6 +44,7 @@ for (const [name, isNew, exists, git, options, expected] of cases) {
       isGitRepo: () => git, parseAddDirs: value => String(value || '').split(',').map(s => s.trim()).filter(Boolean),
       log: { info() {}, warn() {} },
       getHarness: id => require('../harnesses').getHarness(id),
+      launchHarness: require('../harnesses').getHarness(), cachedRow: null, fs,
     };
     vm.runInNewContext(source.slice(start, end) + '\nglobalThis.result = claudeArgs;', context, { filename });
     assert.deepEqual(Array.from(context.result), expected);

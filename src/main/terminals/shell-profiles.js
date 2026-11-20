@@ -204,9 +204,9 @@ function quoteArgvForShell(shellPath, argv, { env, cwd, wrapped } = {}) {
   return argv.map(a => quoteArgForShell(shellPath, a, passes)).join(' ');
 }
 
-function powershellLaunch(argv, prefix) {
+function powershellLaunch(argv, prefix, binary = 'claude') {
   const words = prefix.trim().split(/\s+/).filter(Boolean);
-  const [target, ...rest] = words.length ? [...words, 'claude'] : ['claude'];
+  const [target, ...rest] = words.length ? [...words, binary] : [binary];
   return ['__switchboard_launch', target, ...rest, ...argv].map((word, i) => (i ? psLiteral(word) : word)).join(' ');
 }
 
@@ -218,13 +218,13 @@ function fitsCommandLine(shellPath, command, extraArgs) {
   return argsToCommandLine(shellPath, args).length + 1 <= WINDOWS_COMMAND_LINE_LIMIT;
 }
 
-function claudeCommand(shellPath, argv, { env, cwd, prefix = '', windows = isWindows, extraArgs = [], ide = false } = {}) {
+function claudeCommand(shellPath, argv, { env, cwd, prefix = '', windows = isWindows, extraArgs = [], ide = false, binary = 'claude' } = {}) {
   const wrapped = !!prefix.trim();
   const quoted = quoteArgvForShell(shellPath, argv, { env, cwd, wrapped });
-  const plain = (wrapped ? prefix + ' ' : '') + 'claude ' + quoted;
+  const plain = (wrapped ? prefix + ' ' : '') + binary + ' ' + quoted;
   if (!(windows && isPowerShellShell(shellPath))) return plain;
-  const helper = powershellLaunch(argv, prefix);
-  const baseline = ide ? (wrapped ? prefix + ' ' : '') + 'claude ' + quoteArgvForShell(shellPath, argv.slice(0, -1), { env, cwd, wrapped }) + ' --ide' : plain;
+  const helper = powershellLaunch(argv, prefix, binary);
+  const baseline = ide ? (wrapped ? prefix + ' ' : '') + binary + ' ' + quoteArgvForShell(shellPath, argv.slice(0, -1), { env, cwd, wrapped }) + ' --ide' : plain;
   return fitsCommandLine(shellPath, helper, extraArgs) || !fitsCommandLine(shellPath, baseline, extraArgs) ? helper : baseline;
 }
 

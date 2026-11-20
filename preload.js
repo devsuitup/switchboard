@@ -98,6 +98,8 @@ contextBridge.exposeInMainWorld('api', {
   setSetting: (key, value) => ipcRenderer.invoke('set-setting', key, value),
   deleteSetting: (key) => ipcRenderer.invoke('delete-setting', key),
   getEffectiveSettings: (projectPath) => ipcRenderer.invoke('get-effective-settings', projectPath),
+  getHarnesses: () => ipcRenderer.invoke('get-harnesses'),
+  getHarnessModels: (runtime) => ipcRenderer.invoke('get-harness-models', runtime),
   whatsNewStartup: () => ipcRenderer.invoke('whats-new-startup'),
   whatsNewDismissed: () => ipcRenderer.invoke('whats-new-dismissed'),
   onShowWhatsNew: (callback) => {
@@ -172,7 +174,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('remote-resize-allowed', (_event, sessionId) => callback(sessionId));
   },
   onTerminalNotification: (callback) => {
-    ipcRenderer.on('terminal-notification', (_event, sessionId, message) => callback(sessionId, message));
+    ipcRenderer.on('terminal-notification', (_event, sessionId, message, kind) => callback(sessionId, message, kind));
   },
   onCliBusyState: (callback) => {
     ipcRenderer.on('cli-busy-state', (_event, sessionId, busy) => callback(sessionId, busy));

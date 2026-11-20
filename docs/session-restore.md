@@ -57,8 +57,10 @@ tabs or working-set saves.
 A session started with **+**, or one just cleared with `/clear`, has no
 conversation until its first prompt: the CLI has nothing to resume, and the
 index does not list it. It is saved as a *fresh* entry (`fresh: true`, with
-its project). Restore waits for indexing to finish before it treats a fresh
-entry as having no transcript: one whose first prompt landed before the quit
+its project and, for a CLI other than the default one, its `runtime`, so that
+a Codex tab comes back as Codex). Restore waits for indexing to finish before
+it treats a fresh entry as having no transcript: one whose first prompt landed
+before the quit
 is indexed by then and is resumed like any other session. A fresh entry that
 is still not in the index then is started anew: a new session in that project,
 with the project's current defaults for a new session, except that it never

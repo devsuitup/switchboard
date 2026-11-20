@@ -488,6 +488,8 @@ uninitialised submodule refuses preview/deletion before force can hide its files
 | `get-setting` / `set-setting` / `delete-setting` | Generic key/value over `settings` table |
 | `get-settings-by-prefix` | `(prefix)` accepts only the non-empty string `continuationChoice:` and returns an object of matching keys and values; other prefixes throw before reading settings. Bridge: `getSettingsByPrefix`. Used to load continuation choices before restore and reload. |
 | `get-effective-settings` | `(projectPath)` — resolves global + project overrides |
+| `get-harnesses` | `()` → `[{ id, label, available, enabled, isDefault }]` for every registered CLI adapter; `enabled` reflects `global.disabledHarnesses`. Bridge: `getHarnesses`. See cli-harnesses.md ("Picker, toggles and settings"). |
+| `get-harness-models` | `(runtime)` → the adapter's model catalog (`[{ slug, label, efforts, defaultEffort, visible }]`, Codex reads `$CODEX_HOME/models_cache.json`), `[]` when it has none. Bridge: `getHarnessModels`. |
 | `get-shell-profiles` | Configured shell list |
 | `get-schedule-creator-command` / `create-schedule-session` / `run-schedule-now` | Schedule integration |
 
@@ -626,7 +628,7 @@ An unknown remote target never falls back to local disk IO.
 
 ### Events (main → renderer)
 
-`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`
+`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification` (`sessionId, message, kind` — `kind` is the session harness's `classifyNotification` verdict, see cli-harnesses.md), `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`
 
 `onProjectsChanged(callback)` forwards the main-side `{ cause: string[] }`
 payload. Schedules filters these causes before queuing a bounded debounce;

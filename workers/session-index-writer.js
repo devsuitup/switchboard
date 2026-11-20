@@ -5,6 +5,7 @@ const { setTimeout: delay, setImmediate: yieldTurn } = require('node:timers/prom
 const { performance } = require('node:perf_hooks');
 const { openSessionIndexStore } = require('../session-index-store');
 const { createWriterCommands } = require('../session-index-commands');
+const { assertHarnessSettings } = require('../harnesses');
 const { createProjectDeleteProgress, commitTransaction } = require('../src/main/projects/project-delete-progress');
 const { completeProjectDeletion, bindDeletionProducer, assertDeletionProducer } = require('../src/main/projects/project-delete-writer');
 
@@ -77,6 +78,9 @@ function* targetUnits(name, args) {
     yield () => db.replaceSessionMetrics(...args);
   } else if (name === 'deleteCachedSession') {
     yield () => db.deleteCachedSession(args[0]);
+  } else if (name === 'setSetting' && args[0] === 'global') {
+    // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
+    yield () => { assertHarnessSettings(args[1]); return db.setSetting(...args); };
   } else if (name === 'upsertSearchEntries') {
     for (const entry of args[0]) {
       const token = require('node:crypto').randomUUID();

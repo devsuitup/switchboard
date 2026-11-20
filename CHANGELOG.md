@@ -5,6 +5,10 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
+- Codex CLI sessions found under `~/.codex/sessions` (or `$CODEX_HOME`) now appear in the sidebar under their project, with a "Codex" badge, and can be searched and read in the message viewer; they count in the heatmap and stats. Codex thread names are shown as titles. Deleting a Codex session from Switchboard is refused; new rollouts are picked up as Codex writes them, and sessions whose transcripts are gone leave the sidebar, even when the whole Codex sessions folder was removed. (#821)
+- A Codex session can be resumed and forked from its sidebar row: the tab runs `codex resume` or `codex fork` and adopts the real session id as soon as Codex writes its transcript. A forked tab adopts only a transcript Codex marked as its own: when that mark is missing, the tab keeps running without being linked to a sidebar row, rather than being guessed from the parent and the start time. A Codex row whose transcript is gone starts a fresh Codex session instead of failing. (#822)
+- A Codex tab shows the same states as a Claude one: working while a turn runs, needs-you when Codex asks for an approval or an action, response-ready when its turn ends. (#823)
+- The project "+" menu offers a new Codex session next to Claude. Settings gains a "CLI Agents" section to switch each CLI on or off (a switched-off CLI is not scanned or offered and its sessions are hidden until it is switched back on, while its open tabs keep working; at least one stays on) and the Codex sandbox, approval, model and reasoning effort used for new Codex sessions. (#824)
 - The Changes list can be viewed as a tree: a toolbar button switches between the flat list (the default) and files grouped under collapsible folders. The choice is remembered. (#828)
 
 ### Changed

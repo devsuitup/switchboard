@@ -73,7 +73,7 @@ function fixture(t) {
   let watched;
   const mainFile = path.join(__dirname, '../main.js');
   const main = fs.readFileSync(mainFile, 'utf8');
-  const watcher = { PROJECTS_DIR: root, path, Set, Map, console, log: console,
+  const watcher = { PROJECTS_DIR: root, path, Set, Map, console, log: console, getSetting: () => ({}),
     fs: { ...fs, watch: (_dir, _options, callback) => { watched = callback; return { on() {} }; } },
     writer: { refreshFolder: async (...args) => cache.refreshFolder(...args), dropFolderRows: async (...args) => cache.dropFolderRows(...args) },
     detectSessionTransitions() {}, localTranscriptTracker: { record() {} },
