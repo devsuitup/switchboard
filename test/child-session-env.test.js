@@ -33,13 +33,13 @@ test('GIVEN main-process startup WHEN children can start THEN session scrubbing 
 });
 
 function contaminate(t) {
-  for (const key of [...parentMarkers, 'CLAUDE_CONFIG_DIR', 'ELECTRON_RUN_AS_NODE']) {
+  for (const key of [...parentMarkers, 'GIT_EDITOR', 'CLAUDE_CONFIG_DIR', 'ELECTRON_RUN_AS_NODE']) {
     const previous = process.env[key];
     t.after(() => {
       if (previous === undefined) delete process.env[key];
       else process.env[key] = previous;
     });
-    process.env[key] = key === 'CLAUDE_CONFIG_DIR' ? 'user-config' : 'launching-session';
+    process.env[key] = key === 'CLAUDE_CONFIG_DIR' ? 'user-config' : key === 'GIT_EDITOR' ? 'true' : 'launching-session';
   }
 }
 
@@ -48,6 +48,7 @@ function assertClean(env, intentional = {}) {
     if (Object.hasOwn(intentional, key)) assert.equal(env[key], intentional[key]);
     else assert.equal(Object.hasOwn(env, key), false, `${key} leaked from the launching session`);
   }
+  assert.equal(Object.hasOwn(env, 'GIT_EDITOR'), false, 'GIT_EDITOR=true leaked from the launching session');
   assert.equal(env.CLAUDE_CONFIG_DIR, 'user-config');
 }
 

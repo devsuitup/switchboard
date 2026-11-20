@@ -22,7 +22,7 @@ for (const consumer of ['loadStartupProjects', 'markRestoreIndexingDone']) {
       if (++calls === 1) throw Error('single effective failure');
       return { defaultProjects: [], allProjects: [] };
     };
-    loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects', consumer] });
+    loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects', consumer], declarations: ['startupProjectsHandedOver'] });
     await w[consumer](); assert.equal(warnings.length, 1);
   });
 }
@@ -36,7 +36,7 @@ function fixture(t) {
   w.api.getSetting = () => { const d = deferred(); settings.push(d); return d.promise; };
   w.api.getActiveTerminals = async () => [];
   w.pollActiveSessions = () => { const d = deferred(); polls.push(d); return d.promise; };
-  const { loadProjects, reloadProjects } = loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects', 'reloadProjects'] });
+  const { loadProjects, reloadProjects } = loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects', 'reloadProjects'], declarations: ['startupProjectsHandedOver'] });
   const reply = (i, name) => requests[i].resolve({ defaultProjects: [{ projectPath: name, sessions: [] }], allProjects: [{ projectPath: name, sessions: [] }] });
   return { ...h, w, requests, settings, polls, paints, loadProjects, reloadProjects, reply };
 }

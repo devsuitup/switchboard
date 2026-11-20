@@ -18,7 +18,7 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Change subagent grouping, transcript view, parent→child | [contexts/subagent-observability.md](contexts/subagent-observability.md) |
 | Change busy/attention/response-ready state or the session-state domain module | [contexts/session-state.md](contexts/session-state.md) |
 | Read the Claude CLI's own session state files | [contexts/cli-session-state.md](contexts/cli-session-state.md) |
-| Change Memory/.work-files panels (CodeMirror) | [contexts/viewer-panel.md](contexts/viewer-panel.md) |
+| Change Memory or Activity trace panels (CodeMirror) | [contexts/viewer-panel.md](contexts/viewer-panel.md) |
 | Change the Changes panel (git-status parser, local/remote runner, cwd resolution) | [contexts/changes-view.md](contexts/changes-view.md) |
 | Change the Touched tab (files a session's file tools touched, from transcripts) | [contexts/touched-files.md](contexts/touched-files.md) |
 | Change the session tool bar, ownership, Diff parking, shortcuts or overflow | [contexts/tool-bar.md](contexts/tool-bar.md) |
@@ -93,7 +93,7 @@ After the agent completes, **remove the worktree manually** — `git worktree re
 
 ### 4. `.work-files/` is gitignored scratch space
 
-Gitignored scratch space. Use it for session notes, proposals, plans, scratch JSONLs. It's enumerated by the Work Files sidebar tab — files appear there automatically.
+Gitignored scratch space. Use it for session notes, proposals, plans, scratch JSONLs. Open session files through Touched or terminal path links; there is no per-project Work Files listing.
 
 ### 5. No `Co-Authored-By` trailers in commits
 
@@ -116,7 +116,6 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
 - **Heatmap sourced from SQLite cache** instead of `~/.claude/stats-cache.json` (fork PR #7)
 - **Subagent click → read-only transcript** instead of `claude --resume` (fork PR #9)
 - **Single-instance-lock** (fork PR #13 → upstream PR #56 open)
-- **`.work-files/` sidebar tab** per project, with delete + JSON/JSONL format (fork PR #14, #16, #17)
 - **`SWITCHBOARD_DATA_DIR`** env var for DB isolation in dev (fork)
 - **Wayland clipboard fix** — main-process IPC + OSC 52 (fork PR #18 = port of upstream PR #55)
 - **Missing project remap** — detect + UI + atomic JSONL rewrite (fork PR #20 = port of upstream PR #35, with subagent-aware enum + active-session guard added on top)
@@ -185,7 +184,7 @@ The fork has features upstream maintainers might want. When adapting a fork-only
 
 1. Branch off `upstream/main` (NOT fork main), name `upstream/<topic>`.
 2. Cherry-pick the relevant commit(s). Expect manual merges — our `main.js` is ~4100 LOC (measured 2026-10) vs upstream's ~2200; insertion points exist but contexts differ.
-3. Strip fork-specific dependencies (subagent groups, work-files IPC, etc.) — keep the patch minimally scoped.
+3. Strip fork-specific dependencies (subagent groups, schedule IPC, etc.) — keep the patch minimally scoped.
 4. PR against `doctly/switchboard:main`. Link the originating fork PR.
 
 Example: fork PR #13 → upstream PR #56 (`upstream/fix-single-instance-lock` branch).

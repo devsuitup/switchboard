@@ -2,8 +2,8 @@
 
 // read-file-for-panel accepts an arbitrary path on purpose: a file link in
 // terminal output decides it. isSensitivePath says which paths are refused;
-// nothing said how big a file could be, while the neighbouring read-work-file
-// has capped at 2 MB all along. See .ai/contexts/viewer-panel.md, "Bounds".
+// the reader also bounds file size at 2 MB before reading.
+// See .ai/contexts/viewer-panel.md, "Bounds".
 //
 // These are source-text assertions, the house pattern for main.js IPC handlers
 // (see delete-session.test.js): they prove the guard is written, not that it

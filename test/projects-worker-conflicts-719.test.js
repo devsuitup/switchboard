@@ -158,7 +158,7 @@ for (const away of [false, true]) test(`T5.5/T5.6 main conflict envelope survive
   w.api.onProjectsChanged = callback => { event = callback; };
   w.setTimeout = callback => { timers.push(callback); return timers.length; }; w.clearTimeout = () => {};
   w.activeTab = away ? 'stats' : 'sessions';
-  loadAppFunctions(h.context, { declarations: ['searchGeneration'], functions: ['dedup', 'loadProjects', 'reloadProjects'] });
+  loadAppFunctions(h.context, { declarations: ['searchGeneration', 'startupProjectsHandedOver'], functions: ['dedup', 'loadProjects', 'reloadProjects'] });
   const appFilename = path.join(__dirname, '../public/app.js');
   const app = fs.readFileSync(appFilename, 'utf8');
   const eventStart = app.indexOf('let projectsChangedTimer = null;');
@@ -169,7 +169,7 @@ for (const away of [false, true]) test(`T5.5/T5.6 main conflict envelope survive
   assert.equal(assemblies, 0); assert.equal(notifications, 1); assert.equal(timers.length, away ? 0 : 1);
   if (away) {
     const tab = w.document.createElement('button'); tab.className = 'sidebar-tab'; tab.dataset.tab = 'sessions'; w.document.body.append(tab);
-    for (const name of ['searchBar', 'workFilesContent', 'sessionFilters', 'placeholder']) w[name] = w.document.createElement('div');
+    for (const name of ['searchBar', 'sessionFilters', 'placeholder']) w[name] = w.document.createElement('div');
     w.searchInput = w.document.createElement('input'); w.hideAllViewers = () => {}; w.gridViewActive = false;
     const tabsStart = app.indexOf("document.querySelectorAll('.sidebar-tab').forEach(tab => {");
     vm.runInContext(app.slice(tabsStart, app.indexOf('\n// Grid view →', tabsStart)), h.context, { filename: appFilename });

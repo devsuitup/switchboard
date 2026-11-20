@@ -1,7 +1,4 @@
-// --- Memory & Work Files viewers ---
-// Depends on globals: memoryContent, memoryPanel, memoryViewer, placeholder,
-// terminalArea, statsViewer, settingsViewer, jsonlViewer, workFilesViewer (app.js)
-// Depends on: formatDate (utils.js)
+// see .ai/contexts/viewer-panel.md
 
 let cachedMemoryData = { global: { files: [] }, projects: [] };
 let currentMemoryFilePath = null;
@@ -37,7 +34,6 @@ window.api.onScheduleRunExit?.(payload => {
 function hideAllViewers() {
   statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
-  workFilesViewer.style.display = 'none';
   const traceViewer = document.getElementById('activity-trace-viewer');
   if (traceViewer) traceViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
@@ -236,164 +232,6 @@ async function openMemory(file, loadedContent) {
   memoryViewer.style.display = 'flex';
 
   memoryPanel.open(file.filename, file.filePath, content);
-}
-
-// --- Work Files ---
-
-let cachedWorkFilesData = [];          // WorkFilesProject[]
-let currentWorkFilePath = null;
-let currentWorkFileContent = '';
-const workFilesCollapsedState = new Map();
-
-async function loadWorkFiles() {
-  try {
-    const result = await window.api.getWorkFiles();
-    cachedWorkFilesData = result.projects || [];
-    renderWorkFiles();
-    clearAppNotice('getWorkFiles');
-  } catch {
-    showAppNotice({ id: 'getWorkFiles', kind: 'error', message: 'Work Files could not be loaded. Reopen the Work Files tab to retry.' });
-  }
-}
-
-// Remove a single deleted file from the in-memory model and re-render.
-// Avoids re-running the (sometimes slow) full disk scan in get-work-files.
-function removeWorkFileFromCache(filePath) {
-  for (const proj of cachedWorkFilesData) {
-    const idx = proj.files.findIndex(f => f.filePath === filePath);
-    if (idx !== -1) {
-      proj.files.splice(idx, 1);
-      if (typeof proj.totalCount === 'number') proj.totalCount = Math.max(0, proj.totalCount - 1);
-      break;
-    }
-  }
-  // Drop projects that no longer have files
-  cachedWorkFilesData = cachedWorkFilesData.filter(p => p.files.length > 0);
-  renderWorkFiles();
-}
-
-function renderWorkFiles(filterIds) {
-  workFilesContent.innerHTML = '';
-  if (cachedWorkFilesData.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'plans-empty';
-    empty.textContent = 'No .work-files/ directories found in any project.';
-    workFilesContent.appendChild(empty);
-    return;
-  }
-
-  for (const proj of cachedWorkFilesData) {
-    const projFiles = filterIds
-      ? proj.files.filter(f => filterIds.has(f.filePath))
-      : proj.files;
-    if (projFiles.length === 0) continue;
-    workFilesContent.appendChild(buildWorkFilesGroup(proj, projFiles));
-  }
-}
-
-function buildWorkFilesGroup(proj, files) {
-  const group = document.createElement('div');
-  group.className = 'project-group';
-  const isCollapsed = workFilesCollapsedState.get(proj.projectPath) === true;
-  if (isCollapsed) group.classList.add('collapsed');
-
-  const header = document.createElement('div');
-  header.className = 'project-header';
-
-  const arrow = document.createElement('span');
-  arrow.className = 'arrow';
-  arrow.innerHTML = '&#9660;';
-  header.appendChild(arrow);
-
-  const nameSpan = document.createElement('span');
-  nameSpan.className = 'project-name';
-  nameSpan.textContent = proj.shortName;
-  header.appendChild(nameSpan);
-
-  const countBadge = document.createElement('span');
-  countBadge.className = 'memory-file-count';
-  if (proj.totalCount > files.length) {
-    countBadge.textContent = files.length + '/' + proj.totalCount;
-    countBadge.title = 'Showing ' + files.length + ' of ' + proj.totalCount + ' files (capped at 200)';
-  } else {
-    countBadge.textContent = files.length;
-  }
-  header.appendChild(countBadge);
-
-  header.addEventListener('click', () => {
-    const nowCollapsed = !group.classList.contains('collapsed');
-    group.classList.toggle('collapsed');
-    workFilesCollapsedState.set(proj.projectPath, nowCollapsed);
-  });
-
-  group.appendChild(header);
-
-  const filesList = document.createElement('div');
-  filesList.className = 'project-sessions';
-  for (const file of files) {
-    filesList.appendChild(buildWorkFileItem(file));
-  }
-  group.appendChild(filesList);
-
-  return group;
-}
-
-function buildWorkFileItem(file) {
-  const item = document.createElement('div');
-  item.className = 'session-item work-file-item';
-  item.dataset.filepath = file.filePath;
-
-  const row = document.createElement('div');
-  row.className = 'session-row';
-
-  const icon = document.createElement('span');
-  icon.className = 'work-file-icon';
-  icon.innerHTML = ICONS.workFiles(15);
-  row.appendChild(icon);
-
-  const info = document.createElement('div');
-  info.className = 'session-info';
-
-  const titleEl = document.createElement('div');
-  titleEl.className = 'session-summary';
-  titleEl.textContent = file.filename;
-
-  const pathEl = document.createElement('div');
-  pathEl.className = 'session-id';
-  pathEl.textContent = file.relativePath;
-
-  const metaEl = document.createElement('div');
-  metaEl.className = 'session-meta';
-  metaEl.textContent = formatDate(new Date(file.modified));
-
-  info.appendChild(titleEl);
-  info.appendChild(pathEl);
-  info.appendChild(metaEl);
-  row.appendChild(info);
-  item.appendChild(row);
-
-  item.addEventListener('click', () => openWorkFile(file));
-  return item;
-}
-
-async function openWorkFile(file) {
-  workFilesContent.querySelectorAll('.work-file-item.active').forEach(el => el.classList.remove('active'));
-  const target = workFilesContent.querySelector(`.work-file-item[data-filepath="${CSS.escape(file.filePath)}"]`);
-  if (target) target.classList.add('active');
-
-  const content = await window.api.readWorkFile(file.filePath);
-  currentWorkFilePath = file.filePath;
-  currentWorkFileContent = content;
-
-  placeholder.style.display = 'none';
-  terminalArea.style.display = 'none';
-  statsViewer.style.display = 'none';
-  settingsViewer.style.display = 'none';
-  memoryViewer.style.display = 'none';
-  if (typeof hideAgentsView === 'function') hideAgentsView({ restore: false });
-  workFilesViewer.style.display = 'flex';
-
-  workFilesPanel.open(file.filename, file.filePath, content);
 }
 
 function openScheduleMemory(schedule, content) {

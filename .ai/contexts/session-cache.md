@@ -233,16 +233,15 @@ Diagnostics emits main.loop once per second while TRACE.on, with lagMs (the exis
 Tests: app-projects-single-invoke, get-projects-worker-wiring, projects-worker-client, projects-worker-equivalence (real isolated WAL DB with an Electron Node-mode worker), main-loop-monitor, plus the existing cold-start and pending/archive tests. Regression coverage includes the reviewer's 51-caller arrival probe, caller deadlines across retries, three-conflict rejection and event-driven recovery, startup failure/retry and pre-read persistence. Real worker equivalence applies effects to a second unreconciled WAL DB copy and compares session_cache/cache_meta; dropping the worker upsert must fail that comparison. The test-only projects-worker-delayed.cjs wrapper intercepts the shared reconcile helper and uses Atomics.wait after folder publication, keeping the delay seam out of the shipped worker. Real-worker regressions cover recovery from a hung sweep and zero progress for unchanged folders versus one for a changed folder. No stress runs or live typing measurements.
 
 
-### Memory and Work Files queries
+### Memory queries
 
-Issue #616 slice 2 uses separate lazy filesystem workers for the Memory and
-Work Files lists. They reuse the Projects client's queue, caller-deadline,
+The Memory list uses a lazy filesystem worker. Its client reuses the Projects client's queue, caller-deadline,
 hard-ceiling and bounded-conflict pattern without sharing its SQLite reader
 or reconciliation lane. FTS deltas are prepared off main and applied by main
 in guarded, yielding batches; unchanged files are not re-indexed. See
 [viewer-panel.md](viewer-panel.md#file-list-workers) for the path-policy,
 incremental indexing and test contracts. `getKnownProjectPaths` remains on
-main for explicit guarded panel reads/saves; neither list handler calls it.
+main for explicit guarded panel reads/saves; the list handler does not call it.
 
 ## Invariants
 
@@ -352,7 +351,7 @@ A kept row is recorded with its folder. On PTY exit, `main.js` calls `releaseLiv
 
 ## Non-obvious behaviors
 
-- **`resolveWorktreePath` collapses `<repo>/.worktrees/<name>`, `<repo>/.claude-worktrees/<name>` and `<repo>/.claude/worktrees/<name>` → `<repo>`** when the parent dir exists. Consequence: many `~/.claude/projects/-home-...workspace-myproject--worktrees-X` folders derive to the same projectPath. Callers must dedupe (see `get-work-files` IPC for the pattern).
+- **`resolveWorktreePath` collapses `<repo>/.worktrees/<name>`, `<repo>/.claude-worktrees/<name>` and `<repo>/.claude/worktrees/<name>` → `<repo>`** when the parent dir exists. Consequence: many `~/.claude/projects/-home-...workspace-myproject--worktrees-X` folders derive to the same projectPath. Callers that list unique projects must dedupe.
 - **Two-table sidebar payload**: projects are aggregated, but each session row has its own `subagentType` field. A `null`/empty `subagentType` means it's a parent session; anything else (e.g. `'general-purpose'`, `'researcher'`) marks a subagent.
 - **`fs.watch` debouncing**: the watcher batches per-folder events in a `pendingChanges = Map<folder, Set<filename> | true>` for 500 ms (debounced, in `main.js`) before flushing to `refreshFolder`. A `true` value means "full walk needed" (rare path).
 - **The same raw watcher callback also feeds a second, lighter-weight signal that bypasses this debounce entirely** (issue #246 step 4): for a top-level session transcript with no live PTY in `activeSessions`, it sends `session-transcript-activity` straight to the renderer, coalesced to ≤1/s per session by `local-transcript-activity.js`. This exists so a session launched outside Switchboard gets a busy indicator without waiting on the cache refresh — see `.ai/contexts/session-state.md` ("The local-transcript adapter") and `.ai/contexts/ipc-bridge.md`.
@@ -2319,7 +2318,7 @@ parent as-is, preserving the existing comparison when the worktree is missing
 but its repository exists. The matcher accepts a separate target normalizer for
 callers that already normalized their query. A project-cache pass shares one
 matcher across cached rows, empty groups, terminals and the background merge;
-each Memory or Work Files list call builds one matcher for all its folders.
+each Memory list call builds one matcher for all its folders.
 
 The cache, archive projection, pending groups, working-set reload, worktree
 nesting, background descriptors, file lists and trigger resolver all use this
@@ -2546,7 +2545,7 @@ lists never cross the writer transport. See `session-index-writer.md` for orderi
 - `db-bridge-session-migration.test.js` — covers the schema-reconciliation path that adds `bridgeSessionId`/`mergedIntoSessionId`, forces a re-index, and `getTotalCounts()`'s exclusion
 - `session-cache-bridge-dedup.test.js` — covers the compaction-mirror union merge through `refreshFolder()`, `readFolderFromFilesystem()` and `buildProjectsFromCache()`'s rollup, using the real fixture's shape
 - `db-session-metrics.test.js` — covers the `getTotalCounts` pure-JS mirror's `mergedIntoSessionId` exclusion (kept in sync with the real SQL by the SQL-level test above)
-- IPC consumers of cached payloads: `get-projects`, `get-active-sessions`, `search`, `get-stats-from-db`, `get-work-files`, `list-subagents`, `read-session-jsonl`
+- IPC consumers of cached payloads: `get-projects`, `get-active-sessions`, `search`, `get-stats-from-db`, `list-subagents`, `read-session-jsonl`
 - Renderer: `public/sidebar.js` (consumes `buildProjectsFromCache` output), `public/stats-view.js` (consumes `get-stats-from-db`, built from `getDailyMetrics` and the other `session_metrics` queries)
 - If you add a new `session_cache` column, update the SELECT in `getCachedByFolder` — it's `SELECT *` so additions land automatically, but the renderer needs to know about them.
 

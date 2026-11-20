@@ -598,7 +598,7 @@ cause is allowed. Hiding the tab cancels both
 reload timers, invalidates pending requests and clears the requested project
 focus. A pending toggle completed while hidden waits for reopening to reload.
 The clock tab follows
-Agent Files; Work Files is preserved. Search is hidden. Rows show cron, local
+Agent Files. Search is hidden. Rows show cron, local
 next-run and relative time, disabled/archive/validation reasons, shared-slug
 diagnostics, catch-up status and the newest 20 runs from the main-side list.
 Run now retains `RunSchedule:<filePath>` and the persistent error contract;
@@ -749,7 +749,7 @@ Opening a run selects a local indexed row before openSession; remote copies of
 the same session ID do not participate in this local Schedules surface.
 
 Open checks read-memory before changing viewers. On a valid read it uses
-hideAllViewers before memoryPanel, so a previous Work Files or transcript viewer
+hideAllViewers before memoryPanel, so a previous transcript viewer
 does not cover the schedule editor. The existing save and watch contract stays.
 
 History navigation resolves physical run IDs through `rowSessionIds` in local

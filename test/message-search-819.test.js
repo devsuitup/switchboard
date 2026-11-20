@@ -169,7 +169,7 @@ test('showing messages initializes focused search and hiding the viewer clears i
   try {
     Object.assign(ctx.window, { jsonlViewer: viewer, jsonlViewerBody: body, jsonlViewerTitle: ctx.document.createElement('span'),
       jsonlViewerSessionId: ctx.document.createElement('span'), terminalArea: ctx.document.createElement('div'), placeholder: ctx.document.createElement('div'),
-      statsViewer: ctx.document.createElement('div'), memoryViewer: ctx.document.createElement('div'), workFilesViewer: ctx.document.createElement('div'), settingsViewer: ctx.document.createElement('div') });
+      statsViewer: ctx.document.createElement('div'), memoryViewer: ctx.document.createElement('div'), settingsViewer: ctx.document.createElement('div') });
     ctx.evalPublic('memory-workfiles-view.js');
     ctx.window.api.readSessionJsonl = async () => ({ entries: [{ type: 'assistant', message: { content: [{ type: 'text', text: 'alpha' }] } }] });
     await ctx.window.showJsonlViewer({ sessionId: 'one' });
