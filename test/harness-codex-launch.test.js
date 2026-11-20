@@ -257,6 +257,7 @@ test('two pending forks of one parent and only inherited tags: nothing is re-key
   b.exited = true;
   assert.equal(f.transitions.resolvePendingLaunches(codex, [first.file, second.file]), 0, 'one fork, two rollouts: no guess either');
   fs.rmSync(second.file);
-  assert.equal(f.transitions.sweepPendingLaunches(), 1, 'one fork, one rollout: adopted');
-  assert.equal(f.activeSessions.get(first.id), a);
+  assert.equal(f.transitions.sweepPendingLaunches(), 0, 'a rollout once ambiguous between two forks is never re-keyed');
+  assert.equal(f.activeSessions.get(TEMP_A), a);
+  assert.ok(a.pendingLaunch, 'the fork stays under its temporary id');
 });

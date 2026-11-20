@@ -1599,7 +1599,7 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
 
     try {
       worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
-        workerData: { projectsDir, folderPrefix, folders: fullFolders, targets, remaps: remappedProjectsSetting() },
+        workerData: { projectsDir, folderPrefix, folders: fullFolders, targets, remaps: remappedProjectsSetting(), disabledHarnesses: disabledHarnessIds() },
       });
     } catch (err) {
       settle({ ok: false, error: err.message, folders: 0, sessions: 0 });

@@ -90,17 +90,14 @@ test('disabled Claude reconciliation avoids filesystem reads and preserves rows 
   assert.equal(f.db.getCachedSession(ID), null, 're-enabling reconciles the vanished transcript');
 });
 
-test('Claude watcher closes on disable, discards queued work and starts again on enable', { skip: !openStore.supported }, async t => {
-  const f = fixture(t);
-  cache.refreshFolder(f.folder);
+function loadWatcher(t, f) {
   const filename = path.join(__dirname, '../main.js');
   const source = fs.readFileSync(filename, 'utf8');
   const start = source.indexOf('let projectsWatcher = null;');
   const end = source.indexOf('// --- IPC: app version ---', start);
   assert.ok(start > 0 && end > start);
-  const watches = [], timers = new Map();
+  const watches = [], timers = new Map(), writes = [], transitions = [];
   let timerId = 0;
-  const writes = [];
   const context = vm.createContext({
     fs: { ...fs, watch: (_root, _opts, callback) => {
       const watcher = { callback, closed: false, on() {}, close() { this.closed = true; } };
@@ -111,33 +108,71 @@ test('Claude watcher closes on disable, discards queued work and starts again on
     setTimeout: callback => { timers.set(++timerId, callback); return timerId; },
     clearTimeout: id => timers.delete(id),
     flushProjectsBeforeExit: null, localTranscriptTracker: { record() {} },
-    detectSessionTransitions() {}, notifyRendererProjectsChanged() {},
+    detectSessionTransitions: folder => transitions.push(folder), notifyRendererProjectsChanged() {},
     writer: { refreshFolder: folder => { writes.push(folder); return cache.refreshFolder(folder); },
       dropFolderRows: folder => { writes.push(folder); return cache.dropFolderRows(folder); } },
     log: { info() {}, error() {} },
   });
   vm.runInContext(source.slice(start, end), context, { filename, lineOffset: source.slice(0, start).split('\n').length - 1 });
-  context.startProjectsWatcher();
-  assert.equal(watches.length, 1);
-  watches[0].callback('change', path.join(f.folder, ID + '.jsonl'));
+  const flush = async () => {
+    for (const callback of [...timers.values()]) await callback();
+    await context.flushProjectsBeforeExit();
+  };
+  return { context, watches, writes, transitions, flush };
+}
+
+test('switching Claude off keeps its watcher driving open-tab transitions, writes nothing, and indexes again on enable', { skip: !openStore.supported }, async t => {
+  const f = fixture(t);
+  cache.refreshFolder(f.folder);
+  const w = loadWatcher(t, f);
+  w.context.startProjectsWatcher();
+  assert.equal(w.watches.length, 1);
+  w.watches[0].callback('change', path.join(f.folder, ID + '.jsonl'));
   f.db.setSetting('global', { disabledHarnesses: ['claude'] });
-  context.restartHarnessWatchers();
-  assert.equal(watches[0].closed, true, 'switching Claude off closes its watcher');
-  assert.equal(watches.length, 1, 'disabled Claude never opens a replacement watcher');
+  w.context.restartHarnessWatchers();
+  assert.equal(w.watches[0].closed, false, 'the watcher that detects /clear, continuation and fork re-keys of open Claude tabs stays open');
+  assert.equal(w.watches.length, 1, 'and is not replaced');
   fs.rmSync(f.file);
-  for (const callback of timers.values()) await callback();
-  await context.flushProjectsBeforeExit();
-  assert.deepEqual(writes, [], 'a queued refresh cannot delete a disabled CLI row');
+  await w.flush();
+  assert.deepEqual(w.transitions, [f.folder], 'the queued change still reaches detectSessionTransitions');
+  assert.deepEqual(w.writes, [], 'a queued refresh cannot delete a disabled CLI row');
   assert.ok(f.db.getCachedSession(ID));
+  w.watches[0].callback('change', path.join(f.folder, ID + '.jsonl'));
+  await w.flush();
+  assert.deepEqual(w.transitions, [f.folder, f.folder], 'a change seen while disabled is still a transition event');
+  assert.deepEqual(w.writes, [], 'and still not indexed');
   f.db.setSetting('global', { disabledHarnesses: [] });
-  context.restartHarnessWatchers();
-  assert.equal(watches.length, 2, 're-enabling resumes watching');
-  for (const callback of timers.values()) await callback();
-  watches[0].callback('change', path.join(f.folder, ID + '.jsonl'));
-  await context.flushProjectsBeforeExit();
-  assert.deepEqual(writes, [], 'callbacks from the old watcher stay inert after re-enabling');
-  watches[1].callback('change', path.join(f.folder, ID + '.jsonl'));
-  await context.flushProjectsBeforeExit();
-  assert.deepEqual(writes, [f.folder]);
+  w.context.restartHarnessWatchers();
+  assert.equal(w.watches.length, 1, 're-enabling keeps the same watcher');
+  w.watches[0].callback('change', path.join(f.folder, ID + '.jsonl'));
+  await w.flush();
+  assert.deepEqual(w.writes, [f.folder], 're-enabled Claude indexes the next change');
   assert.equal(f.db.getCachedSession(ID), null);
+});
+
+test('toggling only Codex neither restarts the Claude watcher nor drops its queued change', { skip: !openStore.supported }, async t => {
+  const f = fixture(t);
+  const w = loadWatcher(t, f);
+  w.context.startProjectsWatcher();
+  w.watches[0].callback('change', path.join(f.folder, ID + '.jsonl'));
+  f.db.setSetting('global', { disabledHarnesses: ['codex'] });
+  w.context.restartHarnessWatchers();
+  assert.equal(w.watches.length, 1, 'a Codex toggle leaves the Claude watcher alone');
+  assert.equal(w.watches[0].closed, false);
+  await w.flush();
+  assert.deepEqual(w.writes, [f.folder], 'Claude is still enabled: its queued transcript change is indexed');
+  assert.deepEqual(w.transitions, [f.folder], 'and its live-session transitions are detected');
+  assert.ok(f.db.getCachedSession(ID));
+});
+
+test('a Claude subset scan through scanFoldersViaWorker honours the Claude switch', { skip: !openStore.supported }, async t => {
+  const f = fixture(t);
+  f.db.setSetting('global', { disabledHarnesses: ['claude'] });
+  const disabled = await cache.scanFoldersViaWorker({ projectsDir: f.projectsDir, folders: [f.folder] });
+  assert.equal(disabled.ok, true);
+  assert.equal(f.db.getCachedSession(ID), null, 'Claude is switched off: a subset scan must not read and index its transcripts');
+  f.db.setSetting('global', { disabledHarnesses: [] });
+  const enabled = await cache.scanFoldersViaWorker({ projectsDir: f.projectsDir, folders: [f.folder] });
+  assert.equal(enabled.ok, true);
+  assert.ok(f.db.getCachedSession(ID), 'positive control: the same subset scan indexes the transcript once Claude is on');
 });

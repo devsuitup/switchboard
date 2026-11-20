@@ -296,16 +296,22 @@ const LAUNCH_TAG_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 function pruneLaunchTags() {
   const now = Date.now();
-  for (const [tag, expiresAt] of issuedLaunchTags) {
-    if (expiresAt <= now) issuedLaunchTags.delete(tag);
+  for (const [tag, issued] of issuedLaunchTags) {
+    if (issued.expiresAt <= now) issuedLaunchTags.delete(tag);
   }
 }
 
 function launchEnv(tempId) {
   pruneLaunchTags();
   const tag = originatorTag(tempId);
-  issuedLaunchTags.set(tag, Date.now() + LAUNCH_TAG_RETENTION_MS);
+  issuedLaunchTags.set(tag, { expiresAt: Date.now() + LAUNCH_TAG_RETENTION_MS, sessionId: null });
   return { CODEX_INTERNAL_ORIGINATOR_OVERRIDE: tag };
+}
+
+function recordLaunchAdoption(tag, sessionId) {
+  pruneLaunchTags();
+  const issued = issuedLaunchTags.get(tag);
+  if (issued) issued.sessionId = sessionId;
 }
 
 function readLaunchSignals(filePath) {
@@ -338,7 +344,8 @@ function matchesLaunch(signals, { tag, forkFrom, projectPath, spawnedAt }) {
   pruneLaunchTags();
   if (!signals || signals.isSubagent || !signals.sessionId) return false;
   if (tag && signals.originator === tag) return 'tag';
-  if (issuedLaunchTags.has(signals.originator)) return false;
+  const issued = issuedLaunchTags.get(signals.originator);
+  if (issued && !(forkFrom && issued.sessionId === forkFrom)) return false;
   if (forkFrom) return signals.forkedFrom === forkFrom && startedAfterSpawn(signals, spawnedAt) ? 'fork' : false;
   if (signals.originator && /^switchboard_/.test(signals.originator)) return false;
   if (!projectPath || signals.cwd !== projectPath) return false;
@@ -400,5 +407,5 @@ module.exports = {
   toViewerEntry, toViewerEntries,
   parseTitleState, classifyTitleActivity, classifyNotification,
   buildLaunchArgs, needsIdDetection, readModelCatalog,
-  originatorTag, launchEnv, readLaunchSignals, matchesLaunch,
+  originatorTag, launchEnv, recordLaunchAdoption, readLaunchSignals, matchesLaunch,
 };

@@ -39,6 +39,7 @@ function init(ctx) {
   onDescriptorSession = ctx.onDescriptorSession || (() => {});
   descriptorSessions.clear();
   descriptorFailures.clear();
+  launchMatches.clear();
   rekeyGeneration = 0;
   if (settleTimer) clearTimeout(settleTimer);
   settleTimer = null;
@@ -947,6 +948,8 @@ function detectPendingBackgroundContinuations() {
 }
 
 // see .ai/contexts/cli-harnesses.md ("Launching: a session that learns its id afterwards")
+const launchMatches = new Map();
+
 function pendingLaunchSessions() {
   return [...activeSessions].filter(([, session]) => session && !session.exited && session.pendingLaunch && !session.realSessionId);
 }
@@ -972,16 +975,21 @@ function resolvePendingLaunches(harness, candidatePaths) {
       if (!match) continue;
       bySession.get(tempId).push({ signals, match });
       byCandidate.get(signals).push({ tempId, session, match });
+      if (!launchMatches.has(signals.sessionId)) launchMatches.set(signals.sessionId, new Set());
+      launchMatches.get(signals.sessionId).add(tempId);
     }
   }
   let adopted = 0;
   const settled = new Set();
+  const adoptable = signals => !settled.has(signals) && launchMatches.get(signals.sessionId)?.size === 1;
   const adopt = (tempId, session, signals) => {
     log.info(`[launch-detect] ${tempId} → ${signals.sessionId} (${harness.id}, originator=${signals.originator || 'none'})`);
     const kind = session.pendingLaunch.forkFrom ? 'fork' : 'new';
+    harness.recordLaunchAdoption?.(session.pendingLaunch.tag, signals.sessionId);
     session.pendingLaunch = null;
     settled.add(tempId);
     settled.add(signals);
+    launchMatches.delete(signals.sessionId);
     rekeySession(tempId, signals.sessionId, session, [], kind);
     adopted++;
   };
@@ -990,11 +998,11 @@ function resolvePendingLaunches(harness, candidatePaths) {
     if (exact.length === 1 && !settled.has(exact[0].tempId)) adopt(exact[0].tempId, exact[0].session, signals);
   }
   for (const [signals, owners] of byCandidate) {
-    if (settled.has(signals)) continue;
+    if (!adoptable(signals)) continue;
     const open = owners.filter(o => !settled.has(o.tempId));
     if (open.length !== 1) continue;
     const { tempId, session } = open[0];
-    if (bySession.get(tempId).filter(c => !settled.has(c.signals)).length !== 1) continue;
+    if (bySession.get(tempId).filter(c => adoptable(c.signals)).length !== 1) continue;
     adopt(tempId, session, signals);
   }
   return adopted;

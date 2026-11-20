@@ -205,19 +205,30 @@ rollout appears. `session-transitions.js` owns the adoption:
   start-time fallback of a fresh launch, `false` otherwise. The fallback
   refuses a rollout tagged for another Switchboard launch. `launchEnv` records
   issued tags in the Codex adapter for 24 hours, including exited, stopped and
-  already-adopted launches. Matching rejects another issued tag before fork
-  fallback; issuing or matching prunes expired entries. This registry is local
-  to the app process and does not survive restart. An inherited parent tag
-  absent from the registry remains eligible for fork fallback (whether Codex honours
-  `CODEX_INTERNAL_ORIGINATOR_OVERRIDE` on `codex fork` is not measured).
+  already-adopted launches; `recordLaunchAdoption(tag, realId)`, called by the
+  adopt step, notes which real id an issued tag ended up as. Matching rejects
+  another issued tag before fork fallback, with one exception: a tag whose
+  recorded real id is this launch's own `forkFrom` is the parent's inherited
+  tag, not a foreign one, so a lone fork of a parent started in this app run
+  still adopts its lone rollout. A tag issued to any other launch, exited or
+  not, stays foreign. Issuing or matching prunes expired entries. This registry
+  is local to the app process and does not survive restart. An inherited parent
+  tag absent from the registry remains eligible for fork fallback (whether Codex
+  honours `CODEX_INTERNAL_ORIGINATOR_OVERRIDE` on `codex fork` is not measured).
 - Adoption is exact first: a candidate graded `'tag'` by a pending session goes
-  to that session, and nothing else may take it. A remaining candidate is then
-  adopted by fallback only when exactly one open session matches it and that
-  session matches exactly one open candidate. Two forks of the same parent
-  started together, both with inherited tags, therefore stay pending rather
-  than being paired in insertion order; a lone fork still adopts its lone
-  rollout, and the pairing resolves as soon as it becomes unique (one tab
-  closes, one rollout vanishes, or a tagged rollout settles one side).
+  to that session, and nothing else may take it. `session-transitions.js` keeps,
+  per candidate id, every pending launch the candidate ever matched
+  (`launchMatches`, reset by `init`). A remaining candidate is adopted by
+  fallback only when it has only ever matched one launch, that launch is open,
+  and that launch matches exactly one such candidate. A rollout that was once
+  ambiguous between two launches is latched for its lifetime: a sibling exiting,
+  its tab being closed, or the other rollout vanishing never makes it adoptable,
+  because uniqueness among the sessions still open is not ownership evidence.
+  Two forks of the same parent started together, both with inherited or absent
+  tags, therefore stay under their temporary ids for the tabs' lifetime (the 3 s
+  sweep keeps running while they are open); a lone fork still adopts its lone
+  rollout, a rollout that only ever matched one fork is adopted even after a
+  latched sibling rollout, and a tagged rollout settles its own side.
 - A match goes through `rekeySession(tempId, realId, session, [], kind)` with
   `kind` `'new'` or `'fork'` — the same path as a Claude fork. Main's metadata
   callback calls the writer only for `kind === 'background'`; these Codex
@@ -315,11 +326,20 @@ default; nothing here fetches it, so no token leaves the machine.
 - Effects of a switched-off CLI: `prefixedHarnesses(disabledIds)` drops a
   non-default CLI from reconciliation, cold scan and harness watchers. Claude
   has explicit enabled-state checks before listing its projects in the cold
-  worker (including subset scans) and reconciliation. `startProjectsWatcher`
-  closes the previous Claude watcher and opens one only when enabled; queued
-  callbacks and flushes check both enabled state and watcher identity, including
-  between awaited folder writes. Work already submitted to the writer can finish.
-  `set-setting` restarts both watcher paths when the list changes.
+  worker and in reconciliation; `scanFoldersViaWorker` passes
+  `disabledHarnesses` too, so the subset scans (bridge repair, remote hosts) walk
+  nothing while Claude is off. A remote host's sessions are Claude sessions and
+  follow the Claude switch: their rows are hidden with it and not rescanned until
+  it is back on. The projects watcher keeps running while Claude is off, because
+  it is the only detector of /clear, continuation and fork re-keys and of local
+  transcript activity for the Claude tabs still open: its flush still calls
+  `detectSessionTransitions` for each changed folder, but skips the workflow
+  snapshot reads, `writer.refreshFolder` and `dropFolderRows`, re-checking the
+  enabled state between awaited folder writes. Work already submitted to the
+  writer can finish. `set-setting` calls `restartHarnessWatchers` when the list
+  changes: it restarts the harness watchers and opens the projects watcher only
+  if none is running, so toggling Codex never drops the Claude watcher's queued
+  batch.
   `buildProjectsFromCache`
   hides its rows (`exclude(row, 'harness-off')`) and the picker skips it. Its
   cached rows are kept, so switching it back on costs one incremental

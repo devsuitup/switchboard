@@ -3944,9 +3944,10 @@ let projectsWatcher = null;
 function startProjectsWatcher() {
   if (projectsWatcher) { projectsWatcher.close(); projectsWatcher = null; }
   flushProjectsBeforeExit = async () => {};
-  if (getSetting('global')?.disabledHarnesses?.includes('claude')) return;
   let flushChain = Promise.resolve();
   if (!fs.existsSync(PROJECTS_DIR)) return;
+  // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
+  const claudeIndexing = () => !getSetting('global')?.disabledHarnesses?.includes('claude');
 
   // pendingChanges: folder → Set<relativePath> | true.
   //   Set<string>  — only the listed files changed (targeted refresh, fast path)
@@ -3972,7 +3973,7 @@ function startProjectsWatcher() {
 
   async function applyChanges() {
     debounceTimer = null;
-    if (projectsWatcher !== watcher || getSetting('global')?.disabledHarnesses?.includes('claude')) return;
+    if (projectsWatcher !== watcher) return;
     // Drain pendingChanges into a local copy so events arriving during the
     // synchronous flush land in a fresh batch for the next tick.
     const work = new Map(pendingChanges);
@@ -3988,7 +3989,7 @@ function startProjectsWatcher() {
         }
       }
     }
-    for (const filename of snapshots) {
+    for (const filename of claudeIndexing() ? snapshots : []) {
       try {
         const snapshot = JSON.parse(await fs.promises.readFile(path.join(PROJECTS_DIR, filename), 'utf8'));
         const title = typeof snapshot.workflowName === 'string' && snapshot.workflowName.trim()
@@ -4005,13 +4006,15 @@ function startProjectsWatcher() {
     }
     let activityChanged = false;
     for (const [folder, scope] of work) {
-      if (projectsWatcher !== watcher || getSetting('global')?.disabledHarnesses?.includes('claude')) return;
+      if (projectsWatcher !== watcher) return;
       const folderPath = path.join(PROJECTS_DIR, folder);
       let folderChanged;
       if (fs.existsSync(folderPath)) {
         detectSessionTransitions(folder);
+        if (!claudeIndexing()) continue;
         folderChanged = await writer.refreshFolder(folder, scope === true ? undefined : { files: scope });
       } else {
+        if (!claudeIndexing()) continue;
         folderChanged = await writer.dropFolderRows(folder);
       }
       changed = folderChanged === true || changed;
@@ -4041,7 +4044,7 @@ function startProjectsWatcher() {
 
   try {
     projectsWatcher = fs.watch(PROJECTS_DIR, { recursive: true }, (_eventType, filename) => {
-      if (projectsWatcher !== watcher || getSetting('global')?.disabledHarnesses?.includes('claude')) return;
+      if (projectsWatcher !== watcher) return;
       if (!filename) return;
 
       // filename is relative, e.g. "folder-name/sessions-index.json" or "folder-name/abc.jsonl"
@@ -4139,7 +4142,7 @@ function stopHarnessWatchers() {
 }
 
 function restartHarnessWatchers() {
-  startProjectsWatcher();
+  if (!projectsWatcher) startProjectsWatcher();
   for (const watcher of harnessWatchers.splice(0)) watcher.close();
   startHarnessWatchers();
 }
