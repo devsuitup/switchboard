@@ -12,30 +12,19 @@ switches, marked *live* below, apply the moment they are flipped.
 
 ## Global Settings
 
-### Claude CLI Options
+The pages are **General**, **Sessions**, **Keyboard**, **Automation**, **Remote hosts**,
+**Integrations**, **Archived** and **Advanced**. Project Settings has **Launch** and
+**This project**. Each scope remembers its last page on this computer. A narrow
+viewer automatically places the navigation in a horizontal strip above the page.
+See [Settings navigation](keyboard-shortcuts.md#settings-navigation) for the keys.
 
-These are the defaults for new sessions; the New Session dialog can change them
-for one launch — see [Launching sessions](launching-sessions.md).
+All pages share one Save: switching pages keeps edits, and the footer counts
+unsaved changes. Save keeps Settings open and flashes Saved; Cancel discards edits
+without asking. Live switches and Unarchive still take effect immediately.
 
-| Setting | Key | Default | Effect |
-|---|---|---|---|
-| Permission Mode | `permissionMode` | `auto` until a value is saved | `--permission-mode`; **Default (none)** passes no flag — see [permission modes](launching-sessions.md#permission-modes) |
-| Worktree | `worktree` | off | Starts new sessions with `--worktree` — see [Worktree sessions](worktrees.md) |
-| Worktree Name | `worktreeName` | empty (`auto`) | The name passed after `--worktree` |
-| Browser | `browserMode` | Off (`off`) | **Off** passes no browser flag; **Claude in Chrome** (`claude-in-chrome`) passes `--chrome` |
-| Sandbox (Linux only) | `sandbox` | off | Runs `claude` under bubblewrap — see [Sandbox](sandbox.md) |
-| Additional Directories | `addDirs` | empty | Comma-separated; one `--add-dir` each |
+### General
 
-A saved `chrome` setting is read as the matching Browser choice: `true` selects
-**Claude in Chrome**, and `false` selects **Off**.
-
-### Session Launch
-
-| Setting | Key | Default | Effect |
-|---|---|---|---|
-| Pre-launch Command | `preLaunchCmd` | empty | Written in front of the `claude` command, e.g. `aws-vault exec profile --`; restricted to letters, digits, spaces and `- _ . / \ : =` — see [Launching sessions](launching-sessions.md#pre-launch-command) |
-
-### Application
+Startup, Shell, Terminal and IDE settings:
 
 | Setting | Key | Default | Effect |
 |---|---|---|---|
@@ -43,22 +32,9 @@ A saved `chrome` setting is read as the matching Browser choice: `true` selects
 | Terminal Right-Click | `terminalRightClick` | Context menu (`menu`) | `menu`, `paste`, `default` (Native), `none` — see [Terminal](terminal.md#right-click) |
 | Restore Sessions on Startup | `restoreOnStartup` | Ask on startup (`ask`) | `off`, `ask`, `lazy` (Restore on click), `auto`; read at launch — see [Session restore](session-restore.md) |
 | Shell Profile | `shellProfile` | Auto (detect) | The shell for sessions and terminals; new sessions only — see [Launching sessions](launching-sessions.md#how-the-command-is-built) |
-| Max Visible Sessions | `visibleSessionCount` | 10 (1–100) | Sessions shown per project before `+ N older` |
-| Session Max Age (days) | `sessionMaxAgeDays` | 3 (1–365) | Older sessions go behind `+ N older`; older projects start collapsed |
-| Hide SDK-launched Sessions | `hideSdkSessions` | on | Leaves out of the sidebar and grid the sessions a program started through the Claude Agent SDK; scheduled tasks stay — see [Session browser](session-browser.md#sessions-started-by-a-program) |
-| Schedules tab | `schedulesTab` | off | Moves project schedule files from Agent Files to the Schedules tab on save; while off, the files and Run now stay in Agent Files — see [Automation](automation.md#schedules) |
 | IDE Emulation | `mcpEmulation` | off | Switchboard as Claude's IDE; new sessions only — see [IDE emulation](ide-emulation.md) |
 
-### Keyboard Shortcuts
-
-Eight rebindable shortcuts, stored as `shortcuts`: Toggle Changes, Show
-pending Diff, Toggle Touched, Toggle Shell, Navigate sessions / grid, Previous /
-next session, Toggle grid view and Toggle agents view. Each defaults to
-Primary+Shift (Ctrl, or Cmd on macOS) with its key — see
-[Keyboard shortcuts](keyboard-shortcuts.md) for the keys and
-[Rebinding](keyboard-shortcuts.md#rebinding).
-
-### Updates
+#### Updates
 
 | Setting | Key | Default | Effect |
 |---|---|---|---|
@@ -89,24 +65,84 @@ already downloaded before you turned the switch off still installs at the next
 quit. The SQLite cache
 only migrates forward.
 
-### Remote Hosts
+### Sessions
+
+#### Launch and Claude
+
+These are the defaults for new sessions; the New Session dialog can change them
+for one launch — see [Launching sessions](launching-sessions.md).
+
+| Setting | Key | Default | Effect |
+|---|---|---|---|
+| Permission Mode | `permissionMode` | `auto` until a value is saved | `--permission-mode`; **Default (none)** passes no flag — see [permission modes](launching-sessions.md#permission-modes) |
+| Worktree | `worktree` | off | Starts new sessions with `--worktree` — see [Worktree sessions](worktrees.md) |
+| Worktree Name | `worktreeName` | empty (`auto`) | The name passed after `--worktree` |
+| Browser | `browserMode` | Off (`off`) | **Off** passes no browser flag; **Claude in Chrome** (`claude-in-chrome`) passes `--chrome` |
+| Sandbox (Linux only) | `sandbox` | off | Runs `claude` under bubblewrap — see [Sandbox](sandbox.md) |
+| Additional Directories | `addDirs` | empty | Comma-separated; one `--add-dir` each |
+
+A saved `chrome` setting is read as the matching Browser choice: `true` selects
+**Claude in Chrome**, and `false` selects **Off**.
+
+| Setting | Key | Default | Effect |
+|---|---|---|---|
+| Pre-launch Command | `preLaunchCmd` | empty | Written in front of the `claude` command, e.g. `aws-vault exec profile --`; restricted to letters, digits, spaces and `- _ . / \ : =` — see [Launching sessions](launching-sessions.md#pre-launch-command) |
+
+#### CLI Agents and Codex
+
+The existing CLI switches and Codex sandbox, approval, model and reasoning-effort
+controls are grouped here. See [Launching sessions](launching-sessions.md).
+
+#### Sidebar list
+
+| Setting | Key | Default | Effect |
+|---|---|---|---|
+| Max Visible Sessions | `visibleSessionCount` | 10 (1–100) | Sessions shown per project before `+ N older` |
+| Session Max Age (days) | `sessionMaxAgeDays` | 3 (1–365) | Older sessions go behind `+ N older`; older projects start collapsed |
+| Hide SDK-launched Sessions | `hideSdkSessions` | on | Leaves out of the sidebar and grid the sessions a program started through the Claude Agent SDK; scheduled tasks stay — see [Session browser](session-browser.md#sessions-started-by-a-program) |
+
+### Keyboard
+
+Eight rebindable shortcuts, stored as `shortcuts`: Toggle Changes, Show
+pending Diff, Toggle Touched, Toggle Shell, Navigate sessions / grid, Previous /
+next session, Toggle grid view and Toggle agents view. Each defaults to
+Primary+Shift (Ctrl, or Cmd on macOS) with its key — see
+[Keyboard shortcuts](keyboard-shortcuts.md) for the keys and
+[Rebinding](keyboard-shortcuts.md#rebinding).
+
+### Automation
+
+| Setting | Key | Default | Effect |
+|---|---|---|---|
+| Schedules tab | `schedulesTab` | off | Moves project schedule files from Agent Files to the Schedules tab on save; while off, the files and Run now stay in Agent Files — see [Automation](automation.md#schedules) |
+
+### Remote hosts
 
 | Setting | Key | Default | Effect |
 |---|---|---|---|
 | SSH hosts to observe | `remoteHosts` | none | `{alias, label, enabled}` per host — see [Remote hosts](remote-hosts.md) |
 | Refresh every | `remoteRefreshMs` | 5 minutes (minimum 1; the field offers up to 1440) | Time between full pulls |
 
-### Activity Reporting
+### Integrations
 
 | Setting | Key | Default | Effect |
 |---|---|---|---|
 | Send session activity to ActivityWatch | `activityReporting` | off | *Live.* Reports session time to a local ActivityWatch — see [ActivityWatch](activitywatch.md) |
 
-### Diagnostics
+The **What is sent** explanation expands when selected.
+
+### Archived
+
+The existing archived-project list and Unarchive actions are here. Folder and
+session archive management will be added separately.
+
+### Advanced
 
 | Setting | Key | Default | Effect |
 |---|---|---|---|
 | Debug Mode | `activityTrace` | off | *Live.* Records the activity trace; lists, opens and deletes trace files — see [Activity trace](activity-trace.md) |
+
+The **What it records** explanation expands when selected.
 
 ### Stored without a field
 
@@ -131,11 +167,13 @@ only migrates forward.
 
 ## Project Settings
 
-Project Settings override, for one project, the fields of **Claude CLI Options**
-and **Session Launch**: Permission Mode, Worktree, Worktree Name, Browser, Sandbox
+Project Settings override, for one project, the fields on the **Launch** page: Permission Mode, Worktree, Worktree Name, Browser, Sandbox
 (Linux only), Additional Directories and Pre-launch Command. Each field has a
 **Use global default** box; while it is checked the field shows the global value
 and nothing is stored for the project.
+
+The **This project** page reserves space for project identity. For now,
+**Archive Project** and **Delete Project** remain in the footer.
 
 **Archive Project** removes the project and its nested worktrees from the
 sidebar immediately, without asking. A notice offers **Undo** for about 10
@@ -144,7 +182,7 @@ entries are kept. Schedules stay on disk with their enabled state unchanged,
 but Switchboard suspends their launches until you unarchive the project.
 Already running sessions and schedules continue.
 
-In Global Settings → **Archived projects**, **Unarchive** restores the sidebar
+In Global Settings → **Archived**, **Unarchive** restores the sidebar
 row and resumes scheduling (a run that fell due while archived is not replayed); **Add Project** on the same local folder also
 restores it. Previously hidden projects appear here too, with default settings
 because the old Hide action already removed their settings. A remote entry

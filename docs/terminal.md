@@ -52,7 +52,7 @@ state or `Not running` when the job ends or its process is known dead.
 
 ## Right-click
 
-**Global Settings → Terminal Right-Click** sets what the right mouse button
+**Global Settings → General → Terminal → Terminal Right-Click** sets what the right mouse button
 does:
 
 | Option | Behaviour |
@@ -165,5 +165,5 @@ in "N open here", never restored at startup, and never
 
 ## Theme
 
-**Global Settings → Terminal Theme**: Switchboard (default), Ghostty, Tokyo
+**Global Settings → General → Terminal → Terminal Theme**: Switchboard (default), Ghostty, Tokyo
 Night, Catppuccin Mocha, Dracula, Nord, Solarized Dark. It applies on save.

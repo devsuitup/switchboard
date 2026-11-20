@@ -5,7 +5,7 @@ Switchboard can report the time spent on Claude sessions to
 `http://localhost:5600`.
 
 It is **off by default**; off, nothing is sent and no connection is attempted.
-Turn it on in **Global Settings → Activity Reporting → Send session activity to
+Turn it on in **Global Settings → Integrations → Activity Reporting → Send session activity to
 ActivityWatch**. The switch applies at once, without **Save Settings**, and is
 remembered across launches (`activityReporting`). Nothing leaves the machine.
 

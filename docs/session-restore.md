@@ -5,7 +5,7 @@ closed.
 
 ## The setting
 
-**Global Settings → Application → Restore Sessions on Startup**:
+**Global Settings → General → Startup → Restore Sessions on Startup**:
 
 | Option | Behaviour |
 |---|---|
