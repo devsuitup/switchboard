@@ -169,7 +169,7 @@ Each project shows at most **Max Visible Sessions** (default 10) sessions
 modified within **Session Max Age** (default 3 days); the others sit behind a
 `+ N older` link. Running and pinned sessions, and sessions waiting to be
 restored, are always shown. Both limits are
-in [Global Settings](settings.md#application).
+in [Global Settings → Sessions → Sidebar list](settings.md#sidebar-list).
 
 ### Sessions started by a program
 
@@ -177,7 +177,7 @@ A session that a program started through the Claude Agent SDK — a headless
 `claude -p` run, a review tool spawning one session per batch of files — is
 left out of the list: its transcript carries no link to the session that
 launched it, so it cannot be nested under it like a subagent. Turn off **Hide
-SDK-launched Sessions** in [Global Settings](settings.md#application) to list
+SDK-launched Sessions** in [Global Settings → Sessions → Sidebar list](settings.md#sidebar-list) to list
 them. Their subagents are hidden with them, and a project holding only such
 sessions is not listed. A session you have open, or left open when Switchboard
 last closed, stays listed, and so does one you resumed and typed into.

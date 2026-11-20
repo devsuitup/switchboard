@@ -22,7 +22,7 @@ many Linux desktops.
 
 ### Rebinding
 
-In **Global Settings → Keyboard Shortcuts**:
+In **Global Settings → Keyboard → Keyboard Shortcuts**:
 
 1. Click the button showing the current binding. It reads *Press keys…*.
 2. Press the new combination. At least one modifier (Cmd/Ctrl, Option/Alt or
@@ -98,7 +98,7 @@ Paste, Select All — carry Electron's default keys for their roles. There is no
 ## Settings navigation
 
 Tab enters the selected Settings page button. Up/Down select the previous or next
-page; Left/Right do the same in the narrow horizontal strip. Home/End select the
+page; Left/Right do the same in both layouts. Home/End select the
 first/last page. Enter or Space activates a page button. Tab then enters the
 page's first enabled control, followed by its remaining controls and the footer.
 Shift+Tab moves back through the controls. The two explanatory disclosure blocks

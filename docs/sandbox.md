@@ -29,8 +29,8 @@ badge is also shown when Switchboard reattaches to a running sandboxed session.
 Sandbox is off by default. It can be set at three levels, the most specific
 winning:
 
-- **Global Settings → Claude CLI Options → Sandbox**, for every new session;
-- **Project Settings → Sandbox**, for one project;
+- **Global Settings → Sessions → Launch → Sandbox**, for every new session;
+- **Project Settings → Launch → Sandbox**, for one project;
 - the **Sandbox** toggle of the New Session or Resume dialog, for one launch —
   see [Launching sessions](launching-sessions.md).
 

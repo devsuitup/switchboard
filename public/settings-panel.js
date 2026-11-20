@@ -82,11 +82,13 @@
     const addDirsValue = fieldValue('addDirs');
     const visCountValue = fieldValue('visibleSessionCount');
     const maxAgeValue = fieldValue('sessionMaxAgeDays');
-    let hideSdkValue = fieldValue('hideSdkSessions');
+    const hideSdkValue = fieldValue('hideSdkSessions');
+    let appliedHideSdk = hideSdkValue;
     const themeValue = fieldValue('terminalTheme');
     const rightClickValue = fieldValue('terminalRightClick');
     const restoreStartupValue = fieldValue('restoreOnStartup');
-    let mcpEmulationValue = fieldValue('mcpEmulation');
+    const mcpEmulationValue = fieldValue('mcpEmulation');
+    let appliedMcpEmulation = mcpEmulationValue;
     const schedulesTabValue = fieldValue('schedulesTab');
     const autoUpdateValue = fieldValue('autoUpdate');
     const receiveBetaVersionsValue = fieldValue('receiveBetaVersions');
@@ -588,7 +590,9 @@
       }
     }
     for (const section of [...form.children]) {
-      if (section.classList.contains('settings-section')) section.remove();
+      if (!section.classList.contains('settings-section')) continue;
+      if (section.querySelector('.settings-field')) pages.get(isProject ? 'launch' : 'advanced').append(section);
+      else section.remove();
     }
     form.querySelectorAll('div.settings-section-title').forEach(old => {
       const heading = document.createElement('h3');
@@ -598,6 +602,11 @@
     });
     const navButtons = [...layout.querySelectorAll('.settings-nav button')];
     const storageKey = 'settingsSection:' + (isProject ? 'project' : 'global');
+    function revealActiveNav() {
+      if (settingsViewer.classList.contains('settings-narrow')) {
+        navButtons.find(button => button.classList.contains('active'))?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+      }
+    }
     function selectPage(id) {
       if (!pages.has(id)) id = pageDefs[0][0];
       for (const [pageId, page] of pages) page.hidden = pageId !== id;
@@ -609,6 +618,7 @@
         else button.removeAttribute('aria-current');
       }
       try { localStorage.setItem(storageKey, id); } catch {}
+      revealActiveNav();
     }
     for (const [index, button] of navButtons.entries()) {
       button.addEventListener('click', () => selectPage(button.dataset.section));
@@ -631,12 +641,15 @@
     }
     let remembered;
     try { remembered = localStorage.getItem(storageKey); } catch {}
-    selectPage(options.section ?? remembered);
+    selectPage(pages.has(options.section) ? options.section : remembered);
     settingsViewer.classList.remove('settings-narrow');
     if (typeof ResizeObserver !== 'undefined') {
       settingsResizeObserver = new ResizeObserver(entries => {
         for (const entry of entries) {
-          if (entry.target === settingsViewer && entry.contentRect.width > 0) settingsViewer.classList.toggle('settings-narrow', entry.contentRect.width < 720);
+          if (entry.target === settingsViewer && entry.contentRect.width > 0) {
+            settingsViewer.classList.toggle('settings-narrow', entry.contentRect.width < 720);
+            revealActiveNav();
+          }
         }
       });
       settingsResizeObserver.observe(settingsViewer);
@@ -939,12 +952,12 @@
         if (settings.shortcuts && typeof window._applyShortcuts === 'function') {
           window._applyShortcuts(settings.shortcuts);
         }
-        if (settings.hideSdkSessions !== hideSdkValue && typeof loadProjects === 'function') {
+        if (settings.hideSdkSessions !== appliedHideSdk && typeof loadProjects === 'function') {
           await Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
         } else if (typeof refreshSidebar === 'function') {
           refreshSidebar();
         }
-        hideSdkValue = settings.hideSdkSessions;
+        appliedHideSdk = settings.hideSdkSessions;
         // Re-arm the remote refresher so a host added here pulls immediately.
         try { await window.api.remoteHostsApply(); } catch {}
       }
@@ -952,7 +965,7 @@
       if (!form.isConnected) return;
 
       // Notify if IDE Emulation changed
-      if (!isProject && settings.mcpEmulation !== mcpEmulationValue) {
+      if (!isProject && settings.mcpEmulation !== appliedMcpEmulation) {
         const notice = document.createElement('div');
         notice.className = 'settings-notice';
         notice.textContent = 'IDE Emulation setting changed. New sessions will use the updated setting \u2014 running sessions are not affected.';
@@ -960,7 +973,22 @@
         saveBtn.parentElement.insertBefore(notice, saveBtn);
         setTimeout(() => notice.remove(), 8000);
       }
-      mcpEmulationValue = settings.mcpEmulation;
+      appliedMcpEmulation = settings.mcpEmulation;
+
+      const normalizedControls = {
+        'sv-worktree-name': settings.worktreeName,
+        'sv-pre-launch': settings.preLaunchCmd,
+        'sv-add-dirs': settings.addDirs,
+        'sv-visible-count': settings.visibleSessionCount,
+        'sv-max-age': settings.sessionMaxAgeDays,
+        'sv-remote-refresh': settings.remoteRefreshMs === undefined ? undefined : settings.remoteRefreshMs / 60000,
+      };
+      trackedControls.forEach((control, index) => {
+        if (normalizedControls[control.id] === undefined) return;
+        const normalized = String(normalizedControls[control.id]);
+        if (controlValue(control) === submitted.values[index]) control.value = normalized;
+        submitted.values[index] = normalized;
+      });
 
       const saveBtn = settingsViewerBody.querySelector('#sv-save-btn');
       saveBtn.textContent = rejectedHosts ? 'Some changes not saved' : deferred ? '✓ Applied' : '✓ Saved';

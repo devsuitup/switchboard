@@ -115,6 +115,9 @@ test('an explicit Archived deep link wins and is remembered; unknown links fall 
   assert.deepEqual(h.active(), ['archived']);
   assert.equal(h.w.localStorage.getItem('settingsSection:global'), 'archived');
   await h.open('global', { section: 'missing' });
+  assert.deepEqual(h.active(), ['archived']);
+  h.w.localStorage.setItem('settingsSection:global', 'missing-too');
+  await h.open('global', { section: 'missing' });
   assert.deepEqual(h.active(), ['general']);
 });
 
@@ -281,4 +284,108 @@ test('Save cannot overlap another Save while fields remain editable', async t =>
   assert.equal(h.saved.global.visibleSessionCount, 42);
   assert.equal(h.q('#sv-save-btn').disabled, false);
   assert.match(h.q('#sv-unsaved').textContent, /1 unsaved change/);
+});
+
+test('Save displays normalized values and a clean baseline in global and project forms', async t => {
+  for (const scope of ['global', 'project']) {
+    await t.test(scope, async t => {
+      const h = setup(t);
+      await h.open(scope);
+      if (scope === 'project') {
+        for (const field of ['worktreeName', 'preLaunchCmd', 'addDirs']) h.q(`[data-field="${field}"]`).click();
+      }
+      const fields = [['worktree-name', '  branch  ', 'branch'], ['pre-launch', '  env  ', 'env'], ['add-dirs', '  /tmp  ', '/tmp']];
+      if (scope === 'global') fields.push(['visible-count', '', '10'], ['max-age', '', '3'], ['remote-refresh', '0', '5']);
+      for (const [id, value] of fields) h.q('#sv-' + id).value = value;
+      h.q('#sv-save-btn').click();
+      await settle();
+      for (const [id, , expected] of fields) assert.equal(h.q('#sv-' + id).value, expected, `${scope}: ${id} shows saved value`);
+      assert.equal(h.q('#sv-unsaved').textContent, '');
+      await h.open(scope);
+      for (const [id, , expected] of fields) assert.equal(h.q('#sv-' + id).value, expected, `${scope}: ${id} survives reopen`);
+    });
+  }
+});
+
+test('normalization preserves pending edits and compares them with the saved baseline', async t => {
+  const h = setup(t);
+  await h.open();
+  let release;
+  h.w.api.remoteHostsApply = () => new Promise(resolve => { release = resolve; });
+  h.q('#sv-visible-count').value = '';
+  h.q('#sv-worktree-name').value = '  branch  ';
+  h.q('#sv-remote-refresh').value = '0';
+  h.q('#sv-save-btn').click();
+  await settle();
+  h.q('#sv-visible-count').value = '11';
+  h.q('#sv-worktree-name').value = 'new branch';
+  release();
+  await settle();
+  assert.equal(h.q('#sv-visible-count').value, '11');
+  assert.equal(h.q('#sv-worktree-name').value, 'new branch');
+  assert.equal(h.q('#sv-remote-refresh').value, '5');
+  assert.match(h.q('#sv-unsaved').textContent, /2 unsaved changes/);
+  h.q('#sv-visible-count').value = '10';
+  h.q('#sv-worktree-name').value = 'branch';
+  h.q('#sv-visible-count').dispatchEvent(new h.w.Event('input', { bubbles: true }));
+  assert.equal(h.q('#sv-unsaved').textContent, '', 'returning to persisted normalized values clears the counter');
+});
+
+test('unlisted template rows remain reachable in both settings scopes', async t => {
+  for (const scope of ['global', 'project']) {
+    await t.test(scope, async t => {
+      const h = setup(t);
+      const body = h.q('#settings-viewer-body');
+      const descriptor = Object.getOwnPropertyDescriptor(h.w.Element.prototype, 'innerHTML');
+      Object.defineProperty(body, 'innerHTML', {
+        set(html) {
+          descriptor.set.call(this, html);
+          const row = h.w.document.createElement('div');
+          row.className = 'settings-field';
+          row.innerHTML = '<label>Future option<input id="sv-future-option" value="kept"></label>';
+          this.querySelector('.settings-section').append(row);
+        },
+        get() { return descriptor.get.call(this); },
+      });
+      await h.open(scope);
+      const control = h.q('#sv-future-option');
+      assert.ok(control, `${scope}: an unlisted row is not deleted`);
+      const page = control.closest('.settings-page');
+      assert.ok(page, 'fallback belongs to a navigable page');
+      h.click(page.dataset.section);
+      assert.equal(page.hidden, false);
+      control.value = 'changed';
+      control.dispatchEvent(new h.w.Event('input', { bubbles: true }));
+      assert.match(h.q('#sv-unsaved').textContent, /1 unsaved change/);
+    });
+  }
+});
+
+test('opening a narrow strip brings the remembered or explicit active item into view', async t => {
+  const h = setup(t);
+  const scrolled = [];
+  h.w.HTMLElement.prototype.scrollIntoView = function (options) { scrolled.push({ id: this.dataset.section, options }); };
+  h.w.localStorage.setItem('settingsSection:global', 'advanced');
+  for (const options of [undefined, { section: 'archived' }]) {
+    await h.open('global', options);
+    const observer = h.observers.at(-1);
+    observer.callback([{ target: observer.target, contentRect: { width: 480 } }]);
+    assert.equal(scrolled.at(-1)?.id, options?.section || 'advanced');
+    assert.equal(scrolled.at(-1).options.inline, 'nearest');
+    assert.equal(scrolled.at(-1).options.block, 'nearest');
+  }
+});
+
+test('reporting row retains its bottom corners and spacing before its disclosure', async t => {
+  const h = setup(t);
+  await h.open();
+  const row = h.q('#sv-activity-reporting').closest('.settings-field');
+  assert.equal(row.nextElementSibling.tagName, 'DETAILS');
+  const css = fs.readFileSync(path.join(root, 'public/style.css'), 'utf8');
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]+)\}/g)];
+  const rule = rules.find(([, selector, body]) => selector.includes('.settings-section > .settings-field') && body.includes('border-bottom-left-radius'));
+  assert.ok(rule && row.matches(rule[1].trim()), 'reporting matches the production last-row rule');
+  assert.match(rule[2], /border-bottom-left-radius:\s*10px/);
+  assert.match(rule[2], /border-bottom-right-radius:\s*10px/);
+  assert.match(rule[2], /margin-bottom:\s*20px/);
 });
