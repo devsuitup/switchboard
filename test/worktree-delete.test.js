@@ -215,6 +215,40 @@ test('an unresolvable cwd is bounded by the timeout and falls back to the string
   assert.deepEqual(result, [{ sessionId: 'pty', cwd: inside }]);
 });
 
+test('timed-out cwds still match both spellings of an aliased worktree', async () => {
+  for (const requested of ['C:/repo/.worktrees/WORKTR~1', 'C:/REPO~1/.worktrees/task']) {
+    const canonical = 'C:/repository/.worktrees/worktree-long-name';
+    const active = new Map([
+      ['literal-root', { cwd: requested }],
+      ['literal-child', { cwd: requested + '/nested' }],
+      ['canonical-root', { cwd: canonical }],
+      ['canonical-child', { cwd: canonical + '/nested' }],
+      ['sibling', { cwd: requested + '-sibling' }],
+      ['canonical-sibling', { cwd: canonical + '-sibling' }],
+      ['exited', { cwd: requested, exited: true }],
+      ['remote', { cwd: requested, host: 'server' }],
+    ]);
+    const descriptors = [{ sessionId: 'descriptor', cwd: requested + '/descriptor' }];
+    let calls = 0;
+    const result = await deletion.runningSessions(requested, active, descriptors, {
+      realpath: () => ++calls === 1 ? Promise.resolve(canonical) : new Promise(() => {}),
+      timeoutMs: 10,
+    });
+    assert.deepEqual(result, [...active].slice(0, 4).map(([sessionId, { cwd }]) => ({ sessionId, cwd })).concat(descriptors),
+      'timed-out cwds must retain sessions under both literal and resolved worktree roots');
+  }
+});
+
+test('a timed-out worktree lookup retains literal membership when the cwd resolves to an alias', async () => {
+  const requested = 'C:/repo/.worktrees/WORKTR~1';
+  const cwd = requested + '/nested';
+  const result = await deletion.runningSessions(requested, new Map([['live', { cwd }]]), [], {
+    realpath: value => value === requested ? new Promise(() => {}) : Promise.resolve('C:/repo/.worktrees/long-name/nested'),
+    timeoutMs: 10,
+  });
+  assert.deepEqual(result, [{ sessionId: 'live', cwd }]);
+});
+
 test('running sessions match an alias ancestor in either the requested path or recorded cwd', async t => {
   const fs = require('node:fs');
   const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'sb-delete-sessions-'));

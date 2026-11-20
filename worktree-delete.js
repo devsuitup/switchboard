@@ -179,14 +179,16 @@ async function runningSessions(worktreePath, activeSessions, descriptors, { real
   const candidates = [...activeSessions, ...descriptors.map(s => [s.sessionId, s])]
     .filter(([, session]) => session && !session.exited && !session.host && session.cwd);
   const root = await resolveWithin(realpath, worktreePath, timeoutMs);
-  const roots = new Set([comparablePath(worktreePath), root].map(pathRoot));
+  const worktreePaths = [comparablePath(worktreePath), root];
+  const roots = new Set(worktreePaths.map(pathRoot));
   const cwds = await Promise.all(candidates.map(([, session]) => {
     const literal = comparablePath(session.cwd);
     return roots.has(pathRoot(literal)) ? resolveWithin(realpath, session.cwd, timeoutMs) : literal;
   }));
   const sessions = new Map();
   candidates.forEach(([key, session], i) => {
-    if (cwds[i] !== root && !cwds[i].startsWith(root + '/')) return;
+    const sessionPaths = [comparablePath(session.cwd), cwds[i]];
+    if (!sessionPaths.some(cwd => worktreePaths.some(root => cwd === root || cwd.startsWith(root + '/')))) return;
     const sessionId = session.realSessionId || session.sessionId || key;
     sessions.set(sessionId, { sessionId, cwd: session.cwd });
   });
