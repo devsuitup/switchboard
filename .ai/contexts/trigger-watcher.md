@@ -326,20 +326,27 @@ the depth follows the file that will run, not a prediction from PATH. That line
 is the process's `Arguments`, so nothing re-serializes it; `UseShellExecute=$false`
 keeps the console, input is not redirected, and the helper waits and exits with
 the child's status. When PowerShell resolves an `ExternalScript` (a `claude.ps1`,
-which it prefers over a neighbouring `.cmd`), the helper looks for an
-`Application` of the same name in the same directory whose extension is in
-`PATHEXT` (`Get-Command -CommandType Application`, filtered: it also lists the
-extensionless sh shim npm leaves there). For an npm batch shim, it reads the
-`"%dp0%\<target.js or target.exe>" %*` invocation, ignoring the earlier bundled
-Node existence probe. A native target runs directly; a JavaScript target runs
-with the neighbouring `node.exe`, or `node.exe` resolved from the profile's PATH,
-with the script prepended to argv. `ProcessStartInfo` starts this target without
-executing either npm shim. A missing declared target or Node fails the launch.
+which it prefers over a neighbouring `.cmd`), the helper looks for a `.cmd` or
+`.bat` of the same name in the same directory (`Get-Command -CommandType
+Application`, filtered by extension: it also lists the extensionless sh shim npm
+leaves there) and reads that shim's final invocation, `"%dp0%\<target.js or
+target.exe>" %*` (npm 7 and later) or `"%~dp0\<target>" %*` (the cmd-shim
+template: pnpm, yarn classic, npm 6), ignoring the earlier bundled Node existence
+probe. The `.ps1` is bypassed only when that target is recognised and exists: a
+native target runs directly; a JavaScript target runs with the neighbouring
+`node.exe`, or `node.exe` resolved from the profile's PATH, with the script
+prepended to argv. `ProcessStartInfo` starts this target without executing either
+shim. When the `.cmd` is not recognised, or its declared target is missing, the
+`.ps1` runs as PowerShell runs it (`& $c @args`, the behaviour before #1107):
+the payload never goes through the batch file, whose `%*` would truncate it at a
+newline or hit cmd's shorter command-line limit (round 2 of #1107: pnpm's shim
+used to be mistaken for an opaque one and preferred over its `.ps1`).
 This preserves multiline and 12,000-character prompts as well as quotes and
-empty tokens: routing them through `.cmd` truncated at a newline or hit cmd's
-shorter command-line limit, even when the PowerShell launch itself fit (#1107).
-Unrecognised batch wrappers retain the caret transport and its batch limitations;
-they do not acquire the npm direct-target guarantee.
+empty tokens, even when the PowerShell launch itself fit (#1107).
+A `.cmd` or `.bat` alone on PATH (no `.ps1`) that is recognised runs its target
+the same way; one that is not recognised retains the caret transport and its
+batch limitations, and a recognised one whose target or Node is missing fails
+the launch.
 Anything else (a profile function or alias named `claude`, a script alone on
 PATH) is run as PowerShell would run it, `& $c @tokens`; what a script then does
 with `$args` is its own. A launch prefix (letters, digits, spaces and
@@ -350,9 +357,18 @@ stays under the 32,767 limit). The helper's fixed cost is included in the size c
 helper form serialized by node-pty would exceed 32,767 (NUL counted) while the plain form
 (`claude '<token>'...`, no preamble, as before the helper) fits, `claudeCommand` uses the
 plain form for that launch only when every argv token survives PowerShell's own
-re-serialization — non-empty, no `"`, none of `& | < > ^ % !` (a `.cmd` shim's
-`%*` re-parses the line), and no trailing `\` on a token with whitespace (the
-quote PowerShell adds would be escaped by it). Otherwise `claudeCommand` throws
+re-serialization — non-empty, no `"`, and no trailing `\` on a token with
+whitespace (the quote PowerShell adds would be escaped by it); and, only when
+the plain form would end in a batch file, none of `& | < > ^ % !` and no line
+break (cmd's `%*` re-parses the line, truncating at a newline). That last
+condition follows `powershellReparsesClaude` (`claude-binary.js`): the `claude`
+PowerShell itself would resolve from the session's `PATH`, trying `.PS1` before
+`PATHEXT` as PowerShell does, is a `.cmd`/`.bat`, or nothing is found, or a
+launch prefix is set (what the prefix does with its arguments is unknown). A
+`claude.exe`, or a `claude.ps1` (npm's and pnpm's start node or the native
+target without a batch file), receives those characters exactly through
+PowerShell's native passing, so refusing them there would reject launches main
+delivered intact (round 2 of #1107). Otherwise `claudeCommand` throws
 `the launch is too long for PowerShell to pass its arguments exactly: ...`, which
 `open-terminal` returns as its error, since the plain form would hand claude a
 changed argument (#1107, point 3) and nothing shorter carries the preamble. `--ide` joins the argv before this serialization.
@@ -378,7 +394,7 @@ node-pty's `argsToCommandLine`, starts `cmd.exe` with that exact command line an
 compares the argv a disposable echo executable and `claude.cmd` / `claude.bat` shims received, including a launch-directory executable shadowing a PATH shim and the reverse, a whitespace-only prefix, and a native wrapper prefix over resume and fork options,
 with the input. `test/trigger-name-transport-powershell-windows.test.js` does the
 same through `powershell.exe` and, when installed, `pwsh.exe`, into an echo
-`claude.exe`, a custom `claude.cmd` shim, a `claude.ps1` alone (run as a script) and beside a custom `claude.cmd` (the shim runs), an npm layout (the target runs directly), a profile function named `claude`, a native and a batch (`wrap`, `wrap.cmd`, absolute) launch prefix, a 20,000 character argument, with quotes, backslashes, an empty-looking
+`claude.exe`, a custom `claude.cmd` shim, a `claude.ps1` alone (run as a script) and beside a custom, unrecognised `claude.cmd` (the script runs, as before #1107), an npm layout (the target runs directly), a profile function named `claude`, a native and a batch (`wrap`, `wrap.cmd`, absolute) launch prefix, a 20,000 character argument, with quotes, backslashes, an empty-looking
 quote pair, `$env:PATH`, backticks, `;`, `&`, `%PATH%`, typographic quotes and
 unicode. It also runs the launch plan under node-pty against a probe `claude.exe` that checks it has a console, reads a line from standard input and exits with a chosen status. It also writes Ctrl+C to the pseudo console and asserts that the probe reports it. On Linux, string tests pin the helper source and the launch literals; the encoder inside the helper is exercised only by the Windows file. Neither file is a live Claude Code or ConPTY qualification;
 nushell remains unexecuted. `test/trigger-name-transport-npm-windows.test.js`
@@ -387,6 +403,15 @@ invocation, plus an extensionless POSIX shim. It compares received argv for
 bundled Node, PATH Node, multiline and 12,000-character prompts and a native
 target, and asserts that neither npm shim executed. The same fixture checks
 that the headless resolver selects the CLI invocation rather than the Node probe.
+`test/trigger-name-transport-pnpm-windows.test.js` does the same with the
+fixture's pnpm-shaped shim (`%~dp0`) for the multiline and 12,000-character
+prompts, and with an unrecognised `claude.cmd` beside the `claude.ps1`, where
+the argv must arrive intact through the script and the batch shim must not run;
+the headless resolver is checked on the pnpm shim too. The refusal predicate's
+three outcomes (refused for a `claude.cmd`, a prefix or no `claude`; kept for a
+`claude.exe` or a `claude.ps1`; always refused for a quote or a trailing
+backslash) are pinned in `test/trigger-name-transport.test.js` with real files
+on a temporary `PATH`, on Windows only since the lookup uses Windows paths.
 
 A name with an unpaired surrogate is schema-valid but cannot survive UTF-8, so
 `executeOpen` refuses it right after the first cancellation/deadline check, before

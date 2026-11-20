@@ -83,7 +83,7 @@ function makeBin(kind) {
   return dir;
 }
 const KINDS = ['exe', 'cmd', 'ps1', 'ps1cmd', 'npm', 'pty', 'wrapper', 'wrapcmd'];
-const BESIDE_SHIM = new Set(['ps1cmd', 'npm']);
+const VIA_SCRIPT = { ps1: 'a claude.ps1 alone on PATH runs as PowerShell runs it', ps1cmd: 'an unrecognised claude.cmd beside a claude.ps1 leaves the script to PowerShell' };
 const present = exe => win && spawnSync(exe, ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], { encoding: 'utf8' }).status === 0;
 const shells = [['powershell.exe', win], ['pwsh.exe', present('pwsh.exe')]];
 before(() => { if (!skip) for (const kind of KINDS) bins[kind] = makeBin(kind); });
@@ -112,9 +112,11 @@ async function run(shell, kind, request, expected) {
   runPlan(shell, spawned.args, env);
   const viaScript = fs.existsSync(outputOf(kind, '.ps1'));
   assert.deepEqual(read(outputOf(kind, viaScript ? '.ps1' : '')), expected);
-  if (kind === 'ps1') assert.equal(viaScript, true, 'a claude.ps1 alone on PATH runs as PowerShell runs it');
-  if (BESIDE_SHIM.has(kind)) assert.equal(viaScript, false, 'the claude.ps1 ran although a claude.cmd sits beside it');
-  if (kind === 'npm') assert.equal(fs.existsSync(outputOf(kind, '.cmd')), false, 'the npm batch shim must not run');
+  if (VIA_SCRIPT[kind]) assert.equal(viaScript, true, VIA_SCRIPT[kind]);
+  if (kind === 'npm') {
+    assert.equal(viaScript, false, 'the claude.ps1 ran although its claude.cmd is a recognised npm shim');
+    assert.equal(fs.existsSync(outputOf(kind, '.cmd')), false, 'the npm batch shim must not run');
+  }
 }
 
 const NAMES = ['smithy hardening', 'say "hi"', 'a" b', 'a b" c', 'a\\', 'C:\\dir\\', 'a\\b c', 'a b\\\\', 'say "hi\\"', '\\"', '"', '""', ' "a" "b" ', 'a"b',

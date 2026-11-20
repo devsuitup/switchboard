@@ -74,3 +74,11 @@ test('escapeForCmd escapes once for one cmd parse and twice for a shim re-parse'
   assert.equal(escapeForCmd('a&b'), '^^^"a^^^&b^^^"');
   assert.equal(escapeForCmd('a\\'), '^^^"a\\\\^^^"');
 });
+
+test('a pnpm claude.cmd shim, which spells its target with %~dp0, runs node on the cli.js it points to', () => {
+  const shim = '@SETLOCAL\r\n@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe"  "%~dp0\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*\r\n) ELSE (\r\n  node  "%~dp0\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*\r\n)\r\n';
+  const cli = `${NPM}\\node_modules\\@anthropic-ai\\claude-code\\cli.js`;
+  const files = { [`${NPM}\\claude.cmd`]: shim, [`${NPM}\\claude.ps1`]: '', [cli]: '', 'C:\\node\\node.exe': '' };
+  const r = resolveWindowsClaude(['--bg', 'a\nb'], { PATH: `${NPM};C:\\node` }, deps(files));
+  assert.deepEqual(r, { program: 'C:\\node\\node.exe', args: [cli, '--bg', 'a\nb'], verbatim: false });
+});

@@ -397,7 +397,9 @@ background-agent commands use (see `bg-agents.md`, "Running the CLI") — a nati
 `claude.exe` runs directly, an npm `claude.cmd` shim is unwrapped to `node
 <cli.js>` or its declared native target, an opaque shim goes through
 `cmd.exe /d /s /c` with escaped arguments. The npm target comes from the final
-`"%dp0%\<target>" %*` invocation, not the earlier `node.exe` existence probe.
+`"%dp0%\<target>" %*` invocation (npm 7 and later) or `"%~dp0\<target>" %*`
+(the cmd-shim template: pnpm, yarn classic, npm 6), not the earlier `node.exe`
+existence probe.
 For native executables and recognised npm targets, argv never crosses a shell,
 so multiline and long prompts, quotes, trailing backslashes, `&`, `%PATH%`
 and an empty argument reach claude as given. Before this, PowerShell re-serialized

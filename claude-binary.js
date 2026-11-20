@@ -37,7 +37,7 @@ function resolveWindowsClaude(argv, env = {}, deps = {}) {
 
   let shim = '';
   try { shim = readFile(found); } catch {}
-  const m = /"%dp0%\\([^"]+\.(?:js|exe))"\s+%\*/i.exec(shim);
+  const m = /"(?:%dp0%|%~dp0)\\([^"]+\.(?:js|exe))"\s+%\*/i.exec(shim);
   if (m) {
     const dir = path.win32.dirname(found);
     const script = path.win32.join(dir, m[1]);
@@ -63,4 +63,12 @@ function cmdEscapePasses(env = {}, { cwd, wrapped = false, exists = p => fs.exis
   return /\.(cmd|bat)$/i.test(found || '') ? 2 : 1;
 }
 
-module.exports = { resolveWindowsClaude, escapeForCmd, cmdEscapePasses };
+// see .ai/contexts/trigger-watcher.md ("Naming a new session"): PowerShell tries .PS1 before PATHEXT
+function powershellReparsesClaude(env = {}, { exists = p => fs.existsSync(p) } = {}) {
+  const found = findOnPath('claude', {
+    pathEnv: env.PATH || env.Path, pathExt: '.PS1;' + (env.PATHEXT || '.COM;.EXE;.BAT;.CMD'), exists, sep: ';',
+  });
+  return !found || /\.(cmd|bat)$/i.test(found);
+}
+
+module.exports = { resolveWindowsClaude, escapeForCmd, cmdEscapePasses, powershellReparsesClaude };

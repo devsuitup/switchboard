@@ -124,9 +124,11 @@ test('the PowerShell helper falls back to the command PowerShell resolves and ne
   const source = helperSource();
   assert.ok(source.startsWith('function __switchboard_launch{param([string]$n)'), source);
   assert.ok(!source.includes('function claude'));
-  assert.ok(source.includes("Get-Command $n -ErrorAction Stop|Select-Object -First 1;if($c.CommandType -eq 'ExternalScript'){"), source);
-  assert.ok(source.includes("[IO.Path]::GetDirectoryName($_.Source) -eq [IO.Path]::GetDirectoryName($c.Source) -and $x -contains [IO.Path]::GetExtension($_.Source)}|Select-Object -First 1;if($a){$c=$a}};"), source);
-  assert.ok(source.includes("if($c.CommandType -ne 'Application'){& $c @args;return};"), source);
+  assert.ok(source.includes("Get-Command $n -ErrorAction Stop|Select-Object -First 1;$f=$c.Source;$t='';if($c.CommandType -eq 'ExternalScript'){"), source);
+  assert.ok(source.includes("[IO.Path]::GetDirectoryName($_.Source) -eq [IO.Path]::GetDirectoryName($c.Source) -and $_.Source -match '\\.(cmd|bat)$'}|Select-Object -First 1;$f=if($a){$a.Source}else{''}}"), source);
+  assert.ok(source.includes("elseif($c.CommandType -ne 'Application'){& $c @args;return};"), source);
+  assert.ok(source.includes("'\"(?:%dp0%|%~dp0)\\\\([^\"]+\\.(?:js|exe))\"\\s+%\\*'"), source);
+  assert.ok(source.includes("if($c.CommandType -eq 'ExternalScript' -and !($t -and [IO.File]::Exists($t))){& $c @args;return};"), source);
   assert.ok(source.endsWith('$p=[Diagnostics.Process]::Start($i);$p.WaitForExit();exit $p.ExitCode};'), source);
 });
 test('the PowerShell helper chooses the cmd escape depth from the resolved Source extension', () => {
@@ -212,12 +214,37 @@ for (const shell of ['pwsh.exe', 'powershell.exe']) {
   });
 }
 // see .ai/contexts/trigger-watcher.md ("Naming a new session"): PowerShell re-serializes the plain form itself
-const LOSSY = [['a quote', 'say "hi"'], ['a trailing backslash after whitespace', 'C:\\space dir\\'], ['a cmd metacharacter', 'a&b'], ['a percent sign', '100%']];
+const LOSSY = [['a quote', 'say "hi"'], ['a trailing backslash after whitespace', 'C:\\space dir\\']];
+const BATCH_LOSSY = [['a cmd metacharacter', 'a&b'], ['a percent sign', '100%'], ['a line break', 'first\nsecond']];
 const REFUSAL = /too long for PowerShell to pass its arguments exactly.*shorten the system prompt/;
+const claudeOnPath = (t, ...names) => {
+  const dir = tmp(t);
+  for (const name of names) fs.writeFileSync(path.join(dir, name), '');
+  return { PATH: dir, PATHEXT: '.COM;.EXE;.BAT;.CMD' };
+};
+const onWindows = { skip: process.platform !== 'win32' && 'the PATH lookup uses Windows paths' };
+const resumeOnPath = (shell, env, options) => launch(shell, { isNew: false, transcript: true, env, options: { appendSystemPrompt: 'x'.repeat(32300), ...options } });
 for (const shell of ['pwsh.exe', 'powershell.exe']) {
   for (const [label, value] of LOSSY) {
     test(`${shell} refuses a launch that only fits without the helper when ${label} would not survive the plain form`, async () => {
       await assert.rejects(resumeWith(shell, 'x'.repeat(32300), { addDirs: value }), REFUSAL);
+    });
+    test(`${shell} refuses that launch with ${label} even for a claude.exe, which PowerShell re-serializes`, onWindows, async t => {
+      await assert.rejects(resumeOnPath(shell, claudeOnPath(t, 'claude.exe'), { addDirs: value }), REFUSAL);
+    });
+  }
+  for (const [label, value] of BATCH_LOSSY) {
+    test(`${shell} refuses a launch that only fits without the helper when ${label} would reach a claude.cmd, a prefix or no claude at all`, onWindows, async t => {
+      await assert.rejects(resumeWith(shell, 'x'.repeat(32300), { addDirs: value }), REFUSAL, 'no claude');
+      await assert.rejects(resumeOnPath(shell, claudeOnPath(t, 'claude.cmd'), { addDirs: value }), REFUSAL, 'claude.cmd');
+      await assert.rejects(resumeOnPath(shell, claudeOnPath(t, 'claude.exe'), { addDirs: value, preLaunchCmd: 'wrapper.exe --' }), REFUSAL, 'prefix');
+    });
+    test(`${shell} keeps the plain form at the limit when ${label} reaches a claude.exe or a claude.ps1, which PowerShell passes exactly`, onWindows, async t => {
+      for (const files of [['claude.exe'], ['claude.cmd', 'claude.ps1']]) {
+        let spawned;
+        await assert.doesNotReject(async () => { spawned = await resumeOnPath(shell, claudeOnPath(t, ...files), { addDirs: value }); }, files.join(' + '));
+        assert.equal(spawned.args[2], `claude '--resume' '${ID}' '--add-dir' '${value}' '--append-system-prompt' '${'x'.repeat(32300)}'`);
+      }
     });
   }
   test(`${shell} refuses a launch that only fits without the helper when an empty argument would be dropped`, () => {

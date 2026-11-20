@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { escapeForCmd, cmdEscapePasses, resolveWindowsClaude } = require('../../../claude-binary');
+const { escapeForCmd, cmdEscapePasses, powershellReparsesClaude, resolveWindowsClaude } = require('../../../claude-binary');
 
 // --- Cross-platform shell resolution ---
 const isWindows = process.platform === 'win32';
@@ -163,18 +163,19 @@ function isWslShell(shellPath) {
 
 // see .ai/contexts/trigger-watcher.md ("Naming a new session")
 const PS_PREAMBLE = "function __switchboard_launch{param([string]$n)"
-  + "$c=Get-Command $n -ErrorAction Stop|Select-Object -First 1;"
-  + "if($c.CommandType -eq 'ExternalScript'){$x=if($env:PATHEXT){$env:PATHEXT -split ';'}else{'.COM','.EXE','.BAT','.CMD'};"
-  + "$a=Get-Command $n -CommandType Application -ErrorAction SilentlyContinue|Where-Object{[IO.Path]::GetDirectoryName($_.Source) -eq [IO.Path]::GetDirectoryName($c.Source) -and $x -contains [IO.Path]::GetExtension($_.Source)}|Select-Object -First 1;"
-  + "if($a){$c=$a}};"
-  + "if($c.CommandType -ne 'Application'){& $c @args;return};"
-  + "$f=$c.Source;if($f -match '\\.(cmd|bat)$'){"
-  + "$m=[regex]::Match([IO.File]::ReadAllText($f),'\"%dp0%\\\\([^\"]+\\.(?:js|exe))\"\\s+%\\*','IgnoreCase');"
-  + "if($m.Success){$b=[IO.Path]::GetDirectoryName($f);$t=[IO.Path]::Combine($b,$m.Groups[1].Value);"
-  + "if(![IO.File]::Exists($t)){throw ('npm target not found: '+$t)};"
-  + "if($t -match '\\.exe$'){$f=$t}else{$f=[IO.Path]::Combine($b,'node.exe');"
+  + "$c=Get-Command $n -ErrorAction Stop|Select-Object -First 1;$f=$c.Source;$t='';"
+  + "if($c.CommandType -eq 'ExternalScript'){"
+  + "$a=Get-Command $n -CommandType Application -ErrorAction SilentlyContinue|Where-Object{[IO.Path]::GetDirectoryName($_.Source) -eq [IO.Path]::GetDirectoryName($c.Source) -and $_.Source -match '\\.(cmd|bat)$'}|Select-Object -First 1;"
+  + "$f=if($a){$a.Source}else{''}}"
+  + "elseif($c.CommandType -ne 'Application'){& $c @args;return};"
+  + "if($f -match '\\.(cmd|bat)$'){"
+  + "$m=[regex]::Match([IO.File]::ReadAllText($f),'\"(?:%dp0%|%~dp0)\\\\([^\"]+\\.(?:js|exe))\"\\s+%\\*','IgnoreCase');"
+  + "if($m.Success){$t=[IO.Path]::Combine([IO.Path]::GetDirectoryName($f),$m.Groups[1].Value)}};"
+  + "if($c.CommandType -eq 'ExternalScript' -and !($t -and [IO.File]::Exists($t))){& $c @args;return};"
+  + "if($t){if(![IO.File]::Exists($t)){throw ('npm target not found: '+$t)};"
+  + "if($t -match '\\.exe$'){$f=$t}else{$b=[IO.Path]::GetDirectoryName($f);$f=[IO.Path]::Combine($b,'node.exe');"
   + "if(![IO.File]::Exists($f)){$f=(Get-Command node.exe -CommandType Application -ErrorAction Stop|Select-Object -First 1).Source};"
-  + "$args=@($t)+$args}}};"
+  + "$args=@($t)+$args}};"
   + "$d=if($f -match '\\.(cmd|bat)$'){2}else{0};"
   + "$l=($args|ForEach-Object{$s='\"'+[regex]::Replace([regex]::Replace($_,'(\\\\*)\"','$1$1\\\"'),'(\\\\*)\\z','$1$1')+'\"';"
   + "for($k=0;$k -lt $d;$k++){$s=[regex]::Replace($s,'([()\\]\\[%!^\"`<>&|;, *?])','^$1')};$s}) -join ' ';"
@@ -228,7 +229,7 @@ function fitsCommandLine(shellPath, command, extraArgs) {
   return argsToCommandLine(shellPath, args).length + 1 <= WINDOWS_COMMAND_LINE_LIMIT;
 }
 
-const survivesPowerShellNative = token => token !== '' && !/["&|<>^%!]/.test(token) && !(/\s/.test(token) && token.endsWith('\\'));
+const survivesPowerShellNative = (token, batch) => token !== '' && !/"/.test(token) && !(batch && /[&|<>^%!\r\n]/.test(token)) && !(/\s/.test(token) && token.endsWith('\\'));
 
 function claudeCommand(shellPath, argv, { env, cwd, prefix = '', windows = isWindows, extraArgs = [], ide = false } = {}) {
   const wrapped = !!prefix.trim();
@@ -239,7 +240,8 @@ function claudeCommand(shellPath, argv, { env, cwd, prefix = '', windows = isWin
   if (fitsCommandLine(shellPath, helper, extraArgs)) return helper;
   const baseline = ide ? (wrapped ? prefix + ' ' : '') + 'claude ' + quoteArgvForShell(shellPath, argv.slice(0, -1), { env, cwd, wrapped }) + ' --ide' : plain;
   if (!fitsCommandLine(shellPath, baseline, extraArgs)) return helper;
-  if (argv.every(survivesPowerShellNative)) return baseline;
+  const batch = wrapped || powershellReparsesClaude(env || {});
+  if (argv.every(token => survivesPowerShellNative(token, batch))) return baseline;
   throw new Error('the launch is too long for PowerShell to pass its arguments exactly: shorten the system prompt or the additional directories, or pick a bash profile');
 }
 
