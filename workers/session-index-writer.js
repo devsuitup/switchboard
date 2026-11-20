@@ -17,7 +17,7 @@ const rawCommands = new Set(['setSetting', 'deleteSetting', 'toggleStar', 'setSt
   'upsertCachedSessions', 'deleteCachedSession', 'deleteCachedFolder', 'replaceSessionMetrics',
   'touchCachedModified', 'setFolderMeta', 'deleteSearchFolder', 'deleteSearchSession', 'deleteSearchType',
   'upsertSearchEntries', 'applySearchFileBatch', 'setCachedEntrypoints', 'setCachedCustomTitles',
-  'setCachedContinuationIndex', 'setCachedFileSize', 'setInitialScanComplete', 'invalidateFullIndex', 'invalidateFullRead', 'certifyFullRead']);
+  'setCachedContinuationIndex', 'setCachedFileSize', 'setInitialScanComplete', 'invalidateFullIndex', 'invalidateFullRead', 'deriveCachedName', 'certifyNameDerivation']);
 const settings = () => db.listSettingKeys('').map(key => [key, db.getSetting(key)]);
 const queue = [];
 const pendingDeletionHistory = new Set();
@@ -75,7 +75,7 @@ function* targetUnits(name, args) {
   } else if (['upsertCachedSessions', 'setCachedEntrypoints', 'setCachedCustomTitles'].includes(name)) {
     for (const row of args[0]) yield Object.assign(() => db[name]([row]), { producerCommand: name, producerArgs: [[row]] });
   } else if (name === 'certifyFullReads') {
-    for (const row of args[2]) yield () => commands.certifyFullReads(args[0], args[1], [row]);
+    for (const row of args[2]) yield () => db.certifyFullRead(args[0], args[1], row.sessionId, row.stamp, row.witness);
   } else if (name === 'replaceSessionMetrics') {
     yield () => db.replaceSessionMetrics(...args);
   } else if (name === 'deleteCachedSession') {

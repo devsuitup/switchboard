@@ -4,7 +4,7 @@
 
 ## Full-content observations (#1144 A1)
 
-A1 retains the unconditional full startup scan. `fullReadStamp` is a nullable
+`fullReadStamp` is a nullable
 JSON filesystem observation, not `fileMtime`, `fileSize`, directory mtime or a
 completion timestamp. Format 1 records runtime, the relative transcript path,
 decimal BigInt dev/ino/birthtimeNs/mtimeNs/ctimeNs/size, and dependencies. Claude
@@ -55,7 +55,66 @@ skipped/deleted/failed counts, read operations, actual body and auxiliary bytes,
 scan/write durations and `ok`. Bridge rereads count again in operations/bytes,
 but once in distinct files. Auxiliary cwd, sidecar and title bytes are separate.
 No transcript text or absolute source paths are logged. Aggregate status text
-is unchanged. A1 adds no user-visible changelog entry (`no-changelog`).
+is unchanged.
+
+## Claude warm startup (#1144 A2)
+
+`populateCacheViaWorker` remains the single-flight coordinator for startup,
+manual rebuild, repair and bounded retries. It captures rows, folder baselines,
+metadata and per-file continuation generations under a read-checked writer
+revision. The scan dispatcher always supplies an explicit `folders` array and
+passes the snapshot through `workerData.startup`; the scan worker never opens
+SQLite. Existing remote `fileSubsets` callers keep their explicit subset API.
+
+Inside the worker, selection enumerates filesystem and cached Claude folders,
+derives project paths afresh (including `resolveWorktreePath(meta.projectPath)
+!== meta.projectPath`), and compares complete observations and sidecars. Cold or
+interrupted population, empty cache/search, content version/configuration
+changes and rebuild force full validation. Missing baselines, pending seals,
+repair and changed paths force the affected folder. Configuration changes
+durably invalidate local baselines, including disabled providers, before work;
+disabled providers retain rows and perform no transcript I/O. A force admitted
+during a warm scan queues one full follow-up. Repair markers clear only after
+accepted publication. Configuration changes during work discard stale results
+and coalesce a full follow-up.
+
+Eligible folders use the existing subset reader with complete existing rows.
+An empty selection emits an unchanged result. Changed/deleted bridge members
+expand their old and new dependency groups through the existing merge helper;
+suppressed physical mirrors without rows may be reread. Enabled Codex folders
+retain one full harness pass, including Claude-disabled startup. Codex missing
+folder reconciliation remains in `harnessReconciliationFolders`.
+
+Strict inventory distinguishes confirmed ENOENT/ENOTDIR from incomplete or
+inaccessible scopes. A stable complete parse yielding no row deletes the old
+row; a failed or raced read retains it. Missing paths are checked again before
+publication. Live rows remain until release, which removes cache, metrics and
+search together. After a gone folder's publication is sealed, a writer-queued
+cleanup removes its folder metadata only if the folder is still absent and no
+retained rows remain.
+
+Every parsed file is checked again after sibling/bridge reads and before
+publication. Raced dependency groups are withheld; unrelated stable rows may
+publish. Per-file deferred generations clear only after the accepted writer ACK
+and cannot clear newer deferrals. A zero folder marker alone never forces full
+reading. Across restart the missing/mismatching body certificate selects the
+deferred file. Parsed results rejected as stale are resnapshotted on bounded
+retry, never blindly replayed. Population returns `{ok,...}`; initial completion,
+Projects reconciliation time and continuation-choice sweeping require success.
+
+Filesystem freshness and name freshness are independent. The additive
+`session_name_derivation` table records metadata revision/value/provenance and
+collision state. Unchanged bodies with a stale witness get title/name repair
+using existing user-name precedence; collision suppression stays pending.
+Effects and witness certification are separate writer ACKs, both checking the
+body stamp and metadata witness. Neither advances the body certificate.
+Unchanged titles are not rewritten. See the writer context for fencing.
+
+Tests use a same-filesystem-tree, two-store oracle over all persisted session
+columns, metrics, logical FTS content/MATCH, user metadata/provenance and folder
+seals. It includes continuation, worktree, bridge, subagent/workflow, header-only
+refresh and Codex title changes. Read counters measure actual returned bytes,
+including repeated bridge reads; failures retain completed byte accounting.
 
 Manual `rebuild-cache` calls `populateCacheViaWorker({ force: true })`. A forced
 scan clears failed-folder retry scope and backoff, including an exhausted retry
@@ -664,15 +723,13 @@ transaction, emit a warning and let the writer's store open; the version stays u
 and the next database open retries. Successful subsequent opens are no-ops.
 
 The repair transaction also saves exactly the affected folder keys in
-`bridge_uuid_reindex_folders`. At cache initialization, one worker scans only
-those local folders. Pending folders are excluded from synchronous reconciliation and watcher refresh
-until their worker write, so a flush during repair cannot recreate invalidated
-rows through a main-thread full read;
-`get-projects` cannot turn an emptied warm cache into a global population scan
-while local repair is pending. A successful folder write clears its pending key;
-the worker's completion also releases local gates on failure, allowing watcher
-refresh and stat-gated reconciliation to recover without restarting the app or
-retrying the repair worker. Interrupted cold-start population keeps its existing route.
+`bridge_uuid_reindex_folders`. Population adopts those local folders and forces
+their full read, sharing the startup/rebuild retry coordinator. Pending folders
+are excluded from synchronous reconciliation and watcher refresh until their
+accepted worker publication, so a flush cannot recreate invalidated rows through
+a main-thread full read. A failed repair retains its marker and follows bounded
+population retries; successful sealed publication clears it. There is no
+independent initialization repair worker.
 
 Repaired remote folder gates remain absent until the remote indexer's existing
 full-folder worker scans the mirror, even if SSH reports no changed files. That

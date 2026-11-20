@@ -216,6 +216,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     const stamp = continuationStamp(big);
     const stat = isSubagent ? { size: Number(big.size), mtime: new Date(continuationMtime(big)), birthtime: new Date(Number((big.birthtimeNs + 500000n) / 1000000n)) } : fs.statSync(filePath);
     const fileBytes = require('./src/main/session-index/read-counters').readBodyFile(filePath);
+    if (opts.readObservation) Object.assign(opts.readObservation, { before, bytes: fileBytes.length });
     const content = fileBytes.toString('utf8');
     const lines = content.split('\n').filter(Boolean);
     let summary = '';
@@ -548,12 +549,12 @@ function mergeBridgeGroups(existingRows, freshRows, reread) {
  *  subagent transcripts under <folder>/<parentSessionId>/subagents/*.jsonl
  *  (or directly under <folder>/<parentSessionId>/*.jsonl for legacy layouts).
  *  Returns [{ filePath, sessionId, parentSessionId|null }]. */
-function enumerateSessionFiles(folderPath) {
+function enumerateSessionFiles(folderPath, opts = {}) {
   const out = [];
   let topEntries;
   try {
     topEntries = fs.readdirSync(folderPath, { withFileTypes: true });
-  } catch { return out; }
+  } catch (error) { if (opts.strict && !['ENOENT', 'ENOTDIR'].includes(error.code)) throw error; return out; }
 
   const add = filePath => {
     const classified = classifyTranscriptPath(path.relative(folderPath, filePath));
@@ -583,27 +584,27 @@ function enumerateSessionFiles(folderPath) {
           if (!f.endsWith('.jsonl')) continue;
           add(path.join(subagentsDir, f));
         }
-        for (const runDir of workflowRunDirectories(subagentsDir)) {
+        for (const runDir of workflowRunDirectories(subagentsDir, opts)) {
           for (const f of fs.readdirSync(runDir, { withFileTypes: true })) {
             if (f.isFile()) add(path.join(runDir, f.name));
           }
         }
         continue;
       }
-    } catch {}
+    } catch (error) { if (opts.strict && !['ENOENT', 'ENOTDIR'].includes(error.code)) throw error; }
     // Fallback: jsonl directly in the UUID dir (older CLI versions)
     try {
       for (const f of fs.readdirSync(subDir)) {
         if (!f.endsWith('.jsonl')) continue;
         add(path.join(subDir, f));
       }
-    } catch {}
+    } catch (error) { if (opts.strict && !['ENOENT', 'ENOTDIR'].includes(error.code)) throw error; }
   }
 
   return out;
 }
 
-function workflowRunDirectories(subagentsDir) {
+function workflowRunDirectories(subagentsDir, opts = {}) {
   const workflows = path.join(subagentsDir, 'workflows');
   try {
     return fs.readdirSync(workflows, { withFileTypes: true })
@@ -612,7 +613,7 @@ function workflowRunDirectories(subagentsDir) {
           parentSessionId: path.basename(path.dirname(subagentsDir)), workflowRunId: entry.name,
         }))
       .map(entry => path.join(workflows, entry.name));
-  } catch { return []; }
+  } catch (error) { if (opts.strict && !['ENOENT', 'ENOTDIR'].includes(error.code)) throw error; return []; }
 }
 
 function isCanonicalWorkflowPath(folderPath, classified) {

@@ -23,7 +23,7 @@ async function shutdownProducers() {
   _notifyCooldown = false;
   _notifyCauses.clear();
   await Promise.all([...scanWorkers].map(worker => worker.terminate()));
-  await Promise.allSettled([...subsetScans, populatePromise, entrypointBackfill, customTitleBackfill, repairPromise].filter(Boolean));
+  await Promise.allSettled([...subsetScans, populatePromise, entrypointBackfill, customTitleBackfill].filter(Boolean));
 }
 
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
@@ -44,6 +44,7 @@ const { conversationMeta } = require('./conversation-meta');
 const { cleanDisplayName } = require('./public/utils');
 const { isHostedJob } = require('./src/main/bg-agents/bg-agents-roster');
 const { state: TRACE, trace } = require('./src/main/shared/activity-trace');
+const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, matchesFullRead, observation, nameDerivationWitness, sourceRelativePath } = require('./src/main/session-index/full-read-state');
 
 /**
  * Session cache module.
@@ -55,6 +56,7 @@ let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSes
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName;
 let isInitialScanComplete, setInitialScanComplete;
+let cacheBackend;
 let getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession, setCachedContinuationIndex;
 let entrypointBackfill = null;
 let getLocalDescriptors = () => [];
@@ -63,6 +65,8 @@ let setCachedCustomTitles, getCachedMissingCustomTitle;
 let customTitleBackfill = null;
 const continuationFiles = new Map();
 const deferredContinuationFiles = new Map();
+const deferredContinuationVersions = new Map();
+let nextDeferralVersion = 0;
 const CONTINUATION_BYTE_BUDGET = 1024 * 1024;
 
 function continuationRefreshScope(folder, opts = {}) {
@@ -72,8 +76,16 @@ function continuationRefreshScope(folder, opts = {}) {
 
 function applyContinuationRefresh(folder, collector, committed = false) {
   const outstanding = new Set(deferredContinuationFiles.get(folder) || []);
-  for (const file of collector.deferred) outstanding.add(file);
-  if (committed) for (const file of collector.accounted) outstanding.delete(file);
+  for (const file of collector.deferred) {
+    outstanding.add(file);
+    deferredContinuationVersions.set(folder + '\0' + file, ++nextDeferralVersion);
+  }
+  if (committed) for (const file of collector.accounted) {
+    const key = folder + '\0' + file;
+    if (collector.versions && collector.versions.get(file) !== deferredContinuationVersions.get(key)) continue;
+    outstanding.delete(file);
+    deferredContinuationVersions.delete(key);
+  }
   if (outstanding.size) deferredContinuationFiles.set(folder, outstanding);
   else deferredContinuationFiles.delete(folder);
 }
@@ -196,12 +208,15 @@ function scanCachedContinuation(file, id, previous, maxBytes, stat = fs.statSync
 function init(ctx) {
   continuationFiles.clear();
   deferredContinuationFiles.clear();
+  deferredContinuationVersions.clear();
   stopping = false;
   clearTimeout(populateRetryTimer);
   populateRetryTimer = null;
   populateRetry = null;
+  forcePopulateFollowup = false;
   populateNow = ctx.now || Date.now;
   PROJECTS_DIR = ctx.PROJECTS_DIR;
+  cacheBackend = ctx.db;
   isProjectWriteBlocked = ctx.isProjectWriteBlocked;
   activeSessions = ctx.activeSessions;
   getLocalDescriptors = ctx.getLocalDescriptors || (() => []);
@@ -245,7 +260,6 @@ function init(ctx) {
     setCachedEntrypoints, setCachedCustomTitles, setCachedContinuationIndex,
     setInitialScanComplete, setSetting,
   };
-  reindexRepairedFolders();
 }
 
 function hasCollisionName(id) {
@@ -482,7 +496,7 @@ function refreshFolder(folder, opts = {}) {
   const folderPath = resolveFolderDir(folder);
   if (!folderPath || !fs.existsSync(folderPath)) {
     clearDeferred();
-    return dropFolderRows(folder);
+    return dropFolderRows(folder, { search: true });
   }
 
   // Reuse the previously-derived projectPath when its directory still exists.
@@ -1481,7 +1495,7 @@ function writeScannedFolder(r, unverifiedLocalFolder = null) {
     }));
   }
   setFolderMeta(folder, projectPath, indexMtimeMs);
-  if (setSetting && pendingRepairFolders().includes(folder)) {
+  if (!r.startup && setSetting && pendingRepairFolders().includes(folder)) {
     setSetting('bridge_uuid_reindex_folders', pendingRepairFolders().filter(key => key !== folder));
   }
   return sessions.length;
@@ -1536,15 +1550,48 @@ async function publishScannedFolder(msg) {
   let ok = false;
   try {
     if (msg.error) throw new Error(msg.error);
+    if (result?.startup) {
+      applyContinuationRefresh(result.folder, { deferred: new Set((result.deferred || []).map(file => file.split('/').join(path.sep))), accounted: new Set() });
+      const currentConfig = startupConfig();
+      if (result.fullIndexConfig !== currentConfig || JSON.stringify(getCachedByFolder(result.folder)) !== JSON.stringify(result.inventory.rows)
+        || JSON.stringify(getFolderMeta(result.folder) || null) !== JSON.stringify(result.inventory.meta)) {
+        throw Object.assign(new Error('Startup inventory changed before publication'), { code: 'WRITER_STALE' });
+      }
+      result.expectedWriterRevision = getSetting('_writer_revision') || 0;
+      for (const [relativePath, stamp] of result.checks) {
+        const file = path.join(PROJECTS_DIR, result.folder, relativePath);
+        if (stamp === null ? observation(file) !== null : !matchesFullRead(file, stamp, 'claude', relativePath)) {
+          throw Object.assign(new Error('Startup source changed before publication'), { code: 'SCAN_RACE' });
+        }
+      }
+    }
     const written = result?.partial ? await writer.writeScannedFolderPartial(result)
       : await writer.writeScannedFolder(result, msg.unverifiedLocalFolder);
     ok = result?.fullIndexOutcome !== false && !(result?.counters || msg.counters)?.filesFailed;
+    if (result?.startup && result.fullIndexOutcome !== false) {
+      for (const row of getCachedByFolder(result.folder)) {
+        const relativePath = sourceRelativePath(row);
+        if (!relativePath || !matchesFullRead(path.join(PROJECTS_DIR, row.folder, relativePath), row.fullReadStamp, 'claude', relativePath)) continue;
+        const collision = hasCollisionName(row.sessionId);
+        const witness = nameDerivationWitness(getMeta(row.sessionId, true), collision);
+        if (!collision && cacheBackend.getNameDerivation?.(row.sessionId) === witness) continue;
+        if (!await writer.deriveCachedName(row.sessionId, row.fullReadStamp, witness, collision)) {
+          throw Object.assign(new Error('Metadata changed during startup derivation'), { code: 'WRITER_STALE' });
+        }
+      }
+      applyContinuationRefresh(result.folder, { deferred: new Set(), versions: new Map(result.inventory.deferralVersions || []),
+        accounted: new Set(result.checks.map(([relativePath]) => relativePath.split('/').join(path.sep))) }, true);
+    }
+    if (result?.deferred?.length) { ok = false; throw new Error('Startup files deferred after a source race'); }
+    if (result?.startup && !ok) throw new Error('Startup folder publication is not sealed');
+    if (result?.startup && ok && result.goneFolder) await writer.completeGoneFolder(result.folder);
+    if (result?.startup && ok && pendingRepairFolders().includes(result.folder)) await writer.completeRepairFolders([result.folder]);
     return written;
   } finally {
     log?.info('[session-cache] folder-indexed ' + JSON.stringify({
       folder: result?.folder || msg.folder || msg.unverifiedLocalFolder || null,
       runtime: result?.sessions?.[0]?.runtime || (result?.folder?.startsWith('codex/') ? 'codex' : 'claude'),
-      mode: result?.partial ? 'partial' : 'full', reason: 'scan',
+      mode: result?.partial ? 'partial' : 'full', reason: result?.reason || 'scan',
       filesEnumerated: 0, filesRead: 0, filesSkipped: 0, filesDeleted: 0, filesFailed: 0,
       readOperations: 0, bytesRead: 0, bytesSkipped: 0, auxiliaryBytesRead: 0, scanMs: 0,
       ...msg.counters, ...result?.counters, writeMs: performance.now() - started, ok,
@@ -1553,36 +1600,22 @@ async function publishScannedFolder(msg) {
 }
 
 // see .ai/contexts/session-cache.md ("Bridge history divergence")
-let repairPromise = null;
 function pendingRepairFolders() {
   const folders = getSetting?.('bridge_uuid_reindex_folders');
   return Array.isArray(folders) ? folders : [];
 }
 
 function reindexRepairedFolders() {
-  if (repairPromise) return repairPromise;
-  const folders = pendingRepairFolders().filter(key => parseFolderKey(key).alias === null);
-  if (!folders.length || !setSetting) return Promise.resolve({ ok: true, folders: 0 });
-  repairPromise = (async () => {
-    for (const folder of folders) {
-      try { await writer.invalidateFullIndex?.(folder); }
-      catch (error) { log?.warn(`Bridge repair invalidation outcome unknown: ${error.message}`); }
-    }
-    const result = await scanFoldersViaWorker({ projectsDir: PROJECTS_DIR, folders });
-    if (!result.ok) {
-      log?.warn(`Bridge repair re-index failed: ${result.error}`);
-    }
-    if (getMainWindow()) notifyRendererProjectsChanged('bridge-repair');
-    return result;
-  })().catch(err => {
-    log?.warn(`Bridge repair re-index failed: ${err.message}`);
-    return { ok: false, error: err.message };
-  }).finally(async () => {
-    if (writer.completeRepairFolders) await writer.completeRepairFolders(folders);
-    else await writer.setSetting('bridge_uuid_reindex_folders', pendingRepairFolders().filter(key => !folders.includes(key)));
-    repairPromise = null;
-  });
-  return repairPromise;
+  if (!pendingRepairFolders().length) return Promise.resolve({ ok: true, folders: 0 });
+  return populateCacheViaWorker();
+}
+
+function completeGoneFolder(folder) {
+  if (observation(path.join(PROJECTS_DIR, folder)) !== null) throw new Error('Gone folder reappeared or cannot be inspected');
+  if (getCachedByFolder(folder).length) return false;
+  deleteCachedFolder(folder);
+  deleteSearchFolder(folder);
+  return true;
 }
 
 /** Index a caller-chosen subset of folders under an arbitrary projects root.
@@ -1598,11 +1631,11 @@ function scanFoldersViaWorker(options) {
   promise.finally(() => subsetScans.delete(promise)).catch(() => {});
   return promise;
 }
-function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, fileSubsets }) {
+function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, fileSubsets, startup, onFolder }) {
   return new Promise((resolve) => {
     const hasFolders = Array.isArray(folders) && folders.length > 0;
     const subsets = fileSubsets instanceof Map ? fileSubsets : null;
-    if (!hasFolders && !subsets) {
+    if (!hasFolders && !subsets && !startup) {
       resolve({ ok: true, folders: 0, sessions: 0 });
       return;
     }
@@ -1615,7 +1648,7 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
         targets.push({ folder, files: [...files], existingRows: getCachedByFolder(folderKey) });
       }
     }
-    if (fullFolders.length === 0 && targets.length === 0) {
+    if (fullFolders.length === 0 && targets.length === 0 && !startup) {
       resolve({ ok: true, folders: 0, sessions: 0 });
       return;
     }
@@ -1624,12 +1657,15 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
     let sessions = 0;
     let scanned = 0;
     let writeError;
+    let unknownFailure = false;
+    const failedFolders = new Set();
     let worker;
+    let workerExited = false;
     const settle = (value) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      try { worker && worker.terminate(); } catch {}
+      try { if (!workerExited) worker?.terminate(); } catch {}
       resolve(value);
     };
     const timer = setTimeout(() => {
@@ -1638,7 +1674,7 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
 
     try {
       worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
-        workerData: { projectsDir, folderPrefix, folders: fullFolders, targets, remaps: remappedProjectsSetting(), disabledHarnesses: disabledHarnessIds() },
+        workerData: { projectsDir, folderPrefix, folders: fullFolders, targets, startup, remaps: remappedProjectsSetting(), disabledHarnesses: disabledHarnessIds() },
       });
     } catch (err) {
       settle({ ok: false, error: err.message, folders: 0, sessions: 0 });
@@ -1654,16 +1690,22 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
           try {
             sessions += await publishScannedFolder(msg);
           } catch (err) {
-            writeError = err.message;
-            log && log.warn(`[remote] folder write failed: ${err.message}`);
+            const folder = msg.folder || msg.result?.folder;
+            if (!writeError || (folder && !failedFolders.size)) writeError = err.message;
+            if (folder) failedFolders.add(folder);
+            else unknownFailure = true;
+            if (startup) log?.error(`[session-cache] folder write failed: ${err.message}`);
+            else log?.warn(`[remote] folder write failed: ${err.message}`);
           }
+          onFolder?.(msg, sessions);
           return;
         }
-        settle({ ok: !!msg.ok && !writeError, error: writeError || msg.error, folders: scanned, sessions });
+        for (const folder of msg.failedFolders || []) failedFolders.add(folder);
+        settle({ ok: !!msg.ok && !writeError, error: writeError || msg.error, unknownFailure, failedFolders: [...failedFolders], folders: scanned, sessions });
       }).catch(err => { writeError = err.message; settle({ ok: false, error: writeError, folders: scanned, sessions }); });
     });
     worker.on('error', err => { writes.then(() => settle({ ok: false, error: err.message, folders: scanned, sessions })); });
-    worker.on('exit', code => { writes.then(() => settle({ ok: code === 0 && !writeError, error: writeError || (code === 0 ? undefined : `worker exited ${code}`), folders: scanned, sessions })); });
+    worker.on('exit', code => { workerExited = true; writes.then(() => settle({ ok: false, error: writeError || `worker exited ${code} without completion`, folders: scanned, sessions })); });
   });
 }
 
@@ -1676,200 +1718,122 @@ let populateRetry = null;
 let populateRetryTimer = null;
 let populateNow = Date.now;
 
+function startupConfig() {
+  return fullIndexConfig({ disabledHarnesses: disabledHarnessIds(), remappedProjects: remappedProjectsSetting() }, PROJECTS_DIR);
+}
+
+function startupSnapshot(force, scope) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const revision = cacheBackend.getProjectsRevision?.();
+    const config = startupConfig();
+    const rows = getAllCached();
+    const metas = getAllFolderMeta();
+    const metadata = getAllMeta(true);
+    const keys = new Set([...metas.keys(), ...rows.map(row => row.folder)]);
+    const inventory = [...keys].filter(folder => parseFolderKey(folder).alias === null && !harnessForFolder(folder)?.folderPrefix)
+      .map(folder => ({ folder, meta: metas.get(folder) || null, rows: rows.filter(row => row.folder === folder),
+        metadata: rows.filter(row => row.folder === folder).map(row => [row.sessionId, metadata.get(row.sessionId) || null]),
+        deferralVersions: [...(deferredContinuationFiles.get(folder) || [])].map(file => [file, deferredContinuationVersions.get(folder + '\0' + file)]),
+        deferred: [...(deferredContinuationFiles.get(folder) || [])].map(file => file.split(path.sep).join('/')) }));
+    if (cacheBackend.getProjectsRevision?.() !== revision || config !== startupConfig()) continue;
+    const invalid = inventory.some(entry => entry.meta && ((entry.meta.fullIndexVersion != null && entry.meta.fullIndexVersion !== SESSION_CONTENT_INDEX_VERSION)
+      || (entry.meta.fullIndexConfig != null && entry.meta.fullIndexConfig !== config)));
+    return { inventory, config, revision, scope: scope || undefined, repairs: pendingRepairFolders(),
+      force: force || !isInitialScanComplete() || !(cacheBackend.isCachePopulated?.() ?? rows.length > 0)
+        || cacheBackend.isSearchIndexPopulated?.() === false || invalid };
+  }
+  throw Object.assign(new Error('Startup inventory changed while captured'), { code: 'WRITER_STALE' });
+}
+
+let forcePopulateFollowup = false;
+let populateFull = false;
 function populateCacheViaWorker({ force = false } = {}, retryTimerFired = false) {
-  if (stopping) return Promise.resolve();
-  if (populatePromise) return populatePromise;
+  if (stopping) return Promise.resolve({ ok: false, error: 'indexer shutting down' });
+  if (populatePromise) {
+    forcePopulateFollowup ||= force && !populateFull;
+    return populatePromise;
+  }
   if (force) populateRetry = null;
-  if (!retryTimerFired && populateRetry && populateNow() < populateRetry.at) return Promise.resolve();
+  if (!retryTimerFired && populateRetry && populateNow() < populateRetry.at) return Promise.resolve({ ok: false, error: 'scan retry deferred' });
   clearTimeout(populateRetryTimer);
   populateRetryTimer = null;
-  const retryFolders = populateRetry?.folders;
   const retryAttempt = populateRetry?.attempt || 0;
-
-  // Captured once, up front. Keyed on the persistent completeness marker, not
-  // on isCachePopulated(): the worker streams per-folder writes, so a scan
-  // interrupted mid-run leaves session_cache non-empty — a row-count check
-  // would classify the resumed scan as warm and silently drop its banner.
-  // Marker absent covers both a genuine first launch AND the resume after an
-  // interruption; it flips true only via setInitialScanComplete() on the
-  // worker's final successful done message below.
+  const retryFolders = populateRetry?.folders;
   const coldStart = !isInitialScanComplete();
+  populateFull = force || coldStart;
   indexingFinished = false;
   sendStatus('Scanning projects…', 'active');
-
-  let scannedFolders = 0;
-  let totalFolders = 0;
-  let sessionCount = 0;
-  let indexedProjects = 0;
-  let writeError = null;
-  const failedFolders = new Set();
-  let scanSucceeded = false;
-  let unknownFailure = false;
-
-  // ~4 events/s: one IPC message per folder is wasteful on a large tree (the
-  // comparable notifyRendererProjectsChanged is throttled too). The FIRST
-  // event (lastProgressAt still 0) and every done event always pass, so the
-  // banner appears immediately and never misses the terminal state.
-  const PROGRESS_THROTTLE_MS = 250;
-  let lastProgressAt = 0;
-
-  const reportProgress = (done, error) => {
-    if (!coldStart) {
-      if (done) sendIndexingFinished();
-      return;
-    }
+  let lastProgressAt = 0, scanned = 0, total = 0, sessions = 0, indexedProjects = 0;
+  const progress = (done, error) => {
+    if (!coldStart) { if (done) sendIndexingFinished(); return; }
     const now = Date.now();
-    if (!done && lastProgressAt !== 0 && now - lastProgressAt < PROGRESS_THROTTLE_MS) return;
+    if (!done && lastProgressAt && now - lastProgressAt < 250) return;
     lastProgressAt = now;
-    sendIndexingProgress({
-      coldStart: true,
-      current: scannedFolders,
-      total: totalFolders,
-      sessionsSoFar: sessionCount,
-      done,
-      ...(error ? { error } : {}),
-    });
+    sendIndexingProgress({ coldStart: true, current: scanned, total, sessionsSoFar: sessions, done, ...(error ? { error } : {}) });
     if (done) sendIndexingFinished();
   };
-
-  populatePromise = new Promise((resolve) => {
-    let settled = false;
-    let workerExited = false;
-    let worker;
-    const settle = () => {
-      if (settled) return;
-      settled = true;
-      if (scanSucceeded) populateRetry = null;
-      else {
-        const backoff = [30000, 120000, 600000][retryAttempt];
-        populateRetry = {
-          folders: !unknownFailure && failedFolders.size ? [...failedFolders] : retryFolders || null,
-          attempt: retryAttempt + 1,
-          at: backoff === undefined ? Infinity : populateNow() + backoff,
-        };
-      }
-      Promise.resolve(workerExited ? undefined : worker?.terminate()).catch(() => {}).finally(() => {
-        populatePromise = null;
-        if (!stopping && populateRetry && Number.isFinite(populateRetry.at)) {
-          populateRetryTimer = setTimeout(() => {
-            populateRetryTimer = null;
-            try {
-              return populateCacheViaWorker({}, true).catch(err => {
-                log && log.error('[session-cache] scan retry failed:', err);
-              });
-            } catch (err) {
-              log && log.error('[session-cache] scan retry failed:', err);
-            }
-          }, Math.max(0, populateRetry.at - populateNow()));
-          populateRetryTimer?.unref?.();
-        }
-        resolve();
-      });
-    };
-
+  populatePromise = Promise.resolve().then(async () => {
+    let result;
     try {
-      worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
-        workerData: { projectsDir: PROJECTS_DIR, remaps: remappedProjectsSetting(), disabledHarnesses: disabledHarnessIds(),
-          ...(retryFolders ? { folders: retryFolders } : {}) },
-      });
-    } catch (err) {
-      unknownFailure = true;
-      sendStatus('Scan failed: ' + err.message, 'error');
-      reportProgress(true, err.message);
-      settle();
-      return;
-    }
-
-    let writes = Promise.resolve();
-    worker.on('message', (msg) => {
-      writes = writes.then(async () => {
-        if (settled) return;
-        // One folder finished scanning. Write it to the DB immediately instead
-        // of waiting for the rest of the tree, and push a sidebar update
-        // (notifyRendererProjectsChanged is already throttled ~1.5s) so a large
-        // history fills in progressively rather than sitting empty for minutes.
-        if (msg.type === 'folder') {
+      const config = startupConfig();
+      let configInvalid = false;
+      for (const [folder, meta] of getAllFolderMeta()) {
+        if (parseFolderKey(folder).alias !== null || meta.fullIndexConfig == null || meta.fullIndexConfig === config) continue;
+        configInvalid = true;
+        await writer.invalidateFullIndex?.(folder);
+      }
+      for (const folder of pendingRepairFolders().filter(folder => parseFolderKey(folder).alias === null)) await writer.invalidateFullIndex?.(folder);
+      const startup = startupSnapshot(force || configInvalid, configInvalid ? null : retryFolders);
+      populateFull ||= startup.force;
+      result = await scanFoldersViaWorker({ projectsDir: PROJECTS_DIR, folders: [], startup,
+        onFolder: (msg, count) => {
           if (msg.rejected) warnRejectedCwd(msg.rejected.folder, msg.rejected.cwd);
-          scannedFolders = msg.current;
-          totalFolders = msg.total;
-          let written = 0;
-          try {
-            written = await publishScannedFolder(msg);
-          } catch (err) {
-            const folder = msg.folder || msg.result?.folder || msg.unverifiedLocalFolder;
-            if (!writeError || (folder && !failedFolders.size)) writeError = err.message;
-            if (folder) failedFolders.add(folder);
-            else unknownFailure = true;
-            log && log.error('[session-cache] folder write failed:', err.message);
-          }
-          if (written > 0) {
-            sessionCount += written;
-            indexedProjects++;
-          }
-
-          sendStatus(`Scanning projects (${scannedFolders}/${totalFolders})…`, 'active');
-          reportProgress(false);
+          scanned = msg.current;
+          total = msg.total;
+          if (count > sessions) indexedProjects++;
+          sessions = count;
+          sendStatus(`Scanning projects (${scanned}/${total})…`, 'active');
+          progress(false);
           notifyRendererProjectsChanged('scan');
-          return;
-        }
-
-        // msg.type === 'done'
-        if (!msg.ok || writeError) {
-          for (const folder of msg.failedFolders || []) failedFolders.add(folder);
-          if (!msg.ok && !msg.failedFolders?.length) unknownFailure = true;
-          const error = writeError || msg.error;
-          console.error('Worker scan error:', error);
-          const folder = failedFolders.values().next().value;
-          const scope = folder ? ` for ${folder}${failedFolders.size > 1 ? ` (+${failedFolders.size - 1})` : ''}` : '';
-          sendStatus(`Scan failed${scope}: ${error}`, 'error');
-          reportProgress(true, error);
-          settle();
-          return;
-        }
-
+        } });
+      if (startup.config !== startupConfig()) {
+        forcePopulateFollowup = true;
+        result = { ok: false, error: 'Index configuration changed during population' };
+      }
+      if (result.ok) {
         if (setInitialScanComplete) await writer.setInitialScanComplete();
-        scanSucceeded = true;
-        sendStatus(`Indexed ${sessionCount} sessions across ${indexedProjects} projects`, 'done');
-        // Clear status after a few seconds
-        setTimeout(() => sendStatus(''), 5000);
-        reportProgress(true);
+        populateRetry = null;
+        sendStatus(`Indexed ${sessions} sessions across ${indexedProjects} projects`, 'done');
+        setTimeout(() => sendStatus(''), 5000).unref?.();
+        progress(true);
         notifyRendererProjectsChanged('scan');
-        settle();
-      }).catch(err => {
-        unknownFailure = true;
-        sendStatus('Scan failed: ' + err.message, 'error');
-        reportProgress(true, err.message);
-        settle();
-      });
-    });
-
-    worker.on('error', (err) => {
-      writes = writes.then(() => {
-        if (settled) return;
-        unknownFailure = true;
-        console.error('Worker error:', err);
-        sendStatus('Worker error: ' + err.message, 'error');
-        reportProgress(true, err.message);
-        settle();
-      });
-    });
-
-    // If the worker exits abnormally (SIGSEGV, OOM, uncaught exception) without
-    // sending a message, neither the 'message' nor 'error' handler will fire.
-    // Resolve here so awaiters aren't stuck forever and the next call can retry.
-    worker.on('exit', (code) => {
-      workerExited = true;
-      writes = writes.then(() => {
-        if (!settled && code !== 0) {
-          unknownFailure = true;
-          sendStatus('Scan worker exited unexpectedly', 'error');
-          reportProgress(true, 'worker exited unexpectedly');
-        }
-        settle();
-      });
-    });
+        return result;
+      }
+    } catch (error) { result = { ok: false, error: error.message }; }
+    const backoff = [30000, 120000, 600000][retryAttempt];
+    populateRetry = { folders: !result.unknownFailure && result.failedFolders?.length ? result.failedFolders : null,
+      attempt: retryAttempt + 1, at: backoff === undefined ? Infinity : populateNow() + backoff };
+    const failed = result.failedFolders || [];
+    const scope = failed.length ? ` for ${failed[0]}${failed.length > 1 ? ` (+${failed.length - 1})` : ''}` : '';
+    sendStatus(`Scan failed${scope}: ${result.error}`, 'error');
+    progress(true, result.error);
+    return result;
+  }).then(async result => {
+    populatePromise = null;
+    if (forcePopulateFollowup && !stopping) {
+      forcePopulateFollowup = false;
+      return populateCacheViaWorker({ force: true });
+    }
+    if (!stopping && populateRetry && Number.isFinite(populateRetry.at)) {
+      populateRetryTimer = setTimeout(() => {
+        populateRetryTimer = null;
+        try { return populateCacheViaWorker({}, true).catch(error => log?.error('[session-cache] scan retry failed:', error)); }
+        catch (error) { log?.error('[session-cache] scan retry failed:', error); }
+      }, Math.max(0, populateRetry.at - populateNow()));
+      populateRetryTimer.unref?.();
+    }
+    return result;
   });
-
   return populatePromise;
 }
 
@@ -1956,6 +1920,7 @@ module.exports = { shutdownProducers,
   readFolderFromFilesystem,
   refreshFolder,
   dropFolderRows,
+  completeGoneFolder,
   releaseLiveSession,
   reconcileCacheFromFilesystem,
   buildProjectsFromCache,

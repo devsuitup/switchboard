@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Changed
+- After a restart, Switchboard re-reads only Claude Code transcripts changed since the previous run. Codex history is still re-read in full. (#1144)
 - Codex sessions run non-interactively by a program (`codex exec`: scripted reviews and fixes) are now left out of the sidebar and grid like Claude Agent SDK sessions, under the same **Hide SDK-launched Sessions** setting. They still count in the heatmap and are found by search; the ones you have open stay listed. Codex sessions already indexed are re-checked once at the next start. (#1145)
 
 ### Fixed

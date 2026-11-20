@@ -692,8 +692,9 @@ and captured canonical configuration (sorted remaps, deduplicated/sorted
 disabled harness IDs, resolved source roots). A full scan records the content
 version; a partial operation restores only an existing full baseline.
 
-Begin/effect failure leaves conservative state. Begin failure still submits
-the existing write. Certificate rejection or failure skips that folder's seal;
+Begin/effect failure leaves conservative state. Legacy producers still submit
+their existing write on begin failure; A2 startup rejects that publication and
+replans from a fresh snapshot. Certificate rejection or failure skips that folder's seal;
 transport failure is logged as an unknown outcome and never rejects an already
 committed body. A seal with unknown outcome is logged, never retried or
 compensated: it either leaves pending state or committed a valid seal over
@@ -710,10 +711,29 @@ The commands bracket producer operations at the facade. They do not alter
 the generic chunk scheduler, producer-unit packing, transaction budgets,
 admission or deadlines (#1135). Certificate commands participate in existing
 project-deletion ownership fencing. Repair invalidates its folder seal before
-scanning; A1 keeps the existing finally-based repair-marker clearing, so that
-marker is never evidence of successful completion.
+scanning and joins startup population; its marker clears only after successful
+sealed publication.
 
 Parser/merge/metric/search output changes must bump
 `SESSION_CONTENT_INDEX_VERSION` and add an immutable golden digest entry; see
-[session-cache.md](session-cache.md), "Full-content observations". A1 records
-these fields without enabling any startup skipping.
+[session-cache.md](session-cache.md), "Full-content observations".
+
+A2 startup checks the captured row/folder/configuration inventory and source
+observations before queueing. The facade checks writer revision again when the
+queued computation starts. `WRITER_STALE` is returned to population for a new
+scan, without replaying stale parsed rows. Deletion-only subsets also use the
+pending/seal protocol. Deferred files are withheld from all derived effects;
+an accepted stable subset can retain its previous full baseline while failed
+files stay individually uncertified. Deferred generations clear after ACK.
+
+`deriveCachedName` checks the expected body stamp and metadata witness, applies
+existing transcript-name rules and repairs only a changed search title. After
+that command ACK, `certifyNameDerivation` checks the post-effect witness again.
+A concurrent user rename rejects certification. Collision suppression records
+no completed witness, so removal of a collision descriptor is retried even
+when the body is unchanged. Both commands keep session deletion fences.
+
+The obsolete single-row worker `certifyFullRead` command is removed; certificate
+units invoke the store method directly inside `certifyFullReads`. The real
+worker facade test uses 80 certificates and an intervening setting write to
+prove `continuous:false` returns the body ACK.

@@ -108,6 +108,9 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       const currentConfig = () => fullIndexConfig({ ...(backend.getSetting('global') || {}), remappedProjects: backend.getSetting('projectRemaps') || {} },
         args[0]?.fullIndexConfig ? JSON.parse(args[0].fullIndexConfig).roots[0] : projectsDir);
       const scanResult = ['writeScannedFolder', 'writeScannedFolderPartial'].includes(name) ? args[0] : null;
+      if (scanResult?.startup && scanResult.expectedWriterRevision !== (backend.getSetting('_writer_revision') || 0)) {
+        throw Object.assign(new Error('Startup snapshot changed while queued'), { code: 'WRITER_STALE' });
+      }
       if (scanResult) scanResult.fullIndexOutcome = false;
       const folder = name === 'refreshFolder' ? args[0] : name === 'releaseLiveSession' ? cache.getRetainedFolder?.(args[0]) : undefined;
       let continuationRetry = false, combinedResult;
@@ -137,7 +140,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         if (projectsDir) {
           const candidates = effects.filter(effect => effect.name === 'upsertCachedSessions').flatMap(effect => effect.args[0]).filter(row => fullIds.has(row.sessionId));
           const folders = new Set(candidates.map(row => row.folder));
-          if (scanFolder && name === 'writeScannedFolder') folders.add(scanFolder);
+          if (scanFolder && (name === 'writeScannedFolder' || scanResult?.startup && effects.some(effect => effect.name === 'deleteCachedSession'))) folders.add(scanFolder);
           for (const key of folders) {
             const publication = { token: randomUUID(), config: scanResult?.fullIndexConfig || currentConfig(), began: false };
             publications.set(key, publication);
@@ -147,7 +150,10 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
               publication.previousIndex = receipt.previous;
               publication.began = true;
               revision = receipt.committedRevision;
-            } catch (error) { (options.log || console).warn('[session-index-writer] full index begin outcome unknown: ' + error.message); }
+            } catch (error) {
+              if (scanResult?.startup) throw error;
+              (options.log || console).warn('[session-index-writer] full index begin outcome unknown: ' + error.message);
+            }
           }
         }
         if (scanResult) {
@@ -175,10 +181,11 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
           if (folder !== undefined) cache.applyContinuationRefresh?.(folder, continuationCollector, true);
         }
         catch (error) {
-          if (error.code !== 'WRITER_STALE' || attempt === 2 || name === 'applyProjectsWorkerEffects') throw error;
+          if (error.code !== 'WRITER_STALE' || attempt === 2 || name === 'applyProjectsWorkerEffects' || scanResult?.startup) throw error;
           continue;
         }
         notifyChanges?.();
+        if (scanResult?.startup && !publications.size) scanResult.fullIndexOutcome = true;
         combinedResult = combinedResult === true || result === true ? true : combinedResult === 'activity' || result === 'activity' ? 'activity' : result;
         if (continuationCollector.deferred.size && !continuationRetry) {
           continuationRetry = true;
@@ -207,7 +214,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         }
         for (const [key, publication] of publications) if (publication.began && !publication.failed) {
           try {
-            if (publication.config === currentConfig() && !scanResult?.counters?.filesFailed) {
+            if (publication.config === currentConfig() && (!scanResult?.counters?.filesFailed || scanResult?.startup && scanResult?.deferred?.length)) {
               const full = name === 'writeScannedFolder';
               const sealed = await send('sealFullIndex', key, publication.token, full ? SESSION_CONTENT_INDEX_VERSION : publication.previousIndex?.fullIndexVersion ?? null,
                 full ? publication.config : publication.previousIndex?.fullIndexConfig ?? null, publication.config, { receipt: forwarded });
@@ -282,6 +289,10 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     async rekeySessionMeta(from, to) { return request('rekeySessionMeta', from, to); },
     async completeRepairFolders(folders) { return request('completeRepairFolders', folders); },
     async invalidateFullIndex(folder) { return request('invalidateFullIndex', folder); },
+    async deriveCachedName(...args) {
+      const result = await request('deriveCachedName', ...args);
+      return !!result && request('certifyNameDerivation', args[0], args[1], result.witness, result.collision);
+    },
     async buildProjectsFromCache(showArchived) { return compute('buildProjectsFromCache', showArchived); },
     async refreshFolder(folder, opts) { return compute('refreshFolder', folder, opts); },
     async dropFolderRows(folder, opts) { return compute('dropFolderRows', folder, opts); },
@@ -291,6 +302,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     },
     async writeScannedFolder(result, unverified) { return compute('writeScannedFolder', result, unverified); },
     async writeScannedFolderPartial(result) { return compute('writeScannedFolderPartial', result); },
+    async completeGoneFolder(folder) { return compute('completeGoneFolder', folder); },
     async applyProjectsWorkerEffects(result) {
       if (result.effects?.length === 0 && result.keptLiveRows?.length === 0) return;
       return compute('applyProjectsWorkerEffects', result);

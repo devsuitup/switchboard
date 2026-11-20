@@ -1399,8 +1399,7 @@ ipcMain.handle('unwatch-file', (_event, filePath) => {
 // populateCacheViaWorker's internal Promise.
 ipcMain.handle('rebuild-cache', async () => {
   try {
-    await populateCacheViaWorker({ force: true });
-    return { ok: true };
+    return await populateCacheViaWorker({ force: true });
   } catch (err) {
     console.error('Error rebuilding cache:', err);
     return { ok: false, error: err.message };
@@ -1426,7 +1425,7 @@ async function getProjectsSnapshot(showArchived) {
     }
     const needsPopulate = !isInitialScanComplete() || (!repairPending && (!isCachePopulated() || !isSearchIndexPopulated()));
 
-    if (needsPopulate) Promise.resolve(populateCacheViaWorker()).then(() => { if (isInitialScanComplete()) projectsReconciledAt = Date.now(); }, () => {});
+    if (needsPopulate) Promise.resolve(populateCacheViaWorker()).then(result => { if (result?.ok && isInitialScanComplete()) projectsReconciledAt = Date.now(); }, () => {});
     backfillEntrypoints();
     backfillCustomTitles();
     const result = await projectsClient.request({ reconcile: !needsPopulate && Date.now() - projectsReconciledAt >= 5000, measureBytes: TRACE.on });
@@ -4388,19 +4387,8 @@ if (!app.isPackaged) {
       }
     }).catch(error => log.error('[automation] startup failed:', error));
 
-    // Full cache rebuild on every startup — prunes stale rows for deleted
-    // transcripts (sub-agent/workflow runs cleaned up between sessions leave
-    // ghost rows in session_cache that show in the sidebar but are
-    // inaccessible on open). populateCacheViaWorker runs in a Worker thread
-    // and is non-blocking; concurrent callers share the same in-flight
-    // Promise so the FTS-recreated path below (if also triggered) is free.
-    populateCacheViaWorker().then(sweepContinuationChoices).catch(error => log.warn('[continuation-choices] startup sweep failed:', error));
-
-    // Re-index search if FTS table was recreated (e.g. tokenizer config change).
-    // populateCacheViaWorker is already running above; the guard inside it
-    // (populatePromise !== null) means this is a no-op on the same tick and
-    // returns the shared Promise — no double scan.
-    if (searchFtsRecreated) populateCacheViaWorker();
+    // see .ai/contexts/session-cache.md
+    populateCacheViaWorker({ force: searchFtsRecreated }).then(result => { if (result.ok) return sweepContinuationChoices(); }).catch(error => log.warn('[continuation-choices] startup sweep failed:', error));
 
     // Check for updates after launch
     if (autoUpdater) {
