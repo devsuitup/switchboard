@@ -122,12 +122,12 @@ try {
       throw error;
     }
   };
-  const folders = Array.isArray(workerData.folders)
+  const folders = workerData.disabledHarnesses?.includes('claude') ? [] : Array.isArray(workerData.folders)
     ? workerData.folders.filter(f => typeof f === 'string' && f && f !== '.git' && f !== '.' && f !== '..' && !/[\\/]/.test(f))
     : listProjectFolders();
 
   // see .ai/contexts/session-cache.md ("Remote hosts file-level rescan")
-  const targets = Array.isArray(workerData.targets) ? workerData.targets : [];
+  const targets = workerData.disabledHarnesses?.includes('claude') ? [] : Array.isArray(workerData.targets) ? workerData.targets : [];
   // see .ai/contexts/session-cache.md ("Harness folders")
   const harnessFolders = Array.isArray(workerData.folders) || FOLDER_PREFIX !== '' ? []
     : prefixedHarnesses(workerData.disabledHarnesses).flatMap(harness => harness.listFolders().map(folder => ({ harness, folder })));

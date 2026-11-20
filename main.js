@@ -3942,6 +3942,9 @@ const deleteSessionGuard = makeDeleteSessionGuard({
 let projectsWatcher = null;
 
 function startProjectsWatcher() {
+  if (projectsWatcher) { projectsWatcher.close(); projectsWatcher = null; }
+  flushProjectsBeforeExit = async () => {};
+  if (getSetting('global')?.disabledHarnesses?.includes('claude')) return;
   let flushChain = Promise.resolve();
   if (!fs.existsSync(PROJECTS_DIR)) return;
 
@@ -3954,6 +3957,7 @@ function startProjectsWatcher() {
   const pendingWorkflowTitles = new Set();
   const workflowTitles = new Map();
   let debounceTimer = null;
+  let watcher = null;
 
   flushProjectsBeforeExit = async () => {
     if (debounceTimer) clearTimeout(debounceTimer);
@@ -3968,6 +3972,7 @@ function startProjectsWatcher() {
 
   async function applyChanges() {
     debounceTimer = null;
+    if (projectsWatcher !== watcher || getSetting('global')?.disabledHarnesses?.includes('claude')) return;
     // Drain pendingChanges into a local copy so events arriving during the
     // synchronous flush land in a fresh batch for the next tick.
     const work = new Map(pendingChanges);
@@ -4000,6 +4005,7 @@ function startProjectsWatcher() {
     }
     let activityChanged = false;
     for (const [folder, scope] of work) {
+      if (projectsWatcher !== watcher || getSetting('global')?.disabledHarnesses?.includes('claude')) return;
       const folderPath = path.join(PROJECTS_DIR, folder);
       let folderChanged;
       if (fs.existsSync(folderPath)) {
@@ -4035,6 +4041,7 @@ function startProjectsWatcher() {
 
   try {
     projectsWatcher = fs.watch(PROJECTS_DIR, { recursive: true }, (_eventType, filename) => {
+      if (projectsWatcher !== watcher || getSetting('global')?.disabledHarnesses?.includes('claude')) return;
       if (!filename) return;
 
       // filename is relative, e.g. "folder-name/sessions-index.json" or "folder-name/abc.jsonl"
@@ -4062,6 +4069,7 @@ function startProjectsWatcher() {
       debounceTimer = setTimeout(() => flushChanges().catch(err => log.error('[projects] watcher refresh failed:', err.message)), 500);
     });
 
+    watcher = projectsWatcher;
     projectsWatcher.on('error', (err) => {
       console.error('Projects watcher error:', err);
     });
@@ -4131,6 +4139,7 @@ function stopHarnessWatchers() {
 }
 
 function restartHarnessWatchers() {
+  startProjectsWatcher();
   for (const watcher of harnessWatchers.splice(0)) watcher.close();
   startHarnessWatchers();
 }

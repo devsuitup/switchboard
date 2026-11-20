@@ -203,8 +203,12 @@ rollout appears. `session-transitions.js` owns the adoption:
   originator is the launch's own tag, `'fork'` when `forked_from_id` names the
   parent and the rollout started after the spawn, `'cwd'` for the cwd plus
   start-time fallback of a fresh launch, `false` otherwise. The fallback
-  refuses a rollout tagged for another Switchboard launch; a fork cannot,
-  because a fork may inherit its parent's tag (whether Codex honours
+  refuses a rollout tagged for another Switchboard launch. `launchEnv` records
+  issued tags in the Codex adapter for 24 hours, including exited, stopped and
+  already-adopted launches. Matching rejects another issued tag before fork
+  fallback; issuing or matching prunes expired entries. This registry is local
+  to the app process and does not survive restart. An inherited parent tag
+  absent from the registry remains eligible for fork fallback (whether Codex honours
   `CODEX_INTERNAL_ORIGINATOR_OVERRIDE` on `codex fork` is not measured).
 - Adoption is exact first: a candidate graded `'tag'` by a pending session goes
   to that session, and nothing else may take it. A remaining candidate is then
@@ -215,8 +219,9 @@ rollout appears. `session-transitions.js` owns the adoption:
   rollout, and the pairing resolves as soon as it becomes unique (one tab
   closes, one rollout vanishes, or a tagged rollout settles one side).
 - A match goes through `rekeySession(tempId, realId, session, [], kind)` with
-  `kind` `'new'` or `'fork'` — the same path as a Claude fork, so metadata is
-  re-keyed through the writer, `publishRekey` moves `activeSessions`, status
+  `kind` `'new'` or `'fork'` — the same path as a Claude fork. Main's metadata
+  callback calls the writer only for `kind === 'background'`; these Codex
+  adoptions do not persist a metadata rekey. `publishRekey` moves `activeSessions`, status
   generations, MCP, activity, trigger ownership and sends `session-forked`,
   which the renderer handles by re-keying the tab, pending row, restore set
   and task records. `publishRekey` skips the continuation snapshot when the
@@ -307,10 +312,15 @@ default; nothing here fetches it, so no token leaves the machine.
   `setSetting('global', …)` (`workers/session-index-writer.js`), so no
   forwarded read-modify-write can switch everything off (ADR 0004). The panel
   also locks the last checked toggle.
-- Effects of a switched-off CLI: `prefixedHarnesses(disabledIds)` drops it
-  from the reconcile listing (`session-cache.js`), the cold scan
-  (`workerData.disabledHarnesses`) and the watchers (`startHarnessWatchers`,
-  restarted by `set-setting` when the list changes); `buildProjectsFromCache`
+- Effects of a switched-off CLI: `prefixedHarnesses(disabledIds)` drops a
+  non-default CLI from reconciliation, cold scan and harness watchers. Claude
+  has explicit enabled-state checks before listing its projects in the cold
+  worker (including subset scans) and reconciliation. `startProjectsWatcher`
+  closes the previous Claude watcher and opens one only when enabled; queued
+  callbacks and flushes check both enabled state and watcher identity, including
+  between awaited folder writes. Work already submitted to the writer can finish.
+  `set-setting` restarts both watcher paths when the list changes.
+  `buildProjectsFromCache`
   hides its rows (`exclude(row, 'harness-off')`) and the picker skips it. Its
   cached rows are kept, so switching it back on costs one incremental
   reconcile. `prefixedHarnesses` filters on the setting only, not on

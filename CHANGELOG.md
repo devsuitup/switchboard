@@ -11,6 +11,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - The project "+" menu offers a new Codex session next to Claude. Settings gains a "CLI Agents" section to switch each CLI on or off (a switched-off CLI is not scanned or offered and its sessions are hidden until it is switched back on; at least one stays on) and the Codex sandbox, approval, model and reasoning effort used for new Codex sessions. (#824)
 
 ### Fixed
+- A Codex fork no longer adopts a sibling's tagged transcript after that sibling exits or is stopped. Switching Claude off now also stops its transcript scans and watcher, keeping cached sessions for re-enabling. (#821)
 - Opening a remote session whose process has ended and whose pid now belongs to another program is refused with an error saying the session is gone, instead of attaching to that program's tmux pane. (#1114)
 
 ## v0.0.107 — 2026-11-17

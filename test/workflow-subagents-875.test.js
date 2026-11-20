@@ -279,7 +279,7 @@ test('projects watcher refreshes workflow snapshot titles when a run ends', asyn
   let watch, flush;
   const notifications = [], refreshes = [];
   const context = vm.createContext({ fs: { ...fs, watch: (_dir, _opts, callback) => { watch = callback; return { on() {} }; } },
-    path, PROJECTS_DIR: h.root, projectsWatcher: null, console,
+    path, PROJECTS_DIR: h.root, projectsWatcher: null, console, getSetting: () => ({}),
     detectSessionTransitions() {}, localTranscriptTracker: { record() {} },
     writer: { refreshFolder: async (folder, opts) => { refreshes.push({ folder, opts }); return cache.refreshFolder(folder, opts); } },
     notifyRendererProjectsChanged: cause => notifications.push(cause),

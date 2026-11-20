@@ -291,8 +291,21 @@ function originatorTag(tempId) {
   return 'switchboard_' + String(tempId).replace(/[^a-zA-Z0-9]/g, '');
 }
 
+const issuedLaunchTags = new Map();
+const LAUNCH_TAG_RETENTION_MS = 24 * 60 * 60 * 1000;
+
+function pruneLaunchTags() {
+  const now = Date.now();
+  for (const [tag, expiresAt] of issuedLaunchTags) {
+    if (expiresAt <= now) issuedLaunchTags.delete(tag);
+  }
+}
+
 function launchEnv(tempId) {
-  return { CODEX_INTERNAL_ORIGINATOR_OVERRIDE: originatorTag(tempId) };
+  pruneLaunchTags();
+  const tag = originatorTag(tempId);
+  issuedLaunchTags.set(tag, Date.now() + LAUNCH_TAG_RETENTION_MS);
+  return { CODEX_INTERNAL_ORIGINATOR_OVERRIDE: tag };
 }
 
 function readLaunchSignals(filePath) {
@@ -322,8 +335,10 @@ function startedAfterSpawn(signals, spawnedAt) {
 }
 
 function matchesLaunch(signals, { tag, forkFrom, projectPath, spawnedAt }) {
+  pruneLaunchTags();
   if (!signals || signals.isSubagent || !signals.sessionId) return false;
   if (tag && signals.originator === tag) return 'tag';
+  if (issuedLaunchTags.has(signals.originator)) return false;
   if (forkFrom) return signals.forkedFrom === forkFrom && startedAfterSpawn(signals, spawnedAt) ? 'fork' : false;
   if (signals.originator && /^switchboard_/.test(signals.originator)) return false;
   if (!projectPath || signals.cwd !== projectPath) return false;

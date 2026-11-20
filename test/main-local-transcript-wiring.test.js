@@ -85,7 +85,7 @@ test('injected projects-watch notifications verify real files while indexing sta
   let racing = 0;
   let callback;
   const context = vm.createContext({
-    PROJECTS_DIR: root, path, console, projectsWatcher: null,
+    PROJECTS_DIR: root, path, console, projectsWatcher: null, getSetting: () => ({}),
     taskRecords: { read() { return Promise.resolve(); }, child() {} },
     cliSessionState: { getStatus() { return {}; } },
     bgAgents: { getSnapshot() { return { roster: [] }; } },

@@ -856,6 +856,7 @@ function reconciliationFolders(throttle) {
   if (throttle && now - lastReconcileAt < RECONCILE_THROTTLE_MS) return [];
   lastReconcileAt = now;
   const metaMap = getAllFolderMeta();
+  if (disabledHarnessIds().includes(DEFAULT_HARNESS)) return harnessReconciliationFolders(metaMap);
   const ghostFolders = new Set(getAllCached().filter(row => {
     if (row.parentSessionId || !row.sessionId.startsWith('agent-') || parseFolderKey(row.folder).alias !== null) return false;
     try { fs.statSync(path.join(PROJECTS_DIR, row.folder, row.sessionId + '.jsonl')); return false; } catch { return true; }
