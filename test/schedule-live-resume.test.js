@@ -53,6 +53,7 @@ function setup(t, { sandbox = false, spawnError = false } = {}) {
     resolveShell: () => ({ path: 'fake-shell' }),
     quoteArgvForShell: (_shell, args) => args.join(' '),
     shellArgs: (_shell, cmd) => [cmd],
+    headlessClaudeLaunch: (shell, args) => ({ program: shell, args: ['claude ' + args.join(' ')] }),
     cleanPtyEnv: {},
     resolveScheduleSandbox: () => sandbox,
     scheduleLaunchRefusal: require('../src/main/schedules/schedule-runner').scheduleLaunchRefusal,

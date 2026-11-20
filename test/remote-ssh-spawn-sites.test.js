@@ -39,7 +39,7 @@ const UNRESOLVED_ALLOWED = {
   },
   'main.js': {
     spawnPty: 'node-pty wrapper: the shell of a local session, or the attach adapter\'s resolved ssh',
-    runScheduleCommand: 'the shell of the schedule\'s shell profile',
+    runScheduleCommand: 'the shell of the schedule\'s shell profile, or on Windows the claude that headlessClaudeLaunch resolves on PATH',
     runClaudeCommand: 'the shell profile running a local claude command (agents, --bg, stop, respawn, rm)',
   },
   'src/main/shared/run-to-exit.js': {
