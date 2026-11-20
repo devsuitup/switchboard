@@ -4,25 +4,33 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const ERROR_MEMBER_SKIPPED = 299;
+const MAX_START_ATTEMPTS = 3;
 
 function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, startupMs = 15000,
   requestMs = 3000, protectedPids = () => [] } = {}) {
   let child, started = false, ready = false, failed = false, buffer = '', startupTimer, earlyCloseWarned = false;
+  let attempts = 0, retryAt = 0, unavailableWarned = false;
   const pending = new Map();
   const queued = new Map();
   const waiting = new Map();
   let resolveReady;
-  const readiness = new Promise(resolve => { resolveReady = resolve; });
+  let readiness;
 
   function fail(reason) {
     if (failed) return;
     failed = true;
+    retryAt = Date.now() + 1000 * 2 ** (attempts - 1);
     clearTimeout(startupTimer);
     resolveReady(false);
     for (const entry of pending.values()) { clearTimeout(entry.timer); entry.resolve(false); }
     for (const entries of waiting.values()) for (const entry of entries) entry.resolve(false);
     pending.clear(); queued.clear(); waiting.clear();
-    try { warn(`[pty] Windows job helper unavailable; using plain ConPTY close: ${reason}`); } catch {}
+    const detail = `attempt ${attempts}/${MAX_START_ATTEMPTS}: ${reason}${attempts >= MAX_START_ATTEMPTS ? '; startup retries exhausted' : ''}`;
+    try {
+      if (!unavailableWarned) warn(`[pty] Windows job helper unavailable; using plain ConPTY close: ${detail}`);
+      else warn(`[pty] Windows job helper ${detail}`);
+    } catch {}
+    unavailableWarned = true;
     try { child?.kill(); } catch {}
   }
 
@@ -75,23 +83,35 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
   }
 
   function start() {
-    if (started) return readiness;
+    if (failed) {
+      if (ready || attempts >= MAX_START_ATTEMPTS || Date.now() < retryAt) return Promise.resolve(false);
+    } else if (started) return readiness;
     started = true;
+    failed = false;
+    buffer = '';
+    const attempt = ++attempts;
+    readiness = new Promise(resolve => { resolveReady = resolve; });
+    const current = () => attempt === attempts && !failed;
+    const failedAttempt = reason => { if (current()) fail(reason); };
+    if (attempt > 1) {
+      try { warn(`[pty] Windows job helper startup retry attempt ${attempt}/${MAX_START_ATTEMPTS}`); } catch {}
+    }
     try {
       const script = fs.readFileSync(path.join(__dirname, 'windows-job-helper.ps1'), 'utf8').replace(/\r\n/g, '\n').replace(/^[ \t]+/gm, '');
       child = spawnChild(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
         ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
         { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-      child.on('error', error => fail(error.message));
-      child.on('exit', () => fail('helper exited'));
-      child.stdin.on('error', error => fail(error.message));
-      child.stdout.on('error', error => fail(error.message));
-      child.stderr.on('error', error => fail(error.message));
+      child.on('error', error => failedAttempt(error.message));
+      child.on('exit', () => failedAttempt('helper exited'));
+      child.stdin.on('error', error => failedAttempt(error.message));
+      child.stdout.on('error', error => failedAttempt(error.message));
+      child.stderr.on('error', error => failedAttempt(error.message));
       child.stdout.setEncoding?.('utf8');
-      child.stdout.on('data', receive);
+      child.stdout.on('data', data => { if (current()) receive(data); });
       let stderrLine = '';
       const stderrWarned = new Set();
       const forwardWarning = () => {
+        if (!current()) return;
         const line = stderrLine.trim();
         stderrLine = '';
         if (!line) return;
@@ -103,6 +123,7 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
       };
       child.stderr.setEncoding?.('utf8');
       child.stderr.on('data', data => {
+        if (!current()) return;
         const text = String(data);
         let start = 0;
         while (start < text.length) {
@@ -117,7 +138,7 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
       child.stderr.on('end', forwardWarning);
       child.unref?.();
       for (const stream of [child.stdin, child.stdout, child.stderr]) stream.unref?.();
-      startupTimer = setTimeout(() => fail('startup timed out'), startupMs);
+      startupTimer = setTimeout(() => failedAttempt('startup timed out'), startupMs);
       startupTimer.unref?.();
     } catch (error) { fail(error.message); }
     return readiness;
@@ -125,6 +146,7 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
 
   function request(op, id, args = '', current) {
     if (!/^[\w-]+$/.test(id)) return Promise.resolve(false);
+    if (failed && op !== 'assign') return Promise.resolve(false);
     start();
     if (failed) return Promise.resolve(false);
     let resolveRequest;
