@@ -1145,6 +1145,9 @@ function checkDeleteWorktree(worktreePath) {
   const normalizedPath = worktreePath.replace(/\/$/, '');
   const match = normalizedPath.match(WORKTREE_PATH_RE);
   if (!match) return { ok: false, error: 'Path does not match a recognized worktree layout' };
+  if (normalizedPath.split(path.sep === '\\' ? /[/\\]/ : '/').some(segment => segment === '.' || segment === '..')) {
+    return { ok: false, error: 'Path does not match a recognized worktree layout: "." and ".." segments are not allowed' };
+  }
   const parentRepo = match[1];
   if (!isKnownProjectRoot(parentRepo)) return { ok: false, error: 'Parent repository is not a known project' };
   return { ok: true, normalizedPath, parentRepo };

@@ -33,7 +33,7 @@ function fixture(t, mainOnly = false) {
     return git(root, args);
   };
   const read = () => deletion.readStatus(target, root, runGit);
-  return { root, target, git: args => git(target, args), removes, read,
+  return { root, target, git: args => git(target, args), runGit, removes, read,
     remove: shown => deletion.removeWorktree(target, root, shown, read, runGit) };
 }
 
@@ -62,6 +62,40 @@ test('real git previews a registered worktree through a noncanonical ancestor an
   await assert.rejects(deletion.readStatus(unregistered, f.root, runGit), /no longer a registered worktree/);
   assert.equal(fs.existsSync(f.root), true);
   assert.equal(f.removes.length, 0);
+});
+
+function shortName(target) {
+  return execFileSync('cmd.exe', ['/d', '/c', `for %I in ("${target}") do @echo %~sI`], { encoding: 'utf8', windowsHide: true, windowsVerbatimArguments: true }).trim();
+}
+
+test('real git previews and removes a registered worktree addressed by its 8.3 short basename', {
+  skip: process.platform !== 'win32' && 'Windows 8.3 spelling',
+}, async t => {
+  const f = fixture(t);
+  const probe = path.join(f.root, 'long ascii probe name');
+  fs.mkdirSync(probe);
+  if (shortName(probe).toLowerCase() === probe.toLowerCase()) { t.skip('8.3 aliases are disabled on this Windows volume'); return; }
+  const short = shortName(f.target);
+  assert.equal(fs.realpathSync.native(short), f.target, 'fixture must address the same real directory');
+  const shortBasename = path.join(path.dirname(f.target), path.basename(short));
+  assert.notEqual(shortBasename.toLowerCase(), f.target.toLowerCase(), 'fixture must exercise a genuinely different basename');
+  const { runGit } = f;
+  for (const requested of [shortBasename, short]) {
+    const shown = await deletion.readStatus(requested, f.root, runGit);
+    assert.equal(shown.ok, true, requested);
+    assert.deepEqual(shown.dirty, []);
+  }
+  await assert.rejects(deletion.readStatus(shortName(f.root), f.root, runGit), /main worktree.*cannot be deleted/i);
+  const unregistered = path.join(f.root, 'unregistered long name');
+  fs.mkdirSync(unregistered);
+  await assert.rejects(deletion.readStatus(shortName(unregistered), f.root, runGit), /no longer a registered worktree/);
+  assert.equal(f.removes.length, 0);
+  const read = () => deletion.readStatus(shortBasename, f.root, runGit);
+  const result = await deletion.removeWorktree(shortBasename, f.root, await read(), read, runGit);
+  assert.deepEqual(result, { ok: true });
+  assert.equal(f.removes.length, 1);
+  assert.equal(fs.existsSync(f.target), false);
+  assert.equal(fs.existsSync(f.root), true);
 });
 
 test('real git refuses the main checkout, including a path through an alias ancestor', async t => {
