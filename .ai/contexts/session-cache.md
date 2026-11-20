@@ -93,22 +93,35 @@ search together. After a gone folder's publication is sealed, a writer-queued
 cleanup removes its folder metadata only if the folder is still absent and no
 retained rows remain.
 
+Null subagent parses retain the reader's initial sidecar observation and compare
+it after parsing, including zero-byte files, missing sidechain flags and empty
+content. A stable null parse is skipped/deleted; a sidecar race stays deferred.
+An unresolved or budget-exhausted cwd uses the full-scan folder drop, including
+removal of `cache_meta` and the once-per-folder rejected-cwd warning. Live-row
+retention still applies to that drop.
+
 Every parsed file is checked again after sibling/bridge reads and before
 publication. Raced dependency groups are withheld; unrelated stable rows may
 publish. Per-file deferred generations clear only after the accepted writer ACK
 and cannot clear newer deferrals. A zero folder marker alone never forces full
 reading. Across restart the missing/mismatching body certificate selects the
 deferred file. Parsed results rejected as stale are resnapshotted on bounded
-retry, never blindly replayed. Population returns `{ok,...}`; initial completion,
+retry, never blindly replayed. A stale folder is selected again within the same
+population, with at most two fresh folder attempts; unrelated folders are not
+rescanned. Population has no wall-clock deadline. Explicit remote/subset scans
+retain the ten-minute ceiling. Population returns `{ok,...}`; initial completion,
 Projects reconciliation time and continuation-choice sweeping require success.
 
 Filesystem freshness and name freshness are independent. The additive
 `session_name_derivation` table records metadata revision/value/provenance and
 collision state. Unchanged bodies with a stale witness get title/name repair
 using existing user-name precedence; collision suppression stays pending.
-Effects and witness certification are separate writer ACKs, both checking the
-body stamp and metadata witness. Neither advances the body certificate.
-Unchanged titles are not rewritten. See the writer context for fencing.
+Startup submits name derivations in one folder batch. Each row's effect and
+witness certification share a bounded worker unit, checking the body stamp and
+metadata witness. Matching name certificates skip main-thread transcript stats.
+Deleting a session removes its name certificate through a database trigger.
+Neither name repair nor certification advances the body certificate. Unchanged
+titles are not rewritten. See the writer context for fencing.
 
 Tests use a same-filesystem-tree, two-store oracle over all persisted session
 columns, metrics, logical FTS content/MATCH, user metadata/provenance and folder

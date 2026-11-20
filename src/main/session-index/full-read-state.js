@@ -75,5 +75,11 @@ function nameDerivationWitness(meta, collision = false) {
     transcriptTitle: meta?.nameTranscriptTitle ?? null, collision });
 }
 
+function folderReadWitness(db, folder) {
+  const rows = db.getCachedByFolder(folder);
+  return JSON.stringify({ rows, meta: db.getFolderMeta(folder) || null,
+    metadata: rows.map(row => [row.sessionId, db.getMeta(row.sessionId, true) || null]) });
+}
+
 module.exports = { SESSION_CONTENT_INDEX_VERSION, CONTENT_GOLDEN_DIGESTS, observation, relativeSource, fullReadStamp, fullIndexConfig, rowWitness,
-  matchesFullRead, sourceRelativePath, safeRelativePath, nameDerivationWitness };
+  matchesFullRead, sourceRelativePath, safeRelativePath, nameDerivationWitness, folderReadWitness };

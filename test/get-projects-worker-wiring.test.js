@@ -149,7 +149,7 @@ test('a completed cold scan advances the reconcile throttle', async () => {
   await invoke(null, false);
   assert.equal(requests[0].reconcile, false, 'a cold load never reconciles');
   scanDone = true;
-  finishScan();
+  finishScan({ ok: true });
   await flush();
   await invoke(null, false);
   assert.equal(requests[1].reconcile, false, 'the scan just read every file: the first post-scan load is a plain build');

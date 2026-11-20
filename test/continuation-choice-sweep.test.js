@@ -47,11 +47,11 @@ test('the startup population runs the sweep only after the scan promise settles'
   f.context.populateCacheViaWorker = () => new Promise(resolve => { done = resolve; });
   f.context.log = { warn: assert.fail, error: assert.fail };
   const marker = source.indexOf('    populateCacheViaWorker', source.indexOf('app.whenReady'));
-  const start = -1;
+  assert.ok(marker >= 0, 'startup population anchor exists');
   const statement = source.slice(marker, source.indexOf('\n', marker));
   f.context.searchFtsRecreated = false;
   assert.ok(statement, 'startup must run population');
-  assert.ok(start === -1 || statement.includes('sweepContinuationChoices'), 'startup must attach the sweep to population');
+  assert.ok(statement.includes('sweepContinuationChoices'), 'startup must attach the sweep to population');
   const pending = vm.runInContext(statement, f.context);
   assert.equal(f.settings.has('continuationChoice:gone'), true);
   done({ ok: true });

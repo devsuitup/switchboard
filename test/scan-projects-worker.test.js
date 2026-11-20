@@ -31,7 +31,7 @@ test.before(() => {
 });
 test.after(() => { process.env.CODEX_HOME = originalCodexHome; fs.rmSync(isolatedCodexHome, { recursive: true, force: true }); });
 
-function startupScan(t, mutate, fault) {
+function startupScan(t, mutate, fault, derive) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-a2-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const folder = encodeProjectPath(root), dir = path.join(root, folder), file = path.join(dir, 'source.jsonl');
@@ -51,7 +51,8 @@ function startupScan(t, mutate, fault) {
     require: name => name === 'worker_threads' ? { parentPort: { postMessage: msg => messages.push(msg) },
       workerData: { projectsDir: root, folders: [], startup: { config, inventory: [{ folder, rows: [row],
         meta: { projectPath: root, fullIndexVersion: 1, fullIndexConfig: config, fullIndexPending: null } }] } } }
-      : name === 'fs' || name === 'node:fs' ? wrappedFs : (() => {
+      : name === 'fs' || name === 'node:fs' ? wrappedFs
+      : name === '../derive-project-path' && derive ? { ...native(name), deriveProjectPath: derive } : (() => {
         assert.ok(!/sqlite|session-index-store|database/.test(name), 'the scan worker cannot import a SQLite backend');
         return native(name);
       })(),
@@ -68,6 +69,16 @@ test('A2 startup inventory selects confirmed vanished files for explicit partial
   assert.ok(result?.toDelete?.includes('source'), 'confirmed missing source is selected for deletion');
 });
 
+test('startup drops an unresolved cwd after derivation exhausts its budget like a full scan', t => {
+  const { messages } = startupScan(t, null, null, (_dir, _folder, opts) => {
+    opts?.onIncomplete?.();
+    return null;
+  });
+  const folder = messages.find(message => message.type === 'folder');
+  assert.equal(messages.at(-1).ok, true, 'cwd budget exhaustion does not fail the population');
+  assert.ok(folder.unverifiedLocalFolder, 'unresolved cwd uses the full-scan folder drop');
+});
+
 test('A2 startup inventory reports inaccessible scope without authorizing deletion', t => {
   const { messages } = startupScan(t, null, (method, args, { dir }) => {
     if (method === 'readdirSync' && args[0] === dir) throw Object.assign(new Error('inaccessible fixture'), { code: 'EACCES' });
@@ -81,6 +92,24 @@ test('A2 startup stable bookkeeping-only rewrite removes its previously indexed 
   assert.ok(messages.find(message => message.type === 'folder')?.result?.toDelete?.includes('source'),
     'stable complete parse with no indexable session deletes the old row');
 });
+
+for (const variant of ['zero-byte', 'no-sidechain', 'empty-content']) {
+  test('M23 stable subagent null row is deleted without deferral: ' + variant, t => {
+    const { messages } = startupScan(t, ({ dir, row }) => {
+      const file = path.join(dir, 'parent', 'subagents', 'agent-null.jsonl');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const entry = { type: 'user', isSidechain: true, cwd: row.projectPath, message: { content: 'indexed subagent' } };
+      fs.writeFileSync(file, JSON.stringify(entry) + '\n');
+      Object.assign(row, readSessionFile(file, row.folder, row.projectPath, { parentSessionId: 'parent' }));
+      if (variant === 'no-sidechain') delete entry.isSidechain;
+      if (variant === 'empty-content') entry.message.content = '';
+      fs.writeFileSync(file, variant === 'zero-byte' ? '' : JSON.stringify(entry) + '\n');
+    });
+    const result = messages.find(message => message.type === 'folder')?.result;
+    assert.ok(result?.toDelete?.includes('sub:parent:null'), 'stable null subagent deletes its cached row');
+    assert.equal(result.deferred.length, 0, 'stable null subagent is never deferred');
+  });
+}
 
 for (const scope of ['root', 'folder', 'nested']) {
   test('A2 inventory retains inaccessible ' + scope + ' scope', t => {
@@ -97,6 +126,27 @@ for (const scope of ['root', 'folder', 'nested']) {
     assert.ok(messages.every(message => !message.result?.toDelete?.length));
   });
 }
+
+test('M23 a null subagent with a sidecar race retains its cached row', t => {
+  const { messages } = startupScan(t, ({ dir, row }) => {
+    const file = path.join(dir, 'parent', 'subagents', 'agent-race.jsonl');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const entry = { type: 'user', isSidechain: true, cwd: row.projectPath, message: { content: 'indexed' } };
+    fs.writeFileSync(file, JSON.stringify(entry) + '\n');
+    Object.assign(row, readSessionFile(file, row.folder, row.projectPath, { parentSessionId: 'parent' }));
+    delete entry.isSidechain;
+    fs.writeFileSync(file, JSON.stringify(entry) + '\n');
+    const read = fs.readFileSync;
+    t.mock.method(fs, 'readFileSync', (target, ...args) => {
+      const bytes = read(target, ...args);
+      if (target === file) fs.writeFileSync(file.replace('.jsonl', '.meta.json'), '{"description":"raced"}');
+      return bytes;
+    });
+  });
+  const result = messages.find(message => message.type === 'folder')?.result;
+  assert.ok(result?.deferred.includes('parent/subagents/agent-race.jsonl'), 'null parse with a raced dependency must remain deferred');
+  assert.ok(!result.toDelete.includes('sub:parent:race'), 'raced null parse cannot delete the prior row');
+});
 
 test('A2 whole missing root plans deletion while failed body reads defer', t => {
   const gone = startupScan(t, ({ root }) => fs.rmSync(root, { recursive: true }));

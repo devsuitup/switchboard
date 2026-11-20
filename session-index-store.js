@@ -367,6 +367,7 @@ if (migrations.length > currentDbVersion) {
   if (!cols.has('fileSize')) db.exec('ALTER TABLE session_cache ADD COLUMN fileSize INTEGER');
   if (!cols.has('fullReadStamp')) db.exec('ALTER TABLE session_cache ADD COLUMN fullReadStamp TEXT');
   db.exec('CREATE TABLE IF NOT EXISTS session_name_derivation (sessionId TEXT PRIMARY KEY, witness TEXT)');
+  db.exec('CREATE TRIGGER IF NOT EXISTS session_name_derivation_delete AFTER DELETE ON session_cache BEGIN DELETE FROM session_name_derivation WHERE sessionId = OLD.sessionId; END');
   const folderColumns = new Set(db.prepare('PRAGMA table_info(cache_meta)').all().map(row => row.name));
   for (const [name, type] of [['fullIndexVersion', 'INTEGER'], ['fullIndexConfig', 'TEXT'], ['fullIndexPending', 'TEXT']]) {
     if (!folderColumns.has(name)) db.exec(`ALTER TABLE cache_meta ADD COLUMN ${name} ${type}`);
@@ -750,8 +751,10 @@ function certifyFullRead(folder, token, sessionId, stamp, witness) {
   return stmts.fullReadCertify.run(stamp, sessionId, folder).changes === 1;
 }
 
+let nameDerivationGet;
 function getNameDerivation(sessionId) {
-  return db.prepare('SELECT witness FROM session_name_derivation WHERE sessionId = ?').get(sessionId)?.witness ?? null;
+  nameDerivationGet ||= db.prepare('SELECT witness FROM session_name_derivation WHERE sessionId = ?');
+  return nameDerivationGet.get(sessionId)?.witness ?? null;
 }
 
 function deriveCachedName(sessionId, expectedStamp, expectedMeta, collision) {

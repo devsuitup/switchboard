@@ -216,7 +216,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     const stamp = continuationStamp(big);
     const stat = isSubagent ? { size: Number(big.size), mtime: new Date(continuationMtime(big)), birthtime: new Date(Number((big.birthtimeNs + 500000n) / 1000000n)) } : fs.statSync(filePath);
     const fileBytes = require('./src/main/session-index/read-counters').readBodyFile(filePath);
-    if (opts.readObservation) Object.assign(opts.readObservation, { before, bytes: fileBytes.length });
+    if (opts.readObservation) Object.assign(opts.readObservation, { before, bytes: fileBytes.length, dependencies });
     const content = fileBytes.toString('utf8');
     const lines = content.split('\n').filter(Boolean);
     let summary = '';

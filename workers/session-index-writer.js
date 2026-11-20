@@ -8,6 +8,7 @@ const { createWriterCommands } = require('../session-index-commands');
 const { assertHarnessSettings } = require('../harnesses');
 const { createProjectDeleteProgress, commitTransaction } = require('../src/main/projects/project-delete-progress');
 const { completeProjectDeletion, bindDeletionProducer, assertDeletionProducer } = require('../src/main/projects/project-delete-writer');
+const { folderReadWitness } = require('../src/main/session-index/full-read-state');
 
 // see .ai/contexts/session-index-writer.md
 const db = openSessionIndexStore({ readonly: false });
@@ -27,7 +28,7 @@ const assertWorkflow = message => {
 };
 let running = false, interactiveBurst = 0;
 const backgroundCommands = new Set(['effects', 'upsertCachedSessions', 'replaceSessionMetrics', 'upsertSearchEntries',
-  'applySearchFileBatch', 'setCachedEntrypoints', 'setCachedCustomTitles', 'deleteCachedFolder', 'deleteSearchFolder', 'deleteSearchType', 'dropRemoteFolder', 'cleanupWorktree', 'certifyFullReads']);
+  'applySearchFileBatch', 'setCachedEntrypoints', 'setCachedCustomTitles', 'deleteCachedFolder', 'deleteSearchFolder', 'deleteSearchType', 'dropRemoteFolder', 'cleanupWorktree', 'certifyFullReads', 'deriveCachedNames']);
 const journalCommands = new Set(['querySessionRequestOutcome', 'claimSessionResultNamespace', 'recordSessionResultPublication',
   'recordConsumedSessionStatusRequest', 'recordSessionRequestConflict']);
 const chunkWallTimeMs = 10;
@@ -76,6 +77,11 @@ function* targetUnits(name, args) {
     for (const row of args[0]) yield Object.assign(() => db[name]([row]), { producerCommand: name, producerArgs: [[row]] });
   } else if (name === 'certifyFullReads') {
     for (const row of args[2]) yield () => db.certifyFullRead(args[0], args[1], row.sessionId, row.stamp, row.witness);
+  } else if (name === 'deriveCachedNames') {
+    for (const row of args[0]) yield Object.assign(() => {
+      const result = db.deriveCachedName(row.sessionId, row.stamp, row.witness, row.collision);
+      return !!result && db.certifyNameDerivation(row.sessionId, row.stamp, result.witness, result.collision);
+    }, { producerCommand: 'deriveCachedName', producerArgs: [row.sessionId, row.stamp, row.witness, row.collision] });
   } else if (name === 'replaceSessionMetrics') {
     yield () => db.replaceSessionMetrics(...args);
   } else if (name === 'deleteCachedSession') {
@@ -105,7 +111,7 @@ function* targetUnits(name, args) {
       : db.connection.prepare('SELECT id, type FROM search_map WHERE type = ?').all(args[0]);
     for (const row of rows) yield () => db.applySearchFileBatch(row.type, [row.id], []);
   } else if (name === 'effects') {
-    if ((db.getSetting('_writer_revision') || 0) !== args[1]) throw Object.assign(new Error('cache snapshot changed before writer admission'), { code: 'WRITER_STALE' });
+    if (!args[2] && (db.getSetting('_writer_revision') || 0) !== args[1]) throw Object.assign(new Error('cache snapshot changed before writer admission'), { code: 'WRITER_STALE' });
     for (const effect of args[0]) {
       if (!rawCommands.has(effect.name) && effect.name !== 'completeRepairFolders') throw new Error(`invalid writer effect ${effect.name}`);
       yield* units(effect.name, effect.args);
@@ -182,6 +188,7 @@ async function drain() {
             beforeRevision: db.getSetting('_writer_revision') || 0, committedRevision: db.getSetting('_writer_revision') || 0 };
           message.result = message.args[3]?.receipt ? receipt : receipt.certified;
         }
+        if (message.command === 'deriveCachedNames') message.result = message.namesDerived ?? true;
         parentPort.postMessage({ id: message.id, ...(message.producerError ? { error: { message: message.producerError.message, code: message.producerError.code } }
           : { result: message.command === 'effects' ? { committedRevision: message.committedRevision } : message.result }),
           ...(message.mutated ? { settings: settings() } : {}) });
@@ -198,13 +205,17 @@ async function drain() {
           message.result = unit.value();
         } else {
           const before = db.getSetting('_writer_revision') || 0;
-          if (message.command === 'effects' && message.committedRevision !== undefined && before !== message.committedRevision) {
+          const folderFence = message.command === 'effects' && message.args[2];
+          if (message.command === 'effects' && !folderFence && message.committedRevision !== undefined && before !== message.committedRevision) {
             throw Object.assign(new Error('cache snapshot changed between writer effect batches'), { code: 'WRITER_STALE' });
           }
           const buffered = message.pending.length ? message.pending : [unit];
           let committed = 0;
           const acknowledgment = await transaction(message.command, () => {
             assertWorkflow(message);
+            if (folderFence && (message.folderWitness ?? folderFence.witness) !== folderReadWitness(db, folderFence.folder)) {
+              throw Object.assign(new Error('Startup folder changed between writer effects'), { code: 'WRITER_STALE' });
+            }
             let next = unit, result, count = 0, elapsed = 0, certified = true;
             while (!next.done) {
               const execute = () => {
@@ -221,13 +232,16 @@ async function drain() {
               if (applied.deferred) break;
               result = applied.result;
               if (message.command === 'certifyFullReads') certified &&= result === true;
+              if (message.command === 'deriveCachedNames') certified &&= result === true;
               count++;
               if (count >= db.nextChunkSize() || elapsed >= chunkWallTimeMs) break;
               next = buffered[count] ||= message.iterator.next();
             }
             committed = count;
-            return message.command === 'certifyFullReads' ? certified : result;
+            return ['certifyFullReads', 'deriveCachedNames'].includes(message.command) ? certified : result;
           });
+          if (folderFence) message.folderWitness = folderReadWitness(db, folderFence.folder);
+          if (message.command === 'deriveCachedNames') message.namesDerived = (message.namesDerived ?? true) && acknowledgment.result;
           if (message.command === 'certifyFullReads') {
             const previous = message.certificateReceipt;
             message.certificateReceipt = {

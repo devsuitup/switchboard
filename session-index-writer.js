@@ -15,7 +15,7 @@ const { createCacheEffects } = require('./cache-effects');
 const { projectArchiveWorkflows, archiveProjectIdentity } = require('./src/main/projects/project-archive-workflow');
 const { worktreeParentPath } = require('./public/worktree-nesting');
 const { stable } = require('./src/main/projects/project-delete-identity');
-const { SESSION_CONTENT_INDEX_VERSION, fullIndexConfig, rowWitness } = require('./src/main/session-index/full-read-state');
+const { SESSION_CONTENT_INDEX_VERSION, fullIndexConfig, rowWitness, folderReadWitness, observation } = require('./src/main/session-index/full-read-state');
 const { randomUUID } = require('node:crypto');
 
 // see .ai/contexts/session-index-writer.md
@@ -108,13 +108,15 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       const currentConfig = () => fullIndexConfig({ ...(backend.getSetting('global') || {}), remappedProjects: backend.getSetting('projectRemaps') || {} },
         args[0]?.fullIndexConfig ? JSON.parse(args[0].fullIndexConfig).roots[0] : projectsDir);
       const scanResult = ['writeScannedFolder', 'writeScannedFolderPartial'].includes(name) ? args[0] : null;
-      if (scanResult?.startup && scanResult.expectedWriterRevision !== (backend.getSetting('_writer_revision') || 0)) {
-        throw Object.assign(new Error('Startup snapshot changed while queued'), { code: 'WRITER_STALE' });
+      if (scanResult?.startup && (JSON.stringify(backend.getCachedByFolder(scanFolder)) !== JSON.stringify(scanResult.inventory.rows)
+        || JSON.stringify(backend.getFolderMeta(scanFolder) || null) !== JSON.stringify(scanResult.inventory.meta))) {
+        throw Object.assign(new Error('Startup folder changed while queued'), { code: 'WRITER_STALE' });
       }
       if (scanResult) scanResult.fullIndexOutcome = false;
       const folder = name === 'refreshFolder' ? args[0] : name === 'releaseLiveSession' ? cache.getRetainedFolder?.(args[0]) : undefined;
       let continuationRetry = false, combinedResult;
       for (let attempt = 0; ; attempt++) {
+        let startupFence = scanResult?.startup ? { folder: scanFolder, witness: folderReadWitness(backend, scanFolder) } : null;
         if (name === 'applyProjectsWorkerEffects' && backend.getProjectsRevision() !== sourceVersion) throw Object.assign(new Error('Projects effect snapshot changed while queued'), { code: 'WRITER_STALE' });
         const continuationCollector = { deferred: new Set(), accounted: new Set() };
         let computeArgs = args;
@@ -140,16 +142,17 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         if (projectsDir) {
           const candidates = effects.filter(effect => effect.name === 'upsertCachedSessions').flatMap(effect => effect.args[0]).filter(row => fullIds.has(row.sessionId));
           const folders = new Set(candidates.map(row => row.folder));
-          if (scanFolder && (name === 'writeScannedFolder' || scanResult?.startup && effects.some(effect => effect.name === 'deleteCachedSession'))) folders.add(scanFolder);
+          if (scanFolder && !scanResult?.unverified && (name === 'writeScannedFolder' || scanResult?.startup && effects.some(effect => effect.name === 'deleteCachedSession'))) folders.add(scanFolder);
           for (const key of folders) {
             const publication = { token: randomUUID(), config: scanResult?.fullIndexConfig || currentConfig(), began: false };
             publications.set(key, publication);
             try {
-              const receipt = await send('beginFullIndex', key, publication.token, { expectedRevision: revision, receipt: true,
+              const receipt = await send('beginFullIndex', key, publication.token, { ...(startupFence ? { expectedFolder: startupFence.witness } : { expectedRevision: revision }), receipt: true,
                 projects: [...new Set(candidates.filter(row => row.folder === key).map(row => row.projectPath).filter(Boolean))] });
               publication.previousIndex = receipt.previous;
               publication.began = true;
               revision = receipt.committedRevision;
+              if (startupFence) startupFence = { folder: key, witness: receipt.folderWitness };
             } catch (error) {
               if (scanResult?.startup) throw error;
               (options.log || console).warn('[session-index-writer] full index begin outcome unknown: ' + error.message);
@@ -177,7 +180,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         const notifyChanges = prepareSessionsChanged(effects);
         let acknowledgment;
         try {
-          acknowledgment = effects.length ? await send('effects', effects, revision) : null;
+          acknowledgment = effects.length ? await send('effects', effects, revision, startupFence) : null;
           if (folder !== undefined) cache.applyContinuationRefresh?.(folder, continuationCollector, true);
         }
         catch (error) {
@@ -293,6 +296,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       const result = await request('deriveCachedName', ...args);
       return !!result && request('certifyNameDerivation', args[0], args[1], result.witness, result.collision);
     },
+    async deriveCachedNames(rows) { return request('deriveCachedNames', rows); },
     async buildProjectsFromCache(showArchived) { return compute('buildProjectsFromCache', showArchived); },
     async refreshFolder(folder, opts) { return compute('refreshFolder', folder, opts); },
     async dropFolderRows(folder, opts) { return compute('dropFolderRows', folder, opts); },
@@ -302,7 +306,11 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     },
     async writeScannedFolder(result, unverified) { return compute('writeScannedFolder', result, unverified); },
     async writeScannedFolderPartial(result) { return compute('writeScannedFolderPartial', result); },
-    async completeGoneFolder(folder) { return compute('completeGoneFolder', folder); },
+    async completeGoneFolder(folder) {
+      if (observation(path.join(projectsDir, folder)) !== null) throw new Error('Gone folder reappeared or cannot be inspected');
+      if (backend.getCachedByFolder(folder).length) return false;
+      return compute('dropFolderRows', folder, { search: true });
+    },
     async applyProjectsWorkerEffects(result) {
       if (result.effects?.length === 0 && result.keptLiveRows?.length === 0) return;
       return compute('applyProjectsWorkerEffects', result);

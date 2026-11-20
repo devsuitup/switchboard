@@ -1,4 +1,5 @@
 {
+  "merge-async": true,
   "reporter": ["text", "lcov"],
   "reports-dir": "./coverage",
   "exclude": [

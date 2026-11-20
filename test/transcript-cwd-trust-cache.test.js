@@ -213,6 +213,8 @@ test('cold scan: a local folder with no verified path loses its cached rows, and
     initCache(projectsDir, state.db, { info() {}, error() {}, warn: (m) => warnings.push(m) });
     await sessionCache.populateCacheViaWorker();
     assert.deepEqual(state.calls.deletedFolders, [folder]);
+    assert.deepEqual(state.calls.metaWrites, [], 'unverified folders must not recreate cache_meta with a null path');
+    assert.equal(state.folderMeta.size, 0);
     assert.equal(warnings.length, 1);
     assert.ok(!warnings[0].includes('\n'));
   } finally { cleanup(tmp); }

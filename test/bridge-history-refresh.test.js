@@ -235,63 +235,60 @@ test('warm incremental reconciliation drops a cached local folder with an invali
   assert.ok(!f.search.has('a'));
 });
 
-test('one-time repair indexes only repaired folders off-thread and cannot loop through reconcile', { timeout: 9000 }, async t => {
-  const f = fixture(t);
-  f.write('a', [f.msg('a-open', '01')]);
-  f.write('b', [f.msg('b-own', '02')]);
-  const other = encodeProjectPath(path.join(f.root, 'other'));
-  fs.mkdirSync(path.join(f.root, other));
-  fs.writeFileSync(path.join(f.root, other, 'untouched.jsonl'), JSON.stringify({ ...f.msg('other', '01'), cwd: path.join(f.root, 'other') }) + '\n');
-  f.meta.set(other, { projectPath: path.join(f.root, 'other'), indexMtimeMs: require('../folder-index-state').getFolderIndexMtimeMs(path.join(f.root, other)) });
-  f.settings.set('bridge_uuid_reindex_folders', [f.folder]);
-  const upsert = f.db.upsertCachedSessions;
-  let writes = 0;
-  f.db.upsertCachedSessions = fresh => { writes++; upsert(fresh); };
-  const reads = [], original = fs.readFileSync;
-  fs.readFileSync = (file, ...args) => { if (String(file).startsWith(f.dir) && String(file).endsWith('.jsonl')) reads.push(file); return original(file, ...args); };
-  try {
-    cache.init({ PROJECTS_DIR: f.root, activeSessions: f.activeSessions, getMainWindow: () => null, log: console, db: f.db });
-    const first = cache.reindexRepairedFolders?.();
-    assert.equal(cache.refreshFolder(f.folder, { files: new Set(['a.jsonl']) }), false);
-    assert.deepEqual(reads, [], 'watcher flush during repair must not recreate invalidated rows on the main thread');
+test('one-time repair is adopted by population off-thread and cannot loop through reconcile',
+  { timeout: 9000, skip: !require('./fixtures/conversation-store.cjs').supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const f = await require('./fixtures/warm-start-1144.cjs').fixture(t);
+    f.write('a');
+    f.write('b');
+    const other = encodeProjectPath(path.join(f.root, 'other'));
+    fs.mkdirSync(path.join(f.projects, other));
+    fs.writeFileSync(path.join(f.projects, other, 'untouched.jsonl'), JSON.stringify({ type: 'user',
+      cwd: path.join(f.root, 'other'), message: { content: 'untouched' } }) + '\n');
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    await f.writer.setSetting('bridge_uuid_reindex_folders', [f.folder]);
+    f.calls.length = 0;
+    const reads = [], original = fs.readFileSync;
+    t.mock.method(fs, 'readFileSync', (file, ...args) => {
+      if (String(file).startsWith(f.dir) && String(file).endsWith('.jsonl')) reads.push(file);
+      return original(file, ...args);
+    });
+    const first = cache.reindexRepairedFolders();
+    assert.equal(await f.writer.refreshFolder(f.folder, { files: new Set(['a.jsonl']) }), false);
     assert.equal(cache.reconcileCacheFromFilesystem(), undefined);
-    await first;
-    await cache.reindexRepairedFolders();
-  }
-  finally { fs.readFileSync = original; }
-  assert.deepEqual(reads, []);
-  assert.equal(f.rows.size, 2);
-  assert.equal(writes, 1, 'startup repair writes its folder once; neither reconcile nor repeated calls restart it');
-  assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders'), []);
-});
+    assert.equal((await first).ok, true);
+    assert.equal((await cache.reindexRepairedFolders()).folders, 0);
+    assert.deepEqual(reads, [], 'watcher and reconcile cannot recreate repair rows on main');
+    assert.deepEqual(f.db.getCachedByFolder(f.folder).map(row => row.sessionId).sort(), ['a', 'b']);
+    assert.ok(f.db.getCachedSession('untouched'));
+    const upserts = f.calls.filter(call => call.name === 'effects').flatMap(call => call.args[0])
+      .filter(effect => effect.name === 'upsertCachedSessions');
+    assert.equal(upserts.length, 1, 'only the repaired folder is rewritten once');
+    assert.deepEqual(Array.from(f.db.getSetting('bridge_uuid_reindex_folders')), []);
+  });
 
-test('a failed repair write releases its gate so watcher and reconcile discover sessions without a restart', { timeout: 9000 }, async t => {
-  const f = fixture(t);
-  f.write('a', [f.msg('own', '01')]);
-  f.settings.set('bridge_uuid_reindex_folders', [f.folder]);
-  const upsert = f.db.upsertCachedSessions;
-  let attempts = 0;
-  let failWrite = true;
-  f.db.upsertCachedSessions = fresh => {
-    if (failWrite) { attempts++; throw new Error('injected repair write failure'); }
-    upsert(fresh);
-  };
-  const ctx = { PROJECTS_DIR: f.root, activeSessions: f.activeSessions, getMainWindow: () => null, log: { warn() {} }, db: f.db };
-  cache.init(ctx);
-  assert.equal((await cache.reindexRepairedFolders()).ok, false);
-  assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders'), []);
-  failWrite = false;
-  f.write('new', [f.msg('new-own', '02')]);
-  assert.equal(cache.refreshFolder(f.folder, { files: new Set(['new.jsonl']) }), true);
-  assert.ok(f.rows.has('new'), 'watcher discovers a new session after repair failure');
-  f.meta.get(f.folder).indexMtimeMs = 0;
-  assert.equal(cache.reconcileCacheFromFilesystem(), undefined);
-  assert.ok(f.rows.has('a'));
-  assert.ok(f.search.has('a'));
-  assert.equal(attempts, 1, 'incremental recovery does not restart the repair worker');
-  assert.equal((await cache.reindexRepairedFolders()).folders, 0);
-  assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders'), []);
-});
+test('a failed repair retains its marker until an acknowledged population retries it',
+  { timeout: 9000, skip: !require('./fixtures/conversation-store.cjs').supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const f = await require('./fixtures/warm-start-1144.cjs').fixture(t);
+    f.write('a');
+    await f.writer.setSetting('bridge_uuid_reindex_folders', [f.folder]);
+    const write = f.writer.writeScannedFolder.bind(f.writer);
+    let attempts = 0;
+    f.writer.writeScannedFolder = async () => { attempts++; throw new Error('injected repair write failure'); };
+    assert.equal((await cache.reindexRepairedFolders()).ok, false);
+    assert.deepEqual(Array.from(f.db.getSetting('bridge_uuid_reindex_folders')), [f.folder], 'spec 1144 section 3: repair clears only after full publication ACK');
+    f.write('new');
+    assert.equal(await f.writer.refreshFolder(f.folder, { files: new Set(['new.jsonl']) }), false);
+    assert.equal(cache.reconcileCacheFromFilesystem(), undefined);
+    assert.equal(f.db.getCachedSession('new'), null, 'watcher cannot certify an outstanding repair');
+    assert.equal((await cache.reindexRepairedFolders()).ok, false, 'retry backoff prevents an immediate repair loop');
+    assert.equal(attempts, 1);
+    f.writer.writeScannedFolder = write;
+    assert.equal((await cache.populateCacheViaWorker({ force: true })).ok, true);
+    assert.deepEqual(f.db.getCachedByFolder(f.folder).map(row => row.sessionId).sort(), ['a', 'new']);
+    assert.equal(f.db.connection.prepare("SELECT count(*) AS n FROM search_map WHERE type='session'").get().n, 2);
+    assert.deepEqual(Array.from(f.db.getSetting('bridge_uuid_reindex_folders')), []);
+    assert.equal((await cache.reindexRepairedFolders()).folders, 0);
+  });
 
 test('pruning an undeclared host clears its pending repair through the main dropFolder callback', { timeout: 9000 }, async t => {
   const f = fixture(t);

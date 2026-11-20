@@ -220,6 +220,7 @@ function producerTargets(command, args) {
       for (const id of values[1]) sessions.push({ id });
       inspect('upsertSearchEntries', [values[2]]);
     } else if (['setCachedEntrypoints', 'setCachedCustomTitles'].includes(name)) for (const row of values[0]) sessions.push({ id: row.sessionId });
+    else if (name === 'deriveCachedNames') for (const row of values[0]) sessions.push({ id: row.sessionId });
     else if (['invalidateFullRead', 'deriveCachedName', 'certifyNameDerivation'].includes(name)) sessions.push({ id: values[0] });
     else if (['setName', 'renameSession', 'toggleStar', 'setStarred', 'setArchived', 'replaceSessionMetrics', 'deleteCachedSession', 'deleteSearchSession', 'touchCachedModified', 'setCachedContinuationIndex', 'setCachedFileSize', 'rekeySessionMeta'].includes(name)) {
       sessions.push({ id: values[0] });

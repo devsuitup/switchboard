@@ -719,9 +719,13 @@ Parser/merge/metric/search output changes must bump
 [session-cache.md](session-cache.md), "Full-content observations".
 
 A2 startup checks the captured row/folder/configuration inventory and source
-observations before queueing. The facade checks writer revision again when the
-queued computation starts. `WRITER_STALE` is returned to population for a new
-scan, without replaying stale parsed rows. Deletion-only subsets also use the
+observations before queueing. The facade checks that folder's rows and metadata
+again when the queued computation starts. Begin compares its folder witness;
+startup effects compare the folder rows, metadata and pending token inside each
+transaction, then retain the resulting witness for the next chunk. Unrelated
+writer commits do not invalidate startup. Other effect producers retain their
+existing revision guard. `WRITER_STALE` returns to population for up to two fresh
+folder selections, without replaying stale parsed rows. Deletion-only subsets use the
 pending/seal protocol. Deferred files are withheld from all derived effects;
 an accepted stable subset can retain its previous full baseline while failed
 files stay individually uncertified. Deferred generations clear after ACK.
@@ -732,6 +736,12 @@ that command ACK, `certifyNameDerivation` checks the post-effect witness again.
 A concurrent user rename rejects certification. Collision suppression records
 no completed witness, so removal of a collision descriptor is retried even
 when the body is unchanged. Both commands keep session deletion fences.
+
+Startup uses `deriveCachedNames` to batch a folder's candidates in one request.
+Each row derives and certifies in one worker unit; the existing adaptive chunk
+budgets still apply. The batch binds all session deletion owners on admission,
+and every unit checks its own binding before writing. The single-row facade
+retains its separate ACK protocol for existing callers.
 
 The obsolete single-row worker `certifyFullRead` command is removed; certificate
 units invoke the store method directly inside `certifyFullReads`. The real

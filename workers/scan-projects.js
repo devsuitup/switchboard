@@ -24,7 +24,8 @@ function readForScan(file, key, projectPath, opts = {}) {
   const row = readSessionFile(file, key, projectPath, { ...opts, readObservation });
   const relativePath = path.relative(path.join(PROJECTS_DIR, key), file).split(path.sep).join('/');
   const stamp = row?.fullReadStamp || (readObservation.before && fullReadStamp(file, 'claude', relativePath,
-    readObservation.before, readObservation.bytes));
+    readObservation.before, readObservation.bytes,
+    opts.parentSessionId ? { meta: observation(file.replace(/\.jsonl$/, '.meta.json')) } : {}, readObservation.dependencies));
   if (!stamp || (row && !row.fullReadStamp)) { startupRead.failed.add(relativePath); return null; }
   startupRead.checks.set(relativePath, stamp);
   return row;
@@ -141,9 +142,8 @@ function readStartupFolder(folder) {
   catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error; goneFolder = true; }
   const files = enumerateSessionFiles(folderPath, { strict: true });
   enumerateReads(files.map(file => file.filePath));
-  let incomplete = false;
-  const projectPath = deriveProjectPath(folderPath, folder, { onIncomplete: () => { incomplete = true; } });
-  if (incomplete && files.length) throw new Error('Incomplete project path derivation');
+  lastRejected = null;
+  const projectPath = deriveProjectPath(folderPath, folder, { onRejected: cwd => { lastRejected = { folder, cwd }; } });
   const { meta, rows } = entry;
   let reason = workerData.startup.force ? 'forced' : !meta ? 'missing-baseline' : meta.fullIndexPending ? 'pending'
     : meta.fullIndexVersion !== SESSION_CONTENT_INDEX_VERSION ? 'version' : meta.fullIndexConfig !== scanConfig() ? 'configuration'
@@ -169,9 +169,9 @@ function readStartupFolder(folder) {
   }
   startupRead = { byPath, checks: new Map(), failed: new Set() };
   try {
-    const result = reason && files.length && projectPath ? readFolderFromFilesystem(folder)
+    const result = !projectPath ? { folder, projectPath, sessions: [], toDelete: rows.map(row => row.sessionId), unverified: true }
+      : reason && files.length ? readFolderFromFilesystem(folder)
       : readFolderFileSubsetFromFilesystem(folder, selected, rows, projectPath);
-    if (!projectPath && !startupRead.failed.size) { result.sessions = []; result.toDelete = rows.map(row => row.sessionId); }
     if (reason && !files.length) result.partial = false;
     const deferred = [...startupRead.failed];
     for (const [relativePath, stamp] of startupRead.checks) {
@@ -239,8 +239,8 @@ try {
       if (result?.deferred?.length) counters.filesFailed = Math.max(counters.filesFailed, result.deferred.length);
       if (result) Object.assign(result, { counters, fullIndexConfig: scanConfig() });
       stripBridgeEvidence(result);
-      parentPort.postMessage({ type: 'folder', result, counters, folder: FOLDER_PREFIX + folders[i], current, total, rejected: result ? null : lastRejected,
-        unverifiedLocalFolder: !result && FOLDER_PREFIX === '' ? folders[i] : null });
+      parentPort.postMessage({ type: 'folder', result, counters, folder: FOLDER_PREFIX + folders[i], current, total, rejected: !result || result.unverified ? lastRejected : null,
+        unverifiedLocalFolder: (!result || result.unverified) && FOLDER_PREFIX === '' ? folders[i] : null });
     } catch (error) {
       failedFolders.push(folders[i]);
       parentPort.postMessage({ type: 'folder', folder: folders[i], error: error.message, counters: error.counters, current, total });
