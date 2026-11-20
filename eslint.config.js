@@ -286,6 +286,7 @@ const rendererCrossFileGlobals = {
   paintSessionIcon: 'readonly',
   paintSessionIconFromSnapshot: 'readonly',
   rowHasRunningSchedule: 'readonly',
+  rowHasLiveBackgroundJob: 'readonly',
   paintTerminalHeaderStatus: 'readonly',
   // public/remote-activity-ui.js (remote-ssh adapter, see .ai/contexts/session-state.md)
   setRemoteAttached: 'readonly',
@@ -468,6 +469,7 @@ const rendererCrossFileGlobals = {
   // Agents view (public/agents-view.js) — see .ai/contexts/bg-agents.md
   agentsViewActive: 'writable',
   bgAgentSessionIds: 'readonly',
+  agentJobIsLive: 'readonly',
   backgroundActivityEntry: 'readonly',
   backgroundActivityIsForeground: 'readonly',
   backgroundActivitySnapshot: 'readonly',

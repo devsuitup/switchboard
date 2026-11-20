@@ -7,6 +7,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### Changed
 - Codex sessions run non-interactively by a program (`codex exec`: scripted reviews and fixes) are now left out of the sidebar and grid like Claude Agent SDK sessions, under the same **Hide SDK-launched Sessions** setting. They still count in the heatmap and are found by search; the ones you have open stay listed. Codex sessions already indexed are re-checked once at the next start. (#1145)
 
+### Fixed
+- A conversation running as a background job (`claude --bg`) no longer slips into a project's collapsed "Older" rows: while its job is alive it stays visible and sorts with the running sessions, and the Running filter lists it, whatever the date of its last indexed message. (#1146)
+
 ## v0.0.108 — 2026-11-20
 
 ### New
