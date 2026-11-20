@@ -187,13 +187,15 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         }
         const bodyAcknowledgment = acknowledgment;
         let continuous = true;
-        for (const row of certificates) {
-          const publication = publications.get(row.folder);
+        for (const [key, publication] of publications) {
           if (!publication?.began || publication.failed) continue;
+          const rows = certificates.filter(row => row.folder === key);
+          if (!rows.length) continue;
           try {
-            const certificateAck = await send('certifyFullRead', row.folder, publication.token, row.sessionId, row.stamp, row.witness, { receipt: forwarded });
+            const certificateAck = await send('certifyFullReads', key, publication.token, rows, { receipt: forwarded });
             if ((forwarded ? certificateAck.certified : certificateAck) === false) publication.failed = true;
             if (forwarded && certificateAck?.committedRevision !== undefined) {
+              if (certificateAck.continuous === false) continuous = false;
               if (acknowledgment?.committedRevision !== undefined && certificateAck.beforeRevision !== acknowledgment.committedRevision) continuous = false;
               acknowledgment = certificateAck;
             }

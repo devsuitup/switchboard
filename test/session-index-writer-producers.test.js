@@ -34,6 +34,67 @@ function durableFixture(t) {
 
 const sqliteSkip = !openStore.supported && 'SQLite requires native binding or Node 22';
 
+test('full folder publication uses one certificate request for all rows', { skip: sqliteSkip }, async t => {
+  const f = durableFixture(t), calls = [];
+  const worker = require('./fixtures/project-deletion-worker.cjs')(f.store);
+  const writer = createSessionIndexWriter({ readonlyBackend: f.store, client: {
+    ready: Promise.resolve(), request: (name, ...args) => { calls.push(name); return worker.client.request(name, ...args); },
+  } });
+  await writer.ready;
+  writer.initializeCache({ PROJECTS_DIR: f.root, activeSessions: new Map(), getMainWindow: () => null, log: console });
+  const file = path.join(f.root, 'source.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ type: 'user', message: { content: 'batch body' } }) + '\n');
+  const row = require('../read-session-file').readSessionFile(file, 'folder', f.root);
+  const sessions = Array.from({ length: 80 }, (_, i) => ({ ...row, sessionId: 'session-' + i }));
+  await writer.writeScannedFolder({ folder: 'folder', projectPath: f.root, sessions, indexMtimeMs: 1 });
+  assert.equal(calls.filter(name => name.startsWith('certifyFullRead')).length, 1, 'one certificate request per folder, independent of row count');
+  assert.equal(f.store.getAllCached().filter(row => row.fullReadStamp).length, sessions.length);
+  assert.equal(f.store.getFolderMeta('folder').fullIndexVersion, 1);
+});
+
+test('no-summary header refresh discards the previous full-read certificate', { skip: sqliteSkip }, async t => {
+  const f = await publicationFixture(t);
+  await f.writer.writeScannedFolder(f.result());
+  fs.writeFileSync(f.file, JSON.stringify({ type: 'system', cwd: f.root, message: 'no display summary' }) + '\n');
+  fs.utimesSync(f.file, new Date('2030-01-01'), new Date('2030-01-01'));
+  await f.writer.refreshFolder(f.folder);
+  const cached = f.db.getCachedSession('source');
+  assert.equal(cached.modified, '2030-01-01T00:00:00.000Z');
+  assert.equal(cached.fullReadStamp, null, 'no-summary header merge cannot retain a full-read certificate');
+});
+
+test('batched certificates retain rejection across bounded transactions and report revision gaps', { skip: sqliteSkip }, async t => {
+  const f = durableFixture(t), db = f.store;
+  const worker = require('./fixtures/project-deletion-worker.cjs')(db);
+  const rows = Array.from({ length: 80 }, (_, i) => ({ sessionId: 'row-' + i, folder: 'folder', summary: 'body' }));
+  db.upsertCachedSessions(rows);
+  db.beginFullIndex('folder', 'token');
+  const { rowWitness } = require('../src/main/session-index/full-read-state');
+  const certificates = rows.map(row => ({ sessionId: row.sessionId, stamp: 'certificate', witness: rowWitness(db.getCachedSession(row.sessionId)) }));
+  certificates[0].witness = 'stale';
+  const measuredBefore = db.measurements().length;
+  const original = db.certifyFullRead;
+  const revisions = new Map();
+  let interleaved;
+  db.certifyFullRead = (...args) => {
+    const revision = db.getSetting('_writer_revision') || 0;
+    revisions.set(revision, (revisions.get(revision) || 0) + 1);
+    if (!interleaved) interleaved = worker.client.request('setSetting', 'unrelated', true);
+    return original(...args);
+  };
+  const results = await Promise.allSettled([worker.client.request('certifyFullReads', 'folder', 'token', certificates, { receipt: true })]);
+  assert.equal(results[0].status, 'fulfilled', 'worker accepts one bounded certificate command');
+  await interleaved;
+  const ack = results[0].value;
+  assert.equal(ack.certified, false, 'later successful rows cannot erase an earlier witness rejection');
+  assert.equal(ack.continuous, false, 'receipt exposes an unrelated revision between chunks without rejecting certificates');
+  assert.ok(revisions.size > 1, 'large folder certificates split across transactions');
+  assert.ok(db.measurements().slice(measuredBefore).every(sample => sample.rows <= 32 && sample.bytes <= 65536), 'certificate transactions obey the row and byte budgets');
+  assert.equal(db.getAllCached().filter(row => row.fullReadStamp).length, 79);
+  db.beginFullIndex('folder', 'new-token');
+  assert.equal(await worker.client.request('certifyFullReads', 'folder', 'token', certificates), false, 'superseded folder token rejects the batch');
+});
+
 async function publicationFixture(t, intercept = () => {}) {
   const f = durableFixture(t), db = f.store, calls = [], notifications = [], warnings = [];
   const commands = createWriterCommands(db);
@@ -96,7 +157,7 @@ for (const fault of ['interleaved-header', 'certificate-timeout', 'unrelated-wri
   test('certificate stage does not fail committed body: ' + fault, { skip: sqliteSkip }, async t => {
     let interleaved = false;
     const f = await publicationFixture(t, (name, args, db) => {
-      const certificate = name === 'certifyFullRead' || (name === 'effects' && args[0].some(effect => effect.name === 'certifyFullRead'));
+      const certificate = name === 'certifyFullReads' || (name === 'effects' && args[0].some(effect => effect.name === 'certifyFullRead'));
       if (!certificate) return;
       if (fault === 'certificate-timeout') throw Object.assign(new Error('certificate outcome unknown'), { code: 'WRITER_TIMEOUT' });
       if (!interleaved) {
@@ -292,9 +353,9 @@ test('publication boundary preserves safe durable states for failures and unknow
         if (name === 'replaceSessionMetrics' && fault === 'metrics') timeout();
         if (name === 'upsertSearchEntries' && fault === 'fts') timeout();
         if (name === 'sealFullIndex' && fault === 'seal-before') timeout();
-        if (name === 'certifyFullRead' && fault === 'superseded') db.beginFullIndex('folder', 'newer-token');
-        if (name === 'certifyFullRead' && fault === 'header') db.touchCachedModified('source', '2030-01-01T00:00:00.000Z');
-        if (name === 'certifyFullRead' && fault === 'config') db.setSetting('projectRemaps', { changed: '/different' });
+        if (name === 'certifyFullReads' && fault === 'superseded') db.beginFullIndex('folder', 'newer-token');
+        if (name === 'certifyFullReads' && fault === 'header') db.touchCachedModified('source', '2030-01-01T00:00:00.000Z');
+        if (name === 'certifyFullReads' && fault === 'config') db.setSetting('projectRemaps', { changed: '/different' });
         const value = (commands[name] || db[name])(...args);
         if (name === 'upsertSearchEntries' && fault === 'fts-after') timeout();
         if (name === 'beginFullIndex' && fault === 'begin-after') timeout();
@@ -378,7 +439,7 @@ test('certificate commands retain project-deletion producer fencing', { skip: sq
   const { bindDeletionProducer } = require('../src/main/projects/project-delete-writer');
   const baseline = bindDeletionProducer(db, 'setFolderMeta', ['folder', f.root, 1], true);
   assert.ok(baseline.length > 0);
-  for (const name of ['beginFullIndex', 'sealFullIndex', 'invalidateFullIndex', 'certifyFullRead']) {
+  for (const name of ['beginFullIndex', 'sealFullIndex', 'invalidateFullIndex', 'certifyFullRead', 'certifyFullReads']) {
     assert.deepEqual(bindDeletionProducer(db, name, ['folder', 'token', 'source'], true), baseline, name + ' binds the same project owner');
   }
 });

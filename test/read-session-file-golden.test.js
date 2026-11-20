@@ -50,7 +50,9 @@ test('parser output requires a content version bump for Claude, bridge and Codex
     { type: 'session_meta', timestamp: '2024-01-01T00:00:00.000Z', payload: { cwd: '/fixture' } },
     { type: 'response_item', timestamp: '2024-01-01T00:00:01.000Z', payload: { type: 'message', role: 'user', content: 'Codex golden body' } },
   ]);
-  const rows = [readSessionFile(FIXTURE_PATH, 'folder', '/fixture'), ...merged.toUpsert,
+  const canonicalFixture = path.join(root, path.basename(FIXTURE_PATH));
+  fs.writeFileSync(canonicalFixture, fs.readFileSync(FIXTURE_PATH, 'utf8').replace(/\r\n/g, '\n'));
+  const rows = [readSessionFile(canonicalFixture, 'folder', '/fixture'), ...merged.toUpsert,
     require('../harnesses/codex').readSessionFile(codexFile, 'codex/2024/01/01')];
   const normalize = value => {
     if (Array.isArray(value)) return value.map(normalize);

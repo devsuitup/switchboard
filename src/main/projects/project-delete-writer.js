@@ -224,7 +224,7 @@ function producerTargets(command, args) {
       sessions.push({ id: values[0] });
       if (name === 'rekeySessionMeta') sessions.push({ id: values[1] });
     } else if (['setFolderMeta', 'deleteCachedFolder', 'deleteSearchFolder', 'dropRemoteFolder', 'completeRepairFolders',
-      'beginFullIndex', 'sealFullIndex', 'invalidateFullIndex', 'certifyFullRead'].includes(name)) {
+      'beginFullIndex', 'sealFullIndex', 'invalidateFullIndex', 'certifyFullRead', 'certifyFullReads'].includes(name)) {
       for (const folder of name === 'completeRepairFolders' ? values[0] : [values[0]]) folders.push(folder);
       if (name === 'setFolderMeta' && values[1]) projects.push({ alias: parseFolderKey(values[0]).alias, projectPath: values[1], folder: values[0] });
       if (name === 'beginFullIndex') for (const projectPath of values[2]?.projects || []) projects.push({ alias: parseFolderKey(values[0]).alias, projectPath, folder: values[0] });

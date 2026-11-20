@@ -207,12 +207,12 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
   const excludedMessageSignatures = opts.excludedMessageSignatures;
   try {
     const { observation, relativeSource, fullReadStamp } = require('./src/main/session-index/full-read-state');
-    const before = observation(filePath);
+    const big = fs.statSync(filePath, { bigint: true });
+    const before = observation(filePath, big);
     const metaPath = isSubagent ? filePath.replace(/\.jsonl$/, '.meta.json') : null;
     const dependencies = metaPath ? { meta: observation(metaPath) } : {};
     const certificate = bytes => fullReadStamp(filePath, 'claude', relativeSource(filePath, opts.parentSessionId), before, bytes,
       metaPath ? { meta: observation(metaPath) } : {}, dependencies, observation(filePath, finalStat));
-    const big = fs.statSync(filePath, { bigint: true });
     const stamp = continuationStamp(big);
     const stat = isSubagent ? { size: Number(big.size), mtime: new Date(continuationMtime(big)), birthtime: new Date(Number((big.birthtimeNs + 500000n) / 1000000n)) } : fs.statSync(filePath);
     const fileBytes = require('./src/main/session-index/read-counters').readBodyFile(filePath);
@@ -337,6 +337,14 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
 
     const fallbackDate = stat.mtime.toISOString().slice(0, 10);
     const dailyMetrics = extractDailyMetrics(lines, fallbackDate, cutoff, excludedMessageUuids, excludedMessageSignatures);
+    if (isSubagent) {
+      if (!sidechainSeen) return null;
+      if (!agentId) {
+        const m = fileBase.match(/^agent-(.+)$/);
+        if (m) agentId = m[1];
+      }
+      if (!agentId) return null;
+    }
     const metaObservation = { read: false };
     const meta = isSubagent ? readSubagentMeta(filePath, metaObservation) || {} : null;
     const finalStat = fs.statSync(filePath, { bigint: true });
@@ -345,15 +353,6 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       ? messageCountIndex(fileBytes, big, messageCount, tailMessageCount, !!(cutoff || excludedMessageUuids || excludedMessageSignatures)) : null;
 
     if (isSubagent) {
-      // Sidechain marker must be present — otherwise the file lives under a
-      // subagents/ directory but isn't actually a subagent transcript. Bail.
-      if (!sidechainSeen) return null;
-      if (!agentId) {
-        // Fall back to filename: agent-<id>.jsonl
-        const m = fileBase.match(/^agent-(.+)$/);
-        if (m) agentId = m[1];
-      }
-      if (!agentId) return null;
       const subagentType = meta.agentType || null;
       const description = meta.description || null;
       return {

@@ -164,6 +164,16 @@ function createWriterCommands(db) {
       const certified = db.certifyFullRead(...args);
       return args[5]?.receipt ? { certified, beforeRevision, committedRevision: beforeRevision + (certified ? 1 : 0) } : certified;
     },
+    certifyFullReads(folder, token, rows, control) {
+      const beforeRevision = db.getSetting('_writer_revision') || 0;
+      let certified = true, changed = false;
+      for (const row of rows) {
+        const accepted = db.certifyFullRead(folder, token, row.sessionId, row.stamp, row.witness);
+        certified &&= accepted;
+        changed ||= accepted;
+      }
+      return control?.receipt ? { certified, beforeRevision, committedRevision: beforeRevision + (changed ? 1 : 0), continuous: true } : certified;
+    },
     readProjectArchiveEpochs: epochs,
     patchGlobal: patch,
     cleanupWorktree(projectPath) {

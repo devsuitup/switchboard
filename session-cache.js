@@ -700,7 +700,7 @@ function refreshFolder(folder, opts = {}) {
         // stays current. fileMtime has to move too, otherwise this file stays
         // permanently "dirty" and gets re-read on every watcher flush.
         if (count || changedSize || continuationIndex !== cachedEntry.continuationIndex) {
-          sessionsToUpsert.push({ ...cachedEntry, ...count, continuationIndex, modified: fileMtime, fileMtime, fileSize });
+          sessionsToUpsert.push({ ...cachedEntry, ...count, fullReadStamp: null, continuationIndex, modified: fileMtime, fileMtime, fileSize });
         } else sessionsToTouch.push({ sessionId: cachedDbId, fileMtime });
       }
       continue;

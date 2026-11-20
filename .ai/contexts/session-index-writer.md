@@ -669,11 +669,25 @@ The drop remains a `deleteCachedFolder` effect, including through worker chunkin
 so observers still receive the broad `null` invalidation. Deleted-file counters
 include dropped rows absent from the replacement, even when begin failed or a
 subset only deletes files. Certificate SQL statements are prepared once per store.
+Ordinary overlay folder deletion reads no full-index metadata; only a drop with
+`preserveFullIndex` consults the previous pending token.
+
+Begin remains after effect computation: full-read candidates, affected folders
+and the no-op/repair early exits are only known from the computed effects.
+Moving it earlier would either invalidate those no-op paths or require a second
+discovery pass. Its expected-revision fence and the existing bounded stale retry
+remain necessary; no new optimistic pre-compute begin is introduced in A1.
 
 Affected rows lose certificates before materialized replacement. Candidates
-are withheld from upserts, then published as separately ACKed direct commands
-after all body, metrics and staged FTS work. `certifyFullRead` compares the
-folder token and materialized row witness. `sealFullIndex` compares the token
+are withheld from upserts, then published by one separately ACKed direct
+`certifyFullReads(folder, token, rows)` command per nonempty folder after all
+body, metrics and staged FTS work. Each certificate compares the folder token
+and materialized row witness. The worker iterates one row per unit through the
+existing adaptive 32-row/65536-byte/10 ms transaction budgets and background
+scheduling, returning one settings snapshot after the whole command. Rejection
+is accumulated across committed chunks, never overwritten by a later successful
+row; rollback retries recompute only the uncommitted chunk result. All chunks
+retain the project-deletion producer fence. `sealFullIndex` compares the token
 and captured canonical configuration (sorted remaps, deduplicated/sorted
 disabled harness IDs, resolved source roots). A full scan records the content
 version; a partial operation restores only an existing full baseline.
@@ -688,6 +702,9 @@ does not use global writer revision as its freshness fence. Projects replies
 retain their independent revision-continuity check and return the final owned
 ACK only for a continuous sequence; otherwise they retain the body ACK so the
 reader can detect intervening work. This check does not reject certification.
+Batch receipts carry the first before-revision, final committed revision and
+continuity across chunks. An unrelated write between chunks breaks Projects
+receipt continuity without refusing token/witness-valid certificates.
 
 The commands bracket producer operations at the facade. They do not alter
 the generic chunk scheduler, producer-unit packing, transaction budgets,

@@ -54,7 +54,7 @@ function createCacheEffects(read) {
     deleteCachedSession: id => rows.set(id, null),
     deleteCachedFolder: (folder, opts) => {
       for (const row of adapter.getCachedByFolder(folder)) rows.set(row.sessionId, null);
-      const previous = adapter.getFolderMeta(folder);
+      const previous = opts?.preserveFullIndex ? adapter.getFolderMeta(folder) : null;
       folders.set(folder, opts?.preserveFullIndex && previous?.fullIndexPending ? { ...previous, projectPath: null, indexMtimeMs: 0 } : null);
     },
     touchCachedModified: (id, modified) => { const row = rowFor(id); if (row) Object.assign(row, { modified, fileMtime: modified }); },

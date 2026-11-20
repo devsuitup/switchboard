@@ -12,8 +12,9 @@ subagents include the sidecar observation or confirmed absence; Codex includes
 the effective external title. Readers check the source before and after all
 eager content/auxiliary reads and require bytes through the observed EOF. A
 raced read proposes null; partial trailing JSON keeps existing parser semantics.
-Claude certificates reuse the final BigInt stat used by both incremental
-indexes; subagent metadata is read before that final observation.
+Claude certificates reuse the initial and final BigInt stats used by the
+incremental indexes. Subagent metadata is read only after validating the agent
+identity and before the final observation.
 
 The shared Claude full reader covers new watcher rows, pinned-mtime size changes,
 message-count recovery, filtered bridge rereads, scan-worker full/subset reads
@@ -22,7 +23,8 @@ subagents. Codex's full parser covers both harness scans and refreshes. The
 unused main-side folder reader is not a publication path. Header/count/size,
 touch, continuation and title/entrypoint backfills never advance the stamp.
 Header refreshes clear it, including a project-path correction at an unchanged
-source stamp, because the header replaces the full read's display timestamp.
+source stamp and the no-summary merge, because the header replaces the full
+read's display timestamp.
 Message-count recovery's display-mtime override explicitly clears its candidate.
 
 The writer facade separates candidates from durable certificates. It nulls
@@ -40,9 +42,12 @@ compares SHA-256 with `CONTENT_GOLDEN_DIGESTS[version]`. Keep published ledger
 entries immutable: covered output changes need a new version and digest. Extend
 the corpus when parser changes introduce new semantics; a finite corpus cannot
 detect every possible semantic change.
-The checked-in golden JSONL fixtures are pinned to LF in `.gitattributes` so
-their byte counts do not depend on `core.autocrlf`. The golden test also pins
-every recorded ledger entry independently of the current version lookup.
+The golden digest parses a disposable LF-normalized copy of the Claude fixture,
+preserving the basename. This makes its byte-sensitive output independent of an
+existing CRLF working copy; `.gitattributes` alone does not rewrite that copy.
+The golden test also pins every recorded ledger entry independently of the
+current version lookup. Normalization is confined to the test fixture; production
+certificates continue to observe actual source bytes.
 
 `folder-indexed` diagnostics are emitted once after the folder writer response,
 including its seal when applicable, with runtime/mode/reason, enumerated/read/
