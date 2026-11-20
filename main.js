@@ -661,8 +661,15 @@ const projectsClient = createProjectsWorkerClient({
     return acknowledgment?.committedRevision !== undefined ? { committedRevision: acknowledgment.committedRevision }
       : { version: acknowledgment?.version ?? before.version };
   },
-  accepted: result => { if (result.reconciled) projectsReconciledAt = Date.now(); },
+  accepted: (result, { delivered = true } = {}) => {
+    if (!result.reconciled) return;
+    projectsReconciledAt = Date.now();
+    if (!delivered) notifyRendererProjectsChanged('reconcile');
+  },
 });
+// see .ai/contexts/ipc-bridge.md ("Last known projects")
+const { createLastKnownProjectsStore } = require('./src/main/projects/last-known-projects');
+const lastKnownProjects = createLastKnownProjectsStore({ dir: app.getPath('userData'), appVersion: app.getVersion(), log });
 
 const { resolveJsonlPath, readSubagentMeta } = require('./read-session-file');
 
@@ -1402,6 +1409,7 @@ ipcMain.handle('rebuild-cache', async () => {
 });
 
 ipcMain.handle('get-indexing-state', () => ({ finished: isIndexingFinished() }));
+ipcMain.handle('get-last-known-projects', () => lastKnownProjects.load());
 
 async function getProjectsSnapshot(showArchived) {
   const started = TRACE.on ? performance.now() : null;
@@ -1419,7 +1427,7 @@ async function getProjectsSnapshot(showArchived) {
     }
     const needsPopulate = !isInitialScanComplete() || (!repairPending && (!isCachePopulated() || !isSearchIndexPopulated()));
 
-    if (needsPopulate) populateCacheViaWorker();
+    if (needsPopulate) Promise.resolve(populateCacheViaWorker()).then(() => { if (isInitialScanComplete()) projectsReconciledAt = Date.now(); }, () => {});
     backfillEntrypoints();
     backfillCustomTitles();
     const result = await projectsClient.request({ reconcile: !needsPopulate && Date.now() - projectsReconciledAt >= 5000, measureBytes: TRACE.on });
@@ -1452,15 +1460,31 @@ async function getProjectsSnapshot(showArchived) {
     if (TRACE.on) {
       if (started !== null) trace('ipc.get-projects', null, { totalMs: performance.now() - started, rows: result.rows, replyBytes: result.replyBytes?.[showArchived === 'both' ? 'both' : showArchived ? 'all' : 'default'] ?? null });
     }
+    if (result.stale) {
+      notifyRendererProjectsChanged('conflict');
+      if (showArchived === 'both') reply.projectsStale = true;
+    } else if (showArchived === 'both') lastKnownProjects.remember({ defaultProjects: reply.defaultProjects, allProjects: reply.allProjects });
     return reply;
   } catch (err) {
     if (err.code === 'PROJECTS_SNAPSHOT_CONFLICT') {
+      const changed = err.reason === 'live' ? ` changed=${changedLiveComponents(err.before, err.after)}` : '';
+      log.warn(`[projects] snapshot conflict after ${err.dispatches ?? 'unknown'} dispatches: reason=${err.reason ?? 'unknown'}${changed} reconcile=${err.reconcile ?? 'unknown'}`);
       notifyRendererProjectsChanged('conflict');
       return { projectsError: { code: err.code, message: 'Projects changed while loading; reload to retry.' } };
     }
+    if (err.code === 'PROJECTS_WORKER_TIMEOUT') log.warn(`[projects] get-projects timed out after ${err.timeoutMs} ms: reconcile=${err.reconcile ?? 'unknown'} dispatches=${err.dispatches ?? 'unknown'}`);
     console.error('Error listing projects:', err);
     throw err;
   }
+}
+
+function changedLiveComponents(before, after) {
+  let snapshots;
+  try { snapshots = [JSON.parse(before), JSON.parse(after)]; } catch { return 'unknown'; }
+  if (!snapshots.every(value => value && typeof value === 'object')) return 'unknown';
+  const keys = [...new Set([...Object.keys(snapshots[0]), ...Object.keys(snapshots[1])])];
+  const changed = keys.filter(key => JSON.stringify(snapshots[0][key]) !== JSON.stringify(snapshots[1][key]));
+  return changed.length ? changed.join(',') : 'none';
 }
 
 async function getTriggerProjectSnapshot() {

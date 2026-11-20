@@ -17,14 +17,17 @@ module.exports = function loadGetProjectsHandler(context) {
   const helperEnd = source.indexOf('\n}', helperStart) + 2;
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
   const sandbox = {
-    console, performance, structuredClone, Buffer, cliSessionState, require: createRequire(filename), ...context,
+    console, performance, structuredClone, Buffer, cliSessionState, require: createRequire(filename),
+    log: { warn() {}, info() {}, error() {} }, notifyRendererProjectsChanged() {}, lastKnownProjects: { remember() {} }, ...context,
     ipcMain: { handle: (name, callback) => { assert.equal(name, 'get-projects'); handler = callback; } },
   };
   vm.createContext(sandbox);
   vm.runInContext(source.slice(helperStart, end), sandbox, { filename, lineOffset: source.slice(0, helperStart).split('\n').length - 1 });
-  const accepted = source.match(/accepted: (result => \{ if \(result\.reconciled\)[^\n]+\}),/);
-  assert.ok(accepted, 'shipped acceptance callback must exist');
-  handler.accepted = vm.runInContext(accepted[1], sandbox, { filename });
+  const clientStart = source.indexOf('const projectsClient = createProjectsWorkerClient({');
+  const acceptedStart = source.indexOf('\n  accepted: ', clientStart);
+  const acceptedEnd = source.indexOf('\n});', acceptedStart);
+  assert.ok(clientStart >= 0 && acceptedStart > clientStart && acceptedEnd > acceptedStart, 'shipped acceptance callback must exist');
+  handler.accepted = vm.runInContext('(' + source.slice(acceptedStart + '\n  accepted: '.length, acceptedEnd).replace(/,\s*$/, '') + ')', sandbox, { filename });
   handler.reconciledAt = () => sandbox.projectsReconciledAt;
   return handler;
 };

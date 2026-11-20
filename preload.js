@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('api', {
   readMemory: (filePath) => ipcRenderer.invoke('read-memory', filePath),
   saveMemory: (filePath, content, expected) => ipcRenderer.invoke('save-memory', filePath, content, expected),
   getIndexingState: () => ipcRenderer.invoke('get-indexing-state'),
+  getLastKnownProjects: () => ipcRenderer.invoke('get-last-known-projects'),
   getProjects: async (showArchived) => {
     const reply = await ipcRenderer.invoke('get-projects', showArchived);
     if (reply?.projectsError?.code === 'PROJECTS_SNAPSHOT_CONFLICT'
