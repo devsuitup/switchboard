@@ -139,6 +139,11 @@ async function confirmSessionArchivePlan(rows, prepared, ask, prepare = window.p
   return { prepared };
 }
 
+function rowIsRunning(session, includePending = true) {
+  return rowHasRunningSchedule(session) || rowHasLiveBackgroundJob(session)
+    || rowSessionIds(session).some(id => activePtyIds.has(id) || (includePending && pendingSessions.has(id)));
+}
+
 function olderArchiveKeepReason(session) {
   const ids = [...new Set([...rowSessionIds(session), rowHeadId(session)])];
   if (ids.includes(activeSessionId)) return 'active session on screen';
@@ -833,7 +838,7 @@ function buildSlugGroup(slug, sessions, subagentIndex, project, legacyScheduleSc
   const promoted = [];
   const rest = [];
   for (const session of sessions) {
-    if (rowHasRunningSchedule(session) || rowSessionIds(session).some(id => activePtyIds.has(id))) {
+    if (rowIsRunning(session, false)) {
       promoted.push(session);
     } else {
       rest.push(session);
@@ -1374,7 +1379,7 @@ function renderProjects(projects, resort, { keepFocus = false } = {}) {
     const subagentIndex = buildSubagentIndex(allSessions);
     let filtered = allSessions.filter(s => !s.parentSessionId);
     if (showStarredOnly) filtered = filtered.filter(s => s.starred);
-    if (showRunningOnly) filtered = filtered.filter(s => rowHasRunningSchedule(s) || rowSessionIds(s).some(id => activePtyIds.has(id)));
+    if (showRunningOnly) filtered = filtered.filter(s => rowIsRunning(s, false));
     if (showTodayOnly) {
       const now = new Date();
       const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -1391,8 +1396,8 @@ function renderProjects(projects, resort, { keepFocus = false } = {}) {
 
     // Sort
     filtered = [...filtered].sort((a, b) => {
-      const aRunning = rowHasRunningSchedule(a) || rowSessionIds(a).some(id => activePtyIds.has(id) || pendingSessions.has(id));
-      const bRunning = rowHasRunningSchedule(b) || rowSessionIds(b).some(id => activePtyIds.has(id) || pendingSessions.has(id));
+      const aRunning = rowIsRunning(a);
+      const bRunning = rowIsRunning(b);
       const aPri = (a.starred && aRunning ? 3 : aRunning ? 2 : a.starred ? 1 : 0);
       const bPri = (b.starred && bRunning ? 3 : bRunning ? 2 : b.starred ? 1 : 0);
       if (aPri !== bPri) return bPri - aPri;
@@ -1414,12 +1419,12 @@ function renderProjects(projects, resort, { keepFocus = false } = {}) {
     }
     const allItems = [];
     for (const session of ungrouped) {
-      const isRunning = rowHasRunningSchedule(session) || rowSessionIds(session).some(id => activePtyIds.has(id) || pendingSessions.has(id));
+      const isRunning = rowIsRunning(session);
       allItems.push({ sortTime: new Date(session.modified).getTime(), pinned: !!session.starred, running: isRunning, dormant: rowSessionIds(session).some(isDormantSession), element: buildSessionItem(session) });
     }
     for (const [slug, sessions] of slugMap) {
       const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
-      const hasRunning = sessions.some(s => rowHasRunningSchedule(s) || rowSessionIds(s).some(id => activePtyIds.has(id) || pendingSessions.has(id)));
+      const hasRunning = sessions.some(s => rowIsRunning(s));
       const hasPinned = sessions.some(s => s.starred);
       const hasDormant = sessions.some(s => rowSessionIds(s).some(isDormantSession));
       const element = buildSlugGroup(slug, sessions, subagentIndex, project, legacyScheduleScopes);

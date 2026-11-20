@@ -18,7 +18,7 @@ investigating.
 
 ## Turning it on
 
-**Global Settings → Diagnostics → Debug Mode.**
+**Global Settings → Advanced → Diagnostics → Debug Mode.**
 
 ### Toggling it at runtime
 

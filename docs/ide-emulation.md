@@ -9,7 +9,7 @@ panel next to the terminal, instead of in an external editor.
 ## Turning it on
 
 IDE Emulation is **off by default**. Turn it on in **Global Settings →
-Application → IDE Emulation** and save. It applies to sessions launched or
+General → IDE → IDE Emulation** and save. It applies to sessions launched or
 resumed afterwards; running sessions keep what they started with, and the
 settings page says so when the value changes. It is a global setting only.
 

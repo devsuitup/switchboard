@@ -392,6 +392,12 @@ function rowHasRunningSchedule(row) {
   return !row?.remoteAlias && !!row?.runningScheduleIds?.length;
 }
 
+function rowHasLiveBackgroundJob(row) {
+  if (typeof backgroundActivityEntry !== 'function' || typeof agentJobIsLive !== 'function') return false;
+  const entry = backgroundActivityEntry(rowHeadId(row), row);
+  return !!entry && agentJobIsLive(entry);
+}
+
 function scheduledRunIcon(snapshot, row) {
   const icon = renderSessionIcon(snapshot);
   if (!rowHasRunningSchedule(row)) return icon;
