@@ -23,6 +23,9 @@ const ACTION_REQUIRED_RE = /action required/i;
 const SANDBOX_MODES = new Set(['read-only', 'workspace-write', 'danger-full-access']);
 const APPROVAL_POLICIES = new Set(['on-request', 'never']);
 const REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+// see .ai/contexts/cli-harnesses.md ("Codex adapter"): codex exec rollouts hide like SDK sessions (#1145)
+const HEADLESS_ORIGINATORS = new Set(['codex_exec']);
+const HEADLESS_ENTRYPOINT = 'sdk-codex-exec';
 
 function codexHome() {
   return process.env.CODEX_HOME ? path.resolve(process.env.CODEX_HOME) : path.join(os.homedir(), '.codex');
@@ -159,6 +162,7 @@ function readSessionFile(filePath, folder) {
     if (!sessionId) return null;
 
     let projectPath = null, summary = '', messageCount = 0, firstTimestamp = null, lastTimestamp = null, subagent = false, model = '';
+    let entrypoint = '';
     const textParts = [];
     const buckets = new Map();
     const dateOf = ts => (typeof ts === 'string' && ts.length >= 10 ? ts.slice(0, 10) : null) || (firstTimestamp || stat.birthtime.toISOString()).slice(0, 10);
@@ -173,6 +177,7 @@ function readSessionFile(filePath, folder) {
       if (entry.type === 'session_meta') {
         if (isSubagentMeta(payload)) { subagent = true; return false; }
         projectPath = projectPath || payload.cwd || null;
+        if (HEADLESS_ORIGINATORS.has(payload.originator)) entrypoint = HEADLESS_ENTRYPOINT;
         return;
       }
       if (entry.type === 'turn_context') {
@@ -220,7 +225,7 @@ function readSessionFile(filePath, folder) {
       fileMtime: stat.mtime.toISOString(), fileSize: stat.size,
       messageCount, textContent: textParts.join('\n'),
       dailyMetrics: [...buckets.values()].filter(b => b.messageCount || b.toolCallCount || b.inputTokens || b.outputTokens),
-      slug: null, customTitle: '', entrypoint: '',
+      slug: null, customTitle: '', entrypoint,
       aiTitle,
     };
   } catch {

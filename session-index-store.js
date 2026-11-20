@@ -991,6 +991,19 @@ if (!readonly) try {
   console.warn('Bridge UUID repair failed; will retry on next database open:', err.message);
 }
 
+// see .ai/contexts/cli-harnesses.md ("Codex adapter"): rows indexed before #1145 lack the codex exec mark
+if (!readonly) try {
+  if (getSetting('codex_exec_entrypoint_version') !== 1) {
+    db.transaction(() => {
+      db.exec("UPDATE session_cache SET fileMtime = NULL WHERE runtime = 'codex'");
+      db.exec("UPDATE cache_meta SET indexMtimeMs = NULL WHERE folder LIKE 'codex/%'");
+      setSetting('codex_exec_entrypoint_version', 1);
+    })();
+  }
+} catch (err) {
+  console.warn('Codex exec re-read failed; will retry on next database open:', err.message);
+}
+
 let producerOwnersReady = false, producerOwnersRevision, producerHistorySeen = false;
 function prepareProducerOwners() {
   const history = projectDeletion.hasHistory(), revision = getProjectsRevision();

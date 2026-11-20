@@ -12,9 +12,9 @@ const ID_A = '01a03f6c-fdf9-7c83-86e3-c388f81d765c';
 const ID_B = '01a03f6c-fdf9-7c83-86e3-c388f81d765d';
 const FOLDER = 'codex/2026/08/26';
 
-function rollout(cwd, turns, extra = []) {
+function rollout(cwd, turns, extra = [], originator = 'codex_cli_rs') {
   const lines = [
-    { timestamp: '2026-08-26T10:00:00.000Z', type: 'session_meta', payload: { id: 'root', cwd, originator: 'codex_exec' } },
+    { timestamp: '2026-08-26T10:00:00.000Z', type: 'session_meta', payload: { id: 'root', cwd, originator } },
     { timestamp: '2026-08-26T10:00:00.200Z', type: 'turn_context', payload: { model: 'gpt-6', cwd } },
   ];
   let t = 1;
@@ -58,7 +58,7 @@ function fixture(t) {
     fs.rmSync(root, { recursive: true, force: true });
   });
   const file = id => path.join(day, `rollout-2026-08-26T11-55-02-${id}.jsonl`);
-  const write = (id, turns, extra) => fs.writeFileSync(file(id), rollout(project, turns, extra));
+  const write = (id, turns, extra, originator) => fs.writeFileSync(file(id), rollout(project, turns, extra, originator));
   const cache = require('../session-cache');
   const store = fakeDb();
   const activeSessions = new Map();
@@ -205,6 +205,91 @@ test('projected sessions carry the runtime and its label and group under the tra
   assert.equal(session.runtimeLabel, 'Codex');
   assert.equal(session.canLaunch, true, 'a Codex row can be resumed');
 });
+
+// see .ai/contexts/cli-harnesses.md ("Codex adapter"), .ai/contexts/session-cache.md ("SDK-launched sessions")
+test('a codex exec rollout is hidden like an SDK session, stays searchable, and is listed when the setting is off', t => {
+  const f = fixture(t);
+  f.write(ID_A, [['user', 'review the diff']], [], 'codex_exec');
+  f.write(ID_B, [['user', 'hello']], [], 'codex_cli_rs');
+  f.cache.refreshFolder(FOLDER);
+  assert.equal(f.rows.get(ID_A).entrypoint, 'sdk-codex-exec');
+  assert.equal(f.rows.get(ID_B).entrypoint, '');
+  assert.match(f.search.get(ID_A).body, /review the diff/, 'the hidden rollout is still indexed for search');
+  const listed = () => f.cache.buildProjectsFromCache(false).flatMap(p => p.sessions).map(s => s.sessionId).sort();
+  assert.deepEqual(listed(), [ID_B], 'the exec rollout is hidden by default, the interactive one is listed');
+  f.settings.set('global', { hideSdkSessions: false });
+  assert.deepEqual(listed(), [ID_A, ID_B].sort(), 'turning the setting off lists the exec rollout again');
+  f.settings.set('global', { hideSdkSessions: true });
+  f.activeSessions.set(ID_A, { exited: false });
+  assert.deepEqual(listed(), [ID_A, ID_B].sort(), 'an exec rollout open in a tab stays listed');
+});
+
+test('opening a store indexed before #1145 schedules one re-read of its Codex rows and leaves Claude rows alone',
+  { skip: !openStore.supported && 'native SQLite ABI differs; node:sqlite requires Node 22' }, t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-store-'));
+  const previous = process.env.SWITCHBOARD_DATA_DIR;
+  process.env.SWITCHBOARD_DATA_DIR = root;
+  t.after(() => {
+    if (previous === undefined) delete process.env.SWITCHBOARD_DATA_DIR; else process.env.SWITCHBOARD_DATA_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  let db = openStore({ readonly: false });
+  try {
+    assert.equal(db.getSetting('codex_exec_entrypoint_version'), 1, 'a fresh store starts at the current version');
+    db.upsertCachedSessions([
+      { sessionId: ID_A, folder: FOLDER, projectPath: '/p', summary: 'codex', runtime: 'codex', sessionFile: '/s/a.jsonl', fileMtime: '2026-08-26T10:00:00.000Z', entrypoint: '' },
+      { sessionId: 'claude-1', folder: '-p', projectPath: '/p', summary: 'claude', fileMtime: '2026-08-26T10:00:00.000Z', entrypoint: 'cli' }]);
+    db.setFolderMeta(FOLDER, null, 5);
+    db.setFolderMeta('-p', '/p', 7);
+    db.deleteSetting('codex_exec_entrypoint_version');
+  } finally { db.closeDb(); }
+  db = openStore({ readonly: false });
+  try {
+    assert.equal(db.getSetting('codex_exec_entrypoint_version'), 1);
+    assert.equal(db.getCachedSession(ID_A).fileMtime, null, 'the Codex row will be re-read on its next folder refresh');
+    assert.equal(db.getCachedSession(ID_A).entrypoint, '', 'the row itself stays until the re-read decides');
+    assert.equal(db.getFolderMeta(FOLDER)?.indexMtimeMs, null, 'the Codex folder remains discoverable with an invalidated stamp');
+    assert.equal(db.getCachedSession('claude-1').fileMtime, '2026-08-26T10:00:00.000Z');
+    assert.equal(db.getFolderMeta('-p').indexMtimeMs, 7);
+  } finally { db.closeDb(); }
+});
+
+for (const missing of ['date directory', 'sessions root']) {
+  test(`upgrade reconciliation removes the cached row and search entry after the Codex ${missing} disappears`,
+    { skip: !openStore.supported && 'native SQLite ABI differs; node:sqlite requires Node 22' }, async t => {
+    const f = fixture(t);
+    const previous = process.env.SWITCHBOARD_DATA_DIR;
+    process.env.SWITCHBOARD_DATA_DIR = path.join(f.root, 'data');
+    let db;
+    const bind = () => f.cache.init({ PROJECTS_DIR: f.projectsDir, activeSessions: f.activeSessions,
+      getMainWindow: () => null, log: console, db });
+    try {
+      db = openStore({ readonly: false });
+      bind();
+      f.write(ID_A, [['user', 'needle migration regression']], [], 'codex_exec');
+      f.cache.refreshFolder(FOLDER);
+      db.setCachedEntrypoints([{ sessionId: ID_A, entrypoint: '' }]);
+      db.setInitialScanComplete();
+      db.deleteSetting('codex_exec_entrypoint_version');
+      assert.equal(db.getCachedSession(ID_A).entrypoint, '');
+      assert.ok(db.searchByType('session', 'needle').some(row => row.id === ID_A));
+      db.closeDb();
+      fs.rmSync(missing === 'date directory' ? f.day : path.join(f.codexHome, 'sessions'), { recursive: true });
+      db = openStore({ readonly: false });
+      bind();
+      assert.equal(db.getSetting('codex_exec_entrypoint_version'), 1);
+      await f.cache.reconcileCacheFromFilesystemAsync({ throttle: false });
+      assert.deepEqual({
+        cached: !!db.getCachedSession(ID_A),
+        searchable: db.searchByType('session', 'needle').some(row => row.id === ID_A),
+      }, { cached: false, searchable: false }, 'upgrade must remove the vanished rollout from cache and search');
+    } finally {
+      await f.cache.shutdownProducers();
+      if (db) db.closeDb();
+      if (previous === undefined) delete process.env.SWITCHBOARD_DATA_DIR; else process.env.SWITCHBOARD_DATA_DIR = previous;
+    }
+  });
+}
 
 test('continuation rollups ignore rows of a harness without continuations', t => {
   const f = fixture(t);
