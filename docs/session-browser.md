@@ -181,7 +181,10 @@ it like a subagent. Turn off **Hide SDK-launched Sessions** in
 [Global Settings → Sessions → Sidebar list](settings.md#sidebar-list) to list
 them. Their subagents are hidden with them, and a project holding only such
 sessions is not listed. A session you have open, or left open when Switchboard
-last closed, stays listed, and so does one you resumed and typed into.
+last closed, stays listed, and so does a Claude session you resumed and typed into.
+A `codex exec` session stays hidden after an interactive resume unless it is open
+or in that saved working set: its classification reads only the rollout header,
+which keeps the original program originator.
 Scheduled tasks are always listed. Hidden sessions still count in the activity
 heatmap.
 

@@ -188,11 +188,48 @@ test('opening a store indexed before #1145 schedules one re-read of its Codex ro
     assert.equal(db.getSetting('codex_exec_entrypoint_version'), 1);
     assert.equal(db.getCachedSession(ID_A).fileMtime, null, 'the Codex row will be re-read on its next folder refresh');
     assert.equal(db.getCachedSession(ID_A).entrypoint, '', 'the row itself stays until the re-read decides');
-    assert.equal(db.getFolderMeta(FOLDER), null, 'the Codex folder is listed for refresh by the next reconciliation');
+    assert.equal(db.getFolderMeta(FOLDER)?.indexMtimeMs, null, 'the Codex folder remains discoverable with an invalidated stamp');
     assert.equal(db.getCachedSession('claude-1').fileMtime, '2026-08-26T10:00:00.000Z');
     assert.equal(db.getFolderMeta('-p').indexMtimeMs, 7);
   } finally { db.closeDb(); }
 });
+
+for (const missing of ['date directory', 'sessions root']) {
+  test(`upgrade reconciliation removes the cached row and search entry after the Codex ${missing} disappears`,
+    { skip: !openStore.supported && 'native SQLite ABI differs; node:sqlite requires Node 22' }, async t => {
+    const f = fixture(t);
+    const previous = process.env.SWITCHBOARD_DATA_DIR;
+    process.env.SWITCHBOARD_DATA_DIR = path.join(f.root, 'data');
+    let db;
+    const bind = () => f.cache.init({ PROJECTS_DIR: f.projectsDir, activeSessions: f.activeSessions,
+      getMainWindow: () => null, log: console, db });
+    try {
+      db = openStore({ readonly: false });
+      bind();
+      f.write(ID_A, [['user', 'needle migration regression']], [], 'codex_exec');
+      f.cache.refreshFolder(FOLDER);
+      db.setCachedEntrypoints([{ sessionId: ID_A, entrypoint: '' }]);
+      db.setInitialScanComplete();
+      db.deleteSetting('codex_exec_entrypoint_version');
+      assert.equal(db.getCachedSession(ID_A).entrypoint, '');
+      assert.ok(db.searchByType('session', 'needle').some(row => row.id === ID_A));
+      db.closeDb();
+      fs.rmSync(missing === 'date directory' ? f.day : path.join(f.codexHome, 'sessions'), { recursive: true });
+      db = openStore({ readonly: false });
+      bind();
+      assert.equal(db.getSetting('codex_exec_entrypoint_version'), 1);
+      await f.cache.reconcileCacheFromFilesystemAsync({ throttle: false });
+      assert.deepEqual({
+        cached: !!db.getCachedSession(ID_A),
+        searchable: db.searchByType('session', 'needle').some(row => row.id === ID_A),
+      }, { cached: false, searchable: false }, 'upgrade must remove the vanished rollout from cache and search');
+    } finally {
+      await f.cache.shutdownProducers();
+      if (db) db.closeDb();
+      if (previous === undefined) delete process.env.SWITCHBOARD_DATA_DIR; else process.env.SWITCHBOARD_DATA_DIR = previous;
+    }
+  });
+}
 
 test('continuation rollups ignore rows of a harness without continuations', t => {
   const f = fixture(t);

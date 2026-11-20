@@ -144,8 +144,11 @@ re-shaped for the fork's contract. Measured against 237 rollouts on
   (#1145). `codex_cli_rs`, `switchboard_*` and any other originator stay `''`.
   Rows indexed before #1145 hold `''` for every rollout: on first open the
   store (`codex_exec_entrypoint_version`) nulls `fileMtime` on `runtime =
-  'codex'` rows and drops the `codex/` folder meta, so the next reconciliation
-  re-reads every rollout once and stamps the mark; nothing is deleted. The
+  'codex'` rows and nulls `indexMtimeMs` on the `codex/` folder meta, keeping
+  the folder inventory discoverable. The next reconciliation re-reads existing
+  rollouts once and stamps the mark; if a date directory or the sessions root
+  disappeared while the app was closed, it removes the stale rows and search
+  entries through the normal missing-folder path. The
   mark is read from the header only: a `codex exec` thread later resumed
   interactively keeps its originator and stays hidden. And
   `dailyMetrics` per date × model from `turn_context.payload.model` and

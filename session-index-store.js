@@ -959,7 +959,7 @@ if (!readonly) try {
   if (getSetting('codex_exec_entrypoint_version') !== 1) {
     db.transaction(() => {
       db.exec("UPDATE session_cache SET fileMtime = NULL WHERE runtime = 'codex'");
-      db.exec("DELETE FROM cache_meta WHERE folder LIKE 'codex/%'");
+      db.exec("UPDATE cache_meta SET indexMtimeMs = NULL WHERE folder LIKE 'codex/%'");
       setSetting('codex_exec_entrypoint_version', 1);
     })();
   }
