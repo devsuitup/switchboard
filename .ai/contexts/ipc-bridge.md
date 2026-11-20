@@ -929,8 +929,25 @@ compatibility. JB accepted shipping zero flags in the next beta on 20 November.
 The Windows-only windows-job-bash regression exercises the shipped helper
 through its spawn port and a real Git bash; it skips when Git for Windows is
 unavailable. It does not exercise Electron or cover every MSYS tool.
-The failed singleton logs once, settles requests false and never restarts in the
-same app session; subsequent tabs degrade to plain ConPTY close. EOF/finally
+Before its first `ready`, a failed singleton settles requests false and permits
+up to three startup attempts per app session (#1140), each with the same 15 s
+deadline. A later assignment (or explicit `start`) retries only after a backoff
+of 1 s after the first failure and 2 s after the second; there is no background
+retry timer. Concurrent tabs share one attempt and its readiness promise.
+Close, release and observation cannot restart a failed helper. The fallback
+warning is emitted once per app session, while retry attempts, their failures
+and budget exhaustion are logged separately. Events from failed attempts are
+ignored, including delayed ready, exit and stream errors.
+
+Failed assignments are not replayed: tabs created during failure/backoff keep
+plain ConPTY close, and new tabs can acquire jobs after recovery. Retrofitting
+old tabs would not capture children that already escaped and would complicate
+PID/lifecycle ownership. Once a helper has been ready, its failure remains
+terminal for this session: a new process cannot inherit its existing job
+handles. This change only recovers startup failures, not lost jobs. Tests stub
+the spawn port and clock, including timeout-then-success through trackWindowsPty,
+permanent timeout/spawn failure, the retry cap and stale-attempt events.
+EOF/finally
 only closes handles, with no membership scan or termination. Release also just
 closes the handle; there is no limit flag to clear and no release-time flag API
 failure. Explicit protected-aware terminate is the only job cleanup operation.
