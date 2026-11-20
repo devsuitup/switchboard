@@ -33,7 +33,7 @@ function fixture(t, mainOnly = false) {
     return git(root, args);
   };
   const read = () => deletion.readStatus(target, root, runGit);
-  return { root, target, git: args => git(target, args), removes, read,
+  return { root, target, git: args => git(target, args), runGit, removes, read,
     remove: shown => deletion.removeWorktree(target, root, shown, read, runGit) };
 }
 
@@ -79,11 +79,7 @@ test('real git previews and removes a registered worktree addressed by its 8.3 s
   assert.equal(fs.realpathSync.native(short), f.target, 'fixture must address the same real directory');
   const shortBasename = path.join(path.dirname(f.target), path.basename(short));
   assert.notEqual(shortBasename.toLowerCase(), f.target.toLowerCase(), 'fixture must exercise a genuinely different basename');
-  const runGit = async (args, consume) => {
-    if (args.includes('remove')) f.removes.push(args);
-    if (consume) return deletion.streamGit(args, consume, { env: localGitEnv() });
-    return f.git(args);
-  };
+  const { runGit } = f;
   for (const requested of [shortBasename, short]) {
     const shown = await deletion.readStatus(requested, f.root, runGit);
     assert.equal(shown.ok, true, requested);
