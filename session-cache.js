@@ -1565,7 +1565,12 @@ async function publishScannedFolder(msg) {
         if (current && previous && relativePath && !current.fullReadStamp && JSON.stringify(current) !== JSON.stringify(previous)) raced.push(relativePath);
       }
       deferStartupSources(result, raced);
-      if (result.deferredIds?.length) result.sessions = result.sessions.filter(row => !result.deferredIds.includes(row.sessionId) || !getCachedSession(row.sessionId));
+      if (result.deferredIds?.length) result.sessions = result.sessions.filter(row => {
+        if (!result.deferredIds.includes(row.sessionId)) return true;
+        const current = getCachedSession(row.sessionId);
+        const previous = result.inventory.rows.find(entry => entry.sessionId === row.sessionId);
+        return !current || JSON.stringify(current) === JSON.stringify(previous);
+      });
       applyContinuationRefresh(result.folder, { deferred: new Set((result.deferred || []).map(file => file.split('/').join(path.sep))), accounted: new Set() });
       if (result.fullIndexConfig !== startupConfig() || !startupInventoryMatches(cacheBackend, result)) {
         throw Object.assign(new Error('Startup inventory changed before publication'), { code: 'WRITER_STALE' });
@@ -1574,9 +1579,10 @@ async function publishScannedFolder(msg) {
     const written = result?.partial ? await writer.writeScannedFolderPartial(result)
       : await writer.writeScannedFolder(result, msg.unverifiedLocalFolder);
     ok = result?.fullIndexOutcome !== false && !(result?.counters || msg.counters)?.filesFailed;
-    if (result?.startup && result.fullIndexOutcome !== false) {
+    if (result?.startup && (result.fullIndexOutcome !== false || result.fullIndexDeferred)) {
       const names = [];
       for (const row of getCachedByFolder(result.folder)) {
+        if (result.deferredIds?.includes(row.sessionId)) continue;
         const relativePath = sourceRelativePath(row);
         if (!relativePath) continue;
         const collision = hasCollisionName(row.sessionId);

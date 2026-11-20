@@ -343,7 +343,7 @@ test('A2 failed subset does not acknowledge global population completion',
     assert.equal(f.scans()[0].ok, false);
   });
 
-test('A2 continuation race in a later sibling retains only the raced file and its derived effects', t => {
+test('A2 race in a later sibling retains read content without certifying the raced file', t => {
   const root = fixture(t), folder = encodeProjectPath(root), dir = path.join(root, folder);
   fs.mkdirSync(dir);
   const source = path.join(dir, 'source.jsonl'), other = path.join(dir, 'other.jsonl');
@@ -368,7 +368,11 @@ test('A2 continuation race in a later sibling retains only the raced file and it
   }, { filename });
   const result = messages.find(message => message.type === 'folder')?.result;
   assert.ok(result?.sessions.some(row => row.sessionId === 'other'), 'an unrelated stable sibling is still published');
-  assert.ok(!result.sessions.some(row => row.sessionId === 'source'), 'raced source and its name/metrics/search rows are withheld');
+  const raced = result.sessions.find(row => row.sessionId === 'source');
+  assert.ok(raced, 'raced ordinary source retains the bytes read for conditional publication');
+  assert.equal(raced.textContent, 'source baseline\nsource new\n');
+  assert.equal(raced.messageCount, 2);
+  assert.equal(raced.fullReadStamp, null, 'the raced source has no content certificate');
   assert.ok(result.deferred?.includes('source.jsonl'), 'raced source remains deferred per file');
   assert.ok(!result.toDelete.includes('source'));
 });

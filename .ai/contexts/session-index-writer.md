@@ -738,11 +738,16 @@ scope, retaining the resulting witness for the next chunk. Unrelated row header
 refreshes and writer commits do not invalidate startup. Other effect producers retain their
 existing revision guard. `WRITER_STALE` returns to population for up to two fresh
 folder selections, without replaying stale parsed rows. Deletion-only subsets use the
-pending/seal protocol. Deferred existing rows and bridge groups remain untouched;
-newly parsed rows may appear without certificates. Deferred publication leaves
-the folder pending and unsealed while population completes successfully.
+pending/seal protocol. A deferred ordinary row publishes the bytes read without
+a certificate when its current row still equals the selected inventory row (or
+the row is new). A newer watcher replacement and existing deferred bridge groups
+remain untouched. Converting a full result to a subset retains deletion of
+inventory rows absent from the full read, excluding deferred IDs.
+Deferred publication leaves the folder pending and unsealed while population completes successfully.
 Watcher publication of a marked repair also leaves it unsealed. Deferred
-generations clear after ACK only for the accepted paths.
+generations clear after ACK only for the accepted paths, even when neighboring
+paths remain deferred. Name derivation also runs for non-deferred rows after
+that ACK; neither operation certifies a deferred source or seals its folder.
 
 `deriveCachedName` checks the expected body stamp and metadata witness, applies
 existing transcript-name rules and repairs only a changed search title. After

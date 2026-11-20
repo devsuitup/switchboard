@@ -108,8 +108,10 @@ function deferStartupSources(result, paths) {
   }
   for (const row of result.sessions) if (rejected.has(row.sessionId)) row.fullReadStamp = null;
   const existing = new Set(result.inventory.rows.map(row => row.sessionId));
-  result.sessions = result.sessions.filter(row => !rejected.has(row.sessionId) || !existing.has(row.sessionId));
-  result.toDelete = (result.toDelete || []).filter(id => !rejected.has(id));
+  const present = new Set(result.sessions.map(row => row.sessionId));
+  const toDelete = result.partial ? result.toDelete || [] : [...existing].filter(id => !present.has(id));
+  result.sessions = result.sessions.filter(row => !rejected.has(row.sessionId) || !existing.has(row.sessionId) || !groups.has(row.bridgeSessionId));
+  result.toDelete = toDelete.filter(id => !rejected.has(id));
   result.checks = result.checks.filter(([relativePath]) => !deferred.has(relativePath));
   result.deferred = [...deferred];
   result.deferredIds = [...rejected];

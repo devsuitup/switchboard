@@ -101,13 +101,20 @@ removal of `cache_meta` and the once-per-folder rejected-cwd warning. Live-row
 retention still applies to that drop.
 
 Every parsed file is checked again after sibling/bridge reads and before
-publication. Raced files defer their dependency group: existing rows remain,
-and a newly discovered parsed row can publish without a certificate. Stable
-neighbors publish normally. The folder stays pending and unsealed, but counts
+publication. Raced files defer their dependency group. An ordinary parsed row
+publishes its read content and metrics without a certificate if no newer row
+has replaced the inventory row; existing bridge groups remain untouched.
+The header-only watcher can update subsequent counts but does not include bytes
+appended after that full read in search or token metrics. The pending folder
+forces another full read on the next startup. When deferral converts a full
+scan to a subset, vanished inventory rows are still deleted unless deferred.
+Stable neighbors publish normally. The folder stays pending and unsealed, but counts
 as completed for population and `initial_scan_complete`; the next warm start
 re-reads it. A newly uncertified header row changed since selection is also
 deferred instead of repeatedly invalidating the folder. Deferred generations
 clear only after an accepted writer ACK and cannot clear newer observations.
+Accepted non-deferred paths clear and their name derivation runs even while
+another source keeps the folder pending.
 A zero folder marker alone never forces full reading. Watcher and reconciliation
 still discover new and changed sessions in a repair-marked folder; neither
 clears its repair marker nor seals it. Parsed results rejected as stale are resnapshotted on bounded
