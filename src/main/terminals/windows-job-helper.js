@@ -3,6 +3,7 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { performance } = require('node:perf_hooks');
 const ERROR_MEMBER_SKIPPED = 299;
 const MAX_START_ATTEMPTS = 3;
 
@@ -10,16 +11,31 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
   requestMs = 3000, protectedPids = () => [] } = {}) {
   let child, started = false, ready = false, failed = false, buffer = '', startupTimer, earlyCloseWarned = false;
   let attempts = 0, retryAt = 0, unavailableWarned = false;
+  let retryTimer;
+  const lateAssignments = new Map();
   const pending = new Map();
   const queued = new Map();
   const waiting = new Map();
   let resolveReady;
   let readiness;
 
+  function scheduleRetry() {
+    clearTimeout(retryTimer);
+    for (const [id, entry] of lateAssignments) if (!entry.current()) lateAssignments.delete(id);
+    if (ready || attempts >= MAX_START_ATTEMPTS) { lateAssignments.clear(); return; }
+    if (!failed || !lateAssignments.size) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = undefined;
+      for (const [id, entry] of lateAssignments) if (!entry.current()) lateAssignments.delete(id);
+      if (lateAssignments.size) { start(); if (failed) scheduleRetry(); }
+    }, Math.max(0, retryAt - performance.now()));
+    retryTimer.unref?.();
+  }
+
   function fail(reason) {
     if (failed) return;
     failed = true;
-    retryAt = Date.now() + 1000 * 2 ** (attempts - 1);
+    retryAt = performance.now() + 1000 * 2 ** (attempts - 1);
     clearTimeout(startupTimer);
     resolveReady(false);
     for (const entry of pending.values()) { clearTimeout(entry.timer); entry.resolve(false); }
@@ -32,6 +48,7 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
     } catch {}
     unavailableWarned = true;
     try { child?.kill(); } catch {}
+    scheduleRetry();
   }
 
   function settle(entry, value) {
@@ -68,6 +85,11 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
         ready = true; clearTimeout(startupTimer); resolveReady(true);
         for (const entry of queued.values()) send(entry);
         queued.clear();
+        clearTimeout(retryTimer);
+        for (const [id, entry] of lateAssignments) {
+          lateAssignments.delete(id);
+          if (entry.current()) entry.onLateAssignment(request('assign', id, entry.args, entry.current));
+        }
         continue;
       }
       const match = /^(assigned|terminated|released|observed|error) ([\w-]+)(?: (\d+))?$/.exec(line);
@@ -84,9 +106,10 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
 
   function start() {
     if (failed) {
-      if (ready || attempts >= MAX_START_ATTEMPTS || Date.now() < retryAt) return Promise.resolve(false);
+      if (ready || attempts >= MAX_START_ATTEMPTS || performance.now() < retryAt) return Promise.resolve(false);
     } else if (started) return readiness;
     started = true;
+    clearTimeout(retryTimer);
     failed = false;
     buffer = '';
     const attempt = ++attempts;
@@ -165,6 +188,8 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
   }
 
   function finish(op, id, args = '') {
+    lateAssignments.delete(id);
+    if (!lateAssignments.size) clearTimeout(retryTimer);
     if (op === 'terminate' && !ready && !failed && !earlyCloseWarned) {
       earlyCloseWarned = true;
       try { warn('[pty] Tab closed before Windows job helper ready; using plain ConPTY close; hidden processes may remain'); } catch {}
@@ -241,9 +266,16 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
       if (!ready || failed || pending.has(id)) return Promise.resolve(null);
       return request('observe', id).then(value => value && typeof value === 'object' ? value : null);
     },
-    assign(id, pid, spawnTime, current = () => true) {
+    assign(id, pid, spawnTime, current = () => true, { onLateAssignment, current: lateCurrent = current } = {}) {
       if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid || !Number.isSafeInteger(spawnTime)) return Promise.resolve(false);
-      return request('assign', id, ` ${pid} ${spawnTime}`, current);
+      const args = ` ${pid} ${spawnTime}`;
+      return request('assign', id, args, current).then(assigned => {
+        if (!assigned && failed && !ready && attempts < MAX_START_ATTEMPTS && onLateAssignment && lateCurrent()) {
+          lateAssignments.set(id, { args, current: lateCurrent, onLateAssignment });
+          scheduleRetry();
+        }
+        return assigned;
+      });
     },
     terminate,
     terminateWithEvidence,

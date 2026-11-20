@@ -974,22 +974,34 @@ through its spawn port and a real Git bash; it skips when Git for Windows is
 unavailable. It does not exercise Electron or cover every MSYS tool.
 Before its first `ready`, a failed singleton settles requests false and permits
 up to three startup attempts per app session (#1140), each with the same 15 s
-deadline. A later assignment (or explicit `start`) retries only after a backoff
-of 1 s after the first failure and 2 s after the second; there is no background
-retry timer. Concurrent tabs share one attempt and its readiness promise.
+deadline. A later assignment (or explicit `start`) retries only after a monotonic
+backoff of 1 s after the first failure and 2 s after the second. An unreferenced
+timer also retries when that window expires while tracked live tabs are waiting
+(#1156). Concurrent tabs share one attempt and its readiness promise.
 Close, release and observation cannot restart a failed helper. The fallback
 warning is emitted once per app session, while retry attempts, their failures
 and budget exhaustion are logged separately. Events from failed attempts are
 ignored, including delayed ready, exit and stream errors.
 
-Failed assignments are not replayed: tabs created during failure/backoff keep
-plain ConPTY close, and new tabs can acquire jobs after recovery. Retrofitting
-old tabs would not capture children that already escaped and would complicate
-PID/lifecycle ownership. Once a helper has been ready, its failure remains
+Tracked tabs whose initial assignment fails during startup/backoff retain their
+original PID and spawn timestamp. On readiness, each receives at most one late
+assignment, only while its PTY is still live, unchanged, open and unreleased.
+The helper removes the pending recovery before sending it; a failed late
+assignment is never retried. Closing or releasing cancels pending recovery.
+The late assignment promise updates the same PTY record as the initial one,
+including evidence close and natural-exit observation. Plain ConPTY close stays
+available while recovery is pending or has failed.
+Children spawned before late assignment are not captured; only children spawned
+after the root joins the job inherit membership and are ended on tab close.
+Once a helper has been ready, its failure remains
 terminal for this session: a new process cannot inherit its existing job
 handles. This change only recovers startup failures, not lost jobs. Tests stub
 the spawn port and clock, including timeout-then-success through trackWindowsPty,
 permanent timeout/spawn failure, the retry cap and stale-attempt events.
+`windows-job-recovery` combines the real PTY tracking and helper state machines
+with a stubbed child process, independent monotonic/wall clocks and controlled
+timers. It covers automatic and explicit recovery, lifetime guards, one late
+attempt, job close, evidence close and backwards wall-clock steps.
 EOF/finally
 only closes handles, with no membership scan or termination. Release also just
 closes the handle; there is no limit flag to clear and no release-time flag API
@@ -1160,7 +1172,7 @@ the assigned processes alive because no job is armed. Pure-Node native parent-ex
 tests exercise this property; they are not an Electron exit measurement.
 
 Resident PowerShell with P/Invoke may be flagged by EDR/AV or ended by the user.
-There is no restart policy. No EDR product was tested.
+After readiness there is no restart policy. No EDR product was tested.
 
 Tests load shipped production code: pty-ops-jobs covers close ordering, grace
 deadline, exclusions, detach and deferred assignment; windows-job-helper covers

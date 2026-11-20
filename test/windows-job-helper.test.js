@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
+const { performance } = require('node:perf_hooks');
 
 for (const mode of ['nonempty', 'roster never settles', 'already expired']) {
   test(`A4c2afix evidence ${mode} preserves other jobs and releases its handle`, async t => {
@@ -60,6 +61,7 @@ function fixture(t, options = {}) {
 
 test('a timed-out start followed by a successful retry gives the next tabs jobs', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  t.mock.method(performance, 'now', () => Date.now());
   const { trackWindowsPty } = require('../src/main/terminals/pty-ops');
   const children = [], writes = [], warnings = [];
   const { createWindowsJobHelper } = require('../src/main/terminals/windows-job-helper');
@@ -82,14 +84,14 @@ test('a timed-out start followed by a successful retry gives the next tabs jobs'
   t.mock.timers.tick(999);
   assert.equal(await helper.assign('during-backoff', 898, 100), false);
   assert.equal(children.length, 1, 'tab creation during backoff cannot spawn');
-  t.mock.timers.tick(1);
   assert.equal(await helper.terminate('old-tab'), false, 'close must not trigger a retry');
   assert.equal(await helper.release('old-tab'), false);
   assert.equal(await helper.observe('old-tab'), null);
   assert.equal(children.length, 1, 'cleanup and status must not trigger a retry');
+  t.mock.timers.tick(1);
   const next = trackWindowsPty(tab(899), { jobs: helper, platform: 'win32', spawnTime: 100 });
   const concurrent = trackWindowsPty(tab(900), { jobs: helper, platform: 'win32', spawnTime: 100 });
-  assert.equal(children.length, 2, 'the next tab must retry helper startup');
+  assert.equal(children.length, 2, 'waiting tabs and new tabs share one retry');
   const retryReady = helper.start();
   assert.notEqual(retryReady, firstReady, 'retry has its own readiness promise');
   children[0].stdout.emit('data', 'ready\ninvalid\n');
@@ -100,7 +102,7 @@ test('a timed-out start followed by a successful retry gives the next tabs jobs'
   assert.deepEqual(writes, [], 'old helper events cannot flush the retry queue');
   children[1].stdout.emit('data', 'ready\n');
   assert.equal(await retryReady, true);
-  assert.equal(writes.length, 2, 'only new tabs are assigned; failed assignments are not replayed');
+  assert.equal(writes.length, 3, 'new tabs and the failed live tab are assigned');
   for (const line of writes) children[1].stdout.emit('data', `assigned ${line.split(' ')[1]}\n`);
   assert.equal(await next, true, 'next tab receives a job after recovery');
   assert.equal(await concurrent, true);
@@ -112,6 +114,7 @@ test('a timed-out start followed by a successful retry gives the next tabs jobs'
 for (const failure of ['timeout', 'spawn error']) {
   test(`permanently failing helper stops after three starts (${failure})`, async t => {
     t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+    t.mock.method(performance, 'now', () => Date.now());
     let attempts = 0;
     const f = fixture(t, { spawn() {
       attempts++;
