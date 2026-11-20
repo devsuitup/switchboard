@@ -82,9 +82,10 @@ for (const settled of [true, false]) {
     await app.markRestoreIndexingDone();
     await h.app.persistWorkingSet();
     assert.deepEqual(h.spawned.map(call => call.id), ['other', 'new']);
-    assert.equal(vm.runInContext('activeSessionId', h.ctx), 'new');
+    assert.equal(vm.runInContext('activeSessionId', h.ctx), 'other', 'the retried continuation opens behind the peer that filled the screen');
     assert.deepEqual(h.settings().openWorkingSet.map(item => item.sessionId).sort(), ['new', 'other']);
-    assert.equal(h.settings().openWorkingSet.find(item => item.sessionId === 'new').active, true);
+    assert.equal(h.settings().openWorkingSet.find(item => item.sessionId === 'new').active, false);
+    assert.equal(h.settings().openWorkingSet.find(item => item.sessionId === 'other').active, true);
     assert.deepEqual(h.prompts, []);
     await app.markRestoreIndexingDone();
     assert.equal(h.spawned.length, 2, 'a second completion does not spawn twice');

@@ -183,15 +183,12 @@ test('returning to a tmux terminal refreshes once; returning to a local terminal
   } finally { ctx.destroy(); }
 });
 
-test('restore refreshes a new remote terminal once even when its saved id is already active', async () => {
+test('the first reveal of a new remote terminal refreshes once even when its id is already selected', async () => {
   const ctx = setup();
   try {
     ctx.entry('remote', true);
     ctx.window.activeSessionId = 'remote';
-    const guardPath = path.join(__dirname, '../public/resume-guard.js');
-    vm.runInContext(fs.readFileSync(guardPath, 'utf8'), ctx.context, { filename: guardPath });
-    const { runRestore } = loadAppFunctions(ctx.context, { functions: ['runRestore'], declarations: ['restoreRunDepth', 'restoreInFlight', 'restoreIndexingDone'] });
-    await runRestore([{ sessionId: 'remote', active: true }]);
+    ctx.window.showSession('remote');
     await flush(ctx);
     assert.deepEqual(ctx.refreshes, [{ id: 'remote', cols: 120, rows: 40 }]);
     ctx.window.showSession('remote');

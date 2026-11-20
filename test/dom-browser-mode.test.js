@@ -88,7 +88,7 @@ test('startsFresh restore resolves the current browser default into the new laun
   try {
     Object.assign(ctx.window, { liveElsewhereMany: async () => new Map() });
     const functions = loadAppFunctions(ctx.context, { functions: ['runRestore'],
-      declarations: ['restoreRunDepth', 'restoreIndexingDone', 'restoreInFlight', 'restoreSavedIndex', 'RESTORE_STAGGER_MS'] });
+      declarations: ['activeSessionId', 'restoreRunDepth', 'restoreIndexingDone', 'restoreInFlight', 'restoreSavedIndex', 'skippedWorkingSetEntries', 'RESTORE_STAGGER_MS'] });
     await functions.runRestore([{ sessionId: 'fresh', projectPath: '/fixture', fresh: true }], { retryAfterIndexing: false });
     assert.equal(ctx.launched.length, 1, 'startsFresh restore must launch a new session');
     const [project, options, sessionId] = ctx.launched[0];
