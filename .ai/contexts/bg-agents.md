@@ -1520,10 +1520,35 @@ the shell would mangle quotes, `&` and newlines of a prompt, so
 `.exe` itself, or, for an npm `claude.cmd` shim (libuv does not resolve
 `.cmd`), the `node` + `cli.js` the shim points to, or `cmd.exe /d /s /c` with
 escaped arguments as a last resort (a multi-line argument is refused there).
+On that line the shim's path is caret-escaped once, since cmd parses the
+command name once, and each argument twice, since the shim's `%*` parses
+them again (two passes on the path made cmd reject the name, so no opaque
+shim ran headless before round 3 of #1107).
 A shim whose target is a `.exe` (the current `bin\claude.exe` shape) runs
-that `.exe` directly. Only `PATHEXT` names are tried, since npm also leaves an
+that `.exe` directly. The shim is unwrapped only when one whole invocation
+line is understood (`SHIM_INVOCATION`, shared with the PowerShell helper of
+`shell-profiles.js`): optionally npm's trailer `endLocal & goto #_undefined_#
+2>NUL || title %COMSPEC% &` (cmd-shim 4.1.0, bundled from npm 7.24, through
+9.0.0, npm 11), with `set PATHEXT=%PATHEXT:;.JS;=;% &` after it (cmd-shim
+9.0.2), then `"%_prog%"` (that same cmd-shim), `"%~dp0\node.exe"` or `node`
+(pnpm, yarn classic, npm 6) with no option before the quoted `%dp0%` or
+`%~dp0` path of a `.js` target, or that quoted path of a `.exe` target alone,
+then `%*` and nothing else. cmd-shim 4.0.x ends the file with a separate
+`ENDLOCAL` line and has no trailer; a trailer that runs any other command
+before `"%_prog%"` is not a trailer the regex knows. The earlier bundled
+`node.exe` existence probe is not an invocation. A line that says more —
+`node --require "%~dp0\setup.cjs" "%~dp0\cli.js" %*`, a bare `.js` target, a
+redirect — is not reproduced in part: the shim is opaque and runs as written
+through `cmd.exe`, so what it adds (the bootstrap, here) still happens (round 3
+of #1107). Round 4 found the stock trailer missing from the regex: the fixture
+had a shortened `2>NUL &` no generator writes, so every real npm 7+ shim was
+opaque and a multi-line headless launch was refused;
+`test/stock-npm-shim-windows.test.js` now runs both real trailer lines.
+Only `PATHEXT` names are tried, since npm also leaves an
 extensionless sh shim. `resolveWindowsClaude` returns
-`{ program, args, verbatim }` or `{ error }`.
+`{ program, args, verbatim }` or `{ error }`. The schedule runner reaches the
+same resolver through `headlessClaudeLaunch` (`shell-profiles.js`; see
+`schedule-runner.md`, "Windows launches").
 A timeout kills the whole process tree (`taskkill /T` on Windows, the process
 group elsewhere), except for `--bg`: it may have started the daemon, so only
 the client is killed. The call resolves on `close` so stdout is drained, or

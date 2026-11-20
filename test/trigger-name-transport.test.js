@@ -124,12 +124,18 @@ test('the PowerShell helper falls back to the command PowerShell resolves and ne
   const source = helperSource();
   assert.ok(source.startsWith('function __switchboard_launch{param([string]$n)'), source);
   assert.ok(!source.includes('function claude'));
-  assert.ok(source.includes("Get-Command $n -ErrorAction Stop|Select-Object -First 1;if($c.CommandType -ne 'Application'){& $c @args;return};"), source);
+  assert.ok(source.includes("Get-Command $n -ErrorAction Stop|Select-Object -First 1;$f=$c.Source;$t='';if($c.CommandType -eq 'ExternalScript'){"), source);
+  assert.ok(source.includes("[IO.Path]::GetDirectoryName($_.Source) -eq [IO.Path]::GetDirectoryName($c.Source) -and $_.Source -match '\\.(cmd|bat)$'}|Select-Object -First 1;$f=if($a){$a.Source}else{''}}"), source);
+  assert.ok(source.includes("elseif($c.CommandType -ne 'Application'){& $c @args;return};"), source);
+  assert.ok(source.includes("'" + require('../claude-binary').SHIM_INVOCATION.source + "','IgnoreCase,Multiline');"), source);
+  assert.ok(source.includes('(?:(?:\"%_prog%\"|\"(?:%dp0%|%~dp0)\\\\node\\.exe\"|node(?:\\.exe)?)\\s+\"(?:%dp0%|%~dp0)\\\\([^\"\\r\\n]+\\.js)\"|\"(?:%dp0%|%~dp0)\\\\([^\"\\r\\n]+\\.exe)\")\\s+%\\*\\s*$'), source);
+  assert.ok(source.includes("if($m.Success){$t=[IO.Path]::Combine([IO.Path]::GetDirectoryName($f),$m.Groups[1].Value+$m.Groups[2].Value)}};"), source);
+  assert.ok(source.includes("if($c.CommandType -eq 'ExternalScript' -and !($t -and [IO.File]::Exists($t))){& $c @args;return};"), source);
   assert.ok(source.endsWith('$p=[Diagnostics.Process]::Start($i);$p.WaitForExit();exit $p.ExitCode};'), source);
 });
 test('the PowerShell helper chooses the cmd escape depth from the resolved Source extension', () => {
   const source = helperSource();
-  assert.ok(source.includes("$d=if($c.Source -match '\\.(cmd|bat)$'){2}else{0};"), source);
+  assert.ok(source.includes("$d=if($f -match '\\.(cmd|bat)$'){2}else{0};"), source);
   assert.ok(source.includes("for($k=0;$k -lt $d;$k++){$s=[regex]::Replace($s,'([()\\]\\[%!^\"`<>&|;, *?])','^$1')}"), source);
   assert.ok(source.includes("[regex]::Replace([regex]::Replace($_,'(\\\\*)\"','$1$1\\\"'),'(\\\\*)\\z','$1$1')"), source);
 });
@@ -167,7 +173,7 @@ test('a launch that fits only without the helper keeps the plain token form and 
   }
 });
 test('a launch that fits with the helper keeps it just below the limit', async () => {
-  const prompt = 'y'.repeat(31000);
+  const prompt = 'y'.repeat(30800);
   const spawned = await launch('pwsh.exe', { isNew: false, transcript: true, options: { appendSystemPrompt: prompt } });
   assert.ok(spawned.args[2].startsWith('function __switchboard_launch'));
   assert.ok(argsToCommandLine('pwsh.exe', spawned.args).length + 1 <= 32767);
@@ -199,14 +205,57 @@ for (const shell of boundaryShells) {
 }
 for (const shell of ['pwsh.exe', 'powershell.exe']) {
   test(`${shell} with a launch prefix and IDE emulation falls back to the exact baseline command at the limit`, async () => {
-    const baseline = prompt => `wrapper.exe -- claude '--resume' '${ID}' '--add-dir' 'C:\\space dir\\' '--append-system-prompt' '${prompt}' --ide`;
+    const baseline = prompt => `wrapper.exe -- claude '--resume' '${ID}' '--add-dir' 'C:\\space dir' '--append-system-prompt' '${prompt}' --ide`;
     const size = command => argsToCommandLine(shell, profiles.shellArgs(shell, command, [], { pty: true, windows: true })).length + 1;
     const prompt = 'x'.repeat(LIMIT - size(baseline('')));
     assert.equal(size(baseline(prompt)), LIMIT);
-    const spawned = await resumeWith(shell, prompt, { mcpEmulation: true, preLaunchCmd: 'wrapper.exe --', addDirs: 'C:\\space dir\\' });
+    const spawned = await resumeWith(shell, prompt, { mcpEmulation: true, preLaunchCmd: 'wrapper.exe --', addDirs: 'C:\\space dir' });
     assert.equal(spawned.args[2], baseline(prompt));
-    const shorter = await resumeWith(shell, prompt.slice(0, -1), { mcpEmulation: true, preLaunchCmd: 'wrapper.exe --', addDirs: 'C:\\space dir\\' });
+    const shorter = await resumeWith(shell, prompt.slice(0, -1), { mcpEmulation: true, preLaunchCmd: 'wrapper.exe --', addDirs: 'C:\\space dir' });
     assert.equal(shorter.args[2], baseline(prompt.slice(0, -1)));
+  });
+}
+// see .ai/contexts/trigger-watcher.md ("Naming a new session"): PowerShell re-serializes the plain form itself
+const LOSSY = [['a quote', 'say "hi"'], ['a trailing backslash after whitespace', 'C:\\space dir\\']];
+const BATCH_LOSSY = [['a cmd metacharacter', 'a&b'], ['a percent sign', '100%'], ['a line break', 'first\nsecond']];
+const REFUSAL = /too long for PowerShell to pass its arguments exactly.*shorten the system prompt/;
+const claudeOnPath = (t, ...names) => {
+  const dir = tmp(t);
+  for (const name of names) fs.writeFileSync(path.join(dir, name), '');
+  return { PATH: dir, PATHEXT: '.COM;.EXE;.BAT;.CMD' };
+};
+const onWindows = { skip: process.platform !== 'win32' && 'the PATH lookup uses Windows paths' };
+const resumeOnPath = (shell, env, options) => launch(shell, { isNew: false, transcript: true, env, options: { appendSystemPrompt: 'x'.repeat(32300), ...options } });
+for (const shell of ['pwsh.exe', 'powershell.exe']) {
+  for (const [label, value] of LOSSY) {
+    test(`${shell} refuses a launch that only fits without the helper when ${label} would not survive the plain form`, async () => {
+      await assert.rejects(resumeWith(shell, 'x'.repeat(32300), { addDirs: value }), REFUSAL);
+    });
+    test(`${shell} refuses that launch with ${label} even for a claude.exe, which PowerShell re-serializes`, onWindows, async t => {
+      await assert.rejects(resumeOnPath(shell, claudeOnPath(t, 'claude.exe'), { addDirs: value }), REFUSAL);
+    });
+  }
+  for (const [label, value] of BATCH_LOSSY) {
+    test(`${shell} refuses a launch that only fits without the helper when ${label} would reach a claude.cmd, a prefix or no claude at all`, onWindows, async t => {
+      await assert.rejects(resumeWith(shell, 'x'.repeat(32300), { addDirs: value }), REFUSAL, 'no claude');
+      await assert.rejects(resumeOnPath(shell, claudeOnPath(t, 'claude.cmd'), { addDirs: value }), REFUSAL, 'claude.cmd');
+      await assert.rejects(resumeOnPath(shell, claudeOnPath(t, 'claude.exe'), { addDirs: value, preLaunchCmd: 'wrapper.exe --' }), REFUSAL, 'prefix');
+    });
+    test(`${shell} keeps the plain form at the limit when ${label} reaches a claude.exe or a claude.ps1, which PowerShell passes exactly`, onWindows, async t => {
+      for (const files of [['claude.exe'], ['claude.cmd', 'claude.ps1']]) {
+        let spawned;
+        await assert.doesNotReject(async () => { spawned = await resumeOnPath(shell, claudeOnPath(t, ...files), { addDirs: value }); }, files.join(' + '));
+        assert.equal(spawned.args[2], `claude '--resume' '${ID}' '--add-dir' '${value}' '--append-system-prompt' '${'x'.repeat(32300)}'`);
+      }
+    });
+  }
+  test(`${shell} refuses a launch that only fits without the helper when an empty argument would be dropped`, () => {
+    assert.throws(() => profiles.claudeCommand(shell, ['--resume', ID, '--name', '', '--append-system-prompt', 'x'.repeat(32300)], { windows: true }), REFUSAL);
+  });
+  test(`${shell} keeps the plain form at the limit when every argument survives it`, async () => {
+    const prompt = 'x'.repeat(32200);
+    const spawned = await resumeWith(shell, prompt, { addDirs: 'C:\\space dir' });
+    assert.equal(spawned.args[2], `claude '--resume' '${ID}' '--add-dir' 'C:\\space dir' '--append-system-prompt' '${prompt}'`);
   });
 }
 test('IDE emulation adds --ide to the argv before it is serialized, for every shell', async () => {
@@ -312,20 +361,20 @@ test('a native Windows executable receives the name as one untouched argument', 
   assert.deepEqual(plan, { program: 'C:\\bin\\claude.exe', args: argv, verbatim: false });
 });
 test('a recognized npm JavaScript shim runs node with the script and the untouched argument', () => {
-  const shim = '"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js"';
+  const shim = '"%_prog%"  "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*';
   files.clear(); files.add('C:\\bin\\node_modules\\@anthropic-ai\\claude-code\\cli.js'); files.add('C:\\bin\\node.exe');
   const plan = resolveWindowsClaude(argv, env, deps('C:\\bin\\claude.cmd', shim));
   assert.deepEqual(plan, { program: 'C:\\bin\\node.exe', args: ['C:\\bin\\node_modules\\@anthropic-ai\\claude-code\\cli.js', ...argv], verbatim: false });
 });
 test('a recognized npm executable shim runs the executable with the untouched argument', () => {
-  const shim = '"%dp0%\\node_modules\\claude\\claude.exe"';
+  const shim = '"%dp0%\\node_modules\\claude\\claude.exe" %*';
   files.clear(); files.add('C:\\bin\\node_modules\\claude\\claude.exe');
   const plan = resolveWindowsClaude(argv, env, deps('C:\\bin\\claude.cmd', shim));
   assert.deepEqual(plan, { program: 'C:\\bin\\node_modules\\claude\\claude.exe', args: argv, verbatim: false });
 });
-test('an opaque command shim gets a doubly caret-escaped command line with doubled trailing backslashes', () => {
+test('an opaque command shim gets its path escaped once and its arguments doubly caret-escaped, with doubled trailing backslashes', () => {
   files.clear();
   const plan = resolveWindowsClaude(['--name', 'a&b\\'], { ...env, ComSpec: 'C:\\Windows\\System32\\cmd.exe' }, deps('C:\\bin\\claude.cmd', 'opaque'));
   assert.equal(plan.program, 'C:\\Windows\\System32\\cmd.exe'); assert.equal(plan.verbatim, true);
-  assert.deepEqual(plan.args, ['/d', '/s', '/c', '"^^^"C:\\bin\\claude.cmd^^^" ^^^"--name^^^" ^^^"a^^^&b\\\\^^^""']);
+  assert.deepEqual(plan.args, ['/d', '/s', '/c', '"^"C:\\bin\\claude.cmd^" ^^^"--name^^^" ^^^"a^^^&b\\\\^^^""']);
 });

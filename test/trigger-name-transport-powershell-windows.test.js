@@ -11,6 +11,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { launch, ID } = require('./fixtures/trigger-name-launch.cjs');
 const profiles = require('../src/main/terminals/shell-profiles');
+const { writeNpmClaude } = require('./fixtures/npm-claude.cjs');
 
 const win = process.platform === 'win32';
 const skip = !win && 'requires Windows PowerShell and node-pty command-line serialization';
@@ -78,9 +79,11 @@ function makeBin(kind) {
     fs.writeFileSync(path.join(dir, 'claude.cmd'), `@echo off\r\n"${process.execPath}" "%~dp0echo.js" %*\r\n`);
   }
   if (kind === 'ps1' || kind === 'ps1cmd') fs.writeFileSync(path.join(dir, 'claude.ps1'), RECORD('ps1') + '\r\n');
+  if (kind === 'npm') writeNpmClaude(dir);
   return dir;
 }
-const KINDS = ['exe', 'cmd', 'ps1', 'ps1cmd', 'pty', 'wrapper', 'wrapcmd'];
+const KINDS = ['exe', 'cmd', 'ps1', 'ps1cmd', 'npm', 'pty', 'wrapper', 'wrapcmd'];
+const VIA_SCRIPT = { ps1: 'a claude.ps1 alone on PATH runs as PowerShell runs it', ps1cmd: 'an unrecognised claude.cmd beside a claude.ps1 leaves the script to PowerShell' };
 const present = exe => win && spawnSync(exe, ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], { encoding: 'utf8' }).status === 0;
 const shells = [['powershell.exe', win], ['pwsh.exe', present('pwsh.exe')]];
 before(() => { if (!skip) for (const kind of KINDS) bins[kind] = makeBin(kind); });
@@ -88,7 +91,7 @@ after(() => { for (const dir of Object.values(bins)) fs.rmSync(dir, { recursive:
 
 const envFor = (kinds, extra = {}) => {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^path$/i.test(key)));
-  return { ...env, PATH: `${kinds.map(k => bins[k]).join(';')};${process.env.PATH ?? process.env.Path}`,
+  return { ...env, PATH: `${kinds.map(k => bins[k]).join(';')};${path.dirname(process.execPath)};${process.env.PATH ?? process.env.Path}`,
     SB_ARGV_OUT: path.join(bins[kinds[0]], 'argv.json'), ...extra };
 };
 const cleanOutputs = kind => { for (const name of ['argv.json', 'argv.json.ps1', 'argv.json.fn']) fs.rmSync(path.join(bins[kind], name), { force: true }); };
@@ -102,16 +105,18 @@ function runPlan(shell, args, env, mutate = a => a) {
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const outputOf = (kind, ext = '') => path.join(bins[kind], 'argv.json' + ext);
 
-async function run(shell, kind, request) {
+async function run(shell, kind, request, expected) {
   cleanOutputs(kind);
   const env = envFor([kind]);
   const spawned = await launch(shell, { ...request, env });
   runPlan(shell, spawned.args, env);
-  if (kind.startsWith('ps1')) {
-    assert.equal(fs.existsSync(outputOf(kind)), false, 'the claude.cmd ran although claude.ps1 comes first');
-    return read(outputOf(kind, '.ps1'));
+  const viaScript = fs.existsSync(outputOf(kind, '.ps1'));
+  assert.deepEqual(read(outputOf(kind, viaScript ? '.ps1' : '')), expected);
+  if (VIA_SCRIPT[kind]) assert.equal(viaScript, true, VIA_SCRIPT[kind]);
+  if (kind === 'npm') {
+    assert.equal(viaScript, false, 'the claude.ps1 ran although its claude.cmd is a recognised npm shim');
+    assert.equal(fs.existsSync(outputOf(kind, '.cmd')), false, 'the npm batch shim must not run');
   }
-  return read(outputOf(kind));
 }
 
 const NAMES = ['smithy hardening', 'say "hi"', 'a" b', 'a b" c', 'a\\', 'C:\\dir\\', 'a\\b c', 'a b\\\\', 'say "hi\\"', '\\"', '"', '""', ' "a" "b" ', 'a"b',
@@ -130,15 +135,15 @@ const DIRECT = ['--x', '', 'a b', 'a" b', 'a\\', 'say "hi"', '\\"', "it's", '$en
 
 for (const [shell, available] of shells) {
   const options = { skip: skip || (!available && `${shell} is not installed`), timeout: 90000 };
-  for (const kind of ['exe', 'cmd', 'ps1', 'ps1cmd']) {
+  for (const kind of ['exe', 'cmd', 'ps1', 'ps1cmd', 'npm']) {
     for (const name of NAMES) {
       test(`${shell} hands a claude (${kind}) the exact name ${JSON.stringify(name)}`, options, async () => {
-        assert.deepEqual(await run(shell, kind, { name }), ['--session-id', ID, '--name', name]);
+        await run(shell, kind, { name }, ['--session-id', ID, '--name', name]);
       });
     }
     for (const [label, request, expected] of EXISTING) {
       test(`${shell} hands a claude (${kind}) ${label} its exact arguments`, options, async () => {
-        assert.deepEqual(await run(shell, kind, request), expected);
+        await run(shell, kind, request, expected);
       });
     }
   }

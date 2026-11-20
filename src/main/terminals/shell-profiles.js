@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { escapeForCmd, cmdEscapePasses } = require('../../../claude-binary');
+const { escapeForCmd, cmdEscapePasses, powershellReparsesClaude, resolveWindowsClaude, SHIM_INVOCATION } = require('../../../claude-binary');
 
 // --- Cross-platform shell resolution ---
 const isWindows = process.platform === 'win32';
@@ -161,16 +161,28 @@ function isWslShell(shellPath) {
   return base === 'wsl.exe' || base === 'wsl';
 }
 
+const psLiteral = text => "'" + text.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&') + "'";
+
 // see .ai/contexts/trigger-watcher.md ("Naming a new session")
 const PS_PREAMBLE = "function __switchboard_launch{param([string]$n)"
-  + "$c=Get-Command $n -ErrorAction Stop|Select-Object -First 1;"
-  + "if($c.CommandType -ne 'Application'){& $c @args;return};"
-  + "$d=if($c.Source -match '\\.(cmd|bat)$'){2}else{0};"
+  + "$c=Get-Command $n -ErrorAction Stop|Select-Object -First 1;$f=$c.Source;$t='';"
+  + "if($c.CommandType -eq 'ExternalScript'){"
+  + "$a=Get-Command $n -CommandType Application -ErrorAction SilentlyContinue|Where-Object{[IO.Path]::GetDirectoryName($_.Source) -eq [IO.Path]::GetDirectoryName($c.Source) -and $_.Source -match '\\.(cmd|bat)$'}|Select-Object -First 1;"
+  + "$f=if($a){$a.Source}else{''}}"
+  + "elseif($c.CommandType -ne 'Application'){& $c @args;return};"
+  + "if($f -match '\\.(cmd|bat)$'){"
+  + "$m=[regex]::Match([IO.File]::ReadAllText($f)," + psLiteral(SHIM_INVOCATION.source) + ",'IgnoreCase,Multiline');"
+  + "if($m.Success){$t=[IO.Path]::Combine([IO.Path]::GetDirectoryName($f),$m.Groups[1].Value+$m.Groups[2].Value)}};"
+  + "if($c.CommandType -eq 'ExternalScript' -and !($t -and [IO.File]::Exists($t))){& $c @args;return};"
+  + "if($t){if(![IO.File]::Exists($t)){throw ('npm target not found: '+$t)};"
+  + "if($t -match '\\.exe$'){$f=$t}else{$b=[IO.Path]::GetDirectoryName($f);$f=[IO.Path]::Combine($b,'node.exe');"
+  + "if(![IO.File]::Exists($f)){$f=(Get-Command node.exe -CommandType Application -ErrorAction Stop|Select-Object -First 1).Source};"
+  + "$args=@($t)+$args}};"
+  + "$d=if($f -match '\\.(cmd|bat)$'){2}else{0};"
   + "$l=($args|ForEach-Object{$s='\"'+[regex]::Replace([regex]::Replace($_,'(\\\\*)\"','$1$1\\\"'),'(\\\\*)\\z','$1$1')+'\"';"
   + "for($k=0;$k -lt $d;$k++){$s=[regex]::Replace($s,'([()\\]\\[%!^\"`<>&|;, *?])','^$1')};$s}) -join ' ';"
-  + "$i=New-Object Diagnostics.ProcessStartInfo $c.Source,$l;$i.UseShellExecute=$false;"
+  + "$i=New-Object Diagnostics.ProcessStartInfo $f,$l;$i.UseShellExecute=$false;"
   + "$p=[Diagnostics.Process]::Start($i);$p.WaitForExit();exit $p.ExitCode};";
-const psLiteral = text => "'" + text.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&') + "'";
 
 // Shell-quote one argv token per shell family
 function quoteArgForShell(shellPath, value, cmdPasses = 1) {
@@ -218,14 +230,35 @@ function fitsCommandLine(shellPath, command, extraArgs) {
   return argsToCommandLine(shellPath, args).length + 1 <= WINDOWS_COMMAND_LINE_LIMIT;
 }
 
+const survivesPowerShellNative = (token, batch) => token !== '' && !/"/.test(token) && !(batch && /[&|<>^%!\r\n]/.test(token)) && !(/\s/.test(token) && token.endsWith('\\'));
+
 function claudeCommand(shellPath, argv, { env, cwd, prefix = '', windows = isWindows, extraArgs = [], ide = false, binary = 'claude' } = {}) {
   const wrapped = !!prefix.trim();
   const quoted = quoteArgvForShell(shellPath, argv, { env, cwd, wrapped });
   const plain = (wrapped ? prefix + ' ' : '') + binary + ' ' + quoted;
   if (!(windows && isPowerShellShell(shellPath))) return plain;
   const helper = powershellLaunch(argv, prefix, binary);
+  if (fitsCommandLine(shellPath, helper, extraArgs)) return helper;
   const baseline = ide ? (wrapped ? prefix + ' ' : '') + binary + ' ' + quoteArgvForShell(shellPath, argv.slice(0, -1), { env, cwd, wrapped }) + ' --ide' : plain;
-  return fitsCommandLine(shellPath, helper, extraArgs) || !fitsCommandLine(shellPath, baseline, extraArgs) ? helper : baseline;
+  if (!fitsCommandLine(shellPath, baseline, extraArgs)) return helper;
+  const batch = wrapped || powershellReparsesClaude(env || {});
+  if (argv.every(token => survivesPowerShellNative(token, batch))) return baseline;
+  throw new Error('the launch is too long for PowerShell to pass its arguments exactly: shorten the system prompt or the additional directories, or pick a bash profile');
+}
+
+function isUnixLikeShell(shellPath) {
+  const base = path.basename(shellPath, path.extname(shellPath)).toLowerCase();
+  return isWslShell(shellPath) || /bash|zsh|fish|^sh$|^dash$|^ksh$|^nu$/.test(base);
+}
+
+// see .ai/contexts/schedule-runner.md ("Windows launches")
+function headlessClaudeLaunch(shellPath, argv, { env = {}, profileArgs = [], windows = isWindows, deps } = {}) {
+  if (windows && !isUnixLikeShell(shellPath)) {
+    const plan = resolveWindowsClaude(argv, env, deps);
+    return plan.error ? { error: plan.error } : { program: plan.program, args: plan.args, verbatim: plan.verbatim };
+  }
+  const command = 'claude ' + quoteArgvForShell(shellPath, argv, { env });
+  return { program: shellPath, args: shellArgs(shellPath, command, profileArgs, { windows }), verbatim: false };
 }
 
 // Returns spawn args appropriate for the resolved shell
@@ -256,4 +289,4 @@ function shellArgs(shellPath, cmd, extraArgs, { pty = false, windows = isWindows
   return [];
 }
 
-module.exports = { isCmdShell, discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgForShell, quoteArgvForShell, claudeCommand };
+module.exports = { isCmdShell, discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgForShell, quoteArgvForShell, claudeCommand, headlessClaudeLaunch };

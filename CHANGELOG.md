@@ -19,6 +19,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - Clicking a background session in the sidebar attaches it directly, as the Agents view does, instead of going through the saved-entry checks that could refuse and send you to the Agents view. The `bg` badge now names the job (`bg · name`) when the row is titled after its original conversation. (#546)
+- On Windows, PowerShell sessions and scheduled runs using Claude installed with npm, pnpm or yarn now preserve names, additional directories and system prompts, including quotes, trailing backslashes, multiple lines and 12,000-character prompts. A launch too long for PowerShell to pass exactly to the installed Claude is refused with a message instead of starting with changed arguments. (#1107)
 - Processes started fully detached from a Windows tab (for example with `start`) now end when the tab closes. (#1015)
 - While the index is being built at startup, the sidebar no longer fails reload after reload with "Projects changed while loading" as sessions start and stop: it shows the latest snapshot and refreshes at the next change. The first load after indexing no longer runs a full sweep that could time out, and a sweep that outlives its wait now refreshes the sidebar when it finishes. (#1125)
 - The Delete worktree dialog accepts Windows short (8.3) folder names, and no longer waits on unreachable drives or shares to list running sessions. Paths containing a `.` or `..` segment, including Windows backslash separators, are refused before the dialog. (#855)

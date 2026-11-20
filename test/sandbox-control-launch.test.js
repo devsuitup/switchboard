@@ -70,6 +70,7 @@ for (const mode of ['new', 'resume', 'fork', 'schedule']) {
       sessionTransitions: { snapshotContinuationsBeforeSpawn: async () => null },
       sessionTranscriptExists: () => true, parseAddDirs: () => [], sandboxBindEnv: () => '',
       claudeCommand: (_shell, args, o = {}) => (o.prefix ? o.prefix + ' ' : '') + 'claude ' + args.join(' '), quoteArgvForShell: (_shell, args) => args.join(' '), shellArgs: (_shell, command) => ['-c', command],
+      headlessClaudeLaunch: (shell, args) => ({ program: shell, args: ['-c', 'claude ' + args.join(' ')] }),
       sandboxScriptPath: () => '/sandbox.sh', cleanPtyEnv: {},
       scheduleProjects: () => ({ add: async () => {}, list: async () => [] }),
       resolveScheduleSandbox: () => true,
