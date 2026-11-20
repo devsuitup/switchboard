@@ -58,6 +58,103 @@ function fixture(t, options = {}) {
   return { helper, child, writes, invocations, warnings };
 }
 
+test('a timed-out start followed by a successful retry gives the next tabs jobs', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { trackWindowsPty } = require('../src/main/terminals/pty-ops');
+  const children = [], writes = [], warnings = [];
+  const { createWindowsJobHelper } = require('../src/main/terminals/windows-job-helper');
+  const helper = createWindowsJobHelper({ spawn() {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.stdin = new EventEmitter();
+    child.stdin.write = line => writes.push(line);
+    child.kill = () => { child.killed = true; };
+    children.push(child);
+    return child;
+  }, warn: message => warnings.push(message) });
+  t.after(() => children.forEach(child => child.emit('exit')));
+  const tab = pid => ({ pid, onExit() {} });
+  const firstReady = helper.start();
+  const first = trackWindowsPty(tab(897), { jobs: helper, platform: 'win32', spawnTime: 100 });
+  t.mock.timers.tick(15000);
+  assert.equal(await firstReady, false);
+  assert.equal(await first, false);
+  assert.equal(children[0].killed, true);
+  t.mock.timers.tick(999);
+  assert.equal(await helper.assign('during-backoff', 898, 100), false);
+  assert.equal(children.length, 1, 'tab creation during backoff cannot spawn');
+  t.mock.timers.tick(1);
+  assert.equal(await helper.terminate('old-tab'), false, 'close must not trigger a retry');
+  assert.equal(await helper.release('old-tab'), false);
+  assert.equal(await helper.observe('old-tab'), null);
+  assert.equal(children.length, 1, 'cleanup and status must not trigger a retry');
+  const next = trackWindowsPty(tab(899), { jobs: helper, platform: 'win32', spawnTime: 100 });
+  const concurrent = trackWindowsPty(tab(900), { jobs: helper, platform: 'win32', spawnTime: 100 });
+  assert.equal(children.length, 2, 'the next tab must retry helper startup');
+  const retryReady = helper.start();
+  assert.notEqual(retryReady, firstReady, 'retry has its own readiness promise');
+  children[0].stdout.emit('data', 'ready\ninvalid\n');
+  children[0].emit('exit');
+  children[0].emit('error', new Error('late error'));
+  children[0].stdin.emit('error', new Error('late stdin error'));
+  children[0].stderr.emit('data', 'stale warning\n');
+  assert.deepEqual(writes, [], 'old helper events cannot flush the retry queue');
+  children[1].stdout.emit('data', 'ready\n');
+  assert.equal(await retryReady, true);
+  assert.equal(writes.length, 2, 'only new tabs are assigned; failed assignments are not replayed');
+  for (const line of writes) children[1].stdout.emit('data', `assigned ${line.split(' ')[1]}\n`);
+  assert.equal(await next, true, 'next tab receives a job after recovery');
+  assert.equal(await concurrent, true);
+  assert.equal(warnings.filter(line => line.includes('plain ConPTY close')).length, 1);
+  assert.ok(warnings.some(line => /attempt 2\/3/.test(line)), 'retry attempt must be logged');
+  assert.equal(warnings.some(line => line.includes('stale warning')), false);
+});
+
+for (const failure of ['timeout', 'spawn error']) {
+  test(`permanently failing helper stops after three starts (${failure})`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+    let attempts = 0;
+    const f = fixture(t, { spawn() {
+      attempts++;
+      if (failure === 'spawn error') throw new Error('denied');
+      return f.child;
+    } });
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const assignment = f.helper.assign(`tab-${attempt}`, 897, 100);
+      assert.equal(attempts, attempt, 'eligible tab must consume one startup attempt');
+      if (failure === 'timeout') t.mock.timers.tick(5000);
+      assert.equal(await assignment, false);
+      const delay = 1000 * 2 ** (attempt - 1);
+      t.mock.timers.tick(delay - 1);
+      assert.equal(await f.helper.assign(`backoff-${attempt}`, 898, 100), false);
+      assert.equal(attempts, attempt, 'backoff must be respected');
+      t.mock.timers.tick(1);
+    }
+    t.mock.timers.tick(60000);
+    for (let i = 0; i < 5; i++) {
+      const assignment = f.helper.assign(`exhausted-${i}`, 899, 100);
+      assert.equal(attempts, 3, 'exhausted budget cannot spawn a fourth helper');
+      assert.equal(await assignment, false);
+    }
+    assert.equal(await f.helper.start(), false);
+    assert.equal(attempts, 3, 'retry budget must remain exhausted');
+    assert.equal(f.warnings.filter(line => line.includes('plain ConPTY close')).length, 1);
+    assert.ok(f.warnings.some(line => /exhausted/.test(line)), 'budget exhaustion must be logged');
+  });
+}
+
+test('a helper that owned jobs never restarts after failure', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const f = fixture(t);
+  const assigned = f.helper.assign('one', 897, 100);
+  f.child.stdout.emit('data', 'ready\nassigned one\n');
+  assert.equal(await assigned, true);
+  f.child.emit('exit');
+  t.mock.timers.tick(60000);
+  assert.equal(await f.helper.assign('two', 898, 100), false);
+  assert.equal(await f.helper.start(), false);
+  assert.equal(f.invocations.length, 1, 'lost job ownership cannot transfer to a new helper');
+});
+
 for (const chunks of ['one chunk', 'two chunks', 'split lines']) {
   test(`both helper warning kinds are forwarded once with ${chunks}`, t => {
     const f = fixture(t);
@@ -238,7 +335,7 @@ test('close before helper readiness warns even before the PTY has submitted its 
   assert.equal(await done, true);
 });
 
-test('helper death, protocol failure and startup timeout settle requests, log once, never restart', async t => {
+test('helper failures settle requests and log once without an immediate restart', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   for (const failure of ['death', 'error', 'timeout', 'stdin', 'protocol']) {
     const f = fixture(t);
