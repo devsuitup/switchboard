@@ -353,9 +353,12 @@ for (const failure of ['missing-projects', 'folder-read']) test('718b reconcile 
     h.init();
   }
   await assert.doesNotReject(cache.reconcileCacheFromFilesystemAsync({ throttle: false }));
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0][0], 'Error reconciling cache:');
-  assert.match(errors[0][1].message, failure === 'missing-projects' ? /ENOENT/ : /folder read failed/);
+  if (failure === 'missing-projects') assert.equal(errors.length, 0, 'an absent projects directory is an empty listing, not an error');
+  else {
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0][0], 'Error reconciling cache:');
+    assert.match(errors[0][1].message, /folder read failed/);
+  }
   if (failure === 'folder-read') assert.ok(h.rows.has(OTHER), 'healthy folder is still reconciled');
 });
 
