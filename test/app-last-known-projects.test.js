@@ -118,3 +118,29 @@ test('nothing is painted when main has no last known projects or the payload is 
     } finally { s.h.destroy(); }
   }
 });
+
+test('a late disk snapshot preserves the failure after every startup retry has failed', async t => {
+  const s = setup({ projects: new Error('worker failed') });
+  t.after(() => s.h.destroy());
+  s.releaseLoad();
+  await s.w.loadStartupProjects();
+  assert.equal(s.calls.loads, 2);
+  for (let retry = 0; retry < 3; retry++) {
+    assert.equal(s.timers.length, 1);
+    await s.timers.shift()();
+  }
+  assert.equal(s.calls.loads, 5);
+  assert.equal(s.timers.length, 0, 'startup exhausted its retry budget');
+  assert.equal(s.w.loadingStatus.textContent, 'Could not load projects. Reload to retry.');
+  s.releaseLast();
+  await flush();
+  assert.equal(s.w.cachedProjects[0].projectPath, '/last-known');
+  assert.equal(s.w.cachedAllProjects[0].projectPath, '/last-known');
+  assert.equal(s.w.sidebarContent.classList.contains('projects-provisional'), true);
+  s.item.click();
+  assert.equal(s.calls.opened, 0, 'late provisional rows stay inert');
+  assert.equal(s.w.loadingStatus.style.display, '');
+  assert.equal(s.w.loadingStatus.className, 'active');
+  assert.equal(s.w.loadingStatus.textContent, 'Could not load projects. Reload to retry.',
+    'late provisional paint must preserve the failure; no load or retry remains in flight');
+});

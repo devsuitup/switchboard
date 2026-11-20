@@ -1425,7 +1425,10 @@ Renderer side, `paintLastKnownProjects` (app.js) runs from
 `loadStartupProjects` without being awaited. It gives up when the reply is not
 two arrays, when a real load has already committed, or when either cache is
 already filled; otherwise it fills `cachedProjects`/`cachedAllProjects`, runs
-`dedup`, sets the `Refreshing…` status and calls `refreshSidebar`. The
+`dedup`, sets the `Refreshing…` status only while the latest load is pending,
+and calls `refreshSidebar`. A late snapshot preserves the load failure status
+between retries and after the retry budget is exhausted; starting a retry
+sets the progress status through `loadProjects`. The
 provisional state is the class `projects-provisional` on `#sidebar-content`,
 nowhere else: `loadProjects` removes it when a load commits, and its failure
 branch shows "Could not load projects" while it is present even though the
@@ -1444,7 +1447,8 @@ they run only after `loadStartupProjects` has an accepted load, as before.
 
 Tests: `test/last-known-projects.test.js` (store), `test/app-last-known-projects.test.js`
 (paint, inertness, replacement, the race where the real load lands first, the
-all-failed startup) and the remembered-reply case in
+all-failed startup, including a disk snapshot arriving after all five attempts
+have failed) and the remembered-reply case in
 `test/get-projects-worker-wiring.test.js`.
 
 Schedules reuse `run-schedule-now`, `read-memory`, `save-memory` and

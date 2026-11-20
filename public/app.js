@@ -3150,9 +3150,11 @@ async function paintLastKnownProjects() {
   cachedProjects = last.defaultProjects;
   cachedAllProjects = last.allProjects;
   dedup([...cachedAllProjects, ...cachedProjects]);
-  loadingStatus.textContent = 'Refreshing…';
-  loadingStatus.className = 'active';
-  loadingStatus.style.display = '';
+  if (loadProjects.state?.latest?.pending) {
+    loadingStatus.textContent = 'Refreshing…';
+    loadingStatus.className = 'active';
+    loadingStatus.style.display = '';
+  }
   refreshSidebar({ resort: true });
   return true;
 }
