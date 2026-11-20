@@ -31,7 +31,7 @@ function setup(t, { empty = false, sharedHost = false } = {}) {
   const kept = [
     { sessionId: 'mixed', folder: folders[0], projectPath: path.join(root, 'other') },
     { sessionId: 'remote', folder: 'host::remote', projectPath: sharedHost ? root.replaceAll('\\', '/') : '/srv/other' },
-    { sessionId: 'worktree', folder: 'worktree', projectPath: path.join(root, '.work-files', 'worktrees', 'child') },
+    { sessionId: 'worktree', folder: 'worktree', projectPath: path.join(root, 'other', '.work-files', 'worktrees', 'child') },
   ];
   for (const folder of folders) db.setFolderMeta(folder, root, 1);
   db.setFolderMeta('host::remote', kept[1].projectPath, 1);
@@ -902,7 +902,7 @@ test('prepared finalization merges current settings by identity and never seeds 
   const remote = 'host::' + h.root.replaceAll('\\', '/');
   h.db.setSetting('archivedProjects', { [h.root]: { disabledSchedules: ['keep-file'] }, [remote]: { remote: true } });
   h.db.setSetting('scheduleReenableOffers', { [h.root]: { selected: true }, [remote]: { remote: true } });
-  h.db.setSetting('scheduleProjects', [h.root, path.join(h.root, '.work-files', 'worktrees', 'child')]);
+  h.db.setSetting('scheduleProjects', [h.root, h.kept[2].projectPath]);
   h.db.setSetting('global', { sentinel: 'latest', hiddenProjects: [h.root], hiddenProjectKinds: { [h.root]: 'repository' },
     openWorkingSet: [{ sessionId: 'head', projectPath: h.root, active: true }, { sessionId: 'head', projectPath: '/srv/other', active: false }, { sessionId: 'orphan', projectPath: h.root, active: false }, { sessionId: 'worktree', projectPath: h.kept[2].projectPath, active: false }] });
   commitTransaction(h.db, () => { for (const unit of units) engine.applyDeletionUnit(h.db, unit); }); h.reopen();

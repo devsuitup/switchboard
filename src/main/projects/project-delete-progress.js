@@ -6,6 +6,7 @@ const { normalizeProjectPath } = require('../shared/normalize-project-path');
 const { parseFolderKey, isValidAlias } = require('../remote/remote-hosts');
 const { isProjectHidden } = require('../../../public/worktree-nesting');
 const { durableRowLinks } = require('./project-delete-identity');
+const { groupedOwner } = require('./project-delete-owner');
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const stable = value => Array.isArray(value) ? `[${value.map(stable).join(',')}]`
   : value && typeof value === 'object' ? `{${Object.keys(value).sort().filter(key => value[key] !== undefined).map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}` : JSON.stringify(value);
@@ -71,14 +72,14 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
   function readScope({ project }, memo = new Map()) {
     const identity = projectIdentity(project, memo);
     return db.connection.transaction(() => {
-      const identities = new Map([[JSON.stringify([project.alias, project.projectPath]), identity.key]]);
+      const identities = new Map();
       const ownership = db.getAllCached().map(row => ({ ...row })).sort((a, b) => a.sessionId.localeCompare(b.sessionId));
       const rows = ownership.filter(row => {
         if (!row.projectPath || parseFolderKey(row.folder).alias !== identity.alias) return false;
         const key = JSON.stringify([identity.alias, row.projectPath]);
         if (!identities.has(key)) {
           let owner = null;
-          try { owner = projectIdentity({ alias: identity.alias, projectPath: row.projectPath }, memo).key; } catch {}
+          try { owner = groupedOwner({ alias: identity.alias, projectPath: row.projectPath }, memo).key; } catch {}
           identities.set(key, owner);
         }
         return identities.get(key) === identity.key;

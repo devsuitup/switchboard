@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
-- Claude and Codex sessions in `.work-files/worktrees/<name>`, and Codex sessions in `.worktrees`, `.claude-worktrees` and `.claude/worktrees`, appear under their existing repository, including nested worktrees and sessions already indexed. Repository settings, archive and hidden state follow the group, and the project deletion preview includes both runtimes. Resume and fork use the recorded worktree directory and refuse to launch if it no longer exists; Claude sessions in a deleted `.claude/worktrees` directory are refused instead of starting in the repository. (#1137)
+- Claude and Codex sessions in `.work-files/worktrees/<name>`, and Codex sessions in `.worktrees`, `.claude-worktrees` and `.claude/worktrees`, appear under their existing repository, including nested worktrees and sessions already indexed. Repository settings, archive and hidden state follow the group, and project deletion removes the session metadata it previews for both runtimes. Resume and fork use the recorded worktree directory and refuse to launch if it no longer exists; Claude sessions in a deleted `.claude/worktrees` directory are refused instead of starting in the repository. (#1137)
 - A conversation running as a background job (`claude --bg`) no longer slips into a project's collapsed "Older" rows: while its job is alive it stays visible and sorts with the running sessions, and the Running filter lists it, whatever the date of its last indexed message. (#1146)
 
 ## v0.0.108 — 2026-11-20

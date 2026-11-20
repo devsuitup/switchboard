@@ -4,6 +4,7 @@ const { identity, canonicalPath, membershipDigest, durableRowLinks: links, stabl
 const { parseFolderKey } = require('../remote/remote-hosts');
 const { createProjectDeleteProgress, bind } = require('./project-delete-progress');
 const { archivedEntry } = require('../../../archived-projects');
+const { groupedOwner } = require('./project-delete-owner');
 
 const readDurableScope = (db, input, memo) => createProjectDeleteProgress(db).readScope(input, memo);
 const settingsPath = (value, alias) => {
@@ -26,7 +27,7 @@ function validateDeletionManifest(db, input) {
   const sameOwner = (row, project) => {
     if (!ownerKeys.has(row)) {
       let key = null;
-      try { key = identity({ alias: parseFolderKey(row.folder).alias, projectPath: row.projectPath }, memo).key; } catch {}
+      try { key = groupedOwner({ alias: parseFolderKey(row.folder).alias, projectPath: row.projectPath }, memo).key; } catch {}
       ownerKeys.set(row, key);
     }
     return ownerKeys.get(row) === project.key;
@@ -177,7 +178,7 @@ function* completeProjectDeletion(db, input) {
     const memo = new Map(), members = new Map(input.members.map(row => [row.id, row]));
     for (const row of db.getAllCached()) {
       let owner;
-      try { owner = identity({ alias: parseFolderKey(row.folder).alias, projectPath: row.projectPath }, memo).key; } catch {}
+      try { owner = groupedOwner({ alias: parseFolderKey(row.folder).alias, projectPath: row.projectPath }, memo).key; } catch {}
       if (owner === validated.project.key) {
         const member = members.get(row.sessionId);
         if (!member || member.folderKey !== row.folder) throw fail('DELETION_OWNERSHIP', 'Current selected membership changed');
@@ -185,7 +186,7 @@ function* completeProjectDeletion(db, input) {
     }
     for (const folder of validated.exclusiveFolders) {
       const stored = db.getAllFolderMeta().get(folder);
-      if (stored && identity({ alias: parseFolderKey(folder).alias, projectPath: stored.projectPath }, memo).key !== validated.project.key) throw fail('DELETION_OWNERSHIP', 'Current folder ownership changed');
+      if (stored && groupedOwner({ alias: parseFolderKey(folder).alias, projectPath: stored.projectPath }, memo).key !== validated.project.key) throw fail('DELETION_OWNERSHIP', 'Current folder ownership changed');
     }
   };
   let state;
@@ -236,12 +237,16 @@ function bindDeletionProducer(db, command, args, force = false) {
   if (!sessions.length && !folders.length && !projects.length) return [];
   db.projectDeletion.prepareProducerOwners();
   const owners = new Map(), folderOwners = new Map();
-  const add = (map, key, project) => {
+  const add = (map, key, project, historical = false) => {
     if (!key) return;
     let value;
-    try { value = identity(project, memo); } catch { return; }
+    try { value = historical ? identity(project, memo) : groupedOwner(project, memo); } catch { return; }
     if (!map.has(key)) map.set(key, new Map());
     map.get(key).set(value.key, value);
+    if (!historical) {
+      const exact = identity(project, memo);
+      if (exact.key !== value.key && (db.projectDeletion.projectHistory(exact.key) || db.projectDeletion.fence(exact.key)?.blocked)) map.get(key).set(exact.key, exact);
+    }
   };
   for (const row of sessions.flatMap(target => db.projectDeletion.ownerRows(target.id))) {
     try {
@@ -257,12 +262,12 @@ function bindDeletionProducer(db, command, args, force = false) {
     }
     for (const row of db.projectDeletion.folderHistory(folder)) {
       const [alias, projectPath] = JSON.parse(row.projectKey);
-      add(folderOwners, folder, { alias, projectPath });
+      add(folderOwners, folder, { alias, projectPath }, true);
     }
   }
   for (const target of sessions) for (const row of db.projectDeletion.sessionHistory(target.id)) {
     const [alias, projectPath] = JSON.parse(row.projectKey);
-    add(owners, target.id, { alias, projectPath });
+    add(owners, target.id, { alias, projectPath }, true);
   }
   for (const target of sessions) if (target.projectPath) {
     const project = { alias: parseFolderKey(target.folder).alias, projectPath: target.projectPath };

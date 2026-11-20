@@ -13,11 +13,29 @@ layouts, while retaining its grouped `member.cwd` ownership contract. Physical
 worktree removal remains a separate explicit selection. Remote paths keep
 their host identity and are never collapsed through the local filesystem.
 
-The round-2 witness in `.work-files/report-1137-fix2.md` identifies a remaining
-writer boundary: durable scope and manifest validation still use raw cached
-ownership, so a grouped Codex worktree can produce `Group lacks durable mapping`.
-Aligning the writer requires corresponding producer epoch/fencing changes;
-the preview fix alone does not establish end-to-end deletion support.
+`project-delete-owner.js` projects durable local ownership through
+`resolveWorktreePath` before canonical identity comparison. Durable scope,
+manifest validation, per-chunk session and folder checks, and producer bindings
+all use that projection. The raw cache/folder paths remain unchanged; their
+original values remain in the scope digest. A manifest must still name every
+selected durable member and cannot claim another repository's sessions or
+worktrees. Remote ownership retains its exact path and host.
+
+Producer bindings cover cached rows and links, supplied new row paths and folder
+fallbacks with the same repository epoch. Producers received before admission
+retain their old binding; newly received producers cannot publish into a blocked
+repository. Stored deletion history already names an operation identity and is
+not regrouped. If an older worktree identity has history or a blocked fence, it
+also remains an ownership candidate for live evidence; ambiguity refuses the
+target instead of bypassing that older fence. Operation IDs and receipt keys
+retain their original canonical identity contract.
+
+The plain-Node regression in `test/project-delete-grouped-ownership.test.js`
+composes the production inventory, planner and writer with disposable SQLite
+and transcript files. It covers grouped scope/validation, foreign rejection,
+complete metadata/search deletion, per-chunk ownership changes, producer fences,
+legacy receipt identities and remote ownership. Physical worktree and transcript
+removal remain separate from this metadata operation.
 
 ## Superseded previews (#1106)
 
