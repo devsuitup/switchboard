@@ -260,7 +260,7 @@ those of a scheduled run. Existing filenames and effective slugs are preserved.
 The project header's **Create scheduled task** command remains available.
 Switchboard updates its installed creator command only when its exact bytes
 match an official shipped template; customized commands are kept. Its text
-points to the Schedules tab (Global Settings → Schedules tab).
+points to the Schedules tab (Global Settings → Automation → Schedules → Schedules tab).
 
 **Run now** ignores `cron` and
 `enabled`, and does not wait for a run of the same schedule that is still going.

@@ -33,6 +33,8 @@ const SETTING_DEFAULTS = {
   shellProfile: 'auto',
   activityReporting: false, // see .ai/contexts/activitywatch.md
   remoteTriggers: false,
+  remoteHosts: [],
+  remoteRefreshMs: 300000,
   schedulesTab: false,
   lastSeenVersion: null, // see docs/changelog.md
   // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")

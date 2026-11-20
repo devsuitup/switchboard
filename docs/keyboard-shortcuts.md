@@ -22,7 +22,7 @@ many Linux desktops.
 
 ### Rebinding
 
-In **Global Settings → Keyboard Shortcuts**:
+In **Global Settings → Keyboard → Keyboard Shortcuts**:
 
 1. Click the button showing the current binding. It reads *Press keys…*.
 2. Press the new combination. At least one modifier (Cmd/Ctrl, Option/Alt or
@@ -94,6 +94,15 @@ Quit is `Cmd+Q` on macOS and `Ctrl+Q` on Linux; on Windows the item reads
 **Exit** and has no key. The other menu items — Hide, Undo, Redo, Cut, Copy,
 Paste, Select All — carry Electron's default keys for their roles. There is no reload shortcut: `Cmd+R` and `Ctrl+Shift+R` are blocked. See
 [Window](window.md).
+
+## Settings navigation
+
+Tab enters the selected Settings page button. Up/Down select the previous or next
+page; Left/Right do the same in both layouts. Home/End select the
+first/last page. Enter or Space activates a page button. Tab then enters the
+page's first enabled control, followed by its remaining controls and the footer.
+Shift+Tab moves back through the controls. The two explanatory disclosure blocks
+open with Enter or Space. Escape does not close Settings; use Cancel or close.
 
 ## Dialogs
 

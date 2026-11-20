@@ -483,6 +483,59 @@ uninitialised submodule refuses preview/deletion before force can hide its files
 
 ### Settings
 
+`openSettingsViewer(scope, projectPath, folderKey, { section })` accepts an optional
+fourth argument in the renderer, read through `arguments[3]` to preserve the
+three-parameter declaration checked by the existing folder-key source test.
+It does not add IPC. A valid explicit section wins
+over `localStorage`'s `settingsSection:global` or `settingsSection:project`; an unknown
+explicit id falls back to the remembered page, then `general` or `launch` if that
+is also unknown. Storage failures are ignored. Global
+pages are `general`, `sessions`, `keyboard`, `automation`, `remote`, `integrations`,
+`archived`, `advanced`; project pages are `launch`, `project`.
+
+The panel reparents existing rows into named regions before wiring their handlers.
+Hidden pages remain in the DOM, preserving every field id and the one Save path.
+Archive content and project footer actions retain their existing behavior until
+their later #863 slices. The new shell adds no trigger controls or archive APIs.
+The host-list and refresh defaults now live in `SETTING_DEFAULTS`.
+
+Each page scrolls independently; navigation and the footer stay outside that
+scroll. A viewer ResizeObserver selects the horizontal navigation below 720 px;
+there is no layout preference. It disconnects on close or reopen. Navigation uses
+roving tabindex, arrow keys in both layouts, Home/End and Tab into the selected page.
+The active item scrolls into view when the narrow strip opens or changes selection.
+
+The unsaved counter compares control values with their rendered `data-initial`
+values, plus snapshots of the host list and shortcuts; live reporting/debug
+switches are excluded. Save captures the submitted snapshot before awaiting any
+IPC, so later edits remain dirty; rejected host rows remain dirty too. The
+Save button is disabled during the request, so completions cannot overtake each
+other; fields stay editable. The SDK filter and IDE notice compare against the
+last applied values on repeated Saves, separately from the immutable `fieldValue`
+bindings inspected by the defaults test. Save writes normalized numbers and
+trimmed text back to controls whose values still match the submitted snapshot;
+the saved baseline uses normalized values even when later edits are retained.
+Project fields saved with Use global default use an explicitly defined global
+value (including `null`), otherwise `SETTING_DEFAULTS[field]`, while preserving
+edits made during Save. The display and baseline both map null text values to
+empty strings, checkbox values to booleans, and legacy browser `managed` to `off`,
+matching initial rendering. When no host is rejected, the host snapshot still
+matches the pre-await submission, and normalization changed the submitted list,
+Save replaces the editor rows and host baseline with a copy of the stored host
+objects: trimmed aliases and labels, with empty-alias rows removed. The editor
+does not share mutable objects with deferred persistence or app-wide labels.
+An unchanged host list retains its DOM, including completed and pending Check
+host results, across unrelated Saves. Rejected
+rows and host edits made during Save remain visible and dirty.
+Save refreshes those snapshots, uses the
+existing `saved` class for 1.5 seconds and stays open. Cancel still discards
+without a prompt.
+Explanatory reporting/diagnostics prose uses native details/summary disclosure.
+Rows left outside the explicit move lists retain their original group under
+Advanced (global) or Launch (project). The reporting row keeps its bottom
+corners and spacing before the disclosure.
+See `test/dom-settings-nav.test.js` for the DOM contract.
+
 | IPC | Notes |
 |---|---|
 | `get-setting` / `set-setting` / `delete-setting` | Generic key/value over `settings` table |
