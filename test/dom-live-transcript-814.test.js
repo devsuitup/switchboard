@@ -15,7 +15,7 @@ function setup(t) {
   t.after(() => ctx.destroy());
   const w = ctx.window;
   for (const key of ['jsonlViewer', 'jsonlViewerTitle', 'jsonlViewerSessionId', 'jsonlViewerBody', 'terminalArea',
-    'statsViewer', 'memoryViewer', 'workFilesViewer', 'settingsViewer']) {
+    'statsViewer', 'memoryViewer', 'settingsViewer']) {
     w[key] = w.document.createElement('div');
     w.document.body.appendChild(w[key]);
   }

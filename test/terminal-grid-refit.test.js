@@ -33,7 +33,7 @@ function setup(t) {
   } };
   for (const name of ['placeholder', 'terminalHeader', 'statsViewer', 'memoryViewer',
     'settingsViewer', 'jsonlViewer', 'terminalArea', 'gridViewer', 'gridViewerCount',
-    'workFilesContent', 'sessionFilters', 'searchBar', 'searchInput']) {
+    'sessionFilters', 'searchBar', 'searchInput']) {
     window[name] = document.createElement('div');
     document.body.append(window[name]);
   }

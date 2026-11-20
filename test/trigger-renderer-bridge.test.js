@@ -45,6 +45,7 @@ function rig() {
   ipcMain.handle = (name, fn) => handlers.set(name, fn);
   ipcMain.removeHandler = name => handlers.delete(name);
   const sent = [];
+  const logs = [];
   const wc = new EventEmitter();
   wc.mainFrame = {};
   wc.isDestroyed = () => false;
@@ -62,6 +63,7 @@ function rig() {
   sessions.set(B, entry);
   const { createTriggerRendererBridge } = require(modulePath);
   const bridge = createTriggerRendererBridge({
+    log: { info: (...args) => logs.push(args) },
     ipcMain, getWindow: () => currentWindow, getSession: id => sessions.get(id),
     launchAllowed: () => allowed, now: () => at,
     setTimeoutFn: (fn, delay) => { const id = ++nextTimer; timers.set(id, { fn, at: at + delay }); return id; },
@@ -83,10 +85,31 @@ function rig() {
   };
   const payload = () => sent.at(-1)?.payload;
   const ack = (changes = {}) => ({ ...payload(), ok: true, generation: 7, ...changes });
-  return { bridge, handlers, ipcMain, wc, win, sent, sessions, entry, event, ready, reply, request, flush, tick, payload, ack, timers,
+  return { bridge, handlers, ipcMain, wc, win, sent, logs, sessions, entry, event, ready, reply, request, flush, tick, payload, ack, timers,
     advance: time => { at = time; },
     noWindow: () => { currentWindow = null; }, closing: () => { allowed = false; } };
 }
+
+test('readiness logs once per document and repeated handshakes do not redispatch', async () => {
+  const r = rig();
+  try {
+    r.ready({ sender: r.wc, senderFrame: {} });
+    assert.deepEqual(r.logs, []);
+    const pending = r.request();
+    const first = r.ready();
+    assert.deepEqual(r.ready(), first);
+    await r.flush();
+    assert.equal(r.sent.length, 1);
+    r.reply(r.ack());
+    assert.equal((await pending).ok, true);
+    assert.deepEqual(r.logs, [['[trigger-watcher] renderer ready for trigger actions']]);
+    r.wc.emit('did-start-navigation', {}, 'reload', false, true);
+    r.wc.mainFrame = {};
+    const next = r.ready();
+    assert.notEqual(next.documentEpoch, first.documentEpoch);
+    assert.equal(r.logs.length, 2);
+  } finally { r.bridge.dispose(); }
+});
 
 test('a document waits for the explicit main-frame handshake and keeps historical and tab IDs separate', async () => {
   const r = rig();

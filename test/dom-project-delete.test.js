@@ -687,7 +687,7 @@ for (const alias of [null, 'box']) test(`committed ACK prunes only acknowledged 
     restoreSavedIndex: new Map([['own', 0], ['other', 1]]), dormantWorkingSet: new Map([['own', { item: own }]]),
     skippedWorkingSetEntries: new Map(), restorePlanner: { isSettled: () => false, pending: () => [own, other] },
     pendingSessions: new Map([['own', { session: own, projectPath: own.projectPath }], ['other', { session: other, projectPath: other.projectPath }]]), closeAllDiffs() {},
-    queueSchedulesReload() {}, resetSearchFilter() {}, loadWorkFiles: async () => {},
+    queueSchedulesReload() {}, resetSearchFilter() {},
     setActiveSession() {}, switchPanel() {}, placeholder: h.document.getElementById('placeholder'), terminalHeader: h.document.createElement('div'),
   });
   let memories = 0; h.w.loadMemories = async () => { memories++; };

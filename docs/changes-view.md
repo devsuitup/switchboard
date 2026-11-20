@@ -49,6 +49,14 @@ Changes diff, which compares an unstaged file with the index.
   branch (at most 8 agents with changes, 100 rows each; the panel counts the agents it leaves out). Those rows open as read-only
   diffs. A subagent in the session's directory, one whose worktree is gone, and
   one with nothing changed add nothing. Local sessions only.
+- The button left of **Refresh** switches between **List**, the default (one
+  row per file with its full path, in git's order), and **Tree** (files
+  grouped under their folders, folders first, sorted by name). A folder row
+  shows how many changed files it holds; clicking it folds or unfolds it, and
+  a folded folder that holds the open file is highlighted in its place. A
+  folder with a single subfolder is shown as one row (`src/app`). The choice is
+  remembered (`localStorage.changesListView`); the folds last while the tab is
+  open. The icon shows the view you are in and the tooltip names the other.
 - **Refresh** reloads the list.
 
 Clicking a row opens the file under the list, which stays visible with the row

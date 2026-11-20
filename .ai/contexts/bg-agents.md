@@ -892,7 +892,7 @@ The changed `hosted` field makes the snapshot differ and updates badge membershi
 - The view is a sibling of `#jsonl-viewer`, shown by hiding
   `#terminal-area` (as the Stats tab does), so the grid's state survives.
   `hideAllViewers()` calls `hideAgentsView({ restore: false })`, as do the
-  Agent Files / Work Files tabs, Settings and the grid; only the toggle
+  Agent Files tab, Settings and the grid; only the toggle
   restores the terminal area.
 - The view persists `localStorage.agentsViewActive` (`'1'`/`'0'`).
   `initAgentsView()` reads it into `agentsOpenAtStartup`; `app.js` calls

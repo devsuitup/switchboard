@@ -1,20 +1,4 @@
-/**
- * viewer-panel.js — Unified viewer component for CodeMirror-based panels.
- *
- * A single component used by memory viewer, work files viewer, and file panel.
- * Manages toolbar, editor, preview area, and all interactions.
- * Watches files for external changes: reloads a clean buffer, and asks before replacing a dirty one.
- *
- * Toolbar buttons are shown/hidden automatically based on file type:
- *   - Preview: shown for markdown files
- *   - Wrap: always shown (defaults on for markdown, off for others)
- *   - Save: shown if onSave is provided
- *   - Close: shown if onClose is provided
- *   - Copy path/content: shown if opted in
- *
- * Depends on: viewer-toolbar.js
- * codemirror-bundle.js is loaded on demand (lazy) via loadCodeMirrorBundle().
- */
+// see .ai/contexts/viewer-panel.md
 
 // ── Lazy CodeMirror loader ───────────────────────────────────────────────────
 //

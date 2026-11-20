@@ -33,7 +33,7 @@ normally from the sidebar. See [Session Restore](session-restore.md).
 The people icon in the sidebar's filter row, or `Ctrl+Shift+A` (`Cmd+Shift+A`
 on macOS; [rebindable](keyboard-shortcuts.md)). The same toggle closes it and
 brings back whatever was there: the grid, the active session, or the
-placeholder. Opening any other view (Agent Files, Work Files, Settings, the
+placeholder. Opening any other view (Agent Files, Settings, the
 grid, Stats) closes it. Whether the view is open is remembered across
 restarts.
 

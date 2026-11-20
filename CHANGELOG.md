@@ -4,12 +4,20 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- The Changes list can be viewed as a tree: a toolbar button switches between the flat list (the default) and files grouped under collapsible folders. The choice is remembered. (#828)
+
 ### Changed
 - After a restart, the session you were working in opens first and is usable at once; the other sessions open behind it without stealing the focus, background sessions two at a time, and the tab order is restored once they are all open. (#546, #785)
 - The Send to background button now types the CLI's own `/bg` into the session, the same command that works when typed by hand, instead of exiting the terminal and relaunching the conversation's former job; it still refuses when the conversation already runs in a background job and points you to the sidebar. While Claude is working, it first asks whether to send now, since `/bg` interrupts the running tool and finishes the turn in the background. (#661)
+- Removed the per-project Work Files sidebar tab. Open session files from Touched or terminal path links; files in `.work-files/` stay on disk. (#1018)
 
 ### Fixed
 - Clicking a background session in the sidebar attaches it directly, as the Agents view does, instead of going through the saved-entry checks that could refuse and send you to the Agents view. The `bg` badge now names the job (`bg · name`) when the row is titled after its original conversation. (#546)
+- The Delete worktree dialog accepts Windows short (8.3) folder names, and no longer waits on unreachable drives or shares to list running sessions. Paths containing a `.` or `..` segment, including Windows backslash separators, are refused before the dialog. (#855)
+- A trigger dropped while Switchboard indexes transcripts is delivered without waiting for a whole indexing batch to finish; waits of 200 ms or more on the index writer are logged. (#1073)
+- Terminals opened by a Switchboard that was itself started from a Claude Code shell no longer inherit that shell's `GIT_EDITOR=true`, so `git commit` without `-m` opens your editor instead of aborting on an empty message. A `GIT_EDITOR` you set yourself is kept. (#673)
+- File triggers recover after a successful project reload even if every startup load failed, instead of remaining stuck with "renderer not ready" until the window restarts. (#1123)
 - Opening a remote session whose process has ended and whose pid now belongs to another program is refused with an error saying the session is gone, instead of attaching to that program's tmux pane. (#1114)
 
 ## v0.0.107 — 2026-11-17

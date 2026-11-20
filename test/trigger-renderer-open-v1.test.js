@@ -67,7 +67,7 @@ test('startup announces ready only after successful project loading and awaited 
   h.w.loadProjects = async () => { order.push('load'); };
   h.w.restoreStartupSessions = () => new Promise(resolve => { release = () => { order.push('restore'); resolve(); }; });
   h.w.api.triggerActionsReady = async () => { order.push('ready'); };
-  const { loadStartupProjects } = loadAppFunctions(h.context, { functions: ['loadStartupProjects'] });
+  const { loadStartupProjects } = loadAppFunctions(h.context, { functions: ['loadStartupProjects'], declarations: ['startupProjectsHandedOver'] });
   const pending = loadStartupProjects(); await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(order, ['load']); release(); await pending;
   assert.deepEqual(order, ['load', 'restore', 'ready']);

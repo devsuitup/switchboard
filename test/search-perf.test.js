@@ -12,7 +12,7 @@
 //
 // clearSearch, resetSearchFilter and runSearchQuery are extracted from the real
 // public/app.js (test/app-source.js) and run in the jsdom window of
-// dom-setup.js. The sidebar refresh, the memory/work-file renderers, the IPC
+// dom-setup.js. The sidebar refresh, the memory renderer, the IPC
 // search and the animation-frame queue are stubbed so the tests can observe them.
 
 'use strict';
@@ -28,7 +28,6 @@ async function withSearch(fn) {
     const state = {
       refreshSidebarCalls: [],
       renderMemoriesCalls: [],
-      renderWorkFilesCalls: [],
       apiSearchCalls: [],
       apiResults: [],
       frames: new Map(),
@@ -41,7 +40,6 @@ async function withSearch(fn) {
     window.searchTitlesOnly = false;
     window.refreshSidebar = (opts) => state.refreshSidebarCalls.push(opts);
     window.renderMemories = (ids) => state.renderMemoriesCalls.push(ids);
-    window.renderWorkFiles = (ids) => state.renderWorkFilesCalls.push(ids);
     window.requestAnimationFrame = (cb) => { const id = state.nextFrame++; state.frames.set(id, cb); return id; };
     window.cancelAnimationFrame = (id) => { state.frames.delete(id); };
     window.api = {
@@ -252,17 +250,5 @@ test('search: 2-char query on memory tab calls renderMemories (not api.search)',
 
     assert.equal(state.apiSearchCalls.length, 0, 'api.search not called for 2-char on memory tab');
     assert.equal(state.renderMemoriesCalls.length, 1, 'renderMemories called to show unfiltered list');
-  });
-});
-
-test('search: 3-char query on the work-files tab searches work-file and renders the matches', async () => {
-  await withSearch(async ({ state, inputEl, window, runSearchQuery }) => {
-    window.activeTab = 'work-files';
-    state.apiResults = [{ id: 'wf-1' }];
-    inputEl.value = 'plan';
-    await runSearchQuery();
-
-    assert.equal(state.apiSearchCalls[0].kind, 'work-file');
-    assert.deepEqual([...state.renderWorkFilesCalls[0]], ['wf-1']);
   });
 });

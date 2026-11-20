@@ -21,7 +21,7 @@ function setup() {
   w.api.onProjectDeleteRecovery = () => {};
   w.handleTriggerSessionAction = () => {};
   w.console = { ...console, warn: () => {} };
-  loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects'] });
+  loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects'], declarations: ['startupProjectsHandedOver'] });
   return h;
 }
 
@@ -107,6 +107,104 @@ test('a failed event reload keeps both previous lists and settles without reject
     assert.equal(rejected, false, 'event callers must handle worker rejection');
     assert.equal(h.window.cachedProjects[0].projectPath, '/previous');
     assert.equal(h.window.cachedAllProjects[0].projectPath, '/previous');
+  } finally { h.destroy(); }
+});
+
+test('a later successful reload announces trigger readiness after every startup attempt failed', async () => {
+  const h = setup();
+  const timers = [];
+  let calls = 0, ready = 0;
+  h.window.setTimeout = callback => { timers.push(callback); return timers.length; };
+  h.window.restoreStartupSessions = async () => {};
+  h.window.api.triggerActionsReady = async () => { ready++; };
+  h.window.api.getProjects = async () => { calls++; throw new Error('Projects changed while loading; reload to retry.'); };
+  loadAppFunctions(h.context, { functions: ['loadStartupProjects', 'reloadProjects'] });
+  try {
+    await h.window.loadStartupProjects();
+    for (let i = 0; i < 3; i++) await timers.shift()();
+    assert.equal(calls, 5);
+    assert.equal(timers.length, 0);
+    assert.equal(ready, 0, 'failed loads cannot announce readiness');
+    h.window.api.getProjects = async () => ({ defaultProjects: [], allProjects: [] });
+    assert.equal(await h.window.reloadProjects(), true);
+    assert.equal(ready, 1, 'a successful reload after exhausted startup retries must announce readiness');
+    assert.equal(await h.window.reloadProjects(), true);
+    assert.equal(ready, 2, 'later successful reloads may repeat the idempotent handshake');
+  } finally { h.destroy(); }
+});
+
+test('a successful delayed startup retry restores before announcing trigger readiness', async () => {
+  const h = setup();
+  const timers = [], order = [];
+  let calls = 0;
+  h.window.setTimeout = callback => { timers.push(callback); return timers.length; };
+  h.window.api.getProjects = async () => {
+    if (++calls <= 2) throw new Error('temporary IPC failure');
+    return { defaultProjects: [], allProjects: [] };
+  };
+  h.window.restoreStartupSessions = async ({ projectsLoaded = true } = {}) => {
+    if (!projectsLoaded) return;
+    order.push('restore started');
+    await Promise.resolve();
+    order.push('restore resolved');
+  };
+  h.window.api.triggerActionsReady = async () => { order.push('ready'); };
+  loadAppFunctions(h.context, { functions: ['loadStartupProjects', 'reloadProjects'] });
+  try {
+    await h.window.loadStartupProjects();
+    await timers.shift()();
+    assert.deepEqual(order, ['restore started', 'restore resolved', 'ready'], 'delayed startup must restore before its only readiness announcement');
+  } finally { h.destroy(); }
+});
+
+test('an accepted reload cannot announce while startup restoration is pending', async () => {
+  for (const delayed of [false, true]) {
+    const h = setup();
+    const timers = [];
+    let calls = 0, ready = 0, releaseRestore, enteredRestore;
+    const restoring = new Promise(resolve => { enteredRestore = resolve; });
+    const restored = new Promise(resolve => { releaseRestore = resolve; });
+    h.window.setTimeout = callback => { timers.push(callback); return timers.length; };
+    h.window.api.getProjects = async () => {
+      if (++calls <= 2 && delayed) throw new Error('temporary IPC failure');
+      return { defaultProjects: [], allProjects: [] };
+    };
+    h.window.restoreStartupSessions = async ({ projectsLoaded = true } = {}) => {
+      if (!projectsLoaded) return;
+      enteredRestore();
+      await restored;
+    };
+    h.window.api.triggerActionsReady = async () => { ready++; };
+    loadAppFunctions(h.context, { functions: ['loadStartupProjects', 'reloadProjects'] });
+    let startup;
+    try {
+      startup = h.window.loadStartupProjects();
+      if (delayed) { await startup; startup = timers.shift()(); }
+      await restoring;
+      assert.equal(await h.window.reloadProjects(), true);
+      assert.equal(ready, 0, 'an accepted reload must not announce before startup restore resolves');
+      releaseRestore();
+      await startup;
+      assert.equal(ready, 1, 'startup owns the first handshake after restore');
+      assert.equal(await h.window.reloadProjects(), true);
+      assert.equal(ready, 2, 'startup hands over subsequent accepted reloads');
+    } finally { releaseRestore(); await startup; h.destroy(); }
+  }
+});
+
+test('a rejected readiness announcement leaves an accepted reload successful', async () => {
+  const h = setup();
+  let restoreRetries = 0;
+  h.window.api.getProjects = async () => ({ defaultProjects: [], allProjects: [] });
+  h.window.restoreStartupSessions = async () => {};
+  h.window.api.triggerActionsReady = async () => {};
+  h.window.maybeRetryRestoreWorkingSet = async () => { restoreRetries++; };
+  loadAppFunctions(h.context, { functions: ['loadStartupProjects', 'reloadProjects'] });
+  try {
+    await h.window.loadStartupProjects();
+    h.window.api.triggerActionsReady = async () => { throw new Error('No handler registered'); };
+    assert.equal(await h.window.reloadProjects({ restoreRetry: true }), true, 'readiness rejection must not fail an accepted project reload');
+    assert.equal(restoreRetries, 1, 'readiness rejection must not skip working-set recovery');
   } finally { h.destroy(); }
 });
 

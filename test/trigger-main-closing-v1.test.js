@@ -25,7 +25,9 @@ function shippedWiring(t) {
   const wc = new EventEmitter(); wc.mainFrame = {}; wc.isDestroyed = () => false; wc.isCrashed = () => false; wc.send = () => {};
   const win = new EventEmitter(); win.webContents = wc; win.isDestroyed = () => false;
   const unsavedGuardModule = nativeRequire('./src/main/app/unsaved-guard');
+  const logs = [];
   const context = vm.createContext({
+    log: { info: (...args) => logs.push(args) },
     ipcMain, mainWindow: win, autoUpdater: null, clearTimeout, setTimeout,
     createUnsavedGuard: options => unsavedGuardModule.createUnsavedGuard({ ...options, timeoutMs: 20 }),
     require: request => request === './src/main/app/unsaved-guard' ? unsavedGuardModule : nativeRequire(request),
@@ -46,6 +48,7 @@ function shippedWiring(t) {
   bridge.attach(win);
   guard.attach(win);
   handlers.get('trigger-actions-ready')({ sender: wc, senderFrame: wc.mainFrame });
+  assert.deepEqual(logs, [['[trigger-watcher] renderer ready for trigger actions']]);
   return { run, bridge, guard, win, deps: () => run('triggerLifecycleDeps()') };
 }
 

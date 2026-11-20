@@ -859,6 +859,70 @@ The split uses `createSplitter` (`public/splitter.js`, shared with the panel's s
 
 Switching rows is an exit like Back, the tab toggle and the panel's close button: it asks `confirmDiscardChangesEdits` when the buffer is dirty and returns without touching anything if the answer is no. Clicking the row that is already open is not a switch and asks nothing. The row cap (`MAX_CHANGES_ROWS`) and the idle refresh are unchanged by the layout — a refresh rebuilds the list while the editor keeps its instance and its DOM node, which the editor-host MutationObserver test pins with the list now rebuilding alongside it.
 
+### List or tree
+
+The list has two views, switched by one `.icon-btn` in the list toolbar
+(`#changes-list-view-btn`) and persisted under `localStorage.changesListView`
+(`CHANGES_LIST_VIEW_KEY`), the same shape as the editor's
+`changesDiffMode` toggle: the icon shows the current view, `data-view` carries
+it, the tooltip names the other. `list` is the default and is what every
+earlier release rendered; a stored `tree` is honoured at load, anything else
+falls back to `list`. Ported from upstream `c380d187` (doctly/switchboard#98,
+Vincenzo Favara), whose tree builder lived in `project-git-view.js`; the fork
+has no Git tab, so the builder moved into `public/file-panel.js` next to the
+rows it feeds, and the default stayed `list` (upstream later flipped to tree).
+
+`appendChangesRows(sessionId, tab, files, subSessionId)` is the single place
+both the session's own rows and each subagent group's rows go through, so the
+two render alike in either view. In `list` it is the flat loop it replaced. In
+`tree`, `buildChangesTree` splits each path on `/` (git's separator on every
+platform; the fork's rows carry repo-relative git paths) into folder nodes,
+`sortChangesTreeLevel` puts folders before files, sorts each level with a
+numeric, case-insensitive `localeCompare`, and compacts a folder whose only
+child is a folder into one row named `a/b` (VS Code's compact folders), and
+`changesTreeRows` flattens that into display rows, skipping the children of a
+collapsed folder. A leaf is one status record, not one path: git reports two
+records at one path after `git rm --cached f` (a staged deletion and an
+untracked file), the flat list shows both, and the tree keeps both under the
+folder, in git's order, each with its own click target (the leaf key carries
+the record's index). A file row in tree mode shows the node's own name, carries
+`.tree` and `--depth` for its indent, keeps `data-path` as the full repo path
+(so the selection, the click handler, the untracked-count writeback and every
+`[data-path=…]` selector are unchanged), and takes the full path — with the
+rename arrow — as its `title`. The row cap applies before the tree is built:
+the tree is made from the first `MAX_CHANGES_ROWS` files, and the
+`+N more files not shown` note follows as before.
+
+A folder row is a `<button class="changes-folder-row">` with `data-folder`
+(the folder's repo path, compact name included), `data-subagent` for a group's
+folder, `aria-expanded`, a chevron, the name and a count of the changed files
+under it. Collapsed state is per tab, in `tab.collapsedFolders`, a `Set` keyed
+by `changesFolderKey(subSessionId, folderPath)` — the group id and the path
+joined by `\0`, which no git path can contain — so the parent's `src` and a
+group's `src` fold independently, and a fold survives a refresh (the tab is
+the same) but not a reopened tab. The keys are real folder paths, never the
+compacted display name: a compacted row stands for every folder in its chain
+(`changesFolderChain`, `src` and `src/nested` for a row named `src/nested`) and
+is collapsed when any of them is in the set, so a fold made on `src` holds when
+a refresh leaves `src/nested` as its only child and the row compacts, and a
+fold made on `nested` holds when `src` compacts onto it. Folding adds the
+deepest folder of the row; unfolding removes the whole chain, so no stale fold
+reappears once the chain splits again. Clicking a folder bumps `tab.listRevision`
+and goes through `renderPanel`, the same path as the untracked-count
+writeback: the list is rebuilt, the editor is reused (the reuse test's
+`editors.length` pins that), and focus is put back on the new copy of the
+folder row. `updateChangesListSelection` highlights a collapsed folder whose
+path is a prefix of the selected file's, on the same `(subSessionId, path)`
+identity the file rows use, so the open file is never invisible in the list.
+
+`changesListView` is part of the list's reuse signature, next to
+`tab.listRevision`: switching views rebuilds the current tab's list without a
+status request, and a tab snapshotted in the other view (`tab.listView`, see
+"The list and the editor") is rebuilt rather than restored when it is shown
+again. `test/dom-file-panel-changes.test.js` ("List/tree toggle") pins the
+default, the toggle, the persistence, the compaction, the sort, the fold, the
+focus, the stand-in highlight, the refresh and the per-group keys.
+
 ### Look and feel
 
 The panel draws only from the app's existing tokens and palette. Every colour in its CSS is a `:root` token or a value `public/style.css` already uses elsewhere; none is its own. The app has one theme, dark, so there are no light variants to keep in step.
@@ -866,7 +930,7 @@ The panel draws only from the app's existing tokens and palette. Every colour in
 - **Buttons.** Every action in the list toolbar, the editor toolbar, the MCP diff toolbar and `ViewerPanel`'s toolbar is `.icon-btn`: the sidebar filter row's 26px outlined square, carrying a 14px icon, named by its `title` (and by `aria-label` in this panel, since it has no visible word), `.active` when it is on. `.icon-btn` sits in the filter row's own selector lists in `public/style.css` (`#star-toggle, …, .icon-btn`), so the two cannot drift apart; the session tool bar's toggles use it too. `.fp-save-btn`, `.fp-close-btn` and `.fp-delete-btn` stay on as modifiers for their hover colour, and `.fp-save-btn` is also what `handleDiffSave` finds the MCP diff's Save by. `flashButtonText` recognises `.icon-btn` as an icon and flashes its colour instead of replacing its content. The icons live in `FP_ICONS` in `public/file-panel.js`.
 - **The mode button** shows the mode the editor is in, not the one a click moves to. Its tooltip names both (`CHANGES_DIFF_MODE_LABELS`), and `data-mode` carries the current one. The MCP diff tab's two-way toggle follows the same rule (`setModeButton`).
 - **Save** is `disabled` and dimmed while the buffer is clean or a write is in flight, and carries `.active` — the accent treatment a toggle uses for "on" — once there is something to save. Both are set in `updateChangesSaveButton`, from the same `onChange` path as before.
-- **Surfaces.** The editor sits on `--surface-sunken`, as the Memory, Work Files and Stats viewers' content does, under toolbars on `--surface-chrome`. That overrides the CodeMirror theme's own background, gutter and active-line gutter, for every host at once: `.viewer-panel-editor` (Memory, Work Files), `#file-panel-body` (MCP diff) and `#changes-diff-host`. The host's id, or `.viewer-panel-editor .cm-editor`, outranks the single generated class the theme scopes its rules with. The gutter is separated from the text by a `--hairline` rule.
+- **Surfaces.** The editor sits on `--surface-sunken`, as the Memory and Stats viewers' content does, under toolbars on `--surface-chrome`. That overrides the CodeMirror theme's own background, gutter and active-line gutter, for every host at once: `.viewer-panel-editor` (Memory), `#file-panel-body` (MCP diff) and `#changes-diff-host`. The host's id, or `.viewer-panel-editor .cm-editor`, outranks the single generated class the theme scopes its rules with. The gutter is separated from the text by a `--hairline` rule.
 - **The list** is one card with a header, built the way the sidebar's `.project-group` is (`rgba(255,255,255,0.03)` on `--hairline`, 10px radius): `#changes-summary` is the header, in the section-label style `.stat-card-label` uses (11px, uppercase, `--text-muted`), and `#changes-list` the body. Rows follow `.session-row`: 8px radius, `--hairline` on hover, `rgba(120,130,255,0.14)` when selected (`.session-item.active`). The list's scrollbar is the sidebar's.
 - **A row's state** is a badge: the porcelain letter on `--control-surface` inside `--control-border`, coloured by state, with the state's name as its tooltip (`CHANGES_STATE_NAMES`). The letter stays, because colour alone does not tell `M` from `R`. Every unmerged entry is `U`, whatever its two-letter shape (`AA`, `DU`, `UD`, `UU`, …): `parseStatusPorcelainV2` sets it, because the shape's first letter would otherwise read as Added or Deleted for a file in conflict.
 - **Counts** are secondary metadata: 10px monospace, tabular figures, the cell in `--text-muted`. The `+added` and `−deleted` figures keep the palette's green and red (`.changes-added`, `.changes-deleted`), and a count marker (`.changes-count-note`, "Counts for new files") stays `--text-muted`. What the cell contains is decided elsewhere; this is only its style.
