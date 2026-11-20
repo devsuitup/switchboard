@@ -169,3 +169,43 @@ test('1137 remote ownership retains its host and exact worktree path', supported
   assert.deepEqual(readDurableScope(h.db, { project: { ...project, projectPath: '/srv/repo' } }).scope.rows, []);
   assert.deepEqual(readDurableScope(h.db, { project: { ...project, alias: 'other-host' } }).scope.rows, []);
 });
+
+for (const producer of ['codex', 'folder']) test(`1137 reopened legacy W history admits new ${producer} into R`, supported, async t => {
+  const h = await setup(t), row = h.selected[2], project = { alias: null, projectPath: row.projectPath };
+  const folder = producer === 'folder' ? require('../encode-project-path').encodeProjectPath(project.projectPath) : row.folder;
+  const progress = createProjectDeleteProgress(h.db), scope = progress.readScope({ project });
+  const input = { project, operationId: operationId(project, scope.projectEpoch), expectedProjectEpoch: scope.projectEpoch,
+    expectedRevision: scope.writerRevision, writerMembershipDigest: scope.writerMembershipDigest, membershipDigest: 'historical', options,
+    units: [{ category: 'session', target: { id: 'legacy', erase: true } },
+      { category: 'finalize', target: { project: identity(project), entry: project.projectPath, folderKeys: [folder], restoreTargets: [] } }] };
+  progress.admit(input); progress.stage(input, input.units);
+  for (const _unit of input.units) progress.apply(input, () => ({ status: 'completed' }));
+  const { createWriterCommands } = require('../session-index-commands');
+  const commands = createWriterCommands(h.db);
+  commands.revealAddedProject(project.projectPath, commands.readProjectArchiveEpochs([project], true));
+  const name = producer === 'codex' ? 'upsertCachedSessions' : 'setFolderMeta';
+  const args = producer === 'codex' ? [[{ ...row, sessionId: 'new-after-reopen' }]] : [folder, h.project.projectPath, 3];
+  const binding = bindDeletionProducer(h.db, name, args);
+  assert.doesNotThrow(() => assertDeletionProducer(h.db, binding, name, args), 'reopened sealed W is history, not a competing owner');
+  assert.equal(binding[0].key, identity(h.project).key);
+  const reply = await h.worker.post(name, ...args);
+  assert.equal(reply.error, undefined, JSON.stringify(reply.error));
+  if (producer === 'codex') assert.ok(h.db.getCachedSession('new-after-reopen'));
+  else {
+    assert.equal(h.db.getFolderMeta(folder).indexMtimeMs, 3);
+    const indexed = await h.worker.post('upsertCachedSessions', [{ sessionId: 'new-claude', runtime: 'claude', folder, projectPath: h.project.projectPath }]);
+    assert.equal(indexed.error, undefined);
+    assert.ok(h.db.getCachedSession('new-claude'));
+  }
+});
+
+test('1137 grouped deletion prunes legacy W working-set members only', supported, async t => {
+  const h = await setup(t), row = h.selected[2];
+  h.db.setSetting('global', { openWorkingSet: [
+    { sessionId: row.sessionId, projectPath: row.projectPath },
+    { sessionId: 'unrelated', projectPath: row.projectPath },
+  ] });
+  const input = await h.manifest(), reply = await h.worker.post('completeProjectDeletion', input);
+  assert.equal(reply.error, undefined);
+  assert.deepEqual(Array.from(h.db.getSetting('global').openWorkingSet, item => item.sessionId), ['unrelated']);
+});

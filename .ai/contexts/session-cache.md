@@ -3057,16 +3057,36 @@ The refusal calls it a worktree only when the missing cwd has a supported
 worktree layout and differs from the requested project; otherwise it names
 the project directory.
 
-Archive matching collapses local worktree keys and unions their known IDs and
-disabled schedule lists. Regrouped sessions created on or before `archivedAt`
-join the known set; later sessions still reopen the archive. Undated legacy
-rows are adopted once per archive record (`worktreeGroupingVersion: 1`). The
-`groupedFromWorktree` marker also preserves older repository sessions when
-the only archived key was the worktree, including later indexed dated rows.
-The writer persists changed records before retiring an archive, so subsequent
-passes retain the known IDs. This match-time repair tolerates incremental
-indexing of dated rows without a global upgrade-complete marker. Local hidden
-matching collapses keys too, preserving host scopes and remote paths.
+Archive, hide and delete entries retain their original keys. An entry for W
+affects only sessions sourced in W, never the repository R's own sessions or R
+as a whole (D1/D3). Codex uses its raw cwd; Claude uses the source transcript
+folder, carried as `sourceFolder` in the projects payload, or recorded cwd when
+available. Claude's cached `projectPath`/projected `cwd` can already be R and
+does not establish a worktree source. Folder matching accepts the exact encoded
+W and nested supported worktree layouts; it does not accept a sibling whose
+name merely starts with W. Encoding is lossy; arbitrary descendant paths need
+recorded cwd evidence instead of a guessed decode.
+
+Compatibility is computed at match time without writing a migration marker,
+moving keys, or expanding the stored known-ID set (D2). R's archive counts a
+regrouped session as known when its last activity (`modified`, falling back to
+`created`) is at or before `archivedAt`; an undated regrouped session is known
+on every listing. A genuinely newer unknown session still retires the archive.
+W archives filter only W sessions inside R. Hidden entries and delete tombstones
+apply even with Show archived; host scopes and remote identity stay intact.
+The common hidden matcher also supplies the exact main/renderer checks, without
+normalizing a stored W entry into R. Legacy separate worktree groups retain
+their existing hidden-repository marker behavior.
+
+The writer retires the original R or W entry and leases both relevant identities.
+Unarchiving either exact entry works. Schedule offers keep their original keys
+and are collected onto the visible repository; re-enable/dismiss operate on each
+original offer under its own lease and schedule root. Skipped retirement filters
+only the corresponding source sessions. `test/archive-worktree-compat.test.js`
+exercises these operations through the writer and production worker fixture.
+Restore and working-set persistence prefer indexed project identity to a saved
+pre-upgrade W path. A null folder metadata path does not widen targeted refresh;
+the existing truthy-path guard is covered by the grouping regression.
 
 `test/harness-worktree-grouping.test.js` exercises the production modules with
 disposable transcripts and the SQLite conversation-store fixture. It seeds

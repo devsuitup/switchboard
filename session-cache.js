@@ -1160,7 +1160,7 @@ function buildProjectsFromCache(showArchived) {
       sdkOnlyProjectKeys.add(groupKey(alias, groupingPath));
       continue;
     }
-    if (hidden(alias, groupingPath)) { exclude(row, 'hidden-project'); continue; }
+    if (hidden(alias, groupingPath, { ...row, cwd: row.runtime === 'codex' ? row.projectPath : null })) { exclude(row, 'hidden-project'); continue; }
     const meta = metadataFor(row.sessionId);
     const children = mergedChildrenByParent.get(row.sessionId) || [];
     const orderedChildren = [...children].sort((a, b) =>
@@ -1183,6 +1183,7 @@ function buildProjectsFromCache(showArchived) {
       messageCount,
       projectPath: groupingPath,
       cwd: row.projectPath,
+      sourceFolder: row.folder,
       runtime: row.runtime || DEFAULT_HARNESS,
       runtimeLabel: (row.runtime || DEFAULT_HARNESS) === DEFAULT_HARNESS ? null : getHarness(row.runtime).label,
       canLaunch: true,

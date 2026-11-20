@@ -1010,6 +1010,7 @@ return preparedDeletionStatements ??= {
   sessionHistory: db.prepare("SELECT DISTINCT o.projectKey FROM project_delete_units u JOIN project_delete_operations o USING(operationId) WHERE u.category='session' AND json_extract(u.targetJson, '$.id')=?"),
   folderHistory: db.prepare("SELECT DISTINCT o.projectKey FROM project_delete_units u JOIN project_delete_operations o USING(operationId), json_each(u.targetJson, '$.folderKeys') f WHERE u.category='finalize' AND f.value=?"),
   projectHistory: db.prepare('SELECT 1 FROM project_delete_operations WHERE projectKey=? LIMIT 1'),
+  historySealedThrough: db.prepare('SELECT 1 FROM project_delete_operations WHERE projectKey=? AND (sealed=0 OR ownedEpoch>?) LIMIT 1'),
   partial: db.prepare("SELECT 1 FROM project_delete_operations WHERE projectKey=? AND state='partial' AND sealed=1 AND ownedEpoch=? LIMIT 1"),
   fence: db.prepare('SELECT * FROM project_delete_fences WHERE projectKey = ?'),
   setFence: !readonly && db.prepare(`INSERT INTO project_delete_fences(projectKey, epoch, operationId, blocked) VALUES (?, ?, ?, ?)
@@ -1044,6 +1045,7 @@ const projectDeletion = {
   sessionHistory: id => deletionStatements().sessionHistory.all(id),
   folderHistory: folder => deletionStatements().folderHistory.all(folder),
   projectHistory: key => !!deletionStatements().projectHistory.get(key),
+  historySealedThrough: (key, epoch) => !deletionStatements().historySealedThrough.get(key, epoch),
   sealedPartial: (key, epoch) => !!deletionStatements().partial.get(key, epoch - 1),
   fence: key => deletionStatements().fence.get(key) || null,
   setFence: (key, epoch, id, blocked) => deletionStatements().setFence.run(key, epoch, id, blocked),

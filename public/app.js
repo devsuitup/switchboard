@@ -254,7 +254,7 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
       if (fresh && (entry.session.remoteAlias || pendingSessions.get(sessionId).restorable === false)) continue;
       set.push({
         sessionId,
-        projectPath: entry.session.projectPath,
+        projectPath: sessionMap.get(sessionId)?.projectPath || entry.session.projectPath,
         active: sessionId === activeSessionId,
         ...(entry.attach ? { bg: true, ...(typeof entry.attachJobId === 'string' && entry.attachJobId ? { attachJobId: entry.attachJobId } : {}) } : {}),
         ...(fresh ? { fresh: true, ...(entry.session.runtime ? { runtime: entry.session.runtime } : {}) } : {}),
@@ -490,7 +490,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         const originalId = item.sessionId;
         const originalSession = s;
         if (item.bg === true) {
-          s = { ...s, projectPath: item.projectPath };
+          s = { ...s, projectPath: s.projectPath || item.projectPath };
           const index = restoreSavedIndex.get(originalId) ?? position;
           skippedWorkingSetEntries.set(originalId, { item, index });
           const session = s;
@@ -524,12 +524,12 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         }
         let holdReason = { waitingForIndex: false };
         let continuationNotice;
-        s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api,
+        s = await resolveResumeSession({ ...s, projectPath: s.projectPath || item.projectPath }, { automatic: true, api: window.api,
           choices: (window._continuationChoices ||= new Map()), rowKey: indexedRowOf(s.sessionId)?.sessionId || s.sessionId,
           memoryNotify: notice => showAppNotice(notice),
           resolveRow: candidate => {
             const row = indexedRowOf(candidate.sessionId);
-            return row ? rowHeadSession(row) : { ...s, projectPath: item.projectPath, sessionId: candidate.sessionId, headSessionId: candidate.sessionId, mergedMemberIds: [] };
+            return row ? rowHeadSession(row) : { ...s, projectPath: s.projectPath || item.projectPath, sessionId: candidate.sessionId, headSessionId: candidate.sessionId, mergedMemberIds: [] };
           },
           notify: notice => { continuationNotice = notice; }, resolutions: window._startupResumeResolutions,
           onHold: reason => { holdReason = reason; } });

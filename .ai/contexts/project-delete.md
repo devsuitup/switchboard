@@ -25,10 +25,30 @@ Producer bindings cover cached rows and links, supplied new row paths and folder
 fallbacks with the same repository epoch. Producers received before admission
 retain their old binding; newly received producers cannot publish into a blocked
 repository. Stored deletion history already names an operation identity and is
-not regrouped. If an older worktree identity has history or a blocked fence, it
-also remains an ownership candidate for live evidence; ambiguity refuses the
-target instead of bypassing that older fence. Operation IDs and receipt keys
-retain their original canonical identity contract.
+not regrouped. A blocked older worktree fence remains a competing ownership
+candidate and refuses new producers. A sealed W history with an explicitly
+reopened, unblocked fence and an epoch at least as high as every historical
+owned epoch is history only when live evidence binds the target to R. The
+indexed history query also rejects any unsealed operation. This applies to
+session and folder history; a target with historical evidence only retains its
+exact historical owner. Operation IDs and receipt keys keep their original
+canonical identity contract. Already bound producers keep their captured key
+and epoch, so reopening does not grant an old producer new authority.
+
+Grouped ownership is filesystem-dependent: existence of an ancestor can change
+the grouping between independent evaluations. The bind call memoizes grouped
+keys, and producer bindings keep those keys thereafter. Manifest and per-chunk
+checks deliberately recompute ownership so a changed filesystem can refuse
+deletion rather than reuse stale ownership. This limit is documented instead of
+adding a long-lived cache that could authorize a stale destructive operation.
+
+Finalization prunes acknowledged saved working-set members by grouped owner;
+the renderer applies the same supported-layout projection to acknowledged IDs.
+Remote members still require their exact host/path. Visibility compatibility
+does not regroup stored archive/hide/delete keys: W entries affect only W source
+sessions, never R's own sessions (D1/D3). Archive compatibility is read-only at
+match time (D2); retirement alone changes state and preserves W schedule offers.
+See the archive compatibility section in `session-cache.md`.
 
 The plain-Node regression in `test/project-delete-grouped-ownership.test.js`
 composes the production inventory, planner and writer with disposable SQLite

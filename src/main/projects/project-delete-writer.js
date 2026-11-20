@@ -140,7 +140,7 @@ function applyDeletionUnit(db, { category, target }) {
     const openWorkingSet = (current.openWorkingSet || []).filter(row => {
       if (!ids.has(row.sessionId)) return true;
       if (typeof row.projectPath !== 'string') return true;
-      try { return canonicalPath(row.projectPath, project.alias) !== project.projectPath; } catch { return true; }
+      try { return groupedOwner({ alias: project.alias, projectPath: row.projectPath }).key !== project.key; } catch { return true; }
     });
     db.setSetting('global', { ...current, hiddenProjects, hiddenProjectKinds: { ...current.hiddenProjectKinds, [hiddenEntry]: 'delete' },
       ...(current.hiddenProjectScopes || Object.keys(scopes).length ? { hiddenProjectScopes: scopes } : {}),
@@ -245,7 +245,7 @@ function bindDeletionProducer(db, command, args, force = false) {
     map.get(key).set(value.key, value);
     if (!historical) {
       const exact = identity(project, memo);
-      if (exact.key !== value.key && (db.projectDeletion.projectHistory(exact.key) || db.projectDeletion.fence(exact.key)?.blocked)) map.get(key).set(exact.key, exact);
+      if (exact.key !== value.key && !reopenedHistory(exact.key) && (db.projectDeletion.projectHistory(exact.key) || db.projectDeletion.fence(exact.key)?.blocked)) map.get(key).set(exact.key, exact);
     }
   };
   for (const row of sessions.flatMap(target => db.projectDeletion.ownerRows(target.id))) {
@@ -276,8 +276,15 @@ function bindDeletionProducer(db, command, args, force = false) {
   }
   for (const project of projects) add(folderOwners, project.folder, project);
   const bindings = [];
+  function reopenedHistory(key) {
+    const fence = db.projectDeletion.fence(key);
+    return fence && !fence.blocked && !fence.operationId && db.projectDeletion.historySealedThrough(key, fence.epoch);
+  }
   const include = (target, candidates) => {
-    const known = [...(candidates?.values() || [])];
+    const known = [...(candidates?.values() || [])].filter(owner => {
+      const grouped = groupedOwner(owner, memo);
+      return grouped.key === owner.key || !candidates.has(grouped.key) || !reopenedHistory(owner.key);
+    });
     const ambiguous = known.length > 1 && known.some(owner => db.projectDeletion.projectHistory(owner.key) || db.projectDeletion.fence(owner.key)?.blocked);
     if (ambiguous) bindings.push({ target, error: 'DELETION_OWNERSHIP' });
     else if (!known.length) bindings.push({ target, key: null, epoch: 0 });

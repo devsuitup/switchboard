@@ -224,6 +224,18 @@ test('nested layouts collapse past a deleted intermediate worktree', t => {
   assert.equal(resolveWorktreePath(path.join(h.cwd, '.claude', 'worktrees', 'agent-x')), h.repo);
 });
 
+test('null folder metadata does not widen a targeted refresh', storeOptions, t => {
+  const h = fixture(t), previous = process.env.SWITCHBOARD_DATA_DIR;
+  process.env.SWITCHBOARD_DATA_DIR = path.join(h.root, 'data');
+  const db = openStore();
+  h.cleanup.before = () => { db.closeDb(); process.env.SWITCHBOARD_DATA_DIR = previous; };
+  h.write('source'); h.write('unrequested');
+  db.setFolderMeta(h.folder, null, 0);
+  cache.init({ PROJECTS_DIR: h.projects, activeSessions: new Map(), getMainWindow: () => null, log: console, db });
+  cache.refreshFolder(h.folder, { files: new Set(['source.jsonl']) });
+  assert.deepEqual(db.getCachedByFolder(h.folder).map(row => row.sessionId), ['source'], 'unknown metadata is not regrouping');
+});
+
 test('stored worktree metadata compares the entire encoded repository without case on Windows', t => {
   const h = fixture(t);
   assert.equal(storedProjectPathMatchesFolder(h.repo, encodeProjectPath(h.cwd).toUpperCase()), process.platform === 'win32');

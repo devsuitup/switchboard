@@ -714,6 +714,7 @@ for (const alias of [null, 'box']) test(`committed ACK prunes only acknowledged 
   assert.equal(h.w.isDeletedProjectRestoreTarget({ ...own, projectPath: '/another/project' }), false);
   assert.equal(h.w.isDeletedProjectRestoreTarget({ ...own, projectPath: own.projectPath.toUpperCase() }), alias === null, 'path case follows the deletion host, not the hostless saved item');
   assert.equal(h.w.isDeletedProjectRestoreTarget({ ...own, projectPath: own.projectPath + '/child/..' }), true);
+  assert.equal(h.w.isDeletedProjectRestoreTarget({ ...own, projectPath: own.projectPath + '/.work-files/worktrees/legacy' }), alias === null, 'acknowledged grouped W member must be pruned locally');
   oldReply({ defaultProjects: [h.p], allProjects: [{ ...h.p, remoteAlias: alias }] });
   await oldLoad;
   assert.equal(h.w.isDeletedProjectRestoreTarget(own), true, 'a load started before the deletion ACK must retain restore tombstones');
