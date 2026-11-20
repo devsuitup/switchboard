@@ -135,7 +135,19 @@ re-shaped for the fork's contract. Measured against 237 rollouts on
   `modified` come from conversation records, not settings or usage records
   (`e71e6f0c`). The row carries `runtime: 'codex'`, `sessionFile`, `fileSize`,
   `customTitle: ''` and `entrypoint: ''` (known-empty, so the Claude title and
-  SDK backfills never open a rollout through a Claude path), and
+  SDK backfills never open a rollout through a Claude path) — except that a
+  rollout whose `session_meta.payload.originator` is `codex_exec` (a
+  non-interactive `codex exec` run; 285/285 rollouts of 2026-11 on JB's
+  workstation, all automation) carries `entrypoint: 'sdk-codex-exec'`, so
+  `hiddenSdkSessionIds` hides it under the same `hideSdkSessions` setting as a
+  Claude Agent SDK session, with the same open-tab and working-set exemptions
+  (#1145). `codex_cli_rs`, `switchboard_*` and any other originator stay `''`.
+  Rows indexed before #1145 hold `''` for every rollout: on first open the
+  store (`codex_exec_entrypoint_version`) nulls `fileMtime` on `runtime =
+  'codex'` rows and drops the `codex/` folder meta, so the next reconciliation
+  re-reads every rollout once and stamps the mark; nothing is deleted. The
+  mark is read from the header only: a `codex exec` thread later resumed
+  interactively keeps its originator and stays hidden. And
   `dailyMetrics` per date × model from `turn_context.payload.model` and
   `token_usage_record.payload.usage` (`cached_input_tokens` → cacheRead,
   `cache_write_input_tokens` → cacheCreation; tool calls counted from
@@ -431,9 +443,11 @@ the renderer compares nothing to a runtime name.
 ### Tests
 
 `harness-codex.test.js` (parser, fixtures from upstream plus the AGENTS.md
-rule, titles, metrics, folder keys, viewer mapping), `codex-index.test.js`
-(`refreshFolder` over a fake `CODEX_HOME`, reconcile listing, projection,
-rollup exclusion, scan worker, store columns), `codex-viewer-and-guard.test.js`
+rule, the `codex_exec` mark against other originators, titles, metrics, folder
+keys, viewer mapping), `codex-index.test.js` (`refreshFolder` over a fake
+`CODEX_HOME`, reconcile listing, projection, the exec rollout hidden / listed /
+open-tab exemption, the one-shot re-read of a pre-#1145 store, rollup
+exclusion, scan worker, store columns), `codex-viewer-and-guard.test.js`
 (follower transform, delete refusal, badge, main wiring). Running the suite on
 a machine with a real `~/.codex` indexes it: point `CODEX_HOME` at an empty
 directory first.
