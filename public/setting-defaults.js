@@ -43,6 +43,7 @@ const SETTING_DEFAULTS = {
   codexApproval: '',
   codexModel: '',
   codexEffort: '',
+  showCodexUsage: false,
 };
 
 const PROJECT_DELETE_PREVIEW_TIMEOUT_MS = 20000;

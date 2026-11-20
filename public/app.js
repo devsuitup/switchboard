@@ -3432,10 +3432,12 @@ window.api.onUpdaterEvent(updaterHandler);
 // weekly one is the one actually running out. Rows come from the API
 // self-describing, so a newly launched model gets a bar without a code change.
 const quotaGaugeEl = document.getElementById('status-bar-quota');
+let quotaRequest = 0;
 
 // Full labels ("Week (all models)") are too long for a status bar; the tooltip
 // carries them in full.
 function shortQuotaLabel(row) {
+  if (row.kind === 'codex') return 'Codex ' + row.short;
   if (row.kind === 'session') return '5h';
   if (row.kind === 'weekly_all') return 'Week';
   return row.model || 'Week';
@@ -3444,6 +3446,7 @@ function shortQuotaLabel(row) {
 function buildQuotaBar(row) {
   const wrap = document.createElement('span');
   wrap.className = 'quota-item';
+  wrap.dataset.runtime = row.kind === 'codex' ? 'codex' : 'claude';
 
   const label = document.createElement('span');
   label.className = 'quota-label';
@@ -3469,20 +3472,35 @@ function buildQuotaBar(row) {
 }
 
 async function refreshQuotaGauge() {
+  const request = ++quotaRequest;
   try {
-    const usage = await window.api.getUsage();
+    const [usage, codex] = await Promise.all([
+      window.api.getUsage().catch(() => ({})),
+      window.api.getCodexUsage?.().catch(() => ({})) ?? {},
+    ]);
+    if (request !== quotaRequest) return;
     // Prefer the API's self-describing rows; fall back to the flat 5-hour keys.
     const rows = Array.isArray(usage?.limits) && usage.limits.length
-      ? usage.limits
+      ? [...usage.limits]
       : (usage?.session !== undefined
         ? [{ kind: 'session', label: 'Current session', percent: usage.session, reset: usage.sessionReset }]
         : []);
-    if (!rows.length) { quotaGaugeEl.style.display = 'none'; return; }
+    rows.push(...(codex?.limits || []));
+    if (!rows.length) { quotaGaugeEl.replaceChildren(); quotaGaugeEl.style.display = 'none'; return; }
 
     quotaGaugeEl.replaceChildren(...rows.map(buildQuotaBar));
     quotaGaugeEl.style.display = '';
   } catch {}
 }
+
+function applyCodexUsage(enabled) {
+  quotaRequest++;
+  quotaGaugeEl.querySelectorAll('[data-runtime="codex"]').forEach(el => el.remove());
+  if (!quotaGaugeEl.children.length) quotaGaugeEl.style.display = 'none';
+  refreshQuotaGauge();
+  window.refreshCodexStatsUsage?.(enabled === true);
+}
+window._applyCodexUsage = applyCodexUsage;
 refreshQuotaGauge();
 setInterval(refreshQuotaGauge, 5 * 60 * 1000);
 quotaGaugeEl.addEventListener('click', () => {

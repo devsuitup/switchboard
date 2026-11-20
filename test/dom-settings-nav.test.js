@@ -13,6 +13,29 @@ const root = path.join(__dirname, '..');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const globalPages = ['general', 'sessions', 'keyboard', 'automation', 'remote', 'integrations', 'archived', 'advanced'];
 
+test('Codex usage is opt-in under CLI Agents and saving applies it without restart', async t => {
+  const h = setup(t);
+  const applied = [];
+  h.w._applyCodexUsage = value => applied.push(value);
+  await h.open();
+  const toggle = h.q('#sv-show-codex-usage');
+  assert.ok(toggle, 'Show Codex usage toggle exists');
+  assert.equal(toggle.checked, false);
+  assert.equal(toggle.closest('.settings-page').dataset.section, 'sessions');
+  assert.equal(toggle.closest('.settings-section').querySelector('.settings-section-title').textContent, 'CLI Agents');
+  assert.match(toggle.closest('.settings-field').textContent, /chatgpt.com/);
+  for (const enabled of [true, false]) {
+    toggle.checked = enabled;
+    toggle.dispatchEvent(new h.w.Event('change', { bubbles: true }));
+    h.q('#sv-save-btn').click();
+    await settle();
+    assert.equal(h.saved.global.showCodexUsage, enabled);
+    assert.equal(applied.at(-1), enabled);
+  }
+  await h.open('project');
+  assert.equal(h.q('#sv-show-codex-usage'), null);
+});
+
 function setup(t) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'public/index.html'), 'utf8'), { url: 'http://localhost', runScripts: 'outside-only' });
   t.after(() => dom.window.close());

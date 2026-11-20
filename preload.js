@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('api', {
   getStatsFromDb: () => ipcRenderer.invoke('get-stats-from-db'),
   refreshStats: () => ipcRenderer.invoke('refresh-stats'),
   getUsage: () => ipcRenderer.invoke('get-usage'),
+  getCodexUsage: () => ipcRenderer.invoke('get-codex-usage'),
   getMemories: () => ipcRenderer.invoke('get-memories'),
   listSchedules: () => ipcRenderer.invoke('list-schedules'),
   setScheduleEnabled: (filePath, enabled) => ipcRenderer.invoke('set-schedule-enabled', filePath, enabled),
