@@ -24,9 +24,20 @@ const SESSION_MARKERS = new Set([
   'TRACESTATE',
 ]);
 
+const SESSION_RESIDUE = { GIT_EDITOR: 'true' };
+
 function scrubSessionEnv(env) {
+  let inSession = false;
   for (const key of Object.keys(env)) {
-    if (SESSION_MARKERS.has(key.toUpperCase())) delete env[key];
+    if (SESSION_MARKERS.has(key.toUpperCase())) {
+      delete env[key];
+      inSession = true;
+    }
+  }
+  if (inSession) {
+    for (const key of Object.keys(env)) {
+      if (SESSION_RESIDUE[key.toUpperCase()] === env[key]) delete env[key];
+    }
   }
   return env;
 }

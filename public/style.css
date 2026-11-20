@@ -5365,6 +5365,59 @@ body { display: flex; flex-direction: column; }
   border-top: 1px solid var(--hairline);
 }
 
+/* Tree view: file and folder rows indented by depth — see .ai/contexts/changes-view.md ("List or tree") */
+.changes-file-row.tree {
+  padding-left: calc(8px + var(--depth, 0) * 14px);
+}
+
+.changes-folder-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 8px 6px calc(8px + var(--depth, 0) * 14px);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.changes-folder-row:hover {
+  background: var(--hairline);
+}
+
+.changes-folder-row.selected {
+  background: rgba(120,130,255,0.14);
+}
+
+.changes-folder-chevron {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.changes-folder-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #d0d0e0;
+}
+
+.changes-folder-count {
+  flex-shrink: 0;
+  font-family: 'SF Mono', 'Fira Code', Menlo, monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
 /* --- Touched files tab (issue #309) --- */
 #file-panel-touched {
   flex: 1;
