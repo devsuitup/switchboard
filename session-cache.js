@@ -1057,6 +1057,9 @@ function buildProjectsFromCache(showArchived) {
   projectsProjection = { facts: {}, removedInputs: {} };
   const metaMap = getAllMeta(true);
   const cachedRows = scopedConversationRows(getAllCached());
+  const groupingPaths = new Map(cachedRows.map(row => [row.sessionId,
+    parseFolderKey(row.folder).alias === null && !getHarness(row.runtime).groupsByProject
+      ? resolveWorktreePath(row.projectPath) : row.projectPath]));
   const workflowName = row => {
     if (!row.parentSessionId || !isWorkflowRunId(row.workflowRunId)) return null;
     const folderPath = resolveFolderDir(row.folder);
@@ -1128,7 +1131,7 @@ function buildProjectsFromCache(showArchived) {
     const proof = conversations.proofs?.get(row.sessionId.toLowerCase());
     const reason = partIds.length > 1 || !proof?.ids?.length ? null
       : proof.proven && proof.ids.some(id => !cachedById.has(id)) ? 'identity-lost' : 'proof-invalid';
-    return { scope: projectionScope(parseFolderKey(row.folder).alias, row.projectPath), rootId,
+    return { scope: projectionScope(parseFolderKey(row.folder).alias, groupingPaths.get(row.sessionId)), rootId,
       inputs: { projectsBuildId: null, cli: 'unavailable', cliEntryCount: 0, cachedJob: !!job,
         jobState: null, jobEvidenceValid: false, jobEvidenceAt: null,
         descriptors: [...(conversations.targets?.values() || [])].flatMap(t => t.descriptors)
@@ -1150,14 +1153,15 @@ function buildProjectsFromCache(showArchived) {
   for (const row of cachedRows) {
     if (row.mergedIntoSessionId || rollup.has(row.sessionId)) continue;
     if (!row.projectPath) continue;
+    const groupingPath = groupingPaths.get(row.sessionId);
     if (disabledRuntimes.has(row.runtime || DEFAULT_HARNESS)) { exclude(row, 'harness-off'); continue; }
     const { alias } = parseFolderKey(row.folder);
     if (hiddenSdkIds.has(row.sessionId) || hiddenSdkIds.has(row.parentSessionId)) {
       exclude(row, 'sdk-only');
-      sdkOnlyProjectKeys.add(groupKey(alias, row.projectPath));
+      sdkOnlyProjectKeys.add(groupKey(alias, groupingPath));
       continue;
     }
-    if (hidden(alias, row.projectPath)) { exclude(row, 'hidden-project'); continue; }
+    if (hidden(alias, groupingPath)) { exclude(row, 'hidden-project'); continue; }
     const meta = metadataFor(row.sessionId);
     const children = mergedChildrenByParent.get(row.sessionId) || [];
     const orderedChildren = [...children].sort((a, b) =>
@@ -1203,17 +1207,17 @@ function buildProjectsFromCache(showArchived) {
     // see .ai/contexts/subagent-observability.md ("A subagent follows its archived conversation")
     if (!showArchived && s.parentSessionId && conversations.has(s.parentSessionId.toLowerCase())
       && metadataFor(s.parentSessionId).archived) continue;
-    const key = groupKey(alias, row.projectPath);
+    const key = groupKey(alias, groupingPath);
     if (!projectMap.has(key)) {
       projectMap.set(key, {
         folder: alias === null
-          ? encodeProjectPath(row.projectPath)
-          : joinFolderKey(alias, encodeProjectPath(row.projectPath)),
-        projectPath: row.projectPath,
+          ? encodeProjectPath(groupingPath)
+          : joinFolderKey(alias, encodeProjectPath(groupingPath)),
+        projectPath: groupingPath,
         remoteAlias: alias,
         sessions: [],
         // A remote root is never on this filesystem. see .ai/contexts/session-cache.md ("Remote SSH hosts")
-        missing: alias === null ? !fs.existsSync(row.projectPath) : false,
+        missing: alias === null ? !fs.existsSync(groupingPath) : false,
       });
     }
     projectMap.get(key).sessions.push(s);

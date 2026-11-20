@@ -39,16 +39,22 @@ it empty (placeholder `auto`) to let the CLI name each worktree.
 
 ## How Switchboard shows it
 
-- **Sidebar.** A worktree session's transcript is stored by the CLI under the
+- **Sidebar.** A Claude worktree session's transcript is stored by the CLI under the
   worktree's own encoded path in `~/.claude/projects/`. Switchboard maps any
   directory of the form `<repo>/.claude/worktrees/<name>`,
-  `<repo>/.claude-worktrees/<name>` or `<repo>/.worktrees/<name>` back to
+  `<repo>/.claude-worktrees/<name>`, `<repo>/.worktrees/<name>` or
+  `<repo>/.work-files/worktrees/<name>` back to
   `<repo>` when `<repo>` exists — whether the worktree still does or not — so
   the session is listed in the
   repository's project, beside the sessions run in the repository itself.
+  Codex rollouts use their recorded cwd for the same grouping. Nested layouts
+  collapse repeatedly while each parent exists. Layout names are matched
+  without case sensitivity on Windows only.
 - **Resume and fork** run in the directory recorded in the session's
   transcript — the worktree — because `claude --resume` looks the session up
-  by directory and would not find it from the repository root.
+  by directory and would not find it from the repository root. Codex also
+  keeps its recorded worktree cwd for resume and fork. If that directory was
+  deleted, Switchboard refuses the launch and names the missing worktree.
 - The **Changes** panel and the **Shell** panel read and run in the worktree
   too — see [Changes view](changes-view.md) and
   [Terminal](terminal.md#panel-shell).

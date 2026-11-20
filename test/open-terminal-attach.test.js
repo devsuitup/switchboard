@@ -24,7 +24,7 @@ function launchFixture() {
     getSetting: () => ({}), SETTING_DEFAULTS: { shellProfile: 'test' },
     resolveShell: () => ({ path: '/bin/bash' }), isWslShell: () => false,
     log: { info() {}, warn() {}, error() {} },
-    sessionTransitions: { snapshotContinuationsBeforeSpawn: async () => null },
+    sessionTransitions: { snapshotContinuationsBeforeSpawn: async () => null }, armLaunchSweep() {},
     sessionTranscriptExists: () => true, getHarness: require('../harnesses').getHarness,
     claudeCommand: (_shell, args, o = {}) => (o.prefix ? o.prefix + ' ' : '') + 'claude ' + args.join(' '), quoteArgvForShell: (_shell, args) => args.join(' '), shellArgs: (_shell, cmd) => [cmd],
     cleanPtyEnv: {}, scheduleProjects: () => ({ add: async () => {} }),
@@ -43,6 +43,35 @@ function launchFixture() {
     filename: MAIN_FILENAME, lineOffset: MAIN.slice(0, start).split('\n').length - 1,
   });
   return { root, context, spawned, open: (id, project, isNew, options) => handlers.get('open-terminal')(null, id, project, isNew, { mcpEmulation: false, ...options }) };
+}
+
+for (const runtime of ['claude', 'codex']) {
+  for (const fork of [false, true]) {
+    for (const deleted of [false, true]) {
+      test(`${runtime} ${fork ? 'fork' : 'resume'} uses recorded worktree or refuses it when deleted=${deleted}`, async t => {
+        const h = launchFixture();
+        const root = fs.realpathSync(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'sb-launch-wt-')));
+        t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+        const cwd = path.join(root, '.work-files', 'worktrees', '1137');
+        if (!deleted) fs.mkdirSync(cwd, { recursive: true });
+        const file = path.join(root, 'rollout-2026-11-20-11111111-1111-4111-8111-111111111111.jsonl');
+        fs.writeFileSync(file, JSON.stringify({ type: 'session_meta', payload: { cwd } }) + '\n');
+        h.context.resolveSessionRealCwd = () => cwd;
+        h.context.getCachedSession = () => ({ runtime, projectPath: runtime === 'codex' ? cwd : root, sessionFile: file });
+        const id = fork ? 'new-fork' : 'source';
+        const result = await h.open(id, root, fork, { runtime, ...(fork ? { forkFrom: 'source' } : {}) });
+        if (deleted) {
+          assert.equal(result.ok, false, 'a deleted worktree must refuse launch');
+          assert.ok(result.error.includes(`its worktree ${cwd} no longer exists`), result.error);
+          assert.equal(h.spawned.length, 0);
+        } else {
+          assert.equal(result.ok, true, result.error);
+          assert.equal(h.spawned[0][2].cwd, cwd, 'the PTY must launch in the worktree');
+          if (runtime === 'codex' && fork) assert.equal(h.context.activeSessions.get(id).pendingLaunch.projectPath, cwd);
+        }
+      });
+    }
+  }
 }
 
 for (const [mode, isNew, options] of [

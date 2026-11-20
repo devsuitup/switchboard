@@ -46,13 +46,17 @@ function* cwdsInWindow(fd, start, fileSize) {
 
 const WORKTREE_DIRS = ['.worktrees', '.claude-worktrees', '.claude/worktrees', '.work-files/worktrees'];
 const WORKTREE_PATH_RE = new RegExp('^(.+?)[/\\\\](?:' + WORKTREE_DIRS
-  .map(dir => dir.replace(/\./g, '\\.').replace(/\//g, '[/\\\\]')).join('|') + ')[/\\\\][^/\\\\]+[/\\\\]?$');
+  .map(dir => dir.replace(/\./g, '\\.').replace(/\//g, '[/\\\\]')).join('|') + ')[/\\\\][^/\\\\]+[/\\\\]?$', process.platform === 'win32' ? 'i' : '');
 const WORKTREE_FOLDER_SUFFIXES = WORKTREE_DIRS.map(dir => encodeProjectPath('/' + dir + '/'));
 
 function mayBeWorktreeFolderOf(cwd, folderName) {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return false;
+  const candidate = process.platform === 'win32' ? folderName.toLowerCase() : folderName;
   for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
-    if (WORKTREE_DIRS.some((wt) => encodedFolderMayExtend(folderName, path.join(dir, wt) + path.sep))) return true;
+    if (WORKTREE_DIRS.some((wt) => {
+      const prefix = path.join(dir, wt) + path.sep;
+      return encodedFolderMayExtend(candidate, process.platform === 'win32' ? prefix.toLowerCase() : prefix);
+    })) return true;
     if (path.dirname(dir) === dir) return false;
   }
 }
@@ -118,10 +122,11 @@ function rememberUnresolved(filePath, folderName, stat, rejected) {
 
 function resolveWorktreePath(cwd) {
   if (!cwd) return cwd;
-  const worktreeMatch = cwd.match(WORKTREE_PATH_RE);
-  if (worktreeMatch) {
+  let worktreeMatch;
+  while ((worktreeMatch = cwd.match(WORKTREE_PATH_RE))) {
     const parent = worktreeMatch[1];
-    if (fs.existsSync(parent)) return parent;
+    if (!fs.existsSync(parent)) break;
+    cwd = parent;
   }
   return cwd;
 }
@@ -267,7 +272,8 @@ function storedProjectPathMatchesFolder(projectPath, folder) {
   if (typeof projectPath !== 'string' || !path.isAbsolute(projectPath)) return false;
   const base = encodeProjectPath(path.resolve(projectPath));
   const suffix = folder.slice(base.length);
-  return folder.startsWith(base) && WORKTREE_FOLDER_SUFFIXES.some(prefix => suffix.startsWith(prefix) && suffix.length > prefix.length);
+  const layoutSuffix = process.platform === 'win32' ? suffix.toLowerCase() : suffix;
+  return folder.startsWith(base) && WORKTREE_FOLDER_SUFFIXES.some(prefix => layoutSuffix.startsWith(prefix) && layoutSuffix.length > prefix.length);
 }
 
 function resolveSessionRealCwd(projectsDir, sessionId, preferredFolder) {

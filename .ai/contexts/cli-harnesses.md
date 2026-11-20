@@ -167,6 +167,12 @@ Everything downstream reads the adapter, never a runtime name:
   (`projectFolder`, `knownJsonlFiles`, `continuationSnapshot`) run only for a
   `groupsByProject` store; a Codex session has `projectFolder: null`, which
   keeps it out of `detectSessionTransitions`' fork and continuation detection.
+  On resume or fork, a non-project-folder harness uses the source cached row's
+  raw `projectPath` as `spawnCwd`; its sidebar project group may be the parent
+  repository. Both harnesses refuse a missing recorded directory with
+  "its worktree <path> no longer exists" instead of falling back to the group.
+  `pendingLaunch.projectPath` remains `spawnCwd`, so grouping never changes
+  Codex's cwd-based launch ownership evidence.
 - "Start instead of resume" checks the transcript through the adapter: Claude's
   `sessionTranscriptExists`, otherwise `fs.existsSync(transcriptPath(row))` on
   the row's `sessionFile`. A Codex row whose rollout vanished launches fresh.

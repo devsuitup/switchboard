@@ -106,6 +106,105 @@ for (const mode of ['refresh', 'targeted', 'reconcile']) {
   });
 }
 
+test('nested layouts finish migration and open no transcripts on the second refresh or reconcile', storeOptions, t => {
+  const h = fixture(t);
+  const nested = path.join(h.cwd, '.claude', 'worktrees', 'agent-x');
+  fs.mkdirSync(nested, { recursive: true });
+  const folder = encodeProjectPath(nested);
+  const dir = path.join(h.projects, folder);
+  fs.mkdirSync(dir);
+  const file = path.join(dir, 'nested.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ type: 'user', cwd: nested, timestamp: '2026-11-20T10:00:00Z',
+    message: { role: 'user', content: 'nested work' } }) + '\n');
+  const previous = process.env.SWITCHBOARD_DATA_DIR;
+  process.env.SWITCHBOARD_DATA_DIR = path.join(h.root, 'data');
+  const db = openStore();
+  h.cleanup.before = () => {
+    db.closeDb();
+    if (previous === undefined) delete process.env.SWITCHBOARD_DATA_DIR;
+    else process.env.SWITCHBOARD_DATA_DIR = previous;
+  };
+  db.setSetting('global', { disabledHarnesses: ['codex'] });
+  db.upsertCachedSessions([readSessionFile(file, folder, nested)]);
+  db.setFolderMeta(folder, nested, getFolderIndexMtimeMs(dir));
+  db.setInitialScanComplete();
+  cache.init({ PROJECTS_DIR: h.projects, activeSessions: new Map(), getMainWindow: () => null, log: console, db });
+  cache.refreshFolder(folder);
+  let opens = 0;
+  const original = fs.openSync;
+  t.mock.method(fs, 'openSync', function (name, ...args) {
+    if (String(name).endsWith('.jsonl')) opens++;
+    return original.call(this, name, ...args);
+  });
+  cache.refreshFolder(folder);
+  cache.reconcileCacheFromFilesystem({ throttle: false });
+  assert.equal(opens, 0, 'nested migration must not reopen transcripts on the second refresh');
+  assert.equal(db.getFolderMeta(folder).projectPath, h.repo);
+});
+
+test('layout matching ignores case only on win32 and reuses uppercase folder metadata', t => {
+  const h = fixture(t);
+  const cwd = path.join(h.repo, '.WORK-FILES', 'WORKTREES', '1137');
+  assert.equal(resolveWorktreePath(cwd), process.platform === 'win32' ? h.repo : cwd);
+  assert.equal(storedProjectPathMatchesFolder(h.repo, encodeProjectPath(cwd)), process.platform === 'win32');
+});
+
+test('moved transcripts recognize uppercase worktree layouts only on win32', t => {
+  const h = fixture(t);
+  const cwd = path.join(h.repo, '.WORK-FILES', 'WORKTREES', '1137');
+  const folder = encodeProjectPath(cwd);
+  const dir = path.join(h.projects, folder);
+  fs.mkdirSync(dir, { recursive: true });
+  const entry = where => JSON.stringify({ type: 'user', cwd: where, message: { role: 'user', content: 'x'.repeat(4000) } }) + '\n';
+  fs.writeFileSync(path.join(dir, 'moved-upper.jsonl'), entry(h.repo).repeat(80) + entry(cwd));
+  assert.equal(deriveProjectPath(dir, folder), process.platform === 'win32' ? h.repo : null);
+});
+
+for (const deleted of [false, true]) {
+  test(`Claude and Codex rows group under one repository and retain launch identity (deleted=${deleted})`, storeOptions, t => {
+    const h = fixture(t);
+    const previous = { CODEX_HOME: process.env.CODEX_HOME, SWITCHBOARD_DATA_DIR: process.env.SWITCHBOARD_DATA_DIR };
+    process.env.CODEX_HOME = path.join(h.root, 'codex');
+    process.env.SWITCHBOARD_DATA_DIR = path.join(h.root, 'data');
+    const db = openStore();
+    h.cleanup.before = () => {
+      db.closeDb();
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    };
+    h.write('claude-source');
+    const codex = require('../harnesses/codex');
+    const folder = 'codex/2026/11/20';
+    const dir = codex.folderPath(folder);
+    fs.mkdirSync(dir, { recursive: true });
+    const id = '11111111-1111-4111-8111-111111111111';
+    const file = path.join(dir, `rollout-2026-11-20T10-00-00-${id}.jsonl`);
+    fs.writeFileSync(file, [
+      { type: 'session_meta', timestamp: '2026-11-20T10:00:00Z', payload: { cwd: h.cwd } },
+      { type: 'response_item', timestamp: '2026-11-20T10:00:01Z', payload: {
+        type: 'message', role: 'user', content: [{ type: 'input_text', text: 'worktree task' }] } },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+    if (deleted) fs.rmdirSync(h.cwd);
+    cache.init({ PROJECTS_DIR: h.projects, activeSessions: new Map(), getMainWindow: () => null, log: console, db });
+    cache.setRemoteRoots(new Map());
+    cache.refreshFolder(h.folder);
+    cache.refreshFolder(folder);
+    const projects = cache.buildProjectsFromCache(false);
+    assert.deepEqual(projects.map(p => p.projectPath), [h.repo], 'both runtimes must share the repository group');
+    assert.equal(projects[0].sessions.length, 2);
+    assert.equal(projects[0].missing, false);
+    assert.equal(db.getCachedSession(id).projectPath, h.cwd, 'Codex cache keeps the raw launch cwd');
+    assert.equal(projects[0].sessions.find(s => s.sessionId === id).projectPath, h.cwd);
+    assert.equal(db.getCachedSession('claude-source').projectPath, h.repo);
+    const signals = codex.readLaunchSignals(file);
+    const pending = { projectPath: h.cwd, spawnedAt: Date.parse('2026-11-20T09:59:59Z') };
+    assert.equal(codex.matchesLaunch(signals, pending), 'cwd');
+    assert.equal(codex.matchesLaunch(signals, { ...pending, projectPath: h.repo }), false);
+    assert.equal(cache.refreshFolder(folder), false, 'existing Codex rows need no reindex for grouping');
+  });
+}
+
 for (const fork of [false, true]) {
   test(`main launch cwd selection preserves harness cwd after grouping (${fork ? 'fork' : 'resume'})`, t => {
     const h = fixture(t);
