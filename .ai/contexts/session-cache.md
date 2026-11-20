@@ -3023,6 +3023,38 @@ The shared global save merges unrelated current keys but removes legacy `chrome`
 when the patch supplies `browserMode`, so merging cannot undo the Settings
 panel's migration. Patches unrelated to Browser leave that migration untouched.
 
+## Repository grouping for harness worktrees (#1137)
+
+`derive-project-path.js` uses one layout list for `.worktrees`,
+`.claude-worktrees`, `.claude/worktrees` and `.work-files/worktrees`.
+It supplies the cwd collapse pattern, the moved-transcript scan gate and the
+encoded-folder suffixes accepted for stored repository metadata. Collapse
+accepts both separators and one optional trailing separator, requires exactly
+one worktree name after the layout, and keeps the cwd when the parent does not
+exist. This remains a path-layout heuristic, not a Git-registration check.
+
+Local folder reconciliation refreshes metadata whose project path still
+collapses to a parent, even if the index mtime has not changed. `refreshFolder`
+then re-derives that metadata from verified transcripts. When the project path
+changes, a targeted refresh expands to the whole folder so unchanged sessions
+move together. Once migrated, matching parent metadata is reused normally.
+Remote folder metadata retains its existing reuse policy.
+
+Only the grouping identity changes. Transcripts and their recorded cwd are
+untouched; `resolveSessionRealCwd` returns the verified worktree cwd for resume,
+fork and Changes, and Touched retains its transcript-based cwd resolution.
+The dedicated delete dialog and renderer worktree labels/icons are separate
+follow-ups. Prefixed CLI stores such as Codex keep their adapter's project
+derivation; this change covers the encoded project-folder pipeline.
+
+`test/harness-worktree-grouping.test.js` exercises the production modules with
+disposable transcripts and the SQLite conversation-store fixture. It seeds
+old exact worktree metadata with current mtimes, checks full/targeted refresh
+and reconciliation through the sidebar payload, and checks byte-for-byte
+transcript preservation. A filename-bearing VM executes only the shipped
+launch cwd-selection block for resume/fork; it does not load Electron or
+launch a process.
+
 ## Harness folders (#821)
 
 A folder key with a harness prefix (`codex/2026/08/26`) belongs to a CLI whose

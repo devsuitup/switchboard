@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- Sessions in `.work-files/worktrees/<name>` now appear under their repository, including sessions already indexed. Resuming or forking a session keeps its worktree as the working directory. (#1137)
+
 ## v0.0.108 — 2026-11-20
 
 ### New

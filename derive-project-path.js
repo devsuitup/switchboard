@@ -44,7 +44,10 @@ function* cwdsInWindow(fd, start, fileSize) {
   }
 }
 
-const WORKTREE_DIRS = ['.worktrees', '.claude-worktrees', path.join('.claude', 'worktrees')];
+const WORKTREE_DIRS = ['.worktrees', '.claude-worktrees', '.claude/worktrees', '.work-files/worktrees'];
+const WORKTREE_PATH_RE = new RegExp('^(.+?)[/\\\\](?:' + WORKTREE_DIRS
+  .map(dir => dir.replace(/\./g, '\\.').replace(/\//g, '[/\\\\]')).join('|') + ')[/\\\\][^/\\\\]+[/\\\\]?$');
+const WORKTREE_FOLDER_SUFFIXES = WORKTREE_DIRS.map(dir => encodeProjectPath('/' + dir + '/'));
 
 function mayBeWorktreeFolderOf(cwd, folderName) {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return false;
@@ -115,9 +118,7 @@ function rememberUnresolved(filePath, folderName, stat, rejected) {
 
 function resolveWorktreePath(cwd) {
   if (!cwd) return cwd;
-  // Detect worktree paths: <project>/.claude-worktrees/<name>, <project>/.worktrees/<name>, or <project>/.claude/worktrees/<name>
-  // Separators: accept both / and \ so Windows cwds collapse too.
-  const worktreeMatch = cwd.match(/^(.+?)[/\\]\.(?:claude[/\\]worktrees|claude-worktrees|worktrees)[/\\][^/\\]+[/\\]?$/);
+  const worktreeMatch = cwd.match(WORKTREE_PATH_RE);
   if (worktreeMatch) {
     const parent = worktreeMatch[1];
     if (fs.existsSync(parent)) return parent;
@@ -265,7 +266,8 @@ function storedProjectPathMatchesFolder(projectPath, folder) {
   if (verifiedTranscriptCwd(projectPath, folder)) return true;
   if (typeof projectPath !== 'string' || !path.isAbsolute(projectPath)) return false;
   const base = encodeProjectPath(path.resolve(projectPath));
-  return folder.startsWith(base) && /^--(?:claude-)?worktrees-./.test(folder.slice(base.length));
+  const suffix = folder.slice(base.length);
+  return folder.startsWith(base) && WORKTREE_FOLDER_SUFFIXES.some(prefix => suffix.startsWith(prefix) && suffix.length > prefix.length);
 }
 
 function resolveSessionRealCwd(projectsDir, sessionId, preferredFolder) {

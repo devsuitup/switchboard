@@ -28,7 +28,7 @@ async function shutdownProducers() {
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { getHarness, DEFAULT_HARNESS, harnessForFolder, prefixedHarnesses, harnessFolderIndexMtimeMs } = require('./harnesses');
 const { setRemappedProjectReader } = require('./encode-project-path');
-const { deriveProjectPath, storedProjectPathMatchesFolder } = require('./derive-project-path');
+const { deriveProjectPath, storedProjectPathMatchesFolder, resolveWorktreePath } = require('./derive-project-path');
 const { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkEntrypoint, enumerateSessionFiles, resolveJsonlPath, mergeBridgeGroups, isCanonicalWorkflowPath } = require('./read-session-file');
 const { classifyTranscriptPath, isWorkflowRunId } = require('./subagent-attribution');
 const { readMessageCount } = require('./src/main/session-index/message-count');
@@ -492,7 +492,8 @@ function refreshFolder(folder, opts = {}) {
   // project remap detection keeps working.
   const knownMeta = getFolderMeta ? getFolderMeta(folder) : null;
   let projectPath = knownMeta && knownMeta.projectPath && fs.existsSync(knownMeta.projectPath)
-    && (parseFolderKey(folder).alias !== null || storedProjectPathMatchesFolder(knownMeta.projectPath, folder))
+    && (parseFolderKey(folder).alias !== null || (storedProjectPathMatchesFolder(knownMeta.projectPath, folder)
+      && resolveWorktreePath(knownMeta.projectPath) === knownMeta.projectPath))
     ? knownMeta.projectPath
     : null;
   let incomplete = false;
@@ -530,7 +531,8 @@ function refreshFolder(folder, opts = {}) {
   // every subagent subdir) and only stats the dirty files. Falls back to full
   // walk when opts.files is omitted (bootstrap / folder-level events / cold
   // delete-detection).
-  const targeted = opts.files instanceof Set && opts.files.size > 0;
+  const regrouping = knownMeta?.projectPath && knownMeta.projectPath !== projectPath;
+  const targeted = !regrouping && opts.files instanceof Set && opts.files.size > 0;
   let filesToScan;
   if (targeted) {
     filesToScan = [];
@@ -876,7 +878,8 @@ function reconciliationFolders(throttle) {
     .map(d => {
       const folder = d.name, meta = metaMap.get(folder);
       const refresh = ghostFolders.has(folder) || !meta || getFolderIndexMtimeMs(path.join(PROJECTS_DIR, folder)) > (meta.indexMtimeMs || 0)
-        || (meta.projectPath && !storedProjectPathMatchesFolder(meta.projectPath, folder));
+        || (meta.projectPath && (!storedProjectPathMatchesFolder(meta.projectPath, folder)
+          || resolveWorktreePath(meta.projectPath) !== meta.projectPath));
       return { folder, refresh: refresh && !pendingRepairFolders().includes(folder) };
     })
     .concat(harnessReconciliationFolders(metaMap));
