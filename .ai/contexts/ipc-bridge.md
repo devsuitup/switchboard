@@ -24,17 +24,21 @@ Failed entries remain, with `appAlert`; partial
 bulk successes still have Undo. Row actions are locked during a request.
 
 Delete builds `{projectPath, remoteAlias, folder, sessions}` from the exact entry;
-`folder` is the host-qualified encoded path. Local worktree entries disable Delete
-project with a visible reason: delete the worktree from the sidebar or delete its
-repository. The real
-planner maps a worktree folder to the repository and refuses the conflicting
-worktree path hint. Parsing uses the shared `parseFolderKey` and `isValidAlias` in
+`folder` is the host-qualified encoded path. Opening a row's overflow checks the
+existing deletion preview after flushing pending writes, with the shared deadline
+and recovery handling. Delete stays disabled until that preview accepts; its
+`aria-describedby` points to the pending or refusal text. Reopening the menu
+rechecks availability, and late responses from a closed or replaced row are ignored.
+The real inventory groups a local worktree only when its repository exists, so
+orphaned entries can be deleted. A grouped worktree shows the planner's refusal
+and suggests deleting its repository; no sidebar worktree action is promised.
+Parsing uses the shared `parseFolderKey` and `isValidAlias` in
 `public/utils.js`, re-exported by main's `remote-hosts.js`. An empty remote path
-means `/`, matching the writer. For other entries it calls the existing
+means `/`, matching the writer. Accepted entries call the existing
 `confirmAndDeleteProjectFolder`, retaining preview tokens, options,
 refusal handling and committed-result semantics. After cancellation or refusal,
 the manager unlocks the controls before returning focus to the Delete button;
-unlocking keeps unavailable worktree actions disabled. It never calls
+unlocking keeps pending or refused actions disabled. It never calls
 Unarchive before Delete. The overflow also copies the full path through
 `writeClipboard`. No new IPC or launch code is introduced.
 

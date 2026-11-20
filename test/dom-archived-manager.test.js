@@ -4,6 +4,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const os = require('node:os');
+const openStore = require('./fixtures/conversation-store.cjs');
+const { createSessionIndexWriter } = require('../session-index-writer');
+const { createProjectDeleteInventory } = require('../src/main/projects/project-delete-inventory');
 const { setupSidebarDom } = require('./dom-setup');
 const { loadAppFunctions } = require('./app-source');
 const { createProjectDeletePlanner } = require('../src/main/projects/project-delete-plan');
@@ -27,6 +31,18 @@ function plannerFor(h) {
   });
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
+async function waitFor(predicate) {
+  for (let i = 0; i < 100; i++) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.ok(predicate(), 'expected asynchronous UI state');
+}
+async function openDelete(row) {
+  row.querySelector('details').open = true;
+  await waitFor(() => row.querySelector('.archived-delete-reason')?.textContent !== 'Checking deletion availability…');
+  await settle();
+}
 const entries = ['/repo/alpha', '/repo/alpha/.work-files/worktrees/topic', 'vps::/srv/beta', 'removed::/old/gamma', '/gone'];
 
 async function setup(t, empty = false) {
@@ -203,7 +219,8 @@ for (const entry of [entries[0], entries[2]]) test(`Delete from Archived preview
   h.w.applyProjectDeletion = async () => {};
   const row = h.rows().find(r => r.dataset.entry === entry);
   assert.ok(row?.querySelector('.archived-delete'), 'archived row offers Delete without Unarchive');
-  row.querySelector('.archived-delete').click(); await settle();
+  await openDelete(row);
+  row.querySelector('.archived-delete').click(); await waitFor(() => h.q('.choice-dialog-cancel'));
   const remote = entry.includes('::'), projectPath = remote ? '/srv/beta' : entry;
   assert.equal(h.calls.preview[0].projectPath, projectPath);
   const planned = await planner.preview(JSON.parse(JSON.stringify(h.calls.preview[0])));
@@ -221,19 +238,74 @@ for (const entry of [entries[0], entries[2]]) test(`Delete from Archived preview
 });
 
 
-test('local worktree Delete is disabled with a visible alternative and real planner refusal', async t => {
-  const h = await setup(t), planner = plannerFor(h);
-  const refused = await planner.preview({ projectPath: entries[1], folderKey: h.w.encodeProjectPath(entries[1]),
-    options: { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false } });
-  assert.equal(refused.ok, false);
-  assert.equal(refused.code, 'IDENTITY_UNAVAILABLE');
-  const row = h.rows().find(r => r.dataset.entry === entries[1]);
-  assert.equal(row.querySelector('.archived-delete').disabled, true, 'worktree cannot be deleted as a project');
-  row.querySelector('details').open = true;
-  assert.match(row.querySelector('.archived-delete-reason')?.textContent || '', /Delete the worktree.*repository/i);
-  h.q('.archived-unarchive').click(); await settle();
-  assert.equal(row.querySelector('.archived-delete').disabled, true, 'unlock must preserve the worktree refusal');
-});
+for (const layout of ['.claude/worktrees', '.worktrees', '.claude-worktrees', '.work-files/worktrees']) {
+  for (const exists of [false, true]) test(`real inventory: Archived ${layout}, repository exists=${exists}`, {
+    skip: !openStore.supported && 'real SQLite requires Node 22 or matching native ABI',
+  }, async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'archived-inventory-'));
+    const previous = process.env.SWITCHBOARD_DATA_DIR;
+    process.env.SWITCHBOARD_DATA_DIR = root;
+    const db = openStore();
+    t.after(() => {
+      db.closeDb();
+      if (previous === undefined) delete process.env.SWITCHBOARD_DATA_DIR;
+      else process.env.SWITCHBOARD_DATA_DIR = previous;
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+    const h = await setup(t, true), repository = path.join(root, 'repo');
+    if (exists) fs.mkdirSync(repository);
+    const entry = path.join(repository, layout, 'topic');
+    const folder = h.w.encodeProjectPath(entry), projectsDir = path.join(root, 'projects');
+    fs.mkdirSync(projectsDir);
+    db.setFolderMeta(folder, entry, 1);
+    db.setInitialScanComplete();
+    h.settings.hiddenProjects = [entry];
+    db.setSetting('global', h.settings);
+    const worker = require('./fixtures/project-deletion-worker.cjs')(db);
+    const writer = createSessionIndexWriter({ client: worker.client, readonlyBackend: db }, {});
+    await writer.ready;
+    const inventory = createProjectDeleteInventory({ writer, projectsDir, dataDir: root, activeSessions: new Map(),
+      getScheduleRunSnapshot: () => [], readJobs: async () => ({ complete: true, jobs: [] }) });
+    const planner = createProjectDeletePlanner(inventory);
+    const request = { projectPath: entry, folderKey: folder,
+      options: { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false } };
+    const planned = await planner.preview(request);
+    assert.equal(planned.ok, !exists, JSON.stringify(planned));
+    if (exists) assert.equal(planned.code, 'IDENTITY_UNAVAILABLE');
+    h.w.api.previewProjectDelete = async input => {
+      h.calls.preview.push(input);
+      return { ...await planner.preview(JSON.parse(JSON.stringify(input))), token: 'inventory-token' };
+    };
+    h.w.api.deleteProject = async input => {
+      h.calls.execute.push(input);
+      return { ok: true, state: 'committed', operationId: 'inventory-op', invalidation: { sessionIds: [], restoreTargets: [] } };
+    };
+    h.w.applyProjectDeletion = async () => {};
+    await h.w.openSettingsViewer('global', null, null, { section: 'archived' });
+    const row = h.rows()[0];
+    await openDelete(row);
+    const button = row.querySelector('.archived-delete');
+    if (exists) {
+      assert.equal(button.disabled, true, 'grouped worktree is refused');
+      assert.match(row.querySelector('.archived-delete-reason')?.textContent || '', /Folder and path hints conflict.*delete its repository/i);
+      const reason = h.document.getElementById(button.getAttribute('aria-describedby'));
+      assert.ok(reason, 'disabled Delete must be linked to its reason');
+      assert.match(reason.textContent, /Folder and path hints conflict/);
+      assert.match(reason.textContent, /delete its repository/i);
+      assert.doesNotMatch(reason.textContent, /from the sidebar/i);
+      assert.equal(h.calls.execute.length, 0);
+    } else {
+      assert.equal(button.disabled, false, 'orphan worktree accepted by real inventory must be deletable');
+      button.click();
+      await waitFor(() => h.q('.choice-dialog-confirm'));
+      await waitFor(() => !h.q('.choice-dialog-confirm').disabled);
+      h.q('.choice-dialog-confirm').click();
+      await waitFor(() => h.rows().length === 0);
+      assert.equal(h.calls.execute[0].token, 'inventory-token');
+      assert.equal(h.calls.restore.length, 0);
+    }
+  });
+}
 
 test('remote root has a visible path and Delete resolves through the real planner', async t => {
   const h = await setup(t, true);
@@ -246,7 +318,8 @@ test('remote root has a visible path and Delete resolves through the real planne
     h.calls.preview.push(request);
     return { ...await planner.preview(JSON.parse(JSON.stringify(request))), token: 'root' };
   };
-  h.q('.archived-delete').click(); await settle();
+  await openDelete(h.rows()[0]);
+  h.q('.archived-delete').click(); await waitFor(() => h.q('.choice-dialog-cancel'));
   assert.equal(h.calls.preview[0].projectPath, '/');
   assert.ok(h.q('.choice-dialog-cancel'), 'root preview reaches the shared confirmation');
   h.q('.choice-dialog-cancel').click(); await settle();
@@ -274,4 +347,55 @@ test('restored Undo is invalidated when a later reload reports a deletion', asyn
   await loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects'] }).loadProjects();
   assert.equal(undo.isConnected, false, 'deleted project must lose its restore Undo');
   assert.equal(h.settings.hiddenProjectKinds[entries[0]], 'delete');
+});
+
+test('menu preview disables Delete while pending, ignores an older answer and retries a refusal', async t => {
+  const h = await setup(t), planner = plannerFor(h), row = h.rows()[0];
+  const menu = row.querySelector('details'), button = row.querySelector('.archived-delete');
+  let release, calls = 0;
+  const accepted = { ...await planner.preview({ projectPath: entries[0], folderKey: h.w.encodeProjectPath(entries[0]),
+    options: { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false } }), token: 'retry' };
+  h.w.api.previewProjectDelete = () => {
+    calls++;
+    if (calls === 1) return new Promise(resolve => { release = resolve; });
+    return Promise.resolve(calls === 2 ? { ok: false, error: 'Index unavailable' } : accepted);
+  };
+  menu.open = true;
+  await waitFor(() => release);
+  assert.equal(button.disabled, true, 'pending preview must disable Delete');
+  const reason = h.document.getElementById(button.getAttribute('aria-describedby'));
+  assert.ok(reason, 'pending Delete must be linked to its reason');
+  assert.match(reason.textContent, /Checking/);
+  menu.open = false; await waitFor(() => row.dataset.previewGeneration === '2');
+  await openDelete(row);
+  await waitFor(() => row.querySelector('.archived-delete-reason').textContent.includes('Index unavailable'));
+  release(accepted); await settle();
+  assert.equal(button.disabled, true, 'older accepted preview must not override newer refusal');
+  assert.match(row.querySelector('.archived-delete-reason').textContent, /Index unavailable.*reopen/);
+  menu.open = false; await waitFor(() => row.dataset.previewGeneration === '4');
+  await openDelete(row);
+  await waitFor(() => !button.disabled);
+  assert.equal(row.querySelector('.archived-delete-reason').textContent, '');
+});
+
+test('older in-flight reload cannot invalidate a newer restore Undo', async t => {
+  const h = await setup(t);
+  const staleSettings = JSON.parse(JSON.stringify(h.settings));
+  let release;
+  h.w.api.getProjects = async () => ({ defaultProjects: [], allProjects: [] });
+  h.w.api.getSetting = async () => staleSettings;
+  h.w.api.getActiveTerminals = () => new Promise(resolve => { release = resolve; });
+  h.w.loadingStatus = h.document.createElement('div');
+  h.w.reportActivityFocus = h.w.reportActivityTitles = h.w.refreshSidebar = h.w.renderDefaultStatus = () => {};
+  const realLoad = loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects'] }).loadProjects;
+  const pending = realLoad();
+  await waitFor(() => release);
+  h.w.loadProjects = Object.assign(async () => {}, { state: realLoad.state });
+  h.w.api.getSetting = async () => h.settings;
+  h.q('.archived-unarchive').click(); await settle();
+  const undo = h.q('.app-notice-action');
+  assert.ok(undo, 'restore creates Undo while older reload is pending');
+  h.w.loadProjects = realLoad;
+  release([]); await pending;
+  assert.equal(undo.isConnected, true, 'older reload must preserve newer restore Undo');
 });

@@ -16,7 +16,12 @@ for (const action of ['hideProject', 'unhideProject', 'cleanupWorktree', 'reveal
     const previous = process.env.SWITCHBOARD_DATA_DIR;
     process.env.SWITCHBOARD_DATA_DIR = root;
     const db = openStore();
-    t.after(() => { db.closeDb(); process.env.SWITCHBOARD_DATA_DIR = previous; fs.rmSync(root, { recursive: true, force: true }); });
+    t.after(() => {
+      db.closeDb();
+      if (previous === undefined) delete process.env.SWITCHBOARD_DATA_DIR;
+      else process.env.SWITCHBOARD_DATA_DIR = previous;
+      fs.rmSync(root, { recursive: true, force: true });
+    });
     const projectPath = path.join(root, 'repo'), commands = createWriterCommands(db);
     commands.hideProject(projectPath, 'archive');
     commands.hideProject(projectPath, 'archive');
