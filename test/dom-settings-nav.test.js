@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
@@ -40,7 +41,7 @@ function setup(t) {
   }, { get: (target, key) => target[key] || (() => Promise.resolve({})) });
   loadAppFunctions(ctx, { functions: ['saveGlobalSettings'], declarations: ['_persistChain'] });
   loadAppFunctions(ctx, { sourcePath: path.join(root, 'public/sidebar.js'), functions: ['isProjectDeleting', 'projectDeletionKey', 'paintProjectDeletionBusy'], declarations: ['deletingProjectKeys', 'projectDeletionUnavailable'] });
-  for (const file of ['setting-defaults.js', 'utils.js', 'shortcuts.js', 'terminal-themes.js', 'settings-panel.js']) {
+  for (const file of ['setting-defaults.js', 'utils.js', 'app-notices.js', 'shortcuts.js', 'terminal-themes.js', 'remote-enrol-panel.js', 'settings-panel.js']) {
     const filename = path.join(root, 'public', file);
     vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx, { filename });
   }
@@ -54,7 +55,7 @@ function setup(t) {
     return button;
   };
   const active = () => [...w.document.querySelectorAll('.settings-page')].filter(p => !p.hidden).map(p => p.dataset.section);
-  return { w, q, nav, open, click, active, saved, timers, observers };
+  return { w, q, nav, open, click, active, saved, timers, observers, ctx };
 }
 
 test('global and project navigation expose the ordered pages and named regions', async t => {
@@ -341,6 +342,104 @@ test('saving Use global default displays inherited values and a clean baseline',
   }
   assert.equal(h.q('#sv-unsaved').textContent, '');
 });
+
+test('a deferred normalized host save survives later edits and Cancel unchanged on disk', async t => {
+  const h = setup(t);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'settings-deferred-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'global.json');
+  fs.writeFileSync(file, '{}');
+  const read = async () => JSON.parse(fs.readFileSync(file, 'utf8'));
+  h.w.api.getSetting = read;
+  h.w.api.setSetting = async (_key, value) => fs.writeFileSync(file, JSON.stringify(value));
+  const filename = path.join(root, 'public/sidebar.js');
+  const source = fs.readFileSync(filename, 'utf8');
+  const flush = source.match(/^window\.flushDeferredProjectDeletionWrites = \(\) => \{[\s\S]*?^\};/m);
+  assert.ok(flush, 'load the production deferred-write flush');
+  vm.runInContext(flush[0], h.ctx, { filename });
+  await h.open();
+  h.q('#sv-remote-add').click();
+  h.q('.rh-alias').value = '  myhost  ';
+  h.q('.rh-alias').dispatchEvent(new h.w.Event('input', { bubbles: true }));
+  h.q('.rh-label').value = ' Saved ';
+  h.q('.rh-label').dispatchEvent(new h.w.Event('input', { bubbles: true }));
+  h.w.api.getSetting = async () => {
+    h.w.projectDeletionWritesBlocked = true;
+    return read();
+  };
+  h.q('#sv-save-btn').click();
+  await settle();
+  const patch = h.w.projectDeletionDeferredSettings.patch;
+  const submitted = JSON.stringify(patch);
+  assert.match(h.q('#sv-save-btn').textContent, /Applied/);
+  assert.equal(fs.readFileSync(file, 'utf8'), '{}');
+  h.q('.rh-label').value = 'Cancelled';
+  h.q('.rh-label').dispatchEvent(new h.w.Event('input', { bubbles: true }));
+  h.q('#sv-cancel-btn').click();
+  assert.equal(JSON.stringify(patch), submitted, 'Cancel must not mutate the queued save patch');
+  h.w.api.getSetting = read;
+  h.w.projectDeletionWritesBlocked = false;
+  h.w.flushDeferredProjectDeletionWrites();
+  await settle();
+  assert.deepEqual((await read()).remoteHosts, [{ alias: 'myhost', label: 'Saved', enabled: true }]);
+  assert.equal(h.w.projectDeletionDeferredSettings, null);
+});
+
+test('editing a normalized host after Save leaves app-wide labels at the saved value', async t => {
+  const h = setup(t);
+  h.saved.global = { remoteHosts: [{ alias: 'myhost', label: ' Saved ', enabled: true }] };
+  await h.open();
+  h.q('#sv-save-btn').click();
+  await settle();
+  assert.equal(h.w.remoteHostLabel('myhost'), 'Saved');
+  h.q('.rh-label').value = 'Unsaved';
+  h.q('.rh-label').dispatchEvent(new h.w.Event('input', { bubbles: true }));
+  assert.equal(h.w.remoteHostLabel('myhost'), 'Saved', 'typing must not publish an unsaved host label');
+  h.q('#sv-cancel-btn').click();
+  assert.equal(h.w.remoteHostLabel('myhost'), 'Saved');
+});
+
+for (const pending of [false, true]) {
+  test(`an unrelated Save preserves a ${pending ? 'pending' : 'completed'} Check host result`, async t => {
+    const h = setup(t);
+    h.saved.global = { remoteHosts: [{ alias: 'myhost', label: 'Lab', enabled: true }] };
+    await h.open();
+    let release;
+    const result = { ok: true, items: [{ status: 'ok', label: 'SSH', detail: 'Connected' }] };
+    h.w.api.remoteHostEnrolCheck = () => pending ? new Promise(resolve => { release = resolve; }) : Promise.resolve(result);
+    h.q('.rh-check').click();
+    await settle();
+    if (!pending) assert.equal(h.q('.enrol-detail').textContent, 'Connected');
+    h.q('#sv-visible-count').value = '42';
+    h.q('#sv-save-btn').click();
+    await settle();
+    if (pending) {
+      release(result);
+      await settle();
+    }
+    assert.equal(h.q('.remote-host-enrol .enrol-detail')?.textContent, 'Connected', 'Check host result must remain visible after unrelated Save');
+    assert.equal(h.q('.rh-check').disabled, false);
+    assert.equal(h.q('#sv-unsaved').textContent, '');
+  });
+}
+
+for (const [field, id, inherited, override, expected] of [
+  ['permissionMode', 'perm-mode', null, 'plan', ''],
+  ['browserMode', 'browser-mode', 'managed', 'claude-in-chrome', 'off'],
+]) {
+  test(`Use global Save displays inherited ${field} ${inherited} with a clean counter`, async t => {
+    const h = setup(t);
+    h.saved.global = { [field]: inherited };
+    h.saved['project:/project'] = { [field]: override };
+    await h.open('project');
+    h.q(`[data-field="${field}"]`).click();
+    h.q('#sv-save-btn').click();
+    await settle();
+    assert.equal(Object.hasOwn(h.saved['project:/project'], field), false);
+    assert.equal(h.q('#sv-' + id).value, expected, 'inherited value must use the same display mapping as initial render');
+    assert.equal(h.q('#sv-unsaved').textContent, '', 'inherited display must match the saved baseline');
+  });
+}
 
 test('host normalization preserves edits made while Save is pending', async t => {
   const h = setup(t);

@@ -986,20 +986,21 @@
       };
       if (isProject) {
         for (const [field, id] of Object.entries(inheritedControls)) {
-          if (!(field in settings)) normalizedControls[id] = globalSettings[field] ?? SETTING_DEFAULTS[field];
+          if (!(field in settings)) normalizedControls[id] = globalSettings[field] !== undefined ? globalSettings[field] : SETTING_DEFAULTS[field];
         }
       }
+      if (normalizedControls['sv-browser-mode'] === 'managed') normalizedControls['sv-browser-mode'] = 'off';
       trackedControls.forEach((control, index) => {
         if (normalizedControls[control.id] === undefined) return;
-        const normalized = String(normalizedControls[control.id]);
+        const normalized = String(control.type === 'checkbox' ? !!normalizedControls[control.id] : normalizedControls[control.id] ?? '');
         if (controlValue(control) === submitted.values[index]) {
           if (control.type === 'checkbox') control.checked = normalizedControls[control.id];
           else control.value = normalized;
         }
         submitted.values[index] = normalized;
       });
-      if (!isProject && !rejectedHosts && JSON.stringify(remoteHosts) === submitted.hosts) {
-        remoteHosts = settings.remoteHosts;
+      if (!isProject && !rejectedHosts && JSON.stringify(remoteHosts) === submitted.hosts && JSON.stringify(settings.remoteHosts) !== submitted.hosts) {
+        remoteHosts = settings.remoteHosts.map(h => ({ ...h }));
         renderRemoteHosts();
         submitted.hosts = JSON.stringify(remoteHosts);
       }

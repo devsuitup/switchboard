@@ -515,11 +515,17 @@ last applied values on repeated Saves, separately from the immutable `fieldValue
 bindings inspected by the defaults test. Save writes normalized numbers and
 trimmed text back to controls whose values still match the submitted snapshot;
 the saved baseline uses normalized values even when later edits are retained.
-Project fields saved with Use global default display `globalSettings[field] ??
-SETTING_DEFAULTS[field]`, including checkbox values, while preserving edits made
-during Save. When no host is rejected and the host snapshot still matches the
-pre-await submission, Save replaces the editor rows and host baseline with the
-stored list: trimmed aliases and labels, with empty-alias rows removed. Rejected
+Project fields saved with Use global default use an explicitly defined global
+value (including `null`), otherwise `SETTING_DEFAULTS[field]`, while preserving
+edits made during Save. The display and baseline both map null text values to
+empty strings, checkbox values to booleans, and legacy browser `managed` to `off`,
+matching initial rendering. When no host is rejected, the host snapshot still
+matches the pre-await submission, and normalization changed the submitted list,
+Save replaces the editor rows and host baseline with a copy of the stored host
+objects: trimmed aliases and labels, with empty-alias rows removed. The editor
+does not share mutable objects with deferred persistence or app-wide labels.
+An unchanged host list retains its DOM, including completed and pending Check
+host results, across unrelated Saves. Rejected
 rows and host edits made during Save remain visible and dirty.
 Save refreshes those snapshots, uses the
 existing `saved` class for 1.5 seconds and stays open. Cancel still discards
