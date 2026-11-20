@@ -408,8 +408,8 @@ consent and avoid recovery during a system exit. See window-frame.md.
 | `remap-project` | `(oldPath, newPath)` | **Atomic JSONL `cwd` rewrite**, refuses if active sessions exist. See PR #20. |
 | `check-remap-project` | `(oldPath)` | Read-only `{ ok, error? }`; bridge `checkRemapProject`. Runs `remapProjectRefusal`, also used by the action: any non-exited, non-panel PTY with the same encoded folder refuses. The renderer checks before the folder picker and confirmation, and shows a notice on refusal or check failure. |
 | `delete-worktree` | `(worktreePath, shown)` | `shown: { fingerprint, confirmLocked, confirmSubmodules }` from the successful preview. Rechecks path guards and Git state through `worktree-delete.js`; no force for clean status without submodules or a lock, one force for matching dirty status or explicitly confirmed submodules, two only for an explicitly confirmed matching lock. Submodule consent is required even with lock consent. Changed state / Git refusal returns `{ ok: false, refresh: true, status, error }`; renderer shows a persistent notice and asks again. Cleanup happens only after successful removal. Removal has a 120 s timeout; preview calls retain 15 s. |
-| `check-delete-worktree` | `(worktreePath)` | Read-only `{ ok, error? }`; bridge `checkDeleteWorktree`. Shares `checkDeleteWorktree` with Delete and status: string input, recognized layout and disk-resolved known parent. The renderer awaits it before the dialog or status request; refusal or failure shows a notice. No git command or cleanup runs in the check. |
-| `worktree-status` | `(worktreePath)` | `{ ok, path, homeDir, branch, dirty, total, ignoredCount, submodules, locked, lockReason, fingerprint, sessions }`. Line-delimited `worktree list --porcelain` works on Git 2.24 and recent Git; C-quoted paths decode octal UTF-8 and escaped characters. NUL-delimited status explicitly uses `--untracked-files=all --ignore-submodules=none`; a separate `--ignored --untracked-files=normal` status counts collapsed ignored directories. Sessions include non-exited local PTYs and live sidebar descriptors whose cwd is in the worktree; remote records are excluded. |
+| `check-delete-worktree` | `(worktreePath)` | Read-only `{ ok, error? }`; bridge `checkDeleteWorktree`. Shares `checkDeleteWorktree` with Delete and status: string input, recognized layout and disk-resolved known parent. The renderer awaits it before the dialog or status request; refusal or failure shows a notice. No git command or cleanup runs in the check. Segments are split on both slash and backslash on Windows, and slash alone on POSIX so literal backslashes in filenames remain valid. A path with a whole `.` or `..` segment anywhere is refused as an unrecognized layout before the parent lookup: the registration match normalises `..` on the text while Git and `lstat` resolve it on disk, so the two could name different folders (#855). |
+| `worktree-status` | `(worktreePath)` | `{ ok, path, homeDir, branch, dirty, total, ignoredCount, submodules, locked, lockReason, fingerprint, sessions }`. Line-delimited `worktree list --porcelain` works on Git 2.24 and recent Git; C-quoted paths decode octal UTF-8 and escaped characters. NUL-delimited status explicitly uses `--untracked-files=all --ignore-submodules=none`; a separate `--ignored --untracked-files=normal` status counts collapsed ignored directories. Sessions include non-exited local PTYs and live sidebar descriptors whose cwd is in the worktree; remote records are excluded. Registration match (`registeredPath` in `worktree-delete.js`): when `lstat` shows the requested or registered path is not a link, the whole path is compared by `realpath`, so a Windows 8.3 short basename (`WORKTR~1`) matches its long registration; a link or a missing path falls back to the resolved parent plus the literal basename, so a link to a registered worktree is never taken for it. The status carries `registeredPath`, Git's own spelling, and `removeWorktree` passes that spelling to `git worktree remove` because Git 2.24 does not recognise an 8.3 spelling of its registration ("is not a working tree"). Session cwds: only cwds on the same drive as the worktree (literal or resolved; UNC counts as another drive) are resolved on disk, all in parallel, each bounded by `CWD_RESOLVE_MS` (1 s) with both literal and resolved cwd spellings compared against both literal and resolved worktree spellings; a timeout on either lookup retains literal membership. Known blind spot, accepted for the bound: a cwd on another drive is compared literally only, so a junction on drive D: pointing into a worktree on C: is not listed — one unreachable UNC cwd used to cost ~10 s on every status read (#855). `runningSessions` takes an optional `{ realpath, timeoutMs }` for tests. |
 
 The sidebar deletion dialog displays the full path (`~` for home, absolute on
 hover), branch, running session ids/cwds and ignored-entry warning. Confirmation
@@ -464,14 +464,12 @@ final scan remain possible, including newly created or retargeted directory link
 Every index gitlink is checked even when absent from dirty status: a nonempty
 uninitialised submodule refuses preview/deletion before force can hide its files.
 
-### Tabs (Memory / .work-files / Stats)
+### Tabs (Memory / Stats)
 
 | IPC | Returns |
 |---|---|
 | `get-memories` | `{global, projects}` |
 | `read-memory` / `save-memory` | content / `{ok}` |
-| `get-work-files` | `{projects: WorkFilesProject[]}` — **dedupes by projectPath** since PR #15. Walks `<projectPath>/.work-files/` recursively, capped at 200 files per project. |
-| `read-work-file` / `delete-work-file` | content (with `.work-files/` path guard) / `{ok}` |
 | `get-stats-from-db` | `buildStatsFromDb()`: `{dailyActivity, dailyModelTokens, modelUsage, totalMessages, totalSessions, totalToolCalls, totalTokens, firstSessionDate, lastComputedDate}` from `session_metrics` — heatmap source since PR #7 |
 | `refresh-stats` | `{stats, usage}` — combined; calls `buildStatsFromDb` (using `getDailyMetrics`) + `fetchAndTransformUsage` |
 | `get-usage` | rate-limits payload from Claude `/usage` |
@@ -604,6 +602,7 @@ An unknown remote target never falls back to local disk IO.
 | `read-clipboard` / `clipboard-has-image` | Main-process clipboard reads (text; whether an image is on it) |
 | `toggle-full-screen` / `popup-app-menu` | The frameless window's strip and ☰ menu — see window-frame.md |
 | `get-indexing-state` | `{finished}` — whether the first index pass is done; `indexing-finished` pushes the same news. See session-cache.md |
+| `get-last-known-projects` | `{defaultProjects, allProjects, savedAt}` or `null` — the last accepted paired `get-projects` reply persisted by main, for the provisional sidebar at startup. See "Last known projects (#1125)" |
 | `get-task-snapshots` | The task registry's snapshots for live sessions; pushes follow on `task-snapshot` / `task-rekey`. See session-state.md |
 | `get-activity-trace-state` | Debug-mode state for Settings → Diagnostics; `activity-trace-state` pushes changes. See `docs/activity-trace.md` |
 | `get-activity-reporting-state` / `set-activity-reporting-enabled` | ActivityWatch reporting — see activitywatch.md |
@@ -657,11 +656,11 @@ adapter applies it.
 
 - **No `nodeIntegration` in renderer**. The renderer can only call what's in `window.api`. `contextIsolation: true` is mandatory in BrowserWindow options.
 - **Every IPC must validate its arguments** at the main-side handler. The renderer is trusted-ish (single user, single window) but a compromised renderer should not be able to escape the user's working directories.
-- **Path-touching IPCs (`read-work-file`, `delete-work-file`, `read-memory`, `run-schedule-now`, `delete-worktree`, etc.) MUST guard their paths, and the guard must resolve on disk, not just `path.resolve()`**. `path.resolve()` normalises `..` but does not follow symlinks — a path can look contained by every string check and still open a file somewhere else through a symlinked directory. The shared primitive is `resolveOnDisk()` in `resolve-path-on-disk.js` (realpath, or `null` when nothing exists there yet); it is called *inside* the guards, not duplicated at each call site:
+- **Path-touching IPCs (`read-file-for-panel`, `read-memory`, `run-schedule-now`, `delete-worktree`, etc.) MUST guard their paths, and the guard must resolve on disk, not just `path.resolve()`**. `path.resolve()` normalises `..` but does not follow symlinks — a path can look contained by every string check and still open a file somewhere else through a symlinked directory. The shared primitive is `resolveOnDisk()` in `resolve-path-on-disk.js` (realpath, or `null` when nothing exists there yet); it is called *inside* the guards, not duplicated at each call site:
   - `isSensitivePath` / `resolveAllowedMemoryPath` (+ its boolean form `isAllowedMemoryPath`) / `isKnownProjectRoot` (`ipc-path-validator.js`) — denylist, allowlist, and exact-match-against-known-projects, used by the memory, file-panel and worktree handlers. `resolveAllowedMemoryPath` returns the resolved path, not a boolean, and callers that go on to read/write MUST use that returned value for the operation — a caller that re-resolves its own literal path afterwards reopens a TOCTOU (checked path and used path can diverge if a symlinked ancestor is swapped in between). See `resolve-path-on-disk.js` for the documented gap when the target does not exist yet.
   - `resolveDeletionTargets` (`delete-session-target.js`) — session deletion, the first handler to need this and the source the primitive was extracted from.
   - `resolveRunNowTarget` (`run-schedule-now-target.js`) — `run-schedule-now`'s shape + allowlist check, run before any read or spawn. Four duties, and which path each one answers for matters: the **directory shape** (`.claude/commands` parents) is checked on the *requested* path, because what makes a file a schedule is the directory that lists it, and a versioned configuration is linked in there from a repo elsewhere on disk; the **filename** is checked on the requested path *and again on the disk-resolved target*, so the listing directory decides where a schedule may be linked from but never what it may point at; `isSensitivePath` refuses a resolved target in a credential location; and `isAllowedMemoryPath` runs on the disk-resolved file **and** on the disk-resolved project root the run is spawned in, which with a linked-in schedule is not derivable from the file. Dropping any one of the four is caught by `test/run-schedule-now-target.test.js`.
-  Work-files still use the narrower `.includes('/.work-files/')` substring check — same weakness against a symlinked ancestor, not yet migrated (see "IPC path-guard inventory" below). A handler that reads *content* back to the renderer (file panel, memory) and a handler that only decides *whether to run a command* (`run-schedule-now`) both need a guard, and neither one is safe with `path.resolve()` alone.
+  A handler that reads *content* back to the renderer (file panel, memory) and a handler that only decides *whether to run a command* (`run-schedule-now`) both need a guard, and neither one is safe with `path.resolve()` alone.
 - **Trust boundary is the contextBridge call**. Anything passed across must survive structured-clone serialization. No functions, no DOM nodes, no class instances — only plain JSON.
 - **Async handlers return promises**. Renderer uses `await window.api.foo(...)`. Throws cross the boundary as rejected promises; return `{ok, error}` if you want graceful failure handling on the renderer side.
 - **Never call a method on `session.pty` directly.** Go through `src/main/terminals/pty-ops.js` (`resizePty` / `killPty` / `writePty`, or the generic `withPty`). See "PTY operations race the exit" below.
@@ -690,7 +689,6 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 | `check-delete-worktree` / `delete-worktree` / `worktree-status` | Shared `checkDeleteWorktree`: `WORKTREE_PATH_RE` (shape) + `isKnownProjectRoot` (disk-resolved exact match) | shape + disk-resolved allowlist |
 | `delete-session-preview` / `delete-session` | `deleteSessionGuard` then `resolveRowDeletionTargets` (`delete-session-target.js`) | full live/background/unknown-state guard + disk-resolved containment |
 | `run-schedule-now` | `resolveRunNowTarget` (`run-schedule-now-target.js`), which composes directory shape (requested path) + filename shape (requested **and** resolved) + `isSensitivePath` + `isAllowedMemoryPath` on both the resolved file and the resolved project root | disk-resolved allowlist + denylist — **the only handler in the app that both reads a file and spawns a process from a renderer-supplied path; the file's content becomes a prompt sent to the model, so the resolved target is constrained, not just its location** |
-| `read-work-file` / `delete-work-file` | `.includes('/.work-files/')` substring | ad hoc string, **not disk-resolved** — a symlinked ancestor defeats it the same way it defeated `isSensitivePath`/`isAllowedMemoryPath` before they were fixed here. Not migrated in this pass; same fix shape (`resolveOnDisk` + a `.work-files` component check instead of a substring test) would close it |
 | `read-activity-trace-file` / `delete-activity-trace-file` | `resolveTraceFilePath` (`activity-trace.js`) | ad hoc string (directory + basename pattern), **not disk-resolved** — narrower surface (one generated file family) lowers the stakes, not migrated |
 | `add-project` / `remap-project` | none on the probe (`fs.statSync`/`fs.existsSync`/`fs.lstatSync`); the actual write is confined through `encodeProjectPath` | existence/type oracle only — inherent to the feature (both accept an arbitrary disk location by design), not cheaply fixable without breaking it |
 | `open-terminal` (`preLaunchCmd`) | `validatePreLaunchCmd` (`src/main/terminals/pre-launch-cmd-guard.js`) | not a path guard — a character allowlist on a raw-shell-by-design string (the documented prefix's character set plus its analogues: `env VAR=val`, `doas`, an absolute binary path); a denylist here proved incomplete (process substitution `<(...)`/`>(...)` needed none of the blocked characters), so this is closed by construction instead of by enumeration. Known cost: bare `$VAR` expansion and quoted arguments, both previously accepted, are now refused. The real-bash test of the documented shape spawns `bash -l -c` without `-i`: it asserts that the validated prefix runs as an ordinary command line, which does not depend on interactive mode, and `-i` with no TTY is what prints "cannot set terminal process group" (job control) next to the intermittent status 2147483652; the intermittent status is handled in `test/spawn-retry.js` (#342) |
@@ -1370,7 +1368,7 @@ The deny rule is exact membership in `SESSION_MARKERS`, compared case-insensitiv
 
 Kept: `CLAUDE_CONFIG_DIR`, `ANTHROPIC_*` authentication/base URLs, `CLAUDE_CODE_USE_*`, `DISABLE_*`, proxy variables, `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, `CLAUDE_CODE_EFFORT_LEVEL` (the documented user setting, distinct from `CLAUDE_EFFORT`), `CLAUDE_CODE_TASK_LIST_ID` (an explicitly shared task list) and every other non-denied configuration variable. The [official CLI environment reference](https://code.claude.com/docs/en/env-vars), checked for #670, documents the bridge/cloud IDs, child marker, job directory, PID and persisted environment file; private markers are also retained in the explicit deny set from the observed incident.
 
-`GIT_EDITOR=true`, set by the CLI on its Bash children, is deliberately not scrubbed because a user may set it (#673).
+`GIT_EDITOR=true`, set by the CLI on its Bash children, is a session residue rather than a marker: a Switchboard launched from such a shell would hand it to every terminal, where `git commit` without `-m` then aborts on an empty message and `git rebase -i` skips the editor (#673). `scrubSessionEnv()` removes it only when the same environment carried at least one `SESSION_MARKERS` entry and the value is exactly `true` (`SESSION_RESIDUE`, key compared case-insensitively). `GIT_EDITOR=true` with no marker, or any other value beside a marker, is the user's own setting and survives. The gate is evaluated on the environment being scrubbed: at startup that is the launch environment, so by the time `cleanEnv(process.env)` runs the residue is already gone. `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP` is not a marker and is kept: the user sets it on purpose.
 
 What Switchboard sets *after* cleaning stays: the plain terminal's `CLAUDECODE=1` (`open-terminal`, `isPlainTerminal` branch, present since the project's first commit, not tied to the `claude` shim) and `CLAUDE_CODE_SSE_PORT` of a session with IDE Emulation. A new marker the CLI starts setting is added to `SESSION_MARKERS`; `test/clean-pty-env.test.js` lists them one by one.
 
@@ -1402,8 +1400,14 @@ What Switchboard sets *after* cleaning stays: the plain terminal's `CLAUDECODE=1
 On terminal PROJECTS_SNAPSHOT_CONFLICT, get-projects schedules the existing
 throttled projects-changed notification with cause conflict, then returns only
 {projectsError:{code:'PROJECTS_SNAPSHOT_CONFLICT',message:'Projects changed while loading; reload to retry.'}}.
-Preload recognizes that exact envelope and reconstructs a coded Error. Ordinary
-errors still reject; boolean arrays and the paired defaultProjects/allProjects
+Preload recognizes that exact envelope and reconstructs a coded Error. An
+effect-free build whose third dispatch conflicts on the live snapshot is not an
+error (#1125): get-projects returns the paired reply with `projectsStale: true`
+(boolean replies stay plain arrays) and schedules the same conflict
+notification, so the renderer renders it as any reply and the next reload
+replaces it; main logs the differing live component for the rejected case and
+the job options for a caller timeout (session-cache.md, "Projects query
+worker"). Ordinary errors still reject; boolean arrays and the paired defaultProjects/allProjects
 reply retain their successful shapes, with compact provenance on the paired
 reply. Its `projection.facts` map shares deciding inputs by opaque `scope|root`
 across both views (#742). Rows carry no `projectionFacts`; main's assembly and
@@ -1419,6 +1423,62 @@ raw prompts, names, CLI strings, paths, sockets, keys or liveVersion. Lists are
 capped at 128 with complete counts/truncation flags; oversized legitimate records
 compact before transport and remain below 64 KiB after main's timestamp. Invalid
 records or transport failures cannot break publication.
+
+## Last known projects (#1125)
+
+On a cold start with about a thousand sessions the first accepted load can
+take a minute or more, and the user saw an empty, then frozen, sidebar. The
+renderer now paints the sidebar at once from the payload the previous run
+last showed, marked provisional, and the first accepted `loadProjects` replaces
+it; the real load runs in parallel from the first millisecond and is never
+delayed by the paint.
+
+Main side, `src/main/projects/last-known-projects.js` owns the file
+`last-known-projects.json` under `app.getPath('userData')` — the same place as
+`remote-attach-profile-id`, under `SWITCHBOARD_DATA_DIR` in dev and test, never
+the user DB schema. `getProjectsSnapshot('both')` calls `remember` with the
+assembled `defaultProjects` and `allProjects` of every accepted reply (not a
+stale delivery, not a boolean reply, never the `projection`); the store
+coalesces writes two seconds apart, serializes off the IPC path, refuses a
+payload above 8 MiB (and removes the previous file, so a list that outgrew the
+cap is not shown months later), and writes `tmp` then `rename` so a crash
+leaves either the old file or the new one. The record carries a format
+version and the app version; `load` returns `null` and removes the file on a
+parse error, a foreign format, another app version (row shapes change between
+releases), or a row without `projectPath`/`sessionId` — a missing file is
+`null` without a warning. Nothing flushes at quit: the last two seconds of
+reloads may be lost, and the previous write still describes the sidebar as it
+was. `get-last-known-projects` returns `load()`.
+
+Renderer side, `paintLastKnownProjects` (app.js) runs from
+`loadStartupProjects` without being awaited. It gives up when the reply is not
+two arrays, when a real load has already committed, or when either cache is
+already filled; otherwise it fills `cachedProjects`/`cachedAllProjects`, runs
+`dedup`, sets the `Refreshing…` status only while the latest load is pending,
+and calls `refreshSidebar`. A late snapshot preserves the load failure status
+between retries and after the retry budget is exhausted; starting a retry
+sets the progress status through `loadProjects`. The
+provisional state is the class `projects-provisional` on `#sidebar-content`,
+nowhere else: `loadProjects` removes it when a load commits, and its failure
+branch shows "Could not load projects" while it is present even though the
+caches are not empty.
+
+Provisional rows are inert, not routed. A capture-phase listener on
+`#sidebar-content` swallows `click`, `auxclick`, `dblclick`, `contextmenu` and
+Enter/Space `keydown` while the class is present; the rows and headers render
+at 0.7 opacity with a progress cursor. The alternative — letting a click run
+through `openSessionNow`'s guards — was rejected: those guards assume rows from
+an accepted snapshot, so a row deleted or archived since the last run would
+still spawn `claude --resume` against a missing transcript or open a popover
+on a project that no longer exists, and the wait is a few seconds. Restore,
+trigger readiness and the background-agent paths never see provisional rows:
+they run only after `loadStartupProjects` has an accepted load, as before.
+
+Tests: `test/last-known-projects.test.js` (store), `test/app-last-known-projects.test.js`
+(paint, inertness, replacement, the race where the real load lands first, the
+all-failed startup, including a disk snapshot arriving after all five attempts
+have failed) and the remembered-reply case in
+`test/get-projects-worker-wiring.test.js`.
 
 Schedules reuse `run-schedule-now`, `read-memory`, `save-memory` and
 `schedule-run-exit` unchanged. Slice B adds deletion through the Electron-free

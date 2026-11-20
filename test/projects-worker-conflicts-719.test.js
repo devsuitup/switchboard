@@ -23,19 +23,27 @@ function fixture(options = {}) {
     reply: (index, result) => worker.emit('message', { id: messages[index].id, result }) };
 }
 const readonly = { effects: [], keptLiveRows: [], reconciled: false, defaultProjects: [], allProjects: [] };
-test('T5.1 third live snapshot conflict rejects without publishing and independently pending work recovers', async t => {
+const effectful = { ...readonly, effects: [{ name: 'setFolderMeta' }] };
+test('T5.1 third live snapshot conflict delivers the stale snapshot and independently pending work recovers', async t => {
   const f = fixture(); t.after(() => f.client.shutdown());
   const request = f.client.request();
-  const rejected = assert.rejects(request, { code: 'PROJECTS_SNAPSHOT_CONFLICT', message: 'Projects changed while loading; reload to retry.' });
   for (let i = 0; i < 2; i++) { f.change(); f.reply(i, readonly); }
   const pending = f.client.request();
   pending.catch(() => {});
-  f.change(); f.reply(2, readonly);
-  await rejected;
+  f.change(); f.reply(2, { ...readonly, defaultProjects: [{ projectPath: 'third', sessions: [] }] });
+  assert.deepEqual(await request, { ...readonly, defaultProjects: [{ projectPath: 'third', sessions: [] }], stale: true });
   assert.equal(f.applied.length, 0);
   assert.equal(f.messages.length, 4);
   f.reply(3, readonly);
   assert.deepEqual(await pending, readonly);
+});
+test('T5.1b third live snapshot conflict of a reply with effects still rejects without publishing', async t => {
+  const f = fixture(); t.after(() => f.client.shutdown());
+  const request = f.client.request();
+  const rejected = assert.rejects(request, { code: 'PROJECTS_SNAPSHOT_CONFLICT', message: 'Projects changed while loading; reload to retry.' });
+  for (let i = 0; i < 3; i++) { f.change(); f.reply(i, effectful); }
+  await rejected;
+  assert.equal(f.messages.length, 3);
 });
 test('T5.2 a live input changing during final ACK rejects after exactly three attempts', async t => {
   const f = fixture({ apply: async () => { f.db(); f.change(); return { version: f.db() }; } });
@@ -164,12 +172,12 @@ for (const away of [false, true]) test(`T5.5/T5.6 main conflict envelope survive
   const eventStart = app.indexOf('let projectsChangedTimer = null;');
   vm.runInContext(app.slice(eventStart, app.indexOf('\n});', eventStart) + 4), h.context, { filename: appFilename });
   const initial = w.reloadProjects();
-  for (let i = 0; i < 3; i++) { await flush(); f.change(); f.reply(i, readonly); }
+  for (let i = 0; i < 3; i++) { await flush(); f.change(); f.reply(i, effectful); }
   assert.equal(await initial, false); assert.equal(w.cachedProjects[0].projectPath, 'accepted');
   assert.equal(assemblies, 0); assert.equal(notifications, 1); assert.equal(timers.length, away ? 0 : 1);
   if (away) {
     const tab = w.document.createElement('button'); tab.className = 'sidebar-tab'; tab.dataset.tab = 'sessions'; w.document.body.append(tab);
-    for (const name of ['searchBar', 'workFilesContent', 'sessionFilters', 'placeholder']) w[name] = w.document.createElement('div');
+    for (const name of ['searchBar', 'sessionFilters', 'placeholder']) w[name] = w.document.createElement('div');
     w.searchInput = w.document.createElement('input'); w.hideAllViewers = () => {}; w.gridViewActive = false;
     const tabsStart = app.indexOf("document.querySelectorAll('.sidebar-tab').forEach(tab => {");
     vm.runInContext(app.slice(tabsStart, app.indexOf('\n// Grid view →', tabsStart)), h.context, { filename: appFilename });
@@ -179,8 +187,14 @@ for (const away of [false, true]) test(`T5.5/T5.6 main conflict envelope survive
   f.reply(3, { ...readonly, defaultProjects: [{ projectPath: 'fresh', sessions: [] }], allProjects: [{ projectPath: 'fresh', sessions: [] }] });
   await flush(); assert.equal(w.cachedProjects[0].projectPath, 'fresh'); assert.equal(assemblies, 2);
   const coded = bridge.getProjects('both'); const rejected = assert.rejects(coded, { code: 'PROJECTS_SNAPSHOT_CONFLICT' });
-  for (let i = 4; i < 7; i++) { await flush(); f.change(); f.reply(i, readonly); }
+  for (let i = 4; i < 7; i++) { await flush(); f.change(); f.reply(i, effectful); }
   await rejected;
+  const stale = bridge.getProjects('both');
+  for (let i = 7; i < 10; i++) { await flush(); f.change(); f.reply(i, { ...readonly, defaultProjects: [{ projectPath: 'stale', sessions: [] }], allProjects: [] }); }
+  const delivered = await stale;
+  assert.equal(delivered.projectsStale, true, 'a stale delivery crosses IPC flagged');
+  assert.equal(delivered.defaultProjects[0].projectPath, 'stale');
+  assert.equal(notifications, 3, 'a stale delivery schedules one conflict notification');
 });
 
 test('T5.5 repeated conflict notifications coalesce under the shipped throttle and stop after draining', () => {

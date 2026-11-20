@@ -65,7 +65,7 @@ function scenario(name, body) {
               projectsClient: { request: async () => structuredClone(views) },
               mergePlaceholderSessions: rows => rows, annotateRemoteAttachable: rows => rows,
               cliSessionState: require('./cli-session-state'),
-              notifyRendererProjectsChanged() {},
+              notifyRendererProjectsChanged() {}, lastKnownProjects: { remember() {} },
             }, { filename: path.resolve('main.js'), lineOffset: source.slice(0, helperStart).split(String.fromCharCode(10)).length - 1 });
             ${body}
           } finally { await writer.closeDb(); }

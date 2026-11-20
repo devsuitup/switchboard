@@ -240,7 +240,7 @@ enabled, disabled or deleted at their source.
 The tab refreshes on open, after actions, on project changes and every minute
 while visible. No search is offered here. Invalid files show their problems;
 unknown projects cannot be run or opened. Archived projects stay suspended even
-if their schedules are enabled. The Work Files tab remains available.
+if their schedules are enabled.
 
 A running task says **Running**. Recorded outcomes show the exit code, signal,
 launch refusal or spawn failure and are kept across restarts. Runs without a

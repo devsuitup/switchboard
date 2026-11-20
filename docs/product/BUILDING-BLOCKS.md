@@ -296,7 +296,7 @@ semantics; their action buttons become B4.
 - **Job.** Say why a list is empty and what to do next.
 - **Instances.** `index.html:54`; `index.html:46`; `agents-view.js:376,
   382`; `stats-view.js:32`; `jsonl-viewer.js:789, 879`;
-  `memory-workfiles-view.js:41, 235`; `activity-trace-panel.js:153`;
+  `memory-workfiles-view.js`; `activity-trace-panel.js:153`;
   `file-panel.js:1505`; `touched-files-view.js:387`.
 - **Divergences.** Shared `.plans-empty` class across unrelated views and for
   errors; the Agents one ignores the Finished filter (`agents-view.js:374-376`).
