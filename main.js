@@ -3139,7 +3139,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   // Spawn new PTY
   if (!fs.existsSync(spawnCwd)) {
     if (resumeSourceId && !isAttach && sessionOptions?.type !== 'terminal') {
-      return { ok: false, error: `Cannot open session: its worktree ${spawnCwd} no longer exists` };
+      const isWorktree = spawnCwd !== projectPath && !require('./derive-project-path').worktreeAncestorPaths(spawnCwd).next().done;
+      return { ok: false, error: `Cannot open session: its ${isWorktree ? 'worktree' : 'project directory'} ${spawnCwd} no longer exists` };
     }
     return { ok: false, error: `project directory no longer exists: ${spawnCwd}` };
   }

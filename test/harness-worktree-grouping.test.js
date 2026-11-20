@@ -161,7 +161,7 @@ test('moved transcripts recognize uppercase worktree layouts only on win32', t =
 });
 
 for (const deleted of [false, true]) {
-  test(`Claude and Codex rows group under one repository and retain launch identity (deleted=${deleted})`, storeOptions, t => {
+  test(`Claude and Codex rows group under one repository and retain launch identity (deleted=${deleted})`, storeOptions, async t => {
     const h = fixture(t);
     const previous = { CODEX_HOME: process.env.CODEX_HOME, SWITCHBOARD_DATA_DIR: process.env.SWITCHBOARD_DATA_DIR };
     process.env.CODEX_HOME = path.join(h.root, 'codex');
@@ -195,7 +195,20 @@ for (const deleted of [false, true]) {
     assert.equal(projects[0].sessions.length, 2);
     assert.equal(projects[0].missing, false);
     assert.equal(db.getCachedSession(id).projectPath, h.cwd, 'Codex cache keeps the raw launch cwd');
-    assert.equal(projects[0].sessions.find(s => s.sessionId === id).projectPath, h.cwd);
+    const session = projects[0].sessions.find(s => s.sessionId === id);
+    const context = vm.createContext({ window: { api: {
+      getEffectiveSettings: async projectPath => projectPath === h.repo
+        ? { codexSandbox: 'read-only', codexApproval: 'on-request' } : {},
+    } }, normalizeBrowserSettings: value => value, SETTING_DEFAULTS: require('../public/setting-defaults').SETTING_DEFAULTS });
+    const { resolveDefaultSessionOptions } = require('./app-source').loadAppFunctions(context, {
+      functions: ['resolveDefaultSessionOptions'], sourcePath: path.join(__dirname, '../public/dialogs.js'),
+    });
+    const options = await resolveDefaultSessionOptions(session);
+    const argv = codex.buildLaunchArgs({ sessionId: id, isNew: false, options });
+    assert.ok(argv.includes('--sandbox') && argv.includes('read-only'), 'Codex resume must inherit repository sandbox');
+    assert.ok(argv.includes('--ask-for-approval') && argv.includes('on-request'), 'Codex resume must inherit repository approval');
+    assert.equal(session.projectPath, h.repo);
+    assert.equal(session.cwd, h.cwd);
     assert.equal(db.getCachedSession('claude-source').projectPath, h.repo);
     const signals = codex.readLaunchSignals(file);
     const pending = { projectPath: h.cwd, spawnedAt: Date.parse('2026-11-20T09:59:59Z') };
@@ -204,6 +217,17 @@ for (const deleted of [false, true]) {
     assert.equal(cache.refreshFolder(folder), false, 'existing Codex rows need no reindex for grouping');
   });
 }
+
+test('nested layouts collapse past a deleted intermediate worktree', t => {
+  const h = fixture(t);
+  fs.rmdirSync(h.cwd);
+  assert.equal(resolveWorktreePath(path.join(h.cwd, '.claude', 'worktrees', 'agent-x')), h.repo);
+});
+
+test('stored worktree metadata compares the entire encoded repository without case on Windows', t => {
+  const h = fixture(t);
+  assert.equal(storedProjectPathMatchesFolder(h.repo, encodeProjectPath(h.cwd).toUpperCase()), process.platform === 'win32');
+});
 
 for (const fork of [false, true]) {
   test(`main launch cwd selection preserves harness cwd after grouping (${fork ? 'fork' : 'resume'})`, t => {

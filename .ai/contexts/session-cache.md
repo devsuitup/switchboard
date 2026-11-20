@@ -3030,7 +3030,8 @@ panel's migration. Patches unrelated to Browser leave that migration untouched.
 It supplies the cwd collapse pattern, the moved-transcript scan gate and the
 encoded-folder suffixes accepted for stored repository metadata. Collapse
 accepts both separators and one optional trailing separator, requires exactly
-one worktree name after the layout, and repeats while the parent exists.
+one worktree name after the layout, and examines every matching ancestor,
+retaining the outermost existing one even when an intermediate worktree is gone.
 The worktree itself need not exist. Layout matching is case-insensitive only
 on win32, including the moved-transcript gate and metadata suffix check.
 This remains a path-layout heuristic, not a Git-registration check.
@@ -3046,10 +3047,26 @@ Only the grouping identity changes. Transcripts and their recorded cwd are
 untouched; `resolveSessionRealCwd` returns the verified worktree cwd for resume,
 fork and Changes, and Touched retains its transcript-based cwd resolution.
 The dedicated delete dialog and renderer worktree labels/icons are separate
-follow-ups. Codex keeps its raw cwd in cached and projected session rows;
-the projects builder uses a separate collapsed grouping path. Main uses the
+follow-ups. Codex keeps its raw cwd in the cached row; the renderer receives
+the collapsed identity as `projectPath` and the cached path as `cwd`.
+Resume defaults therefore use the repository's sandbox and approval settings.
+The projects builder uses a separate collapsed grouping path. Main uses the
 source row's raw cwd on Codex resume/fork and the verified transcript cwd on
 Claude resume/fork, refusing a deleted cwd instead of launching in the group.
+The refusal calls it a worktree only when the missing cwd has a supported
+worktree layout and differs from the requested project; otherwise it names
+the project directory.
+
+Archive matching collapses local worktree keys and unions their known IDs and
+disabled schedule lists. Regrouped sessions created on or before `archivedAt`
+join the known set; later sessions still reopen the archive. Undated legacy
+rows are adopted once per archive record (`worktreeGroupingVersion: 1`). The
+`groupedFromWorktree` marker also preserves older repository sessions when
+the only archived key was the worktree, including later indexed dated rows.
+The writer persists changed records before retiring an archive, so subsequent
+passes retain the known IDs. This match-time repair tolerates incremental
+indexing of dated rows without a global upgrade-complete marker. Local hidden
+matching collapses keys too, preserving host scopes and remote paths.
 
 `test/harness-worktree-grouping.test.js` exercises the production modules with
 disposable transcripts and the SQLite conversation-store fixture. It seeds
@@ -3106,14 +3123,15 @@ linked continuation on these rows and is inert.
 
 Kept as #821 required: the Claude cwd trust (#385) is not applied — a date
 folder cannot encode a cwd — and the transcript's own cwd remains the cached
-and projected session's `projectPath`, for launch and ownership matching.
+session's `projectPath`, for launch and ownership matching.
 `buildProjectsFromCache` computes a separate `groupingPaths` map for local
 non-project-folder harnesses, collapsing that cwd with `resolveWorktreePath`.
 Project keys, folders, missing/hidden state and projection scopes use this
-grouping path; the session row keeps its raw cwd. Existing Codex rows therefore
+grouping path; the renderer session uses it as `projectPath` and exposes the
+raw cached cwd separately as `cwd`. Existing Codex rows therefore
 group immediately without a schema migration or transcript reindex. Remote
 paths are not collapsed against the local filesystem. The
-the continuation rollup only sees rows whose harness has
+continuation rollup only sees rows whose harness has
 `capabilities.continuations`; subagent rollups key on `parentSessionId`, which
 these rows never have; project remap rewrites files under a Claude folder and
 never touches a rollout, so a remapped project keeps its Codex rows under the

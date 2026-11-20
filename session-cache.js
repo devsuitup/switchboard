@@ -39,7 +39,6 @@ const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanContinuationIndex, resolveContinuations, validId, continuationStamp, matchesContinuationStamp, continuationMtime, continuationRollup } = require('./session-continuations');
 const { mergeLocalBackgroundSessions, conversationGroups, conversationMemberIds: resolveConversationMemberIds, scopedConversationRows } = require('./sidebar-bg-sessions');
 const { projectionScope } = require('./public/session-projection-diagnostics');
-const { projectHiddenMatcher } = require('./public/worktree-nesting');
 const { conversationMeta } = require('./conversation-meta');
 const { cleanDisplayName } = require('./public/utils');
 const { isHostedJob } = require('./src/main/bg-agents/bg-agents-roster');
@@ -1079,7 +1078,7 @@ function buildProjectsFromCache(showArchived) {
     return workflowNames.get(file).title;
   };
   const global = getSetting('global') || {};
-  const hidden = projectHiddenMatcher(global.hiddenProjects, global.hiddenProjectScopes);
+  const hidden = require('./archived-projects').groupedHiddenMatcher(global.hiddenProjects, global.hiddenProjectScopes);
 
   // Group by projectPath, not on-disk folder name. Multiple ~/.claude/projects/<folder>/
   // directories can resolve to the same projectPath (Claude Code's folder-name encoding
@@ -1182,7 +1181,8 @@ function buildProjectsFromCache(showArchived) {
       created: row.created,
       modified,
       messageCount,
-      projectPath: row.projectPath,
+      projectPath: groupingPath,
+      cwd: row.projectPath,
       runtime: row.runtime || DEFAULT_HARNESS,
       runtimeLabel: (row.runtime || DEFAULT_HARNESS) === DEFAULT_HARNESS ? null : getHarness(row.runtime).label,
       canLaunch: true,

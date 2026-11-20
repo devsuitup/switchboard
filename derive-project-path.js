@@ -120,15 +120,21 @@ function rememberUnresolved(filePath, folderName, stat, rejected) {
   unresolvedMemo.set(filePath, { folderName, size: stat.size, mtimeMs: stat.mtimeMs, rejected });
 }
 
-function resolveWorktreePath(cwd) {
-  if (!cwd) return cwd;
+function* worktreeAncestorPaths(cwd) {
+  if (!cwd) return;
   let worktreeMatch;
   while ((worktreeMatch = cwd.match(WORKTREE_PATH_RE))) {
-    const parent = worktreeMatch[1];
-    if (!fs.existsSync(parent)) break;
-    cwd = parent;
+    cwd = worktreeMatch[1];
+    yield cwd;
   }
-  return cwd;
+}
+
+function resolveWorktreePath(cwd) {
+  let resolved = cwd;
+  for (const parent of worktreeAncestorPaths(cwd)) {
+    if (fs.existsSync(parent)) resolved = parent;
+  }
+  return resolved;
 }
 
 function deriveProjectPath(folderPath, folderName, opts) {
@@ -273,7 +279,9 @@ function storedProjectPathMatchesFolder(projectPath, folder) {
   const base = encodeProjectPath(path.resolve(projectPath));
   const suffix = folder.slice(base.length);
   const layoutSuffix = process.platform === 'win32' ? suffix.toLowerCase() : suffix;
-  return folder.startsWith(base) && WORKTREE_FOLDER_SUFFIXES.some(prefix => layoutSuffix.startsWith(prefix) && layoutSuffix.length > prefix.length);
+  const candidate = process.platform === 'win32' ? folder.toLowerCase() : folder;
+  const prefixBase = process.platform === 'win32' ? base.toLowerCase() : base;
+  return candidate.startsWith(prefixBase) && WORKTREE_FOLDER_SUFFIXES.some(prefix => layoutSuffix.startsWith(prefix) && layoutSuffix.length > prefix.length);
 }
 
 function resolveSessionRealCwd(projectsDir, sessionId, preferredFolder) {
@@ -296,4 +304,4 @@ function resolveSessionRealCwd(projectsDir, sessionId, preferredFolder) {
   return null;
 }
 
-module.exports = { deriveProjectPath, storedProjectPathMatchesFolder, resolveWorktreePath, extractCwdFromJsonl, extractVerifiedCwdFromJsonl, resolveSessionRealCwd, sessionTranscriptExists, isGitRepo };
+module.exports = { deriveProjectPath, storedProjectPathMatchesFolder, resolveWorktreePath, worktreeAncestorPaths, extractCwdFromJsonl, extractVerifiedCwdFromJsonl, resolveSessionRealCwd, sessionTranscriptExists, isGitRepo };

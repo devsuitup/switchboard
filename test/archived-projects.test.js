@@ -14,6 +14,55 @@ const {
 } = require('../archived-projects');
 const { scheduleFileUnlinked } = require('../src/main/schedules/schedule-runner');
 
+for (const archiveAtWorktree of [false, true]) test(`regrouping preserves archived state and unions known ids (worktree=${archiveAtWorktree})`, t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'archive-regroup-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cwd = path.join(root, '.work-files', 'worktrees', 'old');
+  const file = path.join(root, 'settings.json');
+  const archivedAt = '2026-11-20T10:00:00Z';
+  const archived = { [root]: { archivedAt, knownSessionIds: ['own-1'] } };
+  if (archiveAtWorktree) archived[cwd] = { archivedAt, knownSessionIds: ['wt-1'], disabledSchedules: ['schedule'] };
+  fs.writeFileSync(file, JSON.stringify({ archivedProjects: archived }));
+  const deps = { getSetting: key => JSON.parse(fs.readFileSync(file))[key], setSetting: (key, value) => {
+    const settings = JSON.parse(fs.readFileSync(file)); settings[key] = value; fs.writeFileSync(file, JSON.stringify(settings));
+  } };
+  const projects = [group(root, [top('own-1'), top('wt-1', { cwd, created: '2026-11-19T10:00:00Z' })])];
+  assert.deepEqual(applyAndPersistArchived(projects, false, deps), [], 'regrouping alone must not clear the repository archive');
+  const saved = deps.getSetting('archivedProjects');
+  assert.deepEqual([...saved[root].knownSessionIds].sort(), ['own-1', 'wt-1']);
+  assert.equal(saved[cwd], undefined);
+  if (archiveAtWorktree) assert.deepEqual(saved[root].disabledSchedules, ['schedule']);
+  assert.deepEqual(applyAndPersistArchived(projects, false, deps), []);
+  projects[0].sessions.push(top('new', { cwd, created: '2026-11-21T10:00:00Z' }));
+  assert.equal(applyAndPersistArchived(projects, false, deps).length, 1, 'a genuinely new worktree session still clears the archive');
+});
+
+test('a worktree-only archive and hidden entry follow their sessions into the repository', t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hidden-regroup-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cwd = path.join(root, '.work-files', 'worktrees', 'old');
+  const projects = [group(root, [top('wt-1', { cwd }), top('repo-1', { created: '2026-11-19T10:00:00Z' })])];
+  const settings = { archivedProjects: { [cwd]: { archivedAt: '2026-11-20T10:00:00Z', knownSessionIds: ['wt-1'] } } };
+  const deps = { getSetting: key => settings[key], setSetting: (key, value) => { settings[key] = value; } };
+  assert.deepEqual(applyAndPersistArchived(projects, false, deps), [], 'worktree-only archive must follow the regrouped row');
+  settings.archivedProjects = {};
+  settings.global = { hiddenProjects: [cwd], hiddenProjectScopes: { [cwd]: { alias: null } } };
+  assert.deepEqual(applyAndPersistArchived(projects, false, deps), [], 'worktree hidden entry must match the repository');
+  assert.equal(applyAndPersistArchived([group(root, [top('remote')], 'box')], false, deps).length, 1, 'local scope must not hide a remote group');
+});
+
+test('legacy undated regrouped sessions are adopted once, then a new undated session clears the archive', t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'archive-undated-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cwd = path.join(root, '.work-files', 'worktrees', 'old');
+  const settings = { archivedProjects: { [root]: { knownSessionIds: ['own'] } } };
+  const deps = { getSetting: key => settings[key], setSetting: (key, value) => { settings[key] = value; } };
+  const projects = [group(root, [top('own'), top('old', { cwd })])];
+  assert.deepEqual(applyAndPersistArchived(projects, false, deps), [], 'undated legacy sessions must not undo archive on upgrade');
+  projects[0].sessions.push(top('new', { cwd }));
+  assert.equal(applyAndPersistArchived(projects, false, deps).length, 1);
+});
+
 function group(projectPath, sessions, remoteAlias = null) {
   return { projectPath, remoteAlias, sessions };
 }

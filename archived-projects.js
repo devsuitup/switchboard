@@ -4,7 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const { joinFolderKey, parseFolderKey } = require('./src/main/remote/remote-hosts');
 const { encodeProjectPath } = require('./encode-project-path');
-const { worktreeParentPath, isHiddenRepositoryWorktree, isProjectHidden } = require('./public/worktree-nesting');
+const { resolveWorktreePath } = require('./derive-project-path');
+const { worktreeParentPath, isHiddenRepositoryWorktree, projectHiddenMatcher } = require('./public/worktree-nesting');
 const { scheduleFields, scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter, skipMissedRunsOf } = require('./src/main/schedules/schedule-runner');
 
 const SETTING_KEY = 'archivedProjects';
@@ -18,6 +19,47 @@ function archivedEntry(alias, projectPath) {
 }
 
 const entryOf = (project) => archivedEntry(project.remoteAlias || null, project.projectPath);
+
+function groupedHiddenMatcher(hiddenProjects, scopes) {
+  scopes = { ...scopes };
+  const unchanged = projectHiddenMatcher(hiddenProjects, scopes);
+  const grouped = projectHiddenMatcher(hiddenProjects, scopes, resolveWorktreePath);
+  return (alias, projectPath) => alias === null ? grouped(alias, projectPath) : unchanged(alias, projectPath);
+}
+
+function regroupArchivedProjects(projects, archived) {
+  const store = {};
+  for (const [entry, record] of Object.entries(archived || {})) {
+    const { alias, folder } = parseFolderKey(entry);
+    const key = alias === null ? archivedEntry(null, resolveWorktreePath(folder)) : entry;
+    const prior = store[key];
+    store[key] = { ...record, ...(prior || {}), knownSessionIds: [...new Set([
+      ...(prior?.knownSessionIds || []), ...(record.knownSessionIds || []),
+    ])] };
+    if (key !== entry || record.groupedFromWorktree) store[key].groupedFromWorktree = true;
+    for (const field of ['disabledSchedules', 'disabledByArchive']) {
+      if (prior?.[field] || record[field]) store[key][field] = [...new Set([...(prior?.[field] || []), ...(record[field] || [])])];
+    }
+    if (prior?.archivedAt && record.archivedAt > prior.archivedAt) store[key].archivedAt = record.archivedAt;
+  }
+  for (const project of projects) {
+    if (project.remoteAlias) continue;
+    const record = store[entryOf(project)];
+    if (!record) continue;
+    const known = new Set(record.knownSessionIds);
+    let regrouped = false;
+    for (const session of project.sessions || []) {
+      const moved = session.cwd && session.cwd !== project.projectPath && resolveWorktreePath(session.cwd) === project.projectPath;
+      if (!moved && !record.groupedFromWorktree) continue;
+      regrouped = true;
+      const dated = Number.isFinite(Date.parse(session.created)) && Number.isFinite(Date.parse(record.archivedAt));
+      if (dated ? Date.parse(session.created) <= Date.parse(record.archivedAt) : record.worktreeGroupingVersion !== 1) known.add(session.sessionId);
+    }
+    record.knownSessionIds = [...known];
+    if (regrouped) record.worktreeGroupingVersion = 1;
+  }
+  return store;
+}
 
 /**
  * Every session id the group holds at archive time: its top-level rows, the
@@ -47,7 +89,7 @@ function knownIdsForGroup({ projects, activeSessions, diskIds, alias, projectPat
  * report the entries a new session has cleared.
  */
 function applyArchivedProjects(projects, archived, showArchived) {
-  const store = archived || {};
+  const store = regroupArchivedProjects(projects, archived);
   const cleared = new Set();
   for (const project of projects) {
     const entry = entryOf(project);
@@ -111,8 +153,11 @@ function retireArchivedEntries(getSetting, setSetting, archived, entries) {
 function applyAndPersistArchived(projects, showArchived, { getSetting, setSetting, scheduleName = readScheduleName }) {
   const global = getSetting('global') || {};
   const hidden = global.hiddenProjects || [];
-  projects = projects.filter(project => !isProjectHidden(hidden, project.remoteAlias || null, project.projectPath, global.hiddenProjectScopes));
-  const archived = getSetting(SETTING_KEY) || {};
+  const hiddenMatcher = groupedHiddenMatcher(hidden, global.hiddenProjectScopes);
+  const previous = getSetting(SETTING_KEY) || {};
+  const archived = regroupArchivedProjects(projects, previous);
+  if (JSON.stringify(archived) !== JSON.stringify(previous)) setSetting(SETTING_KEY, archived);
+  projects = projects.filter(project => !hiddenMatcher(project.remoteAlias || null, project.projectPath));
   const { projects: kept, cleared } = applyArchivedProjects(projects, archived, showArchived);
   if (cleared.length > 0) retireArchivedEntries(getSetting, setSetting, archived, cleared);
   for (const project of kept) {
@@ -349,6 +394,7 @@ function dismissReenableOffer(projectPath, folderKey, { getSetting, setSetting, 
 }
 
 module.exports = {
+  groupedHiddenMatcher,
   archivedEntry, knownIdsForGroup, applyArchivedProjects, applyAndPersistArchived,
   clearArchivedEntry, retireArchivedEntries, archivePlanForGroups, reenableScheduleFiles,
   validArchiveGroups, archiveProjectFolders, undoArchiveProjectFolders, reenableOfferedSchedules, dismissReenableOffer,

@@ -1,5 +1,24 @@
 # Project deletion (#474 A4a–A4d, E)
 
+## Repository session grouping (#1137)
+
+Inventory projects, folders and local cached session ownership use the same
+worktree ancestor enumeration as `resolveWorktreePath`. Existence checks stay
+inside the inventory's bounded asynchronous filesystem ports and memoized
+realpath reads. Missing intermediate worktrees do not stop the collapse.
+The snapshot is a projection; it does not rewrite durable rows. Transcript cwd
+verification uses that same collapse before admitting a member. The planner
+therefore selects Claude and Codex backing groups together, including nested
+layouts, while retaining its grouped `member.cwd` ownership contract. Physical
+worktree removal remains a separate explicit selection. Remote paths keep
+their host identity and are never collapsed through the local filesystem.
+
+The round-2 witness in `.work-files/report-1137-fix2.md` identifies a remaining
+writer boundary: durable scope and manifest validation still use raw cached
+ownership, so a grouped Codex worktree can produce `Group lacks durable mapping`.
+Aligning the writer requires corresponding producer epoch/fencing changes;
+the preview fix alone does not establish end-to-end deletion support.
+
 ## Superseded previews (#1106)
 
 The service retains one pending preview controller per webContents and canonical

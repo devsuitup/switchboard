@@ -74,6 +74,16 @@ for (const runtime of ['claude', 'codex']) {
   }
 }
 
+for (const fork of [false, true]) test(`missing ordinary project uses project-directory refusal (fork=${fork})`, async () => {
+  const h = launchFixture();
+  const missing = path.join(h.root, '.work-files', 'missing-project-1137');
+  h.context.resolveSessionRealCwd = () => missing;
+  const result = await h.open('missing-project', missing, fork, fork ? { forkFrom: 'source' } : {});
+  assert.equal(result.ok, false);
+  assert.equal(result.error, `Cannot open session: its project directory ${missing} no longer exists`);
+  assert.equal(h.spawned.length, 0);
+});
+
 for (const [mode, isNew, options] of [
   ['resume', false, {}], ['fork', true, { forkFrom: 'source' }],
   ['panel', true, { type: 'terminal', panelFor: 'owner' }],
