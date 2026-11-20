@@ -78,7 +78,8 @@ that acknowledgement, treating a missing result as failure. Cron uses the same
 launcher and retains its logging and completion callback. The safe Claude argv
 is quoted for the configured login shell so its profile can initialise PATH.
 Sandbox resolution follows global and project settings and never downgrades
-silently; schedule add-dirs supply both CLI flags and sandbox binds.
+silently; schedule add-dirs supply both CLI flags and sandbox binds. On Windows
+a cmd.exe or PowerShell profile is not started at all (see "Windows launches").
 
 This acknowledgement confirms only shell creation. The shared launcher's `exit`
 handler also calls `schedule-ipc.js`'s `reportRunExit(window, result)` for both
@@ -342,7 +343,7 @@ they do not launch Electron, Claude or a real schedule.
 - **One run at a time per schedule** — `runningTasks` Set guards against overlap. If a schedule is still running when the next minute matches, the next tick is skipped with an info log line (no queue, no retry). A catch-up hits the same guard, after its minute is recorded: the skipped minute is consumed, not retried.
 - **Trigger alignment**: `setTimeout` to next minute boundary, then `setInterval(tick, 60_000)`. The first call is aligned to the wall-clock minute; subsequent calls drift only by JS event-loop latency.
 - **Session pre-seeding is required** — `claude --resume <sid>` won't work without an existing JSONL. `createScheduleSession` writes a minimal valid JSONL containing one user message (the prompt).
-- **Headless child process** — spawned through the configured shell profile with `stdio: ['ignore', 'ignore', 'pipe']`, no PTY and no `detached` option. Stderr is captured for logging; stdout is dropped. The read-only message view follows transcript writes through the existing watcher.
+- **Headless child process** — spawned through the configured shell profile (or, on Windows under cmd.exe and PowerShell, as the resolved `claude` itself; see "Windows launches") with `stdio: ['ignore', 'ignore', 'pipe']`, no PTY and no `detached` option. Stderr is captured for logging; stdout is dropped. The read-only message view follows transcript writes through the existing watcher.
 - **The permission mode defaults to `auto`** when a schedule's `cli:` block names none (`DEFAULT_SCHEDULE_PERMISSION_MODE`); an explicit `permission-mode`, such as `acceptEdits`, is passed verbatim. A mode that prompts for tool permission would hang the headless `-p` run.
 
 ## Non-obvious behaviors
@@ -382,6 +383,56 @@ handlers, resume guard and renderer open/restore paths with a fake child.
 The registry belongs to this app process; after a restart, a surviving run can
 only be detected through the CLI's own descriptors, with their existing limits.
 
+## Windows launches (#1107)
+
+`runScheduleCommand` plans the child with `headlessClaudeLaunch(shell, argv,
+{ env, profileArgs })` (`src/main/terminals/shell-profiles.js`), which returns
+`{ program, args, verbatim }` or `{ error }`. Under a bash, zsh, fish, nushell
+or WSL profile, and everywhere off Windows, the plan is the shell as before:
+`shellArgs(shell, 'claude ' + quoteArgvForShell(shell, argv), profileArgs)`, so
+the login profile can initialise `PATH`. Under cmd.exe, Windows PowerShell or
+PowerShell 7 on Windows the shell is not started: the plan is
+`resolveWindowsClaude(argv, env)` from `claude-binary.js`, the same resolver the
+background-agent commands use (see `bg-agents.md`, "Running the CLI") — a native
+`claude.exe` runs directly, an npm `claude.cmd` shim is unwrapped to `node
+<cli.js>` or its declared native target, an opaque shim goes through
+`cmd.exe /d /s /c` with escaped arguments. The npm target comes from one whole
+invocation line the resolver understands (`SHIM_INVOCATION` in
+`claude-binary.js`; see `bg-agents.md`, "Running the CLI"): optionally npm's
+`endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% &` trailer (with its
+cmd-shim 9.0.2 `set PATHEXT=... &` addition), a stock Node spelling without
+options, or none for a `.exe` target, the quoted `%dp0%` (cmd-shim 4.1.0 and
+later, npm 7.24 to 11) or `%~dp0` (the cmd-shim template: pnpm, yarn classic,
+npm 6) path, `%*`, and nothing else; not the earlier `node.exe` existence probe.
+A shim whose line carries anything more (an interpreter option, another command
+in the trailer, for instance) is opaque and runs as written through `cmd.exe`.
+For native executables and recognised npm targets, argv never crosses a shell,
+so multiline and long prompts, quotes, trailing backslashes, `&`, `%PATH%`
+and an empty argument reach claude as given. Before this, PowerShell re-serialized
+`claude '<token>'...` for the native command and lost quotes and boundaries
+(`say "hi" a" b\` arrived as two arguments; an `--add-dir` ending in `\` absorbed
+the following option), and cmd.exe received the `/C` string through libuv's own
+quoting, which cmd does not parse. The sandbox wrapper (Linux only) replaces the
+plan with the shell form, after the platform refusal.
+
+An `{ error }` plan (no `claude` on `PATH` in `cleanPtyEnv`, or a multi-line
+argument for an opaque shim) is a `spawn-error` run result and a `{ ok: false,
+error }` return with the usual recovery sentence; the completion callback runs and
+the shell is not started. The resolver honours `PATHEXT` only, so a `claude.ps1`
+alone on `PATH` is "not found": npm always installs the `.cmd` beside it. A
+PowerShell profile that adds `claude` to `PATH` is not consulted, as for the
+background-agent commands. The planned program and arguments are what the log's
+`Running:` line shows.
+
+Qualification: `test/headless-claude-launch.test.js` pins the plan per shell with
+injected filesystem probes; `test/schedule-launch-windows.test.js` (Windows only,
+the `windows-2022` leg) runs the extracted `runScheduleCommand` with the real
+`child_process.spawn` under `powershell.exe`, `pwsh.exe` when installed and
+`cmd.exe`, into an argv-recording `claude.exe`, an opaque `claude.cmd` (its Node
+spelled as an absolute path, so it runs through `cmd.exe`) and an npm layout
+(the stock npm shim with its title trailer, unwrapped) with `claude.ps1` beside it, and compares the argv claude
+received, including the quote, backslash, `%PATH%` and empty-argument cases.
+
 ## If you change this, also check
 
 - `public/dialogs.js` (`launchScheduleCreator`) — UI entry point for the schedule creator flow
@@ -391,7 +442,7 @@ only be detected through the CLI's own descriptors, with their existing limits.
 - `archived-projects.js` (`archivePlanForGroups`) and `test/schedule-disable.test.js` — if you change `parseFrontmatter`, the rewrite in `setScheduleEnabled` follows the same state machine
 - `schedule-ipc.js` `SCHEDULE_CREATOR_TEMPLATE` — if you change the schedule file format, update the template's instructions
 - `main.js` (wherever `startScheduler(log, runScheduleCommand, { resumeSource: powerMonitor, stateDir })` is invoked at app boot — checked 2026-09, it moves as main.js grows)
-- The `runScheduleCommand` factory in `main.js` — uses `child_process.spawn`, `cleanPtyEnv`, and the global shell profile. Schedules don't get their own shell selector.
+- The `runScheduleCommand` factory in `main.js` — uses `child_process.spawn`, `cleanPtyEnv`, and the global shell profile through `headlessClaudeLaunch` (no shell under cmd.exe or PowerShell on Windows). Schedules don't get their own shell selector.
 
 ## Limitations worth knowing
 

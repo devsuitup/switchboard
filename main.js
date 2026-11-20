@@ -85,7 +85,7 @@ function spawnPty(file, args, opts) {
 }
 
 // Shell profiles → shell-profiles.js
-const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell, claudeCommand } = require('./src/main/terminals/shell-profiles');
+const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell, claudeCommand, headlessClaudeLaunch } = require('./src/main/terminals/shell-profiles');
 const { startScheduler, scheduleLaunchRefusal, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./src/main/schedules/schedule-runner');
 const { buildScheduleList } = require('./src/main/schedules/schedule-list');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
@@ -4270,9 +4270,9 @@ if (!app.isPackaged) {
         const profileId = globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile;
         const profile = resolveShell(profileId);
         const shell = profile.path;
-        // see .ai/contexts/schedule-runner.md
-        let cmd = 'claude ' + quoteArgvForShell(shell, claudeArgv);
         const env = { ...cleanPtyEnv, FORCE_COLOR: '0' };
+        // see .ai/contexts/schedule-runner.md ("Windows launches")
+        let launch = headlessClaudeLaunch(shell, claudeArgv, { env, profileArgs: profile.args || [] });
 
         const sandbox = resolveScheduleSandbox(cwd, getSetting, SETTING_DEFAULTS.sandbox);
         if (sandbox) {
@@ -4290,21 +4290,28 @@ if (!app.isPackaged) {
           }
           env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = require('./src/main/triggers/trigger-watcher').getTriggersDir();
           fs.mkdirSync(path.join(env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR, 'processed'), { recursive: true });
-          cmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgv);
+          const cmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgv);
+          launch = { program: shell, args: shellArgs(shell, cmd, profile.args || []), verbatim: false };
           const bindEnv = sandboxBindEnv(addDirs);
           if (bindEnv) env.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
           env.SWITCHBOARD_SANDBOX_PROJECT_FOLDER = encodeProjectPath(cwd);
         }
-        const args = shellArgs(shell, cmd, profile.args || []);
-
-        log.info(`[schedule] Running: ${shell} ${args.join(' ')}`);
         const spawnFailure = err => ({ ok: false, error: `Could not start the schedule: ${err.message || String(err)}. Check the shell settings and project folder, then try Run now again.` });
+        if (launch.error) {
+          log.error(`[schedule] ${runName} error:`, launch.error);
+          recordResult({ outcome: 'spawn-error', error: spawnFailure({ message: launch.error }).error });
+          if (onDone) onDone();
+          return spawnFailure({ message: launch.error });
+        }
+
+        log.info(`[schedule] Running: ${launch.program} ${launch.args.join(' ')}`);
         let child;
         try {
-          child = cpSpawn(shell, args, {
+          child = cpSpawn(launch.program, launch.args, {
             cwd,
             stdio: ['ignore', 'ignore', 'pipe'],
             env,
+            windowsVerbatimArguments: launch.verbatim,
           });
         } catch (err) {
           log.error(`[schedule] ${runName} error:`, err.message);
