@@ -1295,7 +1295,12 @@ naming the live owners it had already established** before the traversal became
 uncertain (several owners with the `multiple live continuation jobs` reason; one
 owner when a later continuation's transcript is torn, unreadable, or its worker
 liveness unknown), and main refuses on `jobs.length` (or a known single `job`)
-before reading `known`; a found conflict is never permission to write. Only an
+before reading `known`; a found conflict is never permission to write. A job
+proven live and hosted while a continuation's jobs are sampled enters `owners`
+at once, and the sampling of that continuation runs to its end before an
+unknown liveness is reported: a second job record for the same conversation
+whose worker cannot be placed does not hide the owner, whatever order the jobs
+directory lists them in (the directory order is not sorted). Only an
 answer with no owner at all lets `/bg` go. The respawn and strict-stop callers
 in `bg-agents-ipc.js` keep refusing on `known: false` whatever `jobs` holds.
 This keeps the pre-write boundary the retired
@@ -1305,7 +1310,8 @@ unknown liveness is the decided change. Tests: `bg-handoff` T29/T30,
 "…lets /bg go when continuation liveness is unknown" and "…refuses /bg when an
 uncertain check still names the live owner it had established";
 `bg-duplicate-1020` "continuationJobCheck keeps a proven live owner when a
-later continuation tail is torn".
+later continuation tail is torn" and "…when another job … of the same
+continuation has unknown liveness" (both directory orders).
 
 ### Exit handoff batch (#546, H1)
 

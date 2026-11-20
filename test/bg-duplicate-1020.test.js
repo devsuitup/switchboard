@@ -542,3 +542,17 @@ test('1020 continuationJobCheck keeps a proven live owner when a later continuat
   assert.match(result.reason, /cannot read conversation continuations/);
   assert.deepEqual((result.jobs || []).map(job => job.id), ['bbbbbbbb'], 'an uncertain later read must not erase the owner already established');
 });
+
+for (const other of ['cccccccc', '0000cccc']) {
+  test('1020 continuationJobCheck keeps a proven live owner when another job ' + other + ' of the same continuation has unknown liveness', async t => {
+    const h = fixture(t);
+    h.fork();
+    h.writeJob(other, NEXT, 'working');
+    fs.writeFileSync(path.join(h.root, 'daemon', 'roster.json'), line({ proto: 1, updatedAt: new Date().toISOString(), workers: {} }));
+    assert.equal(bg.liveJobCheck(NEXT, { excludeJobId: other }).job.id, 'bbbbbbbb', 'a live descriptor proves job bbbbbbbb owns the continuation');
+    const result = await bg.continuationJobCheck(SID);
+    assert.equal(result.known, false);
+    assert.match(result.reason, new RegExp('worker liveness unknown for continuation job ' + other));
+    assert.deepEqual((result.jobs || []).map(job => job.id), ['bbbbbbbb'], 'an uncertain sibling job must not erase the owner proven for the same continuation');
+  });
+}
