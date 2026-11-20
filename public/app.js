@@ -524,11 +524,12 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           if (item === activeItem) {
             let timer;
             activeGatePending = true;
-            const expired = new Promise(resolve => { timer = setTimeout(() => resolve(true), activeWaitMs); });
-            activeGate = Promise.race([task.then(() => false, () => false), expired]).then(timedOut => {
+            const activeFrom = activeSessionId;
+            const expired = new Promise(resolve => { timer = setTimeout(resolve, activeWaitMs); });
+            activeGate = Promise.race([task.catch(() => {}), expired]).then(() => {
               activeGatePending = false;
               clearTimeout(timer);
-              if (timedOut) fillEmptyScreen();
+              if (activeSessionId === activeFrom) fillEmptyScreen();
             });
           }
           continue;

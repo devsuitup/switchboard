@@ -228,7 +228,7 @@ test('a delayed active background attach does not take a tab the user selected m
 });
 
 test('when the active background entry is slow, the rest opens after the bound and the late attach keeps the user tab', async (t) => {
-  const h = setup({ activeWaitMs: 50, savedSet: [
+  const h = setup({ activeWaitMs: 500, savedSet: [
     { sessionId: 'a', projectPath: '/pa' },
     { sessionId: 'bg', projectPath: '/pb', bg: true, active: true, attachJobId: '1234abcd' },
   ] });
@@ -236,7 +236,7 @@ test('when the active background entry is slow, the rest opens after the bound a
   t.after(async () => { await drain(h, done); h.dom.window.close(); });
   await h.settle();
   assert.deepEqual(h.pendingOpens.map((p) => p.sessionId), []);
-  await new Promise((resolve) => setTimeout(resolve, 120));
+  await new Promise((resolve) => setTimeout(resolve, 600));
   assert.deepEqual(h.pendingOpens.map((p) => p.sessionId), ['a'], 'the bound expired: the interactive entry opens');
   h.pendingOpens.shift().resolve();
   await h.settle();
@@ -410,6 +410,32 @@ test('an already open background peer fills the empty screen when the active wai
   await done;
   assert.equal(h.active(), 'peer-bg', 'the late active attach opens behind the shown peer');
   assert.deepEqual(h.tabs(), ['active-bg', 'peer-bg']);
+});
+
+test('a refused active background entry shows an already open peer without waiting for another pending background task', async (t) => {
+  const h = setup({ activeWaitMs: 1000, savedSet: [
+    { sessionId: 'active-bg', projectPath: '/pa', bg: true, active: true, attachJobId: '1234abcd' },
+    { sessionId: 'peer-bg', projectPath: '/pb', bg: true, attachJobId: '1234abcd' },
+    { sessionId: 'slow-bg', projectPath: '/pc', bg: true, attachJobId: '1234abcd' },
+  ] });
+  const done = h.restore();
+  t.after(async () => { await drain(h, done); h.dom.window.close(); });
+  await h.settle();
+  assert.deepEqual(h.pendingRestores.map((p) => p.id), ['active-bg', 'peer-bg']);
+  h.pendingRestores.splice(1, 1)[0].resolve();
+  await h.settle();
+  h.pendingOpens.shift().resolve();
+  await h.settle();
+  assert.deepEqual(h.tabs(), ['peer-bg'], 'the peer is open');
+  assert.equal(h.active(), null, 'the peer stays behind the active gate');
+  assert.deepEqual(h.pendingRestores.map((p) => p.id), ['active-bg', 'slow-bg'], 'the released slot went to the slow peer');
+  h.pendingRestores.splice(h.pendingRestores.findIndex((p) => p.id === 'active-bg'), 1)[0].refuse();
+  await h.settle();
+  assert.deepEqual(h.pendingRestores.map((p) => p.id), ['slow-bg'], 'the slow peer is still pending');
+  assert.equal(h.active(), 'peer-bg', 'the refused active entry does not leave the open peer hidden behind an unrelated pending task');
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  await h.settle();
+  assert.deepEqual(h.shown(), ['peer-bg'], 'the cleared active timer shows nothing twice');
 });
 
 test('the expired active wait does not replace a tab the user selected meanwhile', async (t) => {

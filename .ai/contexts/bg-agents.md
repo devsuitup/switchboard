@@ -227,11 +227,15 @@ the gate is pending a peer's `activate` is false, so it cannot take the
 foreground before the saved active entry. `fillEmptyScreen` runs when nothing is
 shown at all and shows `restoredFallbackId()`: the saved active entry (fresh
 ones included, under their started id) if it is open, else the first open,
-not-closed restored tab. It runs twice: when the gate expires on the timer (so
-a peer that opened while the gate was pending is shown at the bound, without
-waiting for the pending active task — a saved set of background entries only
-has no later open to make that decision) and at the end of the run, so a
-refused or slow active entry still leaves a tab on screen. Fallback when the
+not-closed restored tab. It runs twice: when the gate settles (the active
+attach opened, was refused, failed or ran past the bound — so a peer that
+opened while the gate was pending is shown at once, without waiting for the
+pending active task or for an unrelated peer still holding a slot; a saved set
+of background entries only has no later open to make that decision) and at the
+end of the run, so a refused or slow active entry still leaves a tab on screen.
+The settle-time call is skipped when the selection changed since the gate was
+armed (`activeFrom`, the same guard as `mayShow`), so a tab the user picked
+meanwhile, open or not yet, is kept. Fallback when the
 active entry is slow: after the bound the rest opens, the first tab to open
 fills the empty screen, and the late active attach opens behind it without
 taking the focus. Background entries run
@@ -244,7 +248,8 @@ reorder the tab strip; unsaved tabs keep their positions. The helpers are local
 to `runRestore`, and the wait bound is read through `typeof`, so the harnesses
 that cut it out of `app.js` need no further declarations and can shorten the
 bound. Tests: `test/restore-progressive-661.test.js` (active first, two slots,
-active background first, delayed attach, expired bound, user selection kept);
+active background first, delayed attach, expired bound, refused active entry
+with a peer still pending, user selection kept);
 `restore-live-elsewhere` now expects the active entry to open first.
 The remembered active background entry defers to startup policy. Renderer
 rechecks descriptor identity and requires an attach verdict; no interactive
