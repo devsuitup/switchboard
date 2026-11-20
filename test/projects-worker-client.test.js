@@ -352,3 +352,104 @@ test('a DB-only change preserves first paint when the live snapshot is unchanged
     assert.deepEqual(await pending, result);
   } finally { f.client.shutdown(); }
 });
+
+// #1125: the terminal outcome of three live-snapshot conflicts, and the diagnostics they carry.
+function liveFixture(options = {}) {
+  let liveVersion = 0;
+  const f = fixture({ snapshot: () => ({ version: 'db-' + liveVersion, liveVersion: 'live-' + liveVersion }), ...options });
+  return { ...f, change: () => { liveVersion++; }, live: () => 'live-' + liveVersion };
+}
+const effectFree = value => ({ effects: [], keptLiveRows: [], reconciled: false, value });
+
+test('a third live-snapshot conflict of an effect-free build delivers the last snapshot flagged stale', async () => {
+  const f = liveFixture();
+  try {
+    const request = f.client.request();
+    for (let i = 0; i < 3; i++) { f.change(); f.reply(i, effectFree(i)); }
+    assert.deepEqual(await request, { ...effectFree(2), stale: true });
+    assert.deepEqual(f.applied, []);
+    assert.equal(f.messages.length, 3);
+  } finally { await f.client.shutdown(); }
+});
+
+test('a third conflict of a reply carrying retained rows still rejects', async () => {
+  const f = liveFixture();
+  try {
+    const request = f.client.request();
+    const refused = assert.rejects(request, { code: 'PROJECTS_SNAPSHOT_CONFLICT' });
+    for (let i = 0; i < 3; i++) { f.change(); f.reply(i, { effects: [], keptLiveRows: [['live', 'folder']], reconciled: false, value: i }); }
+    await refused;
+    assert.equal(f.messages.length, 3);
+  } finally { await f.client.shutdown(); }
+});
+
+test('an acceptance after every caller expired reports delivered:false', async () => {
+  const accepted = [];
+  const f = liveFixture({ timeoutMs: 20, accepted: (result, info) => accepted.push([result.value, info]) });
+  try {
+    const expired = f.client.request({ reconcile: true });
+    await assert.rejects(expired, /timed out/);
+    f.reply(0, { effects: [], keptLiveRows: [], reconciled: true, value: 'late' });
+    assert.deepEqual(accepted, [['late', { delivered: false }]]);
+    const answered = f.client.request();
+    f.reply(1, effectFree('in time'));
+    await answered;
+    assert.deepEqual(accepted[1], ['in time', { delivered: true }]);
+  } finally { await f.client.shutdown(); }
+});
+
+test('a terminal live conflict names its reason and both snapshots', async () => {
+  const f = liveFixture();
+  try {
+    const request = f.client.request();
+    const before = f.live();
+    for (let i = 0; i < 3; i++) { f.change(); f.reply(i, { effects: [], keptLiveRows: [['live', 'folder']], reconciled: false }); }
+    const error = await request.then(() => assert.fail('must reject'), error => error);
+    assert.equal(error.code, 'PROJECTS_SNAPSHOT_CONFLICT');
+    assert.equal(error.reason, 'live');
+    assert.equal(error.dispatches, 3);
+    assert.equal(error.reconcile, false);
+    assert.equal(error.before, 'live-2', 'the third dispatch snapshot');
+    assert.equal(error.after, 'live-3');
+    assert.notEqual(before, error.after);
+  } finally { await f.client.shutdown(); }
+});
+
+test('a terminal DB conflict of a reply with effects reports reason db', async () => {
+  const f = fixture();
+  try {
+    const request = f.client.request({ reconcile: true });
+    for (let i = 0; i < 3; i++) { f.change(); f.reply(i, { effects: [{ name: 'write' }], keptLiveRows: [], reconciled: true }); }
+    const error = await request.then(() => assert.fail('must reject'), error => error);
+    assert.equal(error.code, 'PROJECTS_SNAPSHOT_CONFLICT');
+    assert.equal(error.reason, 'db');
+    assert.equal(error.reconcile, true);
+  } finally { await f.client.shutdown(); }
+});
+
+test('a caller timeout carries the active job options and dispatch count', async () => {
+  const f = liveFixture({ timeoutMs: 20 });
+  try {
+    const request = f.client.request({ reconcile: true });
+    f.change(); f.reply(0, effectFree(0));
+    const error = await request.then(() => assert.fail('must reject'), error => error);
+    assert.equal(error.message, 'projects worker timed out');
+    assert.equal(error.code, 'PROJECTS_WORKER_TIMEOUT');
+    assert.equal(error.timeoutMs, 20);
+    assert.equal(error.reconcile, true);
+    assert.equal(error.dispatches, 2);
+  } finally { await f.client.shutdown(); }
+});
+
+test('a queued caller that expires reports the merged job its retry joined', async () => {
+  const f = liveFixture({ timeoutMs: 20 });
+  try {
+    const first = f.client.request(); first.catch(() => {});
+    const queued = f.client.request({ reconcile: true });
+    f.change(); f.reply(0, effectFree(0));
+    const error = await queued.then(() => assert.fail('must reject'), error => error);
+    assert.equal(error.code, 'PROJECTS_WORKER_TIMEOUT');
+    assert.equal(error.reconcile, true, 'the retry merged the queued reconcile request');
+    assert.equal(error.dispatches, 2);
+  } finally { await f.client.shutdown(); }
+});

@@ -757,6 +757,13 @@ body { display: flex; flex-direction: column; }
   cursor: not-allowed;
 }
 
+/* see .ai/contexts/ipc-bridge.md ("Last known projects") */
+#sidebar-content.projects-provisional .session-item,
+#sidebar-content.projects-provisional .project-header {
+  opacity: 0.7;
+  cursor: progress;
+}
+
 /* Worktree nested groups */
 .worktree-group {
   margin-left: 12px;

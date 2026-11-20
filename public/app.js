@@ -2214,6 +2214,7 @@ async function loadProjects({ resort = false } = {}) {
     if (obsolete()) return state.outcome;
     state.committed = job.generation;
     state.outcome = { accepted: true, generation: job.generation };
+    sidebarContent.classList.remove('projects-provisional');
     setRemoteHostLabels(globalSettings?.remoteHosts);
     cachedProjects = defaultProjects;
     cachedAllProjects = allProjects;
@@ -2300,7 +2301,7 @@ async function loadProjects({ resort = false } = {}) {
     if (state.latest === job && !obsolete()) {
       state.reportedErrors.add(error);
       console.warn('[switchboard] project reload failed', error);
-      if (!cachedProjects.length) {
+      if (!cachedProjects.length || sidebarContent.classList.contains('projects-provisional')) {
         loadingStatus.textContent = 'Could not load projects. Reload to retry.';
         loadingStatus.className = 'active';
         loadingStatus.style.display = '';
@@ -3128,8 +3129,39 @@ async function restoreStartupSessions({ projectsLoaded = true } = {}) {
   } finally { window._startupResumeResolutions = null; }
 }
 
+// see .ai/contexts/ipc-bridge.md ("Last known projects")
+async function paintLastKnownProjects() {
+  let last = null;
+  try { last = await window.api.getLastKnownProjects?.(); }
+  catch (error) { console.warn('[switchboard] last known projects unavailable', error); }
+  if (!last || !Array.isArray(last.defaultProjects) || !Array.isArray(last.allProjects)) return false;
+  if (loadProjects.state?.committed || cachedProjects.length || cachedAllProjects.length) return false;
+  if (!paintLastKnownProjects.guarded) {
+    paintLastKnownProjects.guarded = true;
+    const inert = event => {
+      if (!sidebarContent.classList.contains('projects-provisional')) return;
+      if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+      event.stopPropagation();
+      event.preventDefault();
+    };
+    for (const type of ['click', 'auxclick', 'dblclick', 'contextmenu', 'keydown']) sidebarContent.addEventListener(type, inert, true);
+  }
+  sidebarContent.classList.add('projects-provisional');
+  cachedProjects = last.defaultProjects;
+  cachedAllProjects = last.allProjects;
+  dedup([...cachedAllProjects, ...cachedProjects]);
+  if (loadProjects.state?.latest?.pending) {
+    loadingStatus.textContent = 'Refreshing…';
+    loadingStatus.className = 'active';
+    loadingStatus.style.display = '';
+  }
+  refreshSidebar({ resort: true });
+  return true;
+}
+
 // see .ai/contexts/session-cache.md ("Projects query worker")
 async function loadStartupProjects() {
+  if (typeof paintLastKnownProjects === 'function') paintLastKnownProjects().catch(error => console.warn('[switchboard] last known projects paint failed', error));
   let loaded = false;
   for (let attempt = 0; attempt < 2; attempt++) {
     try { await loadProjects(); loaded = true; break; }
