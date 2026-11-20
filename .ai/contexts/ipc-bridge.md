@@ -1,5 +1,37 @@
 # Context: ipc-bridge
 
+## Archived projects manager (#863 slice 2)
+
+`settings-panel.js` mounts `renderArchivedProjects` from `archived-manager.js`
+after the shared renderer helpers, dialogs, notices and sidebar controller.
+It passes a copy of hidden entries/kinds, archive timestamps, cached projects and
+the working remote-host list. Host edits update labels without saving. The manager
+groups Local first, then configured hosts in order, then unknown aliases; it never
+collapses a worktree entry into its repository. The filter, selections and folds
+are local to the mounted list. Filtering clears selections outside the results.
+Counts exclude deleted entries. Missing timestamps and unknown session counts
+are omitted, never invented. Names use `shortProjectPath` (last two segments).
+
+Unarchive uses the exact stored entry via `unarchiveProject`, sequentially for a
+bulk action. Successful entries leave the list, reload projects and get one B8
+ten-second Undo notice. Undo calls `archiveProjectSettings(path, folderKey)` and
+reads the new writer timestamp. After reopening Settings, Undo refreshes the
+currently mounted manager; a pending action does not consume its Undo notice.
+Failed entries remain, with `appAlert`; partial
+bulk successes still have Undo. Row actions are locked during a request.
+
+Delete builds `{projectPath, remoteAlias, folder, sessions}` from the exact entry;
+`folder` is the host-qualified encoded path, including for a worktree. It calls
+the existing `confirmAndDeleteProjectFolder`, retaining preview tokens, options,
+Cancel focus, refusal handling and committed-result semantics. It never calls
+Unarchive before Delete. The overflow also copies the full path through
+`writeClipboard`. No new IPC or launch code is introduced.
+
+Native controls provide Tab navigation; Enter/Space folds host groups and Escape
+clears the filter. ResizeObserver alone controls the 720px stacked layout and
+480px search disclosure. New surfaces use existing dark chrome tokens. Folder
+archives and archived sessions are not listed in this slice.
+
 **Purpose**: The trust boundary between the Electron main process (Node, full filesystem) and the renderer (Chromium, sandboxed). The renderer can only call what `preload.js` exposes via `contextBridge`; everything else is denied.
 
 This file is the **canonical inventory** of the IPC surface. When you add a new IPC, you change three places — main handler, preload bridge, renderer caller — and every IPC name should appear here.
@@ -495,8 +527,8 @@ pages are `general`, `sessions`, `keyboard`, `automation`, `remote`, `integratio
 
 The panel reparents existing rows into named regions before wiring their handlers.
 Hidden pages remain in the DOM, preserving every field id and the one Save path.
-Archive content and project footer actions retain their existing behavior until
-their later #863 slices. The new shell adds no trigger controls or archive APIs.
+The Archived projects manager is documented above; project footer actions retain
+their existing behavior until their later #863 slice. The new shell adds no trigger controls or archive APIs.
 The host-list and refresh defaults now live in `SETTING_DEFAULTS`.
 
 Each page scrolls independently; navigation and the footer stay outside that

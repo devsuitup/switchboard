@@ -123,6 +123,18 @@ test('archive keeps persisted project settings, cache, search and schedule regis
   assert.equal(h.notices(), 1);
 });
 
+test('archive IPC records its date through the writer without dating legacy entries', async t => {
+  const h = setup(t, { hidden: ['/legacy'] });
+  const before = Date.now();
+  await h.archive();
+  const dates = h.getSetting('global').hiddenProjectArchivedAt;
+  assert.ok(dates?.[h.projectPath] >= before, 'archive writer must record the archive timestamp');
+  assert.ok(dates[h.projectPath] <= Date.now());
+  assert.equal(dates['/legacy'], undefined);
+  await h.invoke('unarchive-project', h.projectPath);
+  assert.equal(h.getSetting('global').hiddenProjectArchivedAt[h.projectPath], undefined);
+});
+
 for (const alias of [null, 'server']) {
   test(`project Archive returns its stored ${alias ? 'remote' : 'local'} entry for Undo`, async t => {
     const h = setup(t);
@@ -469,7 +481,7 @@ function settingsDom(t, h) {
   dom.window.loadProjects = async () => { reloads++; };
   dom.window.applyProjectDeletion = async () => {};
   loadAppFunctions(ctx.context, { functions: ['saveGlobalSettings'], declarations: ['_persistChain'] });
-  for (const file of ['setting-defaults.js', 'shortcuts.js', 'terminal-themes.js', 'settings-panel.js']) {
+  for (const file of ['setting-defaults.js', 'shortcuts.js', 'terminal-themes.js', 'archived-manager.js', 'settings-panel.js']) {
     vm.runInContext(read('public/' + file), dom.getInternalVMContext(), { filename: path.join(ROOT, 'public', file) });
   }
   return { window: dom.window, document: dom.window.document, calls, reloads: () => reloads };
@@ -482,15 +494,15 @@ test('Settings lists legacy and remote archived projects safely and Unarchive re
   await dom.window.openSettingsViewer('global');
   const list = dom.document.querySelector('#sv-archived-projects');
   assert.ok(list, 'Archived projects must have a Settings list');
-  assert.match(list.textContent, /server::\/srv\/<project>/);
+  assert.match(list.textContent, /server.*\/srv\/<project>/s);
   assert.equal(list.querySelector('project'), null);
-  const button = list.querySelector('button');
+  const button = list.querySelector('.archived-unarchive');
   assert.equal(button.textContent, 'Unarchive');
   button.click();
   await settle();
   assert.deepEqual(dom.calls, [['unarchive', h.projectPath]]);
   assert.equal(dom.reloads(), 1);
-  assert.equal(dom.document.querySelectorAll('#sv-archived-projects button').length, 1);
+  assert.equal(dom.document.querySelectorAll('#sv-archived-projects .archived-row').length, 1);
   dom.document.querySelector('#sv-save-btn').click();
   await settle();
   assert.deepEqual(h.getSetting('global').hiddenProjects, ['server::/srv/<project>']);

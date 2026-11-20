@@ -217,6 +217,11 @@ function createWriterCommands(db) {
       guard([scope ? { alias: scope.alias, projectPath: entryProject(entry).projectPath } : entryProject(entry)], proof);
       const global = db.getSetting('global') || {};
       const fields = {};
+      if (kind === 'archive' || global.hiddenProjectArchivedAt) {
+        fields.hiddenProjectArchivedAt = { ...global.hiddenProjectArchivedAt };
+        if (kind === 'archive') fields.hiddenProjectArchivedAt[entry] = Date.now();
+        else delete fields.hiddenProjectArchivedAt[entry];
+      }
       if (scope || global.hiddenProjectScopes) {
         fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
         if (scope && (!(global.hiddenProjects || []).includes(entry) || Object.hasOwn(global.hiddenProjectScopes || {}, entry))) fields.hiddenProjectScopes[entry] = scope;
@@ -237,6 +242,10 @@ function createWriterCommands(db) {
       const kinds = { ...global.hiddenProjectKinds };
       delete kinds[entry];
       const fields = { hiddenProjects: (global.hiddenProjects || []).filter(p => p !== entry), hiddenProjectKinds: kinds };
+      if (global.hiddenProjectArchivedAt) {
+        fields.hiddenProjectArchivedAt = { ...global.hiddenProjectArchivedAt };
+        delete fields.hiddenProjectArchivedAt[entry];
+      }
       if (global.hiddenProjectScopes) {
         fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
         delete fields.hiddenProjectScopes[entry];

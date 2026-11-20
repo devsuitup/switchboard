@@ -475,7 +475,7 @@ async function settings(h, scope = 'project') {
     if (!h.document.getElementById(id)) { const el = h.document.createElement('div'); el.id = id; h.document.body.append(el); }
   }
   h.w.api.getSetting = async () => ({}); h.w.api.getShellProfiles = async () => [];
-  for (const file of ['shortcuts.js', 'terminal-themes.js', 'remote-enrol-panel.js', 'settings-panel.js']) {
+  for (const file of ['shortcuts.js', 'terminal-themes.js', 'remote-enrol-panel.js', 'archived-manager.js', 'settings-panel.js']) {
     const filename = path.join(__dirname, '../public', file);
     vm.runInContext(fs.readFileSync(filename, 'utf8'), h.context, { filename });
   }

@@ -512,7 +512,7 @@
 
       ${!isProject ? `<div class="settings-section">
         <div class="settings-section-title">Archived projects</div>
-        <div class="settings-description">Unarchive restores a project's sidebar row and schedules. Projects deleted from Switchboard can be added again with default settings.</div>
+        <div class="settings-description">Unarchive restores a project's sidebar row and schedules. Actions apply immediately.</div>
         <div id="sv-archived-projects"></div>
       </div>` : ''}
 
@@ -642,12 +642,13 @@
     let remembered;
     try { remembered = localStorage.getItem(storageKey); } catch {}
     selectPage(pages.has(options.section) ? options.section : remembered);
-    settingsViewer.classList.remove('settings-narrow');
+    settingsViewer.classList.remove('settings-narrow', 'settings-compact');
     if (typeof ResizeObserver !== 'undefined') {
       settingsResizeObserver = new ResizeObserver(entries => {
         for (const entry of entries) {
           if (entry.target === settingsViewer && entry.contentRect.width > 0) {
             settingsViewer.classList.toggle('settings-narrow', entry.contentRect.width < 720);
+            settingsViewer.classList.toggle('settings-compact', entry.contentRect.width < 480);
             revealActiveNav();
           }
         }
@@ -700,32 +701,16 @@
     let renderRemoteHosts;
     if (!isProject) {
       const list = settingsViewerBody.querySelector('#sv-archived-projects');
-      const deleted = current.hiddenProjectKinds || {};
-      let archived = (current.hiddenProjects || []).filter(entry => deleted[entry] !== 'delete');
-      function renderArchived() {
-        list.innerHTML = archived.length ? archived.map((entry, i) => `
-          <div class="settings-field">
-            <div class="settings-field-info">${escapeHtml(entry.includes('::') ? remoteHostLabel(entry.split('::')[0], remoteHosts) + entry.slice(entry.indexOf('::')) : entry)}</div>
-            <div class="settings-field-control"><button class="settings-cancel-btn" data-archived-index="${i}">Unarchive</button></div>
-          </div>`).join('') : '<div class="settings-description">No archived projects.</div>';
-        list.querySelectorAll('button').forEach(button => {
-          button.addEventListener('click', async () => {
-            const entry = archived[Number(button.dataset.archivedIndex)];
-            button.disabled = true;
-            try {
-              const result = await window.api.unarchiveProject(entry);
-              if (result.error) throw new Error(result.error);
-              archived = archived.filter(p => p !== entry);
-              renderArchived();
-              if (typeof loadProjects === 'function') await Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
-            } catch (err) {
-              button.disabled = false;
-              await showChoiceDialog({ title: 'Could not unarchive project', message: err.message, confirmLabel: 'OK' });
-            }
-          });
-        });
-      }
-      renderArchived();
+      const archivedManager = renderArchivedProjects(list, {
+        entries: current.hiddenProjects || [], kinds: { ...current.hiddenProjectKinds },
+        dates: current.hiddenProjectArchivedAt || {}, hosts: remoteHosts,
+        projects: typeof cachedAllProjects === 'undefined' ? [] : cachedAllProjects,
+        onCount: count => {
+          const nav = settingsViewerBody.querySelector('.settings-nav [data-section="archived"]');
+          if (nav) nav.textContent = `Archived (${count})`;
+        },
+      });
+      const renderArchived = () => archivedManager.setHosts(remoteHosts);
 
       const listEl = settingsViewerBody.querySelector('#sv-remote-hosts');
 
@@ -741,7 +726,7 @@
           <div class="remote-host-enrol" data-i="${i}"></div>`).join('');
         listEl.querySelectorAll('.remote-host-row').forEach(row => {
           const i = Number(row.dataset.i);
-          row.querySelector('.rh-alias').addEventListener('input', e => { remoteHosts[i].alias = e.target.value; });
+          row.querySelector('.rh-alias').addEventListener('input', e => { remoteHosts[i].alias = e.target.value; renderArchived(); });
           row.querySelector('.rh-label').addEventListener('input', e => {
             remoteHosts[i].label = e.target.value;
             renderArchived();
@@ -753,6 +738,7 @@
           row.querySelector('.rh-remove').addEventListener('click', () => {
             remoteHosts.splice(i, 1);
             renderRemoteHosts();
+            renderArchived();
           });
         });
         updateDirty();

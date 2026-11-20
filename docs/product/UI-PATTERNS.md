@@ -377,6 +377,12 @@ one yes/no question per candidate.
 
 ## 5. Lists and rows
 
+Settings ? Archived has management rows grouped by host. Selection, Unarchive
+and More actions stay visible; the latter contains Copy path and Delete project.
+A narrow viewer stacks the actions below the metadata, using ResizeObserver
+breakpoints rather than a user mode.
+
+
 | List | Row anatomy, in order | Selection / open | Keyboard | Grouping, folding | Empty state |
 |---|---|---|---|---|---|
 | Sidebar sessions (`buildSessionItem`, `sidebar.js:1655-1827`) | pin · state slot · [badges `terminal` / `bg` / remote alias] name · meta (`time · N msgs`, short id, status) · action bar revealed by hover or keyboard focus (`:focus-visible`) (up to 8 icon buttons, `1808-1818`) | click opens/resumes/attaches/reads (`1431-1439`); active row highlighted; dblclick on name renames (`1460-1463`); right-click menu (`1444-1448`) | **none on rows**; action buttons tabbable, visible while a button has keyboard focus (`:focus-visible`), with a focus ring on that button (`style.css`, `.session-actions:has(:focus-visible)`, `:where(button:focus-visible)`); a shortcut cycles open sessions (`grid-view.js:560-575`) | project → worktree → slug group (`buildSlugGroup`, `sidebar.js:492`) → subagents; slug-group header click toggles, not focusable (`1382-1386`); rows with a PTY promoted to the top of a group (`563-570`) | `Select a session from the sidebar to begin.` (`index.html:54`, main area) |

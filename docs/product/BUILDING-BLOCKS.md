@@ -82,6 +82,12 @@ word read from it; raw CLI words move to tooltips/detail.
 
 ## B3. Session row
 
+Settings ? Archived uses a management-row variant: checkbox, name and badges,
+full path with tooltip, available date/count metadata, always-visible Unarchive
+and a More actions disclosure. Its host headers fold with Enter/Space and offer
+select-all. Rows themselves are not focus targets.
+
+
 - **Job.** One sidebar entry for a session (or a merged set of transcripts).
 - **Anatomy, in order** (`buildSessionItem`, `sidebar.js:1655-1827`): pin
   (`1686-1690`) · B1 (`1693-1697`) · info: badges (B15: remote alias
@@ -292,6 +298,11 @@ focus) with a form body.
 semantics; their action buttons become B4.
 
 ## B11. Empty state
+
+Archived projects distinguishes an empty list (how to Archive Project) from an
+unmatched filter (the query plus Clear filter). It does not claim to list folder
+or session archives yet.
+
 
 - **Job.** Say why a list is empty and what to do next.
 - **Instances.** `index.html:54`; `index.html:46`; `agents-view.js:376,

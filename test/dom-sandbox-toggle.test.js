@@ -205,6 +205,7 @@ function setupSettingsPanelDom(platform) {
   evalInWindow(dom, path.join(PUBLIC_DIR, 'shortcuts.js'));
   // Global scope renders the Application section, which reads TERMINAL_THEMES.
   evalInWindow(dom, path.join(PUBLIC_DIR, 'terminal-themes.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'archived-manager.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'settings-panel.js'));
 
   return {

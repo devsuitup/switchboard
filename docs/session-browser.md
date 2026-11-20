@@ -63,7 +63,7 @@ listed before any session has run in it.
 **Archive Project**, in Project Settings or on a worktree header, removes a
 project from the sidebar without asking. A notice offers **Undo** for about
 10 seconds. Its settings and cache are kept. Schedules are suspended without changing
-their files. **Unarchive** in Settings → **Archived projects**, or **Add Project**
+their files. **Unarchive** in Settings → **Archived**, or **Add Project**
 on the same local folder, restores it and resumes scheduling. Unlike **Archive
 folder**, a new session does not restore it automatically. **Delete Project**
 offers separate choices for app metadata and project settings, and optionally
