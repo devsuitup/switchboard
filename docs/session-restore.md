@@ -55,7 +55,10 @@ tabs or working-set saves.
 The session that was active when Switchboard closed opens first and is shown as
 soon as its terminal is up; the other tabs open behind it, interactive sessions
 one at a time and background sessions two at a time, without taking the focus.
-The tab order still follows the saved order once every tab is open.
+If that session is slow to come back (its wait is bounded to 20 seconds) or
+cannot be reopened, the first tab that is ready is shown meanwhile, and the slow
+one opens behind it without taking the focus. The tab order still follows the
+saved order once every tab is open.
 
 ### A session with no transcript yet
 

@@ -436,8 +436,9 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       const shownItem = savedActive || list[list.length - 1];
       const activeId = shownItem && (startedAs.get(shownItem.sessionId) || shownItem.sessionId);
       const restoredIds = new Set([...list.map(item => startedAs.get(item.sessionId) || item.sessionId), ...skippedWorkingSetEntries.keys()]);
-      return activeId && openSessions.has(activeId) ? activeId
-        : [...openSessions.keys()].find(id => restoredIds.has(id) && !openSessions.get(id).closed);
+      const opened = id => openSessions.has(id) && !openingSessions.has(id);
+      return activeId && opened(activeId) ? activeId
+        : [...openSessions.keys()].find(id => restoredIds.has(id) && opened(id) && !openSessions.get(id).closed);
     };
     const fillEmptyScreen = () => {
       const fallbackId = restoredFallbackId();

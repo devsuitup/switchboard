@@ -390,3 +390,15 @@ test('the shipped handler refuses /bg when the check found several live continua
   assert.match(result.error, /bbbbbbbb, cccccccc/);
   assert.deepEqual(h.writes, [], 'known live conflicts never become permission to submit /bg');
 });
+
+test('the shipped handler refuses /bg when an uncertain check still names the live owner it had established', async t => {
+  const h = ipcSetup(t);
+  h.ctx.log.info = () => assert.fail('an established owner is not unknown liveness');
+  h.ctx.bgAgents.continuationJobCheck = async () => ({ known: false, reason: 'cannot read conversation continuations for 22222222-2222-4222-8222-222222222222',
+    jobs: [{ id: 'bbbbbbbb', state: 'working' }] });
+  const result = await h.handleSendToBackground({}, 'tab');
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'refused');
+  assert.match(result.error, /background job bbbbbbbb\./);
+  assert.deepEqual(h.writes, [], 'a later uncertain tail must not discard the proven live owner and submit /bg');
+});

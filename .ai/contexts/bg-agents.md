@@ -227,7 +227,11 @@ the gate is pending a peer's `activate` is false, so it cannot take the
 foreground before the saved active entry. `fillEmptyScreen` runs when nothing is
 shown at all and shows `restoredFallbackId()`: the saved active entry (fresh
 ones included, under their started id) if it is open, else the first open,
-not-closed restored tab. It runs twice: when the gate settles (the active
+not-closed restored tab. "Open" is `openSessions.has(id) &&
+!openingSessions.has(id)`, the same test the sidebar uses: `openSessionNow`
+creates the terminal entry before awaiting `openTerminal`, so an entry whose
+`openSession` is still in flight is allocated, not ready, and the expired gate
+shows a ready peer rather than that pending terminal. It runs twice: when the gate settles (the active
 attach opened, was refused, failed or ran past the bound — so a peer that
 opened while the gate was pending is shown at once, without waiting for the
 pending active task or for an unrelated peer still holding a slot; a saved set
@@ -248,7 +252,8 @@ reorder the tab strip; unsaved tabs keep their positions. The helpers are local
 to `runRestore`, and the wait bound is read through `typeof`, so the harnesses
 that cut it out of `app.js` need no further declarations and can shorten the
 bound. Tests: `test/restore-progressive-661.test.js` (active first, two slots,
-active background first, delayed attach, expired bound, refused active entry
+active background first, delayed attach, expired bound, expired bound with the
+active terminal still opening, refused active entry
 with a peer still pending, user selection kept);
 `restore-live-elsewhere` now expects the active entry to open first.
 The remembered active background entry defers to startup policy. Renderer
@@ -1285,14 +1290,22 @@ transcript (the #1020 duplicate; the CLI does not check). Unknown liveness lets
 `/bg` go ahead with one info log line (`continuation liveness unknown`): a typed
 `/bg` would, and the unknown-liveness refusal was the main reason the button
 failed where typing worked. "Unknown" means genuinely unavailable liveness only:
-when the checker found several live owners it answers `known: false` with the
-`multiple live continuation jobs` reason **and a `jobs` array naming them**, and
-main refuses on `jobs.length` (or a known single `job`) before reading
-`known`; a found conflict is never permission to write. This keeps the pre-write boundary the retired
+every `known: false` answer of `continuationJobCheck` carries **a `jobs` array
+naming the live owners it had already established** before the traversal became
+uncertain (several owners with the `multiple live continuation jobs` reason; one
+owner when a later continuation's transcript is torn, unreadable, or its worker
+liveness unknown), and main refuses on `jobs.length` (or a known single `job`)
+before reading `known`; a found conflict is never permission to write. Only an
+answer with no owner at all lets `/bg` go. The respawn and strict-stop callers
+in `bg-agents-ipc.js` keep refusing on `known: false` whatever `jobs` holds.
+This keeps the pre-write boundary the retired
 `bg-recovery-1020fix` suite guarded for the live-fork case; proceeding on
 unknown liveness is the decided change. Tests: `bg-handoff` T29/T30,
-`bg-handoff-main` "the shipped handler refuses /bg before any write…" and
-"…lets /bg go when continuation liveness is unknown".
+`bg-handoff-main` "the shipped handler refuses /bg before any write…",
+"…lets /bg go when continuation liveness is unknown" and "…refuses /bg when an
+uncertain check still names the live owner it had established";
+`bg-duplicate-1020` "continuationJobCheck keeps a proven live owner when a
+later continuation tail is torn".
 
 ### Exit handoff batch (#546, H1)
 

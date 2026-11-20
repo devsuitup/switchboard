@@ -531,3 +531,14 @@ test('1020 continuationJobCheck lists every live owner when the continuations ar
   assert.match(result.reason, /multiple live continuation jobs/);
   assert.deepEqual(result.jobs.map(job => job.id).sort(), ['bbbbbbbb', 'cccccccc'], 'the conflict names its owners instead of reading as unknown');
 });
+
+test('1020 continuationJobCheck keeps a proven live owner when a later continuation tail is torn', async t => {
+  const h = fixture(t);
+  h.fork();
+  fs.appendFileSync(path.join(h.root, NEXT + '.jsonl'), '{"type":"continued-in","sessionId":');
+  assert.equal(bg.liveJobCheck(NEXT).job.id, 'bbbbbbbb', 'the continuation is a live job before the torn tail is read');
+  const result = await bg.continuationJobCheck(SID);
+  assert.equal(result.known, false);
+  assert.match(result.reason, /cannot read conversation continuations/);
+  assert.deepEqual((result.jobs || []).map(job => job.id), ['bbbbbbbb'], 'an uncertain later read must not erase the owner already established');
+});

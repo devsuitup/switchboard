@@ -402,15 +402,17 @@ async function conversationCheck(id, { workerLiveness = true } = {}) {
 async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = new Map() } = {}) {
   const pending = [sessionId], seen = new Set(), owners = new Map();
   const evidence = new Map(workerLiveness);
+  // see .ai/contexts/bg-agents.md ("Continuations already hosted")
+  const unknown = reason => ({ known: false, reason, ...(owners.size ? { jobs: [...owners.values()] } : {}) });
   while (pending.length) {
     const id = pending.shift().toLowerCase();
     if (seen.has(id)) continue;
-    if (seen.size >= 64) return { known: false, reason: 'too many conversation continuations' };
+    if (seen.size >= 64) return unknown('too many conversation continuations');
     seen.add(id);
     if (id !== sessionId.toLowerCase()) {
       let names;
       try { names = fs.readdirSync(jobsDir); }
-      catch (err) { if (err.code !== 'ENOENT') return { known: false, reason: 'cannot read background jobs' }; names = []; }
+      catch (err) { if (err.code !== 'ENOENT') return unknown('cannot read background jobs'); names = []; }
       for (const jobId of names.filter(name => JOB_ID_RE.test(name) && name !== excludeJobId)) {
         let job;
         try { job = parseJobState(fs.readFileSync(path.join(jobsDir, jobId, 'state.json'), 'utf8')); } catch {}
@@ -418,22 +420,22 @@ async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = 
         if (sid?.toLowerCase() !== id) continue;
         if (['stopped', 'failed'].includes(job?.state)) continue;
         const liveness = await workerEvidence({ ...job, id: jobId, sessionId: sid }, true);
-        if (liveness !== 'live' && liveness !== 'dead') return { known: false, reason: 'worker liveness unknown for continuation job ' + jobId };
+        if (liveness !== 'live' && liveness !== 'dead') return unknown('worker liveness unknown for continuation job ' + jobId);
         evidence.set(jobId, liveness);
       }
       const owner = liveJobCheck(id, { workerLiveness: evidence, excludeJobId });
-      if (!owner.known) return owner;
+      if (!owner.known) return unknown(owner.reason);
       if (owner.job) owners.set(owner.job.id, { ...owner.job, sessionId: id });
     }
     const file = resolveTranscriptPath?.(id);
     if (!file) continue;
     try { fs.statSync(file); }
-    catch (err) { if (err.code === 'ENOENT') continue; return { known: false, reason: 'cannot read continuation transcript for ' + id }; }
+    catch (err) { if (err.code === 'ENOENT') continue; return unknown('cannot read continuation transcript for ' + id); }
     const ids = await createContinuationReader(file, id)();
-    if (!ids) return { known: false, reason: 'cannot read conversation continuations for ' + id };
+    if (!ids) return unknown('cannot read conversation continuations for ' + id);
     pending.push(...ids);
   }
-  if (owners.size > 1) return { known: false, reason: 'multiple live continuation jobs; check the Agents view', jobs: [...owners.values()] };
+  if (owners.size > 1) return unknown('multiple live continuation jobs; check the Agents view');
   return { known: true, job: owners.values().next().value || null };
 }
 
