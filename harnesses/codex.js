@@ -5,6 +5,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { scanLines, readHead } = require('../jsonl-scan');
+const { observation, fullReadStamp } = require('../src/main/session-index/full-read-state');
+const { bodyRead, readAuxiliaryFile } = require('../src/main/session-index/read-counters');
 
 const id = 'codex';
 const label = 'Codex';
@@ -48,8 +50,9 @@ function readSessionTitles() {
   const cached = cachedTitleIndex;
   if (cached && cached.filePath === filePath && cached.mtimeMs === stat.mtimeMs && cached.ctimeMs === stat.ctimeMs
     && cached.ino === stat.ino && cached.size === stat.size) return cached.titles;
-  let body;
-  try { body = fs.readFileSync(filePath, 'utf8'); } catch { return null; }
+  const before = observation(filePath);
+  let body, bytes;
+  try { bytes = readAuxiliaryFile(filePath); body = bytes.toString('utf8'); } catch { return null; }
   const titles = new Map();
   for (const line of body.split('\n')) {
     if (!line.trim()) continue;
@@ -58,7 +61,9 @@ function readSessionTitles() {
     if (typeof entry?.id !== 'string' || typeof entry?.thread_name !== 'string') continue;
     titles.set(entry.id, entry.thread_name.trim() || null);
   }
-  cachedTitleIndex = { filePath, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino, size: stat.size, titles };
+  const complete = before && bytes.length === Number(before.size) && JSON.stringify(before) === JSON.stringify(observation(filePath));
+  cachedTitleIndex = { filePath, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino, size: stat.size, titles,
+    fullObservation: complete ? before : null };
   return titles;
 }
 
@@ -150,6 +155,8 @@ function metricsBucket(buckets, date, model) {
 
 function readSessionFile(filePath, folder) {
   try {
+    const before = observation(filePath);
+    const titleBefore = observation(titleIndexPath());
     const stat = fs.statSync(filePath);
     const sessionId = sessionIdFromPath(filePath);
     if (!sessionId) return null;
@@ -200,22 +207,29 @@ function readSessionFile(filePath, folder) {
       if (!summary && role === 'user' && text) summary = text.slice(0, 120);
       if (text) textParts.push(text);
     };
-    const scan = scanLines(filePath, 0, onLine, stat.size);
+    const scan = bodyRead(filePath, () => scanLines(filePath, 0, onLine, stat.size));
     if (scan.tail && !scan.stopped) onLine(scan.tail);
     if (subagent || !projectPath || !summary || messageCount < 1) return null;
 
     const created = firstTimestamp || stat.birthtime.toISOString();
+    const titles = readSessionTitles();
+    const aiTitle = titles?.get(sessionId) || null;
+    const titleAfter = observation(titleIndexPath());
     return {
       sessionId, folder, projectPath, runtime: id, sessionFile: filePath,
+      fullReadStamp: titles && JSON.stringify(titleBefore) === JSON.stringify(titleAfter) && titleBefore !== undefined
+        && (titleBefore === null || (cachedTitleIndex?.titles === titles && JSON.stringify(cachedTitleIndex.fullObservation) === JSON.stringify(titleBefore)))
+        ? fullReadStamp(filePath, id, path.basename(filePath), before, scan.read, { title: aiTitle }) : null,
       summary, firstPrompt: summary, created,
       modified: lastTimestamp || created,
       fileMtime: stat.mtime.toISOString(), fileSize: stat.size,
       messageCount, textContent: textParts.join('\n'),
       dailyMetrics: [...buckets.values()].filter(b => b.messageCount || b.toolCallCount || b.inputTokens || b.outputTokens),
       slug: null, customTitle: '', entrypoint,
-      aiTitle: readSessionTitles()?.get(sessionId) || null,
+      aiTitle,
     };
   } catch {
+    require('../src/main/session-index/read-counters').failedRead(filePath);
     return null;
   }
 }

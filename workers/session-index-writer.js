@@ -17,7 +17,7 @@ const rawCommands = new Set(['setSetting', 'deleteSetting', 'toggleStar', 'setSt
   'upsertCachedSessions', 'deleteCachedSession', 'deleteCachedFolder', 'replaceSessionMetrics',
   'touchCachedModified', 'setFolderMeta', 'deleteSearchFolder', 'deleteSearchSession', 'deleteSearchType',
   'upsertSearchEntries', 'applySearchFileBatch', 'setCachedEntrypoints', 'setCachedCustomTitles',
-  'setCachedContinuationIndex', 'setCachedFileSize', 'setInitialScanComplete']);
+  'setCachedContinuationIndex', 'setCachedFileSize', 'setInitialScanComplete', 'invalidateFullIndex', 'invalidateFullRead', 'certifyFullRead']);
 const settings = () => db.listSettingKeys('').map(key => [key, db.getSetting(key)]);
 const queue = [];
 const pendingDeletionHistory = new Set();
@@ -27,7 +27,7 @@ const assertWorkflow = message => {
 };
 let running = false, interactiveBurst = 0;
 const backgroundCommands = new Set(['effects', 'upsertCachedSessions', 'replaceSessionMetrics', 'upsertSearchEntries',
-  'applySearchFileBatch', 'setCachedEntrypoints', 'setCachedCustomTitles', 'deleteCachedFolder', 'deleteSearchFolder', 'deleteSearchType', 'dropRemoteFolder', 'cleanupWorktree']);
+  'applySearchFileBatch', 'setCachedEntrypoints', 'setCachedCustomTitles', 'deleteCachedFolder', 'deleteSearchFolder', 'deleteSearchType', 'dropRemoteFolder', 'cleanupWorktree', 'certifyFullReads']);
 const journalCommands = new Set(['querySessionRequestOutcome', 'claimSessionResultNamespace', 'recordSessionResultPublication',
   'recordConsumedSessionStatusRequest', 'recordSessionRequestConflict']);
 const chunkWallTimeMs = 10;
@@ -74,6 +74,8 @@ function* targetUnits(name, args) {
     yield () => { commands.cleanupWorktree(args[0]); return ids.length; };
   } else if (['upsertCachedSessions', 'setCachedEntrypoints', 'setCachedCustomTitles'].includes(name)) {
     for (const row of args[0]) yield Object.assign(() => db[name]([row]), { producerCommand: name, producerArgs: [[row]] });
+  } else if (name === 'certifyFullReads') {
+    for (const row of args[2]) yield () => commands.certifyFullReads(args[0], args[1], [row]);
   } else if (name === 'replaceSessionMetrics') {
     yield () => db.replaceSessionMetrics(...args);
   } else if (name === 'deleteCachedSession') {
@@ -96,7 +98,7 @@ function* targetUnits(name, args) {
     for (const entry of entries) yield* units('upsertSearchEntries', [[entry]]);
   } else if (name === 'deleteCachedFolder') {
     for (const row of db.getCachedByFolder(args[0])) yield* units('deleteCachedSession', [row.sessionId]);
-    yield () => db.deleteCachedFolder(args[0]);
+    yield () => db.deleteCachedFolder(...args);
   } else if (name === 'deleteSearchFolder' || name === 'deleteSearchType') {
     const rows = name === 'deleteSearchFolder'
       ? db.connection.prepare('SELECT id, type FROM search_map WHERE folder = ?').all(args[0])
@@ -175,6 +177,11 @@ async function drain() {
       const unit = message.pending[0] || message.iterator.next();
       if (unit.done) {
         pendingDeletionHistory.delete(message);
+        if (message.command === 'certifyFullReads') {
+          const receipt = message.certificateReceipt || { certified: true, continuous: true,
+            beforeRevision: db.getSetting('_writer_revision') || 0, committedRevision: db.getSetting('_writer_revision') || 0 };
+          message.result = message.args[3]?.receipt ? receipt : receipt.certified;
+        }
         parentPort.postMessage({ id: message.id, ...(message.producerError ? { error: { message: message.producerError.message, code: message.producerError.code } }
           : { result: message.command === 'effects' ? { committedRevision: message.committedRevision } : message.result }),
           ...(message.mutated ? { settings: settings() } : {}) });
@@ -198,7 +205,7 @@ async function drain() {
           let committed = 0;
           const acknowledgment = await transaction(message.command, () => {
             assertWorkflow(message);
-            let next = unit, result, count = 0, elapsed = 0;
+            let next = unit, result, count = 0, elapsed = 0, certified = true;
             while (!next.done) {
               const execute = () => {
                 try {
@@ -213,13 +220,23 @@ async function drain() {
               elapsed += performance.now() - started;
               if (applied.deferred) break;
               result = applied.result;
+              if (message.command === 'certifyFullReads') certified &&= result === true;
               count++;
               if (count >= db.nextChunkSize() || elapsed >= chunkWallTimeMs) break;
               next = buffered[count] ||= message.iterator.next();
             }
             committed = count;
-            return result;
+            return message.command === 'certifyFullReads' ? certified : result;
           });
+          if (message.command === 'certifyFullReads') {
+            const previous = message.certificateReceipt;
+            message.certificateReceipt = {
+              certified: (previous?.certified ?? true) && acknowledgment.result,
+              beforeRevision: previous?.beforeRevision ?? before,
+              committedRevision: acknowledgment.committedRevision,
+              continuous: (previous?.continuous ?? true) && (!previous || before === previous.committedRevision),
+            };
+          }
           message.result = acknowledgment.result;
           message.committedRevision = acknowledgment.committedRevision;
           message.pending = buffered.slice(committed);

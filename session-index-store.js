@@ -365,6 +365,11 @@ if (migrations.length > currentDbVersion) {
     mustReindex = true;
   }
   if (!cols.has('fileSize')) db.exec('ALTER TABLE session_cache ADD COLUMN fileSize INTEGER');
+  if (!cols.has('fullReadStamp')) db.exec('ALTER TABLE session_cache ADD COLUMN fullReadStamp TEXT');
+  const folderColumns = new Set(db.prepare('PRAGMA table_info(cache_meta)').all().map(row => row.name));
+  for (const [name, type] of [['fullIndexVersion', 'INTEGER'], ['fullIndexConfig', 'TEXT'], ['fullIndexPending', 'TEXT']]) {
+    if (!folderColumns.has(name)) db.exec(`ALTER TABLE cache_meta ADD COLUMN ${name} ${type}`);
+  }
   if (mustReindex) {
     db.exec('DELETE FROM session_cache');
     db.exec('DELETE FROM cache_meta');
@@ -388,6 +393,9 @@ db.exec(`
   )
 `);
 
+if (!readonly && (searchFtsRecreated || !db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'search_fts'").get())) {
+  db.exec('UPDATE cache_meta SET fullIndexVersion = NULL, fullIndexConfig = NULL');
+}
 db.exec(`
   CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
     title, body,
@@ -409,6 +417,11 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_search_map_type_id ON search_map(type, i
 
 let cacheUpsertStatement = null;
 const stmts = {
+  fullIndexBegin: db.prepare('UPDATE cache_meta SET fullIndexPending = ?, fullIndexVersion = NULL, fullIndexConfig = NULL WHERE folder = ?'),
+  fullIndexInvalidate: db.prepare('UPDATE cache_meta SET fullIndexVersion = NULL, fullIndexConfig = NULL WHERE folder = ?'),
+  fullIndexSeal: db.prepare('UPDATE cache_meta SET fullIndexVersion = ?, fullIndexConfig = ?, fullIndexPending = NULL WHERE folder = ? AND fullIndexPending = ?'),
+  fullReadCertify: db.prepare('UPDATE session_cache SET fullReadStamp = ? WHERE sessionId = ? AND folder = ?'),
+  fullReadInvalidate: db.prepare('UPDATE session_cache SET fullReadStamp = NULL WHERE sessionId = ?'),
   get: db.prepare('SELECT * FROM session_meta WHERE sessionId = ?'),
   getAll: db.prepare('SELECT * FROM session_meta'),
   upsertName: db.prepare(`
@@ -430,8 +443,8 @@ const stmts = {
   cacheGetAll: db.prepare('SELECT * FROM session_cache'),
   // see .ai/contexts/cli-harnesses.md (the writer's runtime and sessionFile columns)
   get cacheUpsert() { return cacheUpsertStatement || (cacheUpsertStatement = db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description, fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint, scheduleSlug, continuationIndex, customTitle, fileSize, workflowRunId, messageCountIndex, runtime, sessionFile)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 'claude'), ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description, fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint, scheduleSlug, continuationIndex, customTitle, fileSize, workflowRunId, messageCountIndex, runtime, sessionFile, fullReadStamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 'claude'), ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       runtime = COALESCE(?, session_cache.runtime), sessionFile = COALESCE(excluded.sessionFile, session_cache.sessionFile),
       folder = excluded.folder, projectPath = excluded.projectPath,
@@ -441,6 +454,7 @@ const stmts = {
       messageCountIndex = excluded.messageCountIndex,
       aiTitle = excluded.aiTitle, fileMtime = excluded.fileMtime,
       fileSize = excluded.fileSize,
+      fullReadStamp = excluded.fullReadStamp,
       workflowRunId = excluded.workflowRunId,
       parentSessionId = excluded.parentSessionId, agentId = excluded.agentId,
       subagentType = excluded.subagentType, description = excluded.description,
@@ -622,7 +636,7 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
       s.fileMtime || null, s.bridgeSessionId || null, s.mergedIntoSessionId || null,
       typeof s.entrypoint === 'string' ? s.entrypoint : null,
       s.scheduleSlug || null, s.continuationIndex || null, s.customTitle ?? null, s.fileSize ?? null, s.workflowRunId || null, s.messageCountIndex || null,
-      s.runtime || null, s.sessionFile || null, s.runtime || null
+      s.runtime || null, s.sessionFile || null, s.fullReadStamp ?? null, s.runtime || null
     );
     if (next !== previous) metaFieldSet.run(s.sessionId, 'name', previous.nameRevision ?? 0, 'user', next.nameTranscriptTitle);
   }
@@ -684,11 +698,12 @@ function deleteCachedSession(sessionId) {
   stmts.cacheDeleteSession.run(sessionId);
 }
 
-function deleteCachedFolder(folder) {
+function deleteCachedFolder(folder, opts) {
 
   stmts.metricsDeleteByFolder.run(folder);
   stmts.cacheDeleteFolder.run(folder);
-  stmts.metaDelete.run(folder);
+  if (opts?.preserveFullIndex && getFolderMeta(folder)?.fullIndexPending) setFolderMeta(folder, null, 0);
+  else stmts.metaDelete.run(folder);
 }
 
 function getFolderMeta(folder) {
@@ -704,6 +719,34 @@ function getAllFolderMeta() {
 
 function setFolderMeta(folder, projectPath, indexMtimeMs) {
   stmts.metaUpsert.run(folder, projectPath, indexMtimeMs);
+}
+
+function beginFullIndex(folder, token) {
+  const previous = getFolderMeta(folder);
+  if (!previous) setFolderMeta(folder, null, 0);
+  stmts.fullIndexBegin.run(token, folder);
+  return previous;
+}
+
+function invalidateFullIndex(folder) {
+  stmts.fullIndexInvalidate.run(folder);
+}
+
+function sealFullIndex(folder, token, version, config, capturedConfig) {
+  if (capturedConfig) {
+    const root = JSON.parse(capturedConfig).roots[0];
+    const current = require('./src/main/session-index/full-read-state').fullIndexConfig({ ...(getSetting('global') || {}), remappedProjects: getSetting('projectRemaps') || {} }, root);
+    if (current !== capturedConfig) return false;
+  }
+  return stmts.fullIndexSeal
+    .run(version, config, folder, token).changes === 1;
+}
+
+function certifyFullRead(folder, token, sessionId, stamp, witness) {
+  if (getFolderMeta(folder)?.fullIndexPending !== token) return false;
+  const row = getCachedSession(sessionId);
+  if (!row || require('./src/main/session-index/full-read-state').rowWitness(row) !== witness) return false;
+  return stmts.fullReadCertify.run(stamp, sessionId, folder).changes === 1;
 }
 
 const upsertSearchEntriesBatch = db.transaction((entries) => {
@@ -1139,6 +1182,8 @@ return {
   deleteCachedSession, deleteCachedFolder,
   replaceSessionMetrics,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
+  beginFullIndex, invalidateFullIndex, sealFullIndex, certifyFullRead,
+  invalidateFullRead: sessionId => stmts.fullReadInvalidate.run(sessionId),
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   getSearchFileIds, applySearchFileBatch,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,

@@ -69,7 +69,7 @@ async function build(message) {
     deleteCachedFolder: folder => { for (const row of rows.values()) if (row.folder === folder) rows.delete(row.sessionId); },
     touchCachedModified: (id, modified) => { const row = rows.get(id); if (row) Object.assign(row, { modified, fileMtime: modified }); },
     setCachedFileSize: (id, fileSize) => { const row = rows.get(id); if (row) row.fileSize = fileSize; },
-    setFolderMeta: (folder, projectPath, indexMtimeMs) => folders.set(folder, { folder, projectPath, indexMtimeMs }),
+    setFolderMeta: (folder, projectPath, indexMtimeMs) => folders.set(folder, { ...folders.get(folder), folder, projectPath, indexMtimeMs }),
     setName: (id, name, source = 'user') => {
       const previous = meta.get(id);
       meta.set(id, applySessionName(previous, id, name, source, rows.get(id)?.customTitle ?? null));

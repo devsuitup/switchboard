@@ -148,6 +148,32 @@ function createWriterCommands(db) {
   }
   return {
     ...createSessionRequestCommands(db),
+    beginFullIndex(folder, token, control) {
+      const revision = db.getSetting('_writer_revision') || 0;
+      if (control?.expectedRevision !== undefined && control.expectedRevision !== revision) throw requestError('WRITER_STALE', 'Index producer snapshot changed before begin');
+      const previous = db.beginFullIndex(folder, token);
+      return control?.receipt ? { previous, committedRevision: revision + 1 } : previous;
+    },
+    sealFullIndex(...args) {
+      const beforeRevision = db.getSetting('_writer_revision') || 0;
+      const sealed = db.sealFullIndex(...args);
+      return args[5]?.receipt ? { sealed, beforeRevision, committedRevision: beforeRevision + (sealed ? 1 : 0) } : sealed;
+    },
+    certifyFullRead(...args) {
+      const beforeRevision = db.getSetting('_writer_revision') || 0;
+      const certified = db.certifyFullRead(...args);
+      return args[5]?.receipt ? { certified, beforeRevision, committedRevision: beforeRevision + (certified ? 1 : 0) } : certified;
+    },
+    certifyFullReads(folder, token, rows, control) {
+      const beforeRevision = db.getSetting('_writer_revision') || 0;
+      let certified = true, changed = false;
+      for (const row of rows) {
+        const accepted = db.certifyFullRead(folder, token, row.sessionId, row.stamp, row.witness);
+        certified &&= accepted;
+        changed ||= accepted;
+      }
+      return control?.receipt ? { certified, beforeRevision, committedRevision: beforeRevision + (changed ? 1 : 0), continuous: true } : certified;
+    },
     readProjectArchiveEpochs: epochs,
     patchGlobal: patch,
     cleanupWorktree(projectPath) {

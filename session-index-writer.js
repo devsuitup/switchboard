@@ -15,6 +15,8 @@ const { createCacheEffects } = require('./cache-effects');
 const { projectArchiveWorkflows, archiveProjectIdentity } = require('./src/main/projects/project-archive-workflow');
 const { worktreeParentPath } = require('./public/worktree-nesting');
 const { stable } = require('./src/main/projects/project-delete-identity');
+const { SESSION_CONTENT_INDEX_VERSION, fullIndexConfig, rowWitness } = require('./src/main/session-index/full-read-state');
+const { randomUUID } = require('node:crypto');
 
 // see .ai/contexts/session-index-writer.md
 const journalCommands = new Set(['querySessionRequestOutcome', 'claimSessionResultNamespace', 'recordSessionResultPublication',
@@ -68,7 +70,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       throw error;
     }
   };
-  let backend, recorder, cacheTail = Promise.resolve(), closing, accepting = true, terminated = false;
+  let backend, recorder, projectsDir, cacheTail = Promise.resolve(), closing, accepting = true, terminated = false;
   const pending = new Set();
   const commandScope = new AsyncLocalStorage();
   const owner = {};
@@ -101,6 +103,12 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     const sourceVersion = backend?.getProjectsRevision?.();
     const work = cacheTail.then(async () => {
       await ready;
+      const scanFolder = ['writeScannedFolder', 'writeScannedFolderPartial'].includes(name) ? args[0]?.folder
+        : name === 'refreshFolder' ? args[0] : name === 'releaseLiveSession' ? cache.getRetainedFolder?.(args[0]) : undefined;
+      const currentConfig = () => fullIndexConfig({ ...(backend.getSetting('global') || {}), remappedProjects: backend.getSetting('projectRemaps') || {} },
+        args[0]?.fullIndexConfig ? JSON.parse(args[0].fullIndexConfig).roots[0] : projectsDir);
+      const scanResult = ['writeScannedFolder', 'writeScannedFolderPartial'].includes(name) ? args[0] : null;
+      if (scanResult) scanResult.fullIndexOutcome = false;
       const folder = name === 'refreshFolder' ? args[0] : name === 'releaseLiveSession' ? cache.getRetainedFolder?.(args[0]) : undefined;
       let continuationRetry = false, combinedResult;
       for (let attempt = 0; ; attempt++) {
@@ -122,6 +130,44 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
           effects = recorder.finish();
           if (folder !== undefined) cache.applyContinuationRefresh?.(folder, continuationCollector);
         }
+        const certificates = [];
+        const fullIds = new Set(effects.filter(effect => effect.name === 'replaceSessionMetrics').map(effect => effect.args[0]));
+        const publications = new Map();
+        const forwarded = name === 'applyProjectsWorkerEffects';
+        if (projectsDir) {
+          const candidates = effects.filter(effect => effect.name === 'upsertCachedSessions').flatMap(effect => effect.args[0]).filter(row => fullIds.has(row.sessionId));
+          const folders = new Set(candidates.map(row => row.folder));
+          if (scanFolder && name === 'writeScannedFolder') folders.add(scanFolder);
+          for (const key of folders) {
+            const publication = { token: randomUUID(), config: scanResult?.fullIndexConfig || currentConfig(), began: false };
+            publications.set(key, publication);
+            try {
+              const receipt = await send('beginFullIndex', key, publication.token, { expectedRevision: revision, receipt: true,
+                projects: [...new Set(candidates.filter(row => row.folder === key).map(row => row.projectPath).filter(Boolean))] });
+              publication.previousIndex = receipt.previous;
+              publication.began = true;
+              revision = receipt.committedRevision;
+            } catch (error) { (options.log || console).warn('[session-index-writer] full index begin outcome unknown: ' + error.message); }
+          }
+        }
+        if (scanResult) {
+          const upsertIds = new Set(effects.filter(effect => effect.name === 'upsertCachedSessions').flatMap(effect => effect.args[0].map(row => row.sessionId)));
+          const deletedIds = new Set(effects.flatMap(effect => effect.name === 'deleteCachedSession' ? [effect.args[0]]
+            : effect.name === 'deleteCachedFolder' ? backend.getCachedByFolder(effect.args[0]).map(row => row.sessionId) : []));
+          scanResult.counters = { ...scanResult.counters, filesDeleted: [...deletedIds].filter(id => !upsertIds.has(id)).length };
+        }
+        if (publications.size) {
+          effects.unshift(...[...publications.keys()].map(key => ({ name: 'invalidateFullIndex', args: [key] })));
+          const affectedIds = new Set([...fullIds, ...effects.filter(effect => effect.name === 'deleteCachedSession').map(effect => effect.args[0])]);
+          effects.splice(1, 0, ...[...affectedIds].map(id => ({ name: 'invalidateFullRead', args: [id] })));
+          for (const effect of effects) if (effect.name === 'upsertCachedSessions') {
+            for (const row of effect.args[0]) {
+              if (!fullIds.has(row.sessionId)) continue;
+              if (row.fullReadStamp) certificates.push({ folder: row.folder, sessionId: row.sessionId, stamp: row.fullReadStamp, witness: rowWitness(row) });
+              row.fullReadStamp = null;
+            }
+          }
+        }
         const notifyChanges = prepareSessionsChanged(effects);
         let acknowledgment;
         try {
@@ -139,6 +185,40 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
           attempt--;
           continue;
         }
+        const bodyAcknowledgment = acknowledgment;
+        let continuous = true;
+        for (const [key, publication] of publications) {
+          if (!publication?.began || publication.failed) continue;
+          const rows = certificates.filter(row => row.folder === key);
+          if (!rows.length) continue;
+          try {
+            const certificateAck = await send('certifyFullReads', key, publication.token, rows, { receipt: forwarded });
+            if ((forwarded ? certificateAck.certified : certificateAck) === false) publication.failed = true;
+            if (forwarded && certificateAck?.committedRevision !== undefined) {
+              if (certificateAck.continuous === false) continuous = false;
+              if (acknowledgment?.committedRevision !== undefined && certificateAck.beforeRevision !== acknowledgment.committedRevision) continuous = false;
+              acknowledgment = certificateAck;
+            }
+          } catch (error) {
+            publication.failed = true;
+            continuous = false;
+            (options.log || console).warn('[session-index-writer] full index certificate outcome unknown: ' + error.message);
+          }
+        }
+        for (const [key, publication] of publications) if (publication.began && !publication.failed) {
+          try {
+            if (publication.config === currentConfig() && !scanResult?.counters?.filesFailed) {
+              const full = name === 'writeScannedFolder';
+              const sealed = await send('sealFullIndex', key, publication.token, full ? SESSION_CONTENT_INDEX_VERSION : publication.previousIndex?.fullIndexVersion ?? null,
+                full ? publication.config : publication.previousIndex?.fullIndexConfig ?? null, publication.config, { receipt: forwarded });
+              if (forwarded) {
+                if (acknowledgment?.committedRevision !== undefined && sealed.beforeRevision !== acknowledgment.committedRevision) continuous = false;
+                acknowledgment = sealed;
+              } else if (scanResult) scanResult.fullIndexOutcome = sealed;
+            }
+          } catch (error) { (options.log || console).warn('[session-index-writer] full index seal outcome unknown: ' + error.message); }
+        }
+        if (!continuous) acknowledgment = bodyAcknowledgment;
         return name === 'applyProjectsWorkerEffects' && acknowledgment?.committedRevision !== undefined ? acknowledgment : combinedResult;
       }
     });
@@ -163,6 +243,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     listProjectDeletionOperations: input => request('listProjectDeletionOperations', input),
     initializeCache(ctx) {
       if (!backend) throw new Error('await writer.ready before initializeCache');
+      projectsDir = ctx.PROJECTS_DIR;
       recorder.begin();
       cache.init({ ...ctx, writer, db: recorder.adapter });
       recorder.finish();
@@ -200,6 +281,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     async renameSession(id, name) { return request('renameSession', id, name); },
     async rekeySessionMeta(from, to) { return request('rekeySessionMeta', from, to); },
     async completeRepairFolders(folders) { return request('completeRepairFolders', folders); },
+    async invalidateFullIndex(folder) { return request('invalidateFullIndex', folder); },
     async buildProjectsFromCache(showArchived) { return compute('buildProjectsFromCache', showArchived); },
     async refreshFolder(folder, opts) { return compute('refreshFolder', folder, opts); },
     async dropFolderRows(folder, opts) { return compute('dropFolderRows', folder, opts); },

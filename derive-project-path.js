@@ -11,6 +11,7 @@ function extractCwdFromJsonl(filePath) {
     fd = fs.openSync(filePath, 'r');
     const buf = Buffer.alloc(CWD_SCAN_BYTES);
     const bytesRead = fs.readSync(fd, buf, 0, CWD_SCAN_BYTES, 0);
+    require('./src/main/session-index/read-counters').countBytes(bytesRead);
     const lines = buf.toString('utf8', 0, bytesRead).split('\n');
     // The last line is truncated mid-entry when the file is bigger than the
     // scan window — drop it instead of feeding garbage to JSON.parse.
@@ -32,6 +33,7 @@ function* cwdsInWindow(fd, start, fileSize) {
   const from = Math.max(0, start - 1);
   const buf = Buffer.alloc(Math.min(CWD_SCAN_BYTES + start - from, fileSize - from));
   const bytesRead = fs.readSync(fd, buf, 0, buf.length, from);
+  require('./src/main/session-index/read-counters').countBytes(bytesRead);
   const lines = buf.toString('utf8', 0, bytesRead).split('\n');
   if (from + bytesRead < fileSize) lines.pop();
   if (start > 0) lines.shift();

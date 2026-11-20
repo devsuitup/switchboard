@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const { performance } = require('node:perf_hooks');
 const { Worker: NativeWorker } = require('worker_threads');
 const scanWorkers = new Set();
 const subsetScans = new Set();
@@ -310,12 +311,12 @@ function keepIfRunning(sessionId, folder) {
   return true;
 }
 
-function dropFolderRows(folder, { search = false } = {}) {
+function dropFolderRows(folder, { search = false, preserveFullIndex = false } = {}) {
   const rows = getCachedByFolder(folder);
   const dropped = rows.filter(r => !keepIfRunning(r.sessionId, folder));
   if (dropped.length === rows.length) {
     const hadProject = !!getFolderMeta?.(folder)?.projectPath;
-    deleteCachedFolder(folder);
+    deleteCachedFolder(folder, { preserveFullIndex });
     if (search) deleteSearchFolder(folder);
     return dropped.length > 0 || hadProject;
   }
@@ -663,6 +664,7 @@ function refreshFolder(folder, opts = {}) {
         const merged = {
           ...cachedEntry,
           ...count,
+          fullReadStamp: null,
           continuationIndex,
           folder, projectPath,
           summary: h.summary || cachedEntry.summary,
@@ -699,7 +701,7 @@ function refreshFolder(folder, opts = {}) {
         // stays current. fileMtime has to move too, otherwise this file stays
         // permanently "dirty" and gets re-read on every watcher flush.
         if (count || changedSize || continuationIndex !== cachedEntry.continuationIndex) {
-          sessionsToUpsert.push({ ...cachedEntry, ...count, continuationIndex, modified: fileMtime, fileMtime, fileSize });
+          sessionsToUpsert.push({ ...cachedEntry, ...count, fullReadStamp: null, continuationIndex, modified: fileMtime, fileMtime, fileSize });
         } else sessionsToTouch.push({ sessionId: cachedDbId, fileMtime });
       }
       continue;
@@ -771,7 +773,10 @@ function refreshFolder(folder, opts = {}) {
   // already-cached member re-derived because its recorded mergedIntoSessionId
   // disagreed with the winner just computed (see mergeBridgeGroups).
   for (const s of mergedRows) {
-    if (countRecountMtimes.has(s.sessionId)) s.modified = countRecountMtimes.get(s.sessionId);
+    if (countRecountMtimes.has(s.sessionId)) {
+      s.modified = countRecountMtimes.get(s.sessionId);
+      s.fullReadStamp = null;
+    }
     sessionsToUpsert.push(s);
     metricsToReplace.push({ sessionId: s.sessionId, dailyMetrics: s.dailyMetrics });
     const name = getMeta(s.sessionId)?.name || s.customTitle || s.aiTitle || '';
@@ -1455,7 +1460,7 @@ function writeScannedFolder(r, unverifiedLocalFolder = null) {
   }
   const { folder, projectPath, sessions, indexMtimeMs } = r;
   stripBridgeEvidence(sessions);
-  dropFolderRows(folder, { search: true });
+  dropFolderRows(folder, { search: true, preserveFullIndex: true });
   if (sessions.length > 0) {
     upsertCachedSessions(sessions);
     for (const s of sessions) {
@@ -1525,6 +1530,28 @@ function stripBridgeEvidence(rows) {
   }
 }
 
+async function publishScannedFolder(msg) {
+  const result = msg.result;
+  const started = performance.now();
+  let ok = false;
+  try {
+    if (msg.error) throw new Error(msg.error);
+    const written = result?.partial ? await writer.writeScannedFolderPartial(result)
+      : await writer.writeScannedFolder(result, msg.unverifiedLocalFolder);
+    ok = result?.fullIndexOutcome !== false && !(result?.counters || msg.counters)?.filesFailed;
+    return written;
+  } finally {
+    log?.info('[session-cache] folder-indexed ' + JSON.stringify({
+      folder: result?.folder || msg.folder || msg.unverifiedLocalFolder || null,
+      runtime: result?.sessions?.[0]?.runtime || (result?.folder?.startsWith('codex/') ? 'codex' : 'claude'),
+      mode: result?.partial ? 'partial' : 'full', reason: 'scan',
+      filesEnumerated: 0, filesRead: 0, filesSkipped: 0, filesDeleted: 0, filesFailed: 0,
+      readOperations: 0, bytesRead: 0, bytesSkipped: 0, auxiliaryBytesRead: 0, scanMs: 0,
+      ...msg.counters, ...result?.counters, writeMs: performance.now() - started, ok,
+    }));
+  }
+}
+
 // see .ai/contexts/session-cache.md ("Bridge history divergence")
 let repairPromise = null;
 function pendingRepairFolders() {
@@ -1537,6 +1564,10 @@ function reindexRepairedFolders() {
   const folders = pendingRepairFolders().filter(key => parseFolderKey(key).alias === null);
   if (!folders.length || !setSetting) return Promise.resolve({ ok: true, folders: 0 });
   repairPromise = (async () => {
+    for (const folder of folders) {
+      try { await writer.invalidateFullIndex?.(folder); }
+      catch (error) { log?.warn(`Bridge repair invalidation outcome unknown: ${error.message}`); }
+    }
     const result = await scanFoldersViaWorker({ projectsDir: PROJECTS_DIR, folders });
     if (!result.ok) {
       log?.warn(`Bridge repair re-index failed: ${result.error}`);
@@ -1621,9 +1652,7 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
         if (msg.type === 'folder') {
           scanned++;
           try {
-            sessions += msg.result && msg.result.partial
-              ? await writer.writeScannedFolderPartial(msg.result)
-              : await writer.writeScannedFolder(msg.result, msg.unverifiedLocalFolder);
+            sessions += await publishScannedFolder(msg);
           } catch (err) {
             writeError = err.message;
             log && log.warn(`[remote] folder write failed: ${err.message}`);
@@ -1765,8 +1794,7 @@ function populateCacheViaWorker({ force = false } = {}, retryTimerFired = false)
           totalFolders = msg.total;
           let written = 0;
           try {
-            if (msg.error) throw new Error(msg.error);
-            written = await writer.writeScannedFolder(msg.result, msg.unverifiedLocalFolder);
+            written = await publishScannedFolder(msg);
           } catch (err) {
             const folder = msg.folder || msg.result?.folder || msg.unverifiedLocalFolder;
             if (!writeError || (folder && !failedFolders.size)) writeError = err.message;

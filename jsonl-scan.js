@@ -18,6 +18,7 @@ function scanLines(filePath, startByte, onLine, endByte) {
     while (pos < endByte) {
       const buf = Buffer.allocUnsafe(Math.min(CHUNK_BYTES, endByte - pos));
       const n = fs.readSync(fd, buf, 0, buf.length, pos);
+      require('./src/main/session-index/read-counters').countBytes(n);
       if (n === 0) throw new Error('JSONL file truncated during scan');
       read += n;
       let from = 0;

@@ -647,3 +647,73 @@ history guard and preserves the committed ACK/settings bookkeeping. The original
 transaction error path is unchanged. The full worker is tested with a real guarded
 SQLite fixture and the real client/facade; generation replacement uses a fake
 worker in `test/session-index-writer-recovery.test.js`, without Electron.
+# Full-content publication (#1144 A1)
+
+The writable store reconciles nullable `session_cache.fullReadStamp` and
+`cache_meta.fullIndexVersion/fullIndexConfig/fullIndexPending` columns through
+idempotent ALTERs. Adding these columns does not set `mustReindex`, delete cache
+or metadata, or clear initial completeness. Readonly snapshots and metadata
+overlays retain the fields. FTS absence or recreation durably clears folder
+version/config before writer readiness; reopening before population cannot
+recover an obsolete seal from an ephemeral bootstrap flag.
+
+A producer computes its effects first and ACKs `beginFullIndex` only for full
+row replacements (including an empty full-folder scan). A no-op watcher refresh
+keeps its single folder-meta effects request; a pending-repair early exit sends
+nothing. The begin receipt advances the body snapshot revision.
+Its first replacement effect invalidates the old folder seal even if begin
+failed or its outcome is unknown. A scan's folder drop removes session rows
+while retaining the metadata row and pending token; project deletion still
+deletes the complete metadata row. Ordinary setFolderMeta preserves the fields.
+The drop remains a `deleteCachedFolder` effect, including through worker chunking,
+so observers still receive the broad `null` invalidation. Deleted-file counters
+include dropped rows absent from the replacement, even when begin failed or a
+subset only deletes files. Certificate SQL statements are prepared once per store.
+Ordinary overlay folder deletion reads no full-index metadata; only a drop with
+`preserveFullIndex` consults the previous pending token.
+
+Begin remains after effect computation: full-read candidates, affected folders
+and the no-op/repair early exits are only known from the computed effects.
+Moving it earlier would either invalidate those no-op paths or require a second
+discovery pass. Its expected-revision fence and the existing bounded stale retry
+remain necessary; no new optimistic pre-compute begin is introduced in A1.
+
+Affected rows lose certificates before materialized replacement. Candidates
+are withheld from upserts, then published by one separately ACKed direct
+`certifyFullReads(folder, token, rows)` command per nonempty folder after all
+body, metrics and staged FTS work. Each certificate compares the folder token
+and materialized row witness. The worker iterates one row per unit through the
+existing adaptive 32-row/65536-byte/10 ms transaction budgets and background
+scheduling, returning one settings snapshot after the whole command. Rejection
+is accumulated across committed chunks, never overwritten by a later successful
+row; rollback retries recompute only the uncommitted chunk result. All chunks
+retain the project-deletion producer fence. `sealFullIndex` compares the token
+and captured canonical configuration (sorted remaps, deduplicated/sorted
+disabled harness IDs, resolved source roots). A full scan records the content
+version; a partial operation restores only an existing full baseline.
+
+Begin/effect failure leaves conservative state. Begin failure still submits
+the existing write. Certificate rejection or failure skips that folder's seal;
+transport failure is logged as an unknown outcome and never rejects an already
+committed body. A seal with unknown outcome is logged, never retried or
+compensated: it either leaves pending state or committed a valid seal over
+fully ACKed effects. A newer folder token supersedes older work. Certification
+does not use global writer revision as its freshness fence. Projects replies
+retain their independent revision-continuity check and return the final owned
+ACK only for a continuous sequence; otherwise they retain the body ACK so the
+reader can detect intervening work. This check does not reject certification.
+Batch receipts carry the first before-revision, final committed revision and
+continuity across chunks. An unrelated write between chunks breaks Projects
+receipt continuity without refusing token/witness-valid certificates.
+
+The commands bracket producer operations at the facade. They do not alter
+the generic chunk scheduler, producer-unit packing, transaction budgets,
+admission or deadlines (#1135). Certificate commands participate in existing
+project-deletion ownership fencing. Repair invalidates its folder seal before
+scanning; A1 keeps the existing finally-based repair-marker clearing, so that
+marker is never evidence of successful completion.
+
+Parser/merge/metric/search output changes must bump
+`SESSION_CONTENT_INDEX_VERSION` and add an immutable golden digest entry; see
+[session-cache.md](session-cache.md), "Full-content observations". A1 records
+these fields without enabling any startup skipping.

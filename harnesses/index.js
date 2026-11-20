@@ -65,6 +65,7 @@ function readHarnessFolder(harness, folder) {
   const dir = harness.folderPath(folder);
   if (!dir) return null;
   const files = harness.listTranscripts(dir);
+  require('../src/main/session-index/read-counters').enumerateReads(files);
   const sessions = [];
   for (const file of files) {
     try {

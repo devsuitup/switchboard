@@ -23,6 +23,55 @@ const { readSessionFile, readSessionDisplayHeader } = require('../read-session-f
 
 const FIXTURE_PATH = path.join(__dirname, 'fixtures', 'golden-session.jsonl');
 
+test('published content digest entries are append-only', () => {
+  const { CONTENT_GOLDEN_DIGESTS } = require('../src/main/session-index/full-read-state');
+  assert.deepEqual(Object.fromEntries(Object.entries(CONTENT_GOLDEN_DIGESTS).filter(([version]) => Number(version) <= 1)),
+    { 1: '068456510a189d17ee5b332c541ba439d26fbf4c1f2d30fbd90d3348b00e0fe3' });
+});
+
+test('parser output requires a content version bump for Claude, bridge and Codex derivation', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'golden-index-1144-'));
+  const previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = path.join(root, 'codex');
+  t.after(() => { process.env.CODEX_HOME = previous; fs.rmSync(root, { recursive: true, force: true }); });
+  const user = (uuid, day, text) => ({ type: 'user', uuid, timestamp: `2024-01-${day}T00:00:00.000Z`, message: { content: text } });
+  const bridge = { type: 'bridge-session', bridgeSessionId: 'cse_golden' };
+  const write = (name, entries) => {
+    const file = path.join(root, name);
+    fs.writeFileSync(file, entries.map(entry => JSON.stringify(entry)).join('\n') + '\n');
+    return file;
+  };
+  write('parent.jsonl', [user('shared', '01', 'shared text'), user('parent', '03', 'parent text'), bridge]);
+  write('mirror.jsonl', [user('shared', '01', 'shared text'), user('own', '04', 'mirror text'), bridge]);
+  const reread = (id, dedupeSinceTimestamp, excludedMessageUuids, excludedMessageSignatures) => readSessionFile(path.join(root, id + '.jsonl'), 'folder', '/fixture',
+    { dedupeSinceTimestamp, excludedMessageUuids, excludedMessageSignatures });
+  const merged = require('../read-session-file').mergeBridgeGroups([], ['parent', 'mirror'].map(id => reread(id)), reread);
+  const codexFile = write('rollout-2024-01-01-00000000-0000-0000-0000-000000000001.jsonl', [
+    { type: 'session_meta', timestamp: '2024-01-01T00:00:00.000Z', payload: { cwd: '/fixture' } },
+    { type: 'response_item', timestamp: '2024-01-01T00:00:01.000Z', payload: { type: 'message', role: 'user', content: 'Codex golden body' } },
+  ]);
+  const canonicalFixture = path.join(root, path.basename(FIXTURE_PATH));
+  fs.writeFileSync(canonicalFixture, fs.readFileSync(FIXTURE_PATH, 'utf8').replace(/\r\n/g, '\n'));
+  const rows = [readSessionFile(canonicalFixture, 'folder', '/fixture'), ...merged.toUpsert,
+    require('../harnesses/codex').readSessionFile(codexFile, 'codex/2024/01/01')];
+  const normalize = value => {
+    if (Array.isArray(value)) return value.map(normalize);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.keys(value).sort().map(key => {
+      let next = value[key];
+      if (['fileMtime', 'dev', 'ino', 'birthtimeNs', 'mtimeNs', 'ctimeNs', 'mtime'].includes(key)) next = '<filesystem>';
+      else if (key === 'sessionFile') next = path.basename(next);
+      else if (['fullReadStamp', 'continuationIndex', 'messageCountIndex'].includes(key) && next) next = JSON.parse(next);
+      return [key, normalize(next)];
+    }));
+  };
+  const output = normalize(rows.map(row => ({ row, metrics: row.dailyMetrics,
+    search: { title: ((row.customTitle || row.aiTitle || '') + ' ' + row.summary).trimStart(), body: row.textContent } })));
+  const digest = require('node:crypto').createHash('sha256').update(JSON.stringify(output)).digest('hex');
+  const state = require('../src/main/session-index/full-read-state');
+  assert.equal(digest, state.CONTENT_GOLDEN_DIGESTS?.[state.SESSION_CONTENT_INDEX_VERSION], 'digest matches immutable content-version ledger');
+});
+
 test('readSessionFile: golden output matches fixture — full shape', () => {
   const stat = fs.statSync(FIXTURE_PATH);
   const row = readSessionFile(FIXTURE_PATH, 'test-folder', '/some/project');

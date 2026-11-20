@@ -67,6 +67,66 @@ function fixture(t) {
   return { root, projectsDir, codexHome, project, day, file, write, cache, activeSessions, ...store };
 }
 
+test('Codex full readers record stable certificates and the effective external title', t => {
+  const f = fixture(t);
+  f.write(ID_A, [['user', 'certificate corpus']]);
+  const titleFile = path.join(f.codexHome, 'session_index.jsonl');
+  fs.writeFileSync(titleFile, JSON.stringify({ id: ID_A, thread_name: 'Title witness' }) + '\n');
+  const harness = require('../harnesses/codex');
+  const full = require('../harnesses').readHarnessFolder(harness, FOLDER).sessions[0];
+  assert.ok(full.fullReadStamp, 'full harness scan proposes a certificate');
+  const stamp = JSON.parse(full.fullReadStamp);
+  assert.equal(stamp.runtime, 'codex');
+  assert.equal(stamp.relativePath, path.basename(f.file(ID_A)));
+  assert.equal(stamp.dependencies.title, 'Title witness');
+  f.cache.refreshFolder(FOLDER);
+  assert.equal(f.rows.get(ID_A).fullReadStamp, full.fullReadStamp, 'harness refresh uses the same full reader');
+});
+
+test('Codex failed title observation cannot certify a full read', t => {
+  const f = fixture(t);
+  f.write(ID_A, [['user', 'still parse this rollout']]);
+  const titleFile = path.join(f.codexHome, 'session_index.jsonl'), original = fs.statSync;
+  fs.statSync = function (file, ...args) {
+    if (file === titleFile) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    return original.call(this, file, ...args);
+  };
+  t.after(() => { fs.statSync = original; });
+  const row = require('../harnesses/codex').readSessionFile(f.file(ID_A), FOLDER);
+  assert.ok(row, 'failed auxiliary reads retain existing parser behavior');
+  assert.equal(row.fullReadStamp, null, 'failed title reads do not prove title absence');
+});
+
+test('Codex title race cannot certify the previously read title', t => {
+  const f = fixture(t);
+  f.write(ID_A, [['user', 'title race corpus']]);
+  const titleFile = path.join(f.codexHome, 'session_index.jsonl');
+  fs.writeFileSync(titleFile, JSON.stringify({ id: ID_A, thread_name: 'Before' }) + '\n');
+  const read = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', function (file, ...args) {
+    const value = read.call(this, file, ...args);
+    if (file === titleFile) fs.appendFileSync(titleFile, JSON.stringify({ id: ID_A, thread_name: 'After' }) + '\n');
+    return value;
+  });
+  const row = require('../harnesses/codex').readSessionFile(f.file(ID_A), FOLDER);
+  assert.equal(row.aiTitle, 'Before', 'display parsing keeps existing semantics');
+  assert.equal(row.fullReadStamp, null, 'changed auxiliary source prevents certification');
+});
+
+test('Codex certification requires the title-index read to reach observed EOF', t => {
+  const f = fixture(t);
+  f.write(ID_A, [['user', 'title EOF corpus']]);
+  const titleFile = path.join(f.codexHome, 'session_index.jsonl');
+  fs.writeFileSync(titleFile, JSON.stringify({ id: ID_A, thread_name: 'Before' }) + '\n');
+  const read = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', function (file, ...args) {
+    const bytes = read.call(this, file, ...args);
+    return file === titleFile ? bytes.subarray(0, bytes.length - 1) : bytes;
+  });
+  const row = require('../harnesses/codex').readSessionFile(f.file(ID_A), FOLDER);
+  assert.equal(row.fullReadStamp, null, 'short title-index read cannot certify observed EOF');
+});
+
 test('refreshFolder indexes a Codex date folder through its harness, keeps a running row and drops a vanished one', t => {
   const f = fixture(t);
   f.write(ID_A, [['user', 'fix the parser'], ['assistant', 'done']]);
