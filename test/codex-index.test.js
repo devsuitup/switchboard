@@ -103,7 +103,11 @@ test('a Codex thread rename is picked up without a transcript change', t => {
   f.write(ID_A, [['user', 'hello']]);
   f.cache.refreshFolder(FOLDER);
   assert.equal(f.rows.get(ID_A).aiTitle, null);
-  fs.writeFileSync(path.join(f.codexHome, 'session_index.jsonl'), JSON.stringify({ id: ID_A, thread_name: 'Parser work' }) + '\n');
+  const index = path.join(f.codexHome, 'session_index.jsonl');
+  fs.writeFileSync(index, JSON.stringify({ id: ID_A, thread_name: 'Parser work' }) + '\n');
+  // The rename happens after the last transcript write; CI file clocks tick coarsely enough for both to share one mtime.
+  const renamedAt = new Date(f.meta.get(FOLDER).indexMtimeMs + 1000);
+  fs.utimesSync(index, renamedAt, renamedAt);
   const seen = [];
   f.cache.reconcileCacheFromFilesystem({ onFolder: folder => seen.push(folder), throttle: false });
   assert.ok(seen.includes(FOLDER), 'the reconcile pass lists Codex folders');
