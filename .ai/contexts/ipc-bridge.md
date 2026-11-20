@@ -1510,8 +1510,15 @@ leaves either the old file or the new one. The record carries a format
 version and the app version; `load` returns `null` and removes the file on a
 parse error, a foreign format, another app version (row shapes change between
 releases), or a row without `projectPath`/`sessionId` — a missing file is
-`null` without a warning. At quit, `shutdownForExit` awaits `flush()` alongside
+`null` without a warning. At quit, `shutdownForExit` starts `flush()` alongside
 the PTY exit drains within the existing shared 1500 ms shutdown budget (#1136).
+It awaits the snapshot writes only after metadata drains and `closeDb`, so a
+slow snapshot cannot consume the database writes' budget. A second `flush()`
+starts just before `closeDb` to capture a `remember()` received during the drain.
+On Windows shutdown, restart or logoff, Electron does not emit `before-quit`:
+`query-session-end` / `session-end` use the unsaved guard's `externalFlush`,
+bound through `flushForLogoff` to `drainForUpdate`. That non-destructive path
+also flushes last known projects alongside the other writes within its 1500 ms budget.
 This cancels the pending debounce and awaits the atomic write of the latest
 remembered reply, including any already-running write. With no pending work it
 does not touch the file. Write failures are logged by the store; an unexpected
@@ -1545,7 +1552,9 @@ they run only after `loadStartupProjects` has an accepted load, as before.
 
 Tests: `test/last-known-projects.test.js` (store),
 `test/last-known-projects-quit.test.js` (quit before debounce, no-op, failure and
-shared deadline), `test/app-last-known-projects.test.js`
+shared deadline, database ordering and a reply during the drain),
+`test/session-exit-main.test.js` (Windows logoff persistence and flush failures),
+`test/app-last-known-projects.test.js`
 (paint, inertness, replacement, the race where the real load lands first, the
 all-failed startup, including a disk snapshot arriving after all five attempts
 have failed) and the remembered-reply case in

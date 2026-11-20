@@ -4,6 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const vm = require('node:vm');
 const espree = require('espree');
 const { createUnsavedGuard } = require('../src/main/app/unsaved-guard');
@@ -56,21 +58,22 @@ function setup(platform = 'win32', background) {
   });
   const guardInit = ast.body.flatMap(n => n.declarations || []).find(n => n.id.name === 'unsavedGuard').init;
   const release = guardInit.arguments[0].properties.find(p => p.key.name === 'onAttemptReleased');
-  if (release) context.releaseAttempt = vm.runInContext(source.slice(...release.value.range), context);
-  vm.runInContext(require('./app-source').extractFunction(source, 'resetUpdateAttempt'), context);
+  if (release) context.releaseAttempt = vm.runInContext(source.slice(...release.value.range), context, { filename: require.resolve('../main') });
+  vm.runInContext(require('./app-source').extractFunction(source, 'resetUpdateAttempt'), context, { filename: require.resolve('../main') });
   Object.assign(context, { flushProjectsBeforeExit: async () => {}, flushWindowBounds: async () => {},
+    lastKnownProjects: { flush: async () => {} },
     sessionTransitions: { drainMetadataWrites: async () => {} }, activityReporter: { flush: async () => {} },
     writer: { drain: async () => { calls.push('drain'); } }, flushForLogoff: null,
     shutdownForExit: async () => { calls.push('stop-pty', 'close-db', 'exit'); } });
-  vm.runInContext(require('./app-source').extractFunction(source, 'boundedShutdown'), context);
-  vm.runInContext(require('./app-source').extractFunction(source, 'drainForUpdate'), context);
-  vm.runInContext(source.split('\n').find(line => line.startsWith('flushForLogoff =')), context);
+  vm.runInContext(require('./app-source').extractFunction(source, 'boundedShutdown'), context, { filename: require.resolve('../main') });
+  vm.runInContext(require('./app-source').extractFunction(source, 'drainForUpdate'), context, { filename: require.resolve('../main') });
+  vm.runInContext(source.split('\n').find(line => line.startsWith('flushForLogoff =')), context, { filename: require.resolve('../main') });
   context.drainForUpdate = async () => { calls.push('update-drain'); };
   context.pty = { spawn: () => { calls.push('spawn'); return {}; } };
   context.guardPtyInputErrors = value => value;
   context.process.env = {};
-  vm.runInContext(require('./app-source').extractFunction(source, 'spawnPty'), context);
-  vm.runInContext(source.slice(...installNode.range), context);
+  vm.runInContext(require('./app-source').extractFunction(source, 'spawnPty'), context, { filename: require.resolve('../main') });
+  vm.runInContext(source.slice(...installNode.range), context, { filename: require.resolve('../main') });
   return { guard, win, wc, sent, calls, records, event, checks, detail, answer, answerVersion, menu, timers, context, handlers,
     install: () => handlers.get('updater-install')(), token: () => token };
 }
@@ -359,6 +362,49 @@ test('#769 a confirmed handoff during an open exit dialog does not ask again aft
   assert.deepEqual(t.calls, ['quit']);
   assert.equal(t.guard.launchAllowed(), false);
 });
+
+for (const eventName of ['query-session-end', 'session-end']) {
+  test(`${eventName} persists the last known projects without before-quit`, async t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'projects-logoff-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const { createLastKnownProjectsStore } = require('../src/main/projects/last-known-projects');
+    const debounce = new Set();
+    const store = createLastKnownProjectsStore({ dir, appVersion: '1.2.3',
+      setTimeout: fn => { debounce.add(fn); return fn; }, clearTimeout: fn => debounce.delete(fn),
+    });
+    const projects = [{ projectPath: '/latest', sessions: [{ sessionId: 'new' }] }];
+    store.remember({ defaultProjects: projects, allProjects: projects });
+    const s = setup();
+    s.context.lastKnownProjects = store;
+    const flush = s.context.flushForLogoff;
+    let draining;
+    s.context.flushForLogoff = () => { draining = flush(); return draining; };
+    s.win.emit(eventName);
+    await tick();
+    await draining;
+    const saved = await createLastKnownProjectsStore({ dir, appVersion: '1.2.3' }).load();
+    assert.deepEqual(saved?.defaultProjects, projects, 'logoff must persist pending default projects');
+    assert.deepEqual(saved.allProjects, projects);
+    assert.equal(debounce.size, 0);
+    assert.deepEqual(s.calls, ['drain']);
+  });
+}
+
+for (const mode of ['throw', 'reject']) {
+  test(`logoff logs a last known projects flush ${mode} and still drains the writer`, async () => {
+    const s = setup(), errors = [];
+    s.context.log.error = (...args) => errors.push(args.join(' '));
+    s.context.lastKnownProjects.flush = () => {
+      const error = new Error('logoff flush unavailable');
+      if (mode === 'throw') throw error;
+      return Promise.reject(error);
+    };
+    await s.context.flushForLogoff();
+    assert.ok(errors.some(line => line.includes('last known projects flush failed: Error: logoff flush unavailable')),
+      'logoff must log the snapshot flush failure');
+    assert.deepEqual(s.calls, ['drain']);
+  });
+}
 
 test('A7 logoff supersedes a user choice, coalesces non-destructive drains and never grants user consent', async () => {
   const t = setup(); t.win.emit('close', t.event());

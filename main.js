@@ -4495,7 +4495,10 @@ async function boundedShutdown(drain) {
 }
 function drainForUpdate() {
   return boundedShutdown(async () => {
-    await Promise.all([flushProjectsBeforeExit(), flushWindowBounds(), sessionTransitions.drainMetadataWrites(), activityReporter.flush()]);
+    await Promise.all([flushProjectsBeforeExit(), flushWindowBounds(), sessionTransitions.drainMetadataWrites(), activityReporter.flush(),
+      Promise.resolve().then(() => lastKnownProjects.flush()).catch(error => {
+        log.error('[shutdown] last known projects flush failed:', error);
+      })]);
     await writer.drain();
   });
 }
@@ -4512,9 +4515,12 @@ function shutdownForExit() {
     for (const [id, session] of sessions) {
       if (!session.exited) killPty(session, id);
     }
-    await Promise.all([...exitDrains, Promise.resolve().then(() => lastKnownProjects.flush()).catch(error => {
-      log.error('[shutdown] last known projects flush failed:', error);
-    })]);
+    const flushLastKnownProjects = async () => {
+      try { await lastKnownProjects.flush(); }
+      catch (error) { log.error('[shutdown] last known projects flush failed:', error); }
+    };
+    const projectsFlush = flushLastKnownProjects();
+    await Promise.all(exitDrains);
     await flushProjectsBeforeExit();
     await flushWindowBounds();
     await sessionCache.shutdownProducers();
@@ -4525,7 +4531,9 @@ function shutdownForExit() {
     activityReporter.stop();
     activityFlushedForQuit = true;
     await Promise.all([projectsClient.shutdown(), fileListsClient.shutdown(), searchClient.shutdown()]);
+    const finalProjectsFlush = flushLastKnownProjects();
     await closeDb();
+    await Promise.all([projectsFlush, finalProjectsFlush]);
     activityTrace.close();
   })).then(async error => {
     if (error?.message === 'shutdown drain timed out') log.error('[shutdown] exiting after shutdown drain timed out; unfinished writes may be lost');

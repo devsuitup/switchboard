@@ -111,6 +111,7 @@ test('a pending flush shares the existing 1500ms drain deadline and cannot hold 
   const quitting = s.quit();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(started, true, 'quit must start the flush');
+  assert.ok(s.events.includes('close-db'), 'a pending snapshot must not delay closing the database');
   assert.equal(s.events.includes('exit'), false, 'quit must wait for the flush inside its budget');
   assert.deepEqual([...s.deadlines.values()], [1500]);
   const [expire] = s.deadlines.keys();
@@ -120,4 +121,28 @@ test('a pending flush shares the existing 1500ms drain deadline and cannot hold 
   assert.ok(s.events.includes('exit'));
   assert.ok(s.errors.some(line => line.includes('shutdown drain timed out')));
   assert.equal(s.deadlines.size, 0);
+});
+
+test('remember during shutdown is flushed before exit after metadata and database work', async t => {
+  const s = setup(t);
+  s.store.remember({ defaultProjects: [], allProjects: [] });
+  const flush = s.store.flush;
+  let flushes = 0;
+  let pendingAtClose;
+  s.store.flush = () => { flushes++; return flush(); };
+  s.context.sessionTransitions.drainMetadataWrites = async () => {
+    assert.equal(flushes, 1, 'the first flush starts before metadata drains');
+    s.store.remember(latest);
+  };
+  s.context.closeDb = async () => {
+    pendingAtClose = s.debounce.size;
+    s.events.push('close-db');
+  };
+  await s.quit();
+  assert.ok(s.events.includes('close-db'), 'database closure must complete');
+  assert.equal(pendingAtClose, 0, 'the final flush must cancel a timer armed during the drain before closing the database');
+  const saved = await createLastKnownProjectsStore({ dir: s.dir, appVersion: '1.2.3' }).load();
+  assert.deepEqual(saved.defaultProjects, latest.defaultProjects, 'quit must persist a snapshot remembered during the drain');
+  assert.deepEqual(saved.allProjects, latest.allProjects);
+  assert.deepEqual(s.errors, []);
 });
