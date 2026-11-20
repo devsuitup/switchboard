@@ -5,6 +5,13 @@ const fs = require('fs');
 const path = require('path');
 
 const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+// see .ai/contexts/bg-agents.md ("Running the CLI"): the whole cmd-shim invocation line, or nothing
+const SHIM_INVOCATION = /^\s*@?(?:endlocal\s*&\s*goto\s+#_undefined_#\s+2>nul\s*&\s*)?(?:(?:"%_prog%"|"(?:%dp0%|%~dp0)\\node\.exe"|node(?:\.exe)?)\s+"(?:%dp0%|%~dp0)\\([^"\r\n]+\.js)"|"(?:%dp0%|%~dp0)\\([^"\r\n]+\.exe)")\s+%\*\s*$/im;
+
+function shimTarget(shim) {
+  const m = SHIM_INVOCATION.exec(shim);
+  return m ? m[1] || m[2] : null;
+}
 
 function findOnPath(name, { pathEnv, pathExt, exists, sep }) {
   const exts = String(pathExt || '').split(';').filter(Boolean);
@@ -37,10 +44,10 @@ function resolveWindowsClaude(argv, env = {}, deps = {}) {
 
   let shim = '';
   try { shim = readFile(found); } catch {}
-  const m = /"(?:%dp0%|%~dp0)\\([^"]+\.(?:js|exe))"\s+%\*/i.exec(shim);
-  if (m) {
+  const target = shimTarget(shim);
+  if (target) {
     const dir = path.win32.dirname(found);
-    const script = path.win32.join(dir, m[1]);
+    const script = path.win32.join(dir, target);
     if (/\.exe$/i.test(script) && exists(script)) return { program: script, args: argv, verbatim: false };
     const bundled = path.win32.join(dir, 'node.exe');
     const node = exists(bundled) ? bundled : findOnPath('node', {
@@ -51,7 +58,7 @@ function resolveWindowsClaude(argv, env = {}, deps = {}) {
   if (argv.some((a) => /[\r\n]/.test(a))) {
     return { error: 'a multi-line argument cannot go through a claude.cmd shim; install claude with its native installer or pick a bash profile' };
   }
-  const line = [found, ...argv].map(arg => escapeForCmd(arg)).join(' ');
+  const line = [escapeForCmd(found, 1), ...argv.map(arg => escapeForCmd(arg))].join(' ');
   return { program: env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', `"${line}"`], verbatim: true };
 }
 
@@ -71,4 +78,4 @@ function powershellReparsesClaude(env = {}, { exists = p => fs.existsSync(p) } =
   return !found || /\.(cmd|bat)$/i.test(found);
 }
 
-module.exports = { resolveWindowsClaude, escapeForCmd, cmdEscapePasses, powershellReparsesClaude };
+module.exports = { resolveWindowsClaude, escapeForCmd, cmdEscapePasses, powershellReparsesClaude, SHIM_INVOCATION };

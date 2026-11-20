@@ -396,10 +396,14 @@ PowerShell 7 on Windows the shell is not started: the plan is
 background-agent commands use (see `bg-agents.md`, "Running the CLI") — a native
 `claude.exe` runs directly, an npm `claude.cmd` shim is unwrapped to `node
 <cli.js>` or its declared native target, an opaque shim goes through
-`cmd.exe /d /s /c` with escaped arguments. The npm target comes from the final
-`"%dp0%\<target>" %*` invocation (npm 7 and later) or `"%~dp0\<target>" %*`
-(the cmd-shim template: pnpm, yarn classic, npm 6), not the earlier `node.exe`
-existence probe.
+`cmd.exe /d /s /c` with escaped arguments. The npm target comes from one whole
+invocation line the resolver understands (`SHIM_INVOCATION` in
+`claude-binary.js`; see `bg-agents.md`, "Running the CLI"): a stock Node
+spelling without options, or none for a `.exe` target, the quoted `%dp0%` (npm 7
+and later) or `%~dp0` (the cmd-shim template: pnpm, yarn classic, npm 6) path,
+`%*`, and nothing else; not the earlier `node.exe` existence probe. A shim whose
+line carries anything more (an interpreter option, for instance) is opaque and
+runs as written through `cmd.exe`.
 For native executables and recognised npm targets, argv never crosses a shell,
 so multiline and long prompts, quotes, trailing backslashes, `&`, `%PATH%`
 and an empty argument reach claude as given. Before this, PowerShell re-serialized
@@ -422,8 +426,9 @@ Qualification: `test/headless-claude-launch.test.js` pins the plan per shell wit
 injected filesystem probes; `test/schedule-launch-windows.test.js` (Windows only,
 the `windows-2022` leg) runs the extracted `runScheduleCommand` with the real
 `child_process.spawn` under `powershell.exe`, `pwsh.exe` when installed and
-`cmd.exe`, into an argv-recording `claude.exe`, an npm-shaped `claude.cmd` and an
-npm layout with `claude.ps1` beside the shim, and compares the argv claude
+`cmd.exe`, into an argv-recording `claude.exe`, an opaque `claude.cmd` (its Node
+spelled as an absolute path, so it runs through `cmd.exe`) and an npm layout
+(npm 7's shim, unwrapped) with `claude.ps1` beside it, and compares the argv claude
 received, including the quote, backslash, `%PATH%` and empty-argument cases.
 
 ## If you change this, also check

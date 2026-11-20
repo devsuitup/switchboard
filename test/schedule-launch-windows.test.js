@@ -56,7 +56,9 @@ function makeBin(kind) {
     assert.equal(built.status, 0, built.stderr + built.stdout);
   } else {
     fs.writeFileSync(path.join(dir, 'echo.js'), ECHO_JS);
-    fs.writeFileSync(path.join(dir, 'claude.cmd'), `@ECHO off\r\nSET dp0=%~dp0\r\n"${process.execPath}"  "%dp0%\\echo.js" %*\r\n`);
+    fs.writeFileSync(path.join(dir, 'claude.cmd'), kind === 'npm'
+      ? '@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL & "%_prog%"  "%dp0%\\echo.js" %*\r\n'
+      : `@ECHO off\r\nSET dp0=%~dp0\r\n"${process.execPath}"  "%dp0%\\echo.js" %*\r\n`);
     if (kind === 'npm') {
       fs.writeFileSync(path.join(dir, 'claude.ps1'), NPM_PS1);
       fs.writeFileSync(path.join(dir, 'claude'), '#!/bin/sh\nexec node "$0.js" "$@"\n');

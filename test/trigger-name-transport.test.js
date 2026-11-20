@@ -127,7 +127,9 @@ test('the PowerShell helper falls back to the command PowerShell resolves and ne
   assert.ok(source.includes("Get-Command $n -ErrorAction Stop|Select-Object -First 1;$f=$c.Source;$t='';if($c.CommandType -eq 'ExternalScript'){"), source);
   assert.ok(source.includes("[IO.Path]::GetDirectoryName($_.Source) -eq [IO.Path]::GetDirectoryName($c.Source) -and $_.Source -match '\\.(cmd|bat)$'}|Select-Object -First 1;$f=if($a){$a.Source}else{''}}"), source);
   assert.ok(source.includes("elseif($c.CommandType -ne 'Application'){& $c @args;return};"), source);
-  assert.ok(source.includes("'\"(?:%dp0%|%~dp0)\\\\([^\"]+\\.(?:js|exe))\"\\s+%\\*'"), source);
+  assert.ok(source.includes("'" + require('../claude-binary').SHIM_INVOCATION.source + "','IgnoreCase,Multiline');"), source);
+  assert.ok(source.includes('(?:(?:\"%_prog%\"|\"(?:%dp0%|%~dp0)\\\\node\\.exe\"|node(?:\\.exe)?)\\s+\"(?:%dp0%|%~dp0)\\\\([^\"\\r\\n]+\\.js)\"|\"(?:%dp0%|%~dp0)\\\\([^\"\\r\\n]+\\.exe)\")\\s+%\\*\\s*$'), source);
+  assert.ok(source.includes("if($m.Success){$t=[IO.Path]::Combine([IO.Path]::GetDirectoryName($f),$m.Groups[1].Value+$m.Groups[2].Value)}};"), source);
   assert.ok(source.includes("if($c.CommandType -eq 'ExternalScript' -and !($t -and [IO.File]::Exists($t))){& $c @args;return};"), source);
   assert.ok(source.endsWith('$p=[Diagnostics.Process]::Start($i);$p.WaitForExit();exit $p.ExitCode};'), source);
 });
@@ -171,7 +173,7 @@ test('a launch that fits only without the helper keeps the plain token form and 
   }
 });
 test('a launch that fits with the helper keeps it just below the limit', async () => {
-  const prompt = 'y'.repeat(31000);
+  const prompt = 'y'.repeat(30800);
   const spawned = await launch('pwsh.exe', { isNew: false, transcript: true, options: { appendSystemPrompt: prompt } });
   assert.ok(spawned.args[2].startsWith('function __switchboard_launch'));
   assert.ok(argsToCommandLine('pwsh.exe', spawned.args).length + 1 <= 32767);
@@ -359,7 +361,7 @@ test('a native Windows executable receives the name as one untouched argument', 
   assert.deepEqual(plan, { program: 'C:\\bin\\claude.exe', args: argv, verbatim: false });
 });
 test('a recognized npm JavaScript shim runs node with the script and the untouched argument', () => {
-  const shim = '"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*';
+  const shim = '"%_prog%"  "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*';
   files.clear(); files.add('C:\\bin\\node_modules\\@anthropic-ai\\claude-code\\cli.js'); files.add('C:\\bin\\node.exe');
   const plan = resolveWindowsClaude(argv, env, deps('C:\\bin\\claude.cmd', shim));
   assert.deepEqual(plan, { program: 'C:\\bin\\node.exe', args: ['C:\\bin\\node_modules\\@anthropic-ai\\claude-code\\cli.js', ...argv], verbatim: false });
@@ -370,9 +372,9 @@ test('a recognized npm executable shim runs the executable with the untouched ar
   const plan = resolveWindowsClaude(argv, env, deps('C:\\bin\\claude.cmd', shim));
   assert.deepEqual(plan, { program: 'C:\\bin\\node_modules\\claude\\claude.exe', args: argv, verbatim: false });
 });
-test('an opaque command shim gets a doubly caret-escaped command line with doubled trailing backslashes', () => {
+test('an opaque command shim gets its path escaped once and its arguments doubly caret-escaped, with doubled trailing backslashes', () => {
   files.clear();
   const plan = resolveWindowsClaude(['--name', 'a&b\\'], { ...env, ComSpec: 'C:\\Windows\\System32\\cmd.exe' }, deps('C:\\bin\\claude.cmd', 'opaque'));
   assert.equal(plan.program, 'C:\\Windows\\System32\\cmd.exe'); assert.equal(plan.verbatim, true);
-  assert.deepEqual(plan.args, ['/d', '/s', '/c', '"^^^"C:\\bin\\claude.cmd^^^" ^^^"--name^^^" ^^^"a^^^&b\\\\^^^""']);
+  assert.deepEqual(plan.args, ['/d', '/s', '/c', '"^"C:\\bin\\claude.cmd^" ^^^"--name^^^" ^^^"a^^^&b\\\\^^^""']);
 });

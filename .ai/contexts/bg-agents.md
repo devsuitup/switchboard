@@ -1469,10 +1469,22 @@ the shell would mangle quotes, `&` and newlines of a prompt, so
 `.exe` itself, or, for an npm `claude.cmd` shim (libuv does not resolve
 `.cmd`), the `node` + `cli.js` the shim points to, or `cmd.exe /d /s /c` with
 escaped arguments as a last resort (a multi-line argument is refused there).
+On that line the shim's path is caret-escaped once, since cmd parses the
+command name once, and each argument twice, since the shim's `%*` parses
+them again (two passes on the path made cmd reject the name, so no opaque
+shim ran headless before round 3 of #1107).
 A shim whose target is a `.exe` (the current `bin\claude.exe` shape) runs
-that `.exe` directly. The target is the quoted `%dp0%` (npm 7 and later) or
-`%~dp0` (pnpm, yarn classic, npm 6) path followed by `%*`, so the earlier
-bundled `node.exe` existence probe is not mistaken for the CLI.
+that `.exe` directly. The shim is unwrapped only when one whole invocation
+line is understood (`SHIM_INVOCATION`, shared with the PowerShell helper of
+`shell-profiles.js`): optionally npm 7's `endLocal & goto #_undefined_# 2>NUL &`
+trailer, then `"%_prog%"` (npm 7 and later), `"%~dp0\node.exe"` or `node`
+(pnpm, yarn classic, npm 6) with no option before the quoted `%dp0%` or
+`%~dp0` path of a `.js` target, or that quoted path of a `.exe` target alone,
+then `%*` and nothing else. The earlier bundled `node.exe` existence probe is
+not an invocation. A line that says more — `node --require "%~dp0\setup.cjs"
+"%~dp0\cli.js" %*`, a bare `.js` target, a redirect — is not reproduced in
+part: the shim is opaque and runs as written through `cmd.exe`, so what it
+adds (the bootstrap, here) still happens (round 3 of #1107).
 Only `PATHEXT` names are tried, since npm also leaves an
 extensionless sh shim. `resolveWindowsClaude` returns
 `{ program, args, verbatim }` or `{ error }`. The schedule runner reaches the

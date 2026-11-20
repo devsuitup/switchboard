@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { escapeForCmd, cmdEscapePasses, powershellReparsesClaude, resolveWindowsClaude } = require('../../../claude-binary');
+const { escapeForCmd, cmdEscapePasses, powershellReparsesClaude, resolveWindowsClaude, SHIM_INVOCATION } = require('../../../claude-binary');
 
 // --- Cross-platform shell resolution ---
 const isWindows = process.platform === 'win32';
@@ -161,6 +161,8 @@ function isWslShell(shellPath) {
   return base === 'wsl.exe' || base === 'wsl';
 }
 
+const psLiteral = text => "'" + text.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&') + "'";
+
 // see .ai/contexts/trigger-watcher.md ("Naming a new session")
 const PS_PREAMBLE = "function __switchboard_launch{param([string]$n)"
   + "$c=Get-Command $n -ErrorAction Stop|Select-Object -First 1;$f=$c.Source;$t='';"
@@ -169,8 +171,8 @@ const PS_PREAMBLE = "function __switchboard_launch{param([string]$n)"
   + "$f=if($a){$a.Source}else{''}}"
   + "elseif($c.CommandType -ne 'Application'){& $c @args;return};"
   + "if($f -match '\\.(cmd|bat)$'){"
-  + "$m=[regex]::Match([IO.File]::ReadAllText($f),'\"(?:%dp0%|%~dp0)\\\\([^\"]+\\.(?:js|exe))\"\\s+%\\*','IgnoreCase');"
-  + "if($m.Success){$t=[IO.Path]::Combine([IO.Path]::GetDirectoryName($f),$m.Groups[1].Value)}};"
+  + "$m=[regex]::Match([IO.File]::ReadAllText($f)," + psLiteral(SHIM_INVOCATION.source) + ",'IgnoreCase,Multiline');"
+  + "if($m.Success){$t=[IO.Path]::Combine([IO.Path]::GetDirectoryName($f),$m.Groups[1].Value+$m.Groups[2].Value)}};"
   + "if($c.CommandType -eq 'ExternalScript' -and !($t -and [IO.File]::Exists($t))){& $c @args;return};"
   + "if($t){if(![IO.File]::Exists($t)){throw ('npm target not found: '+$t)};"
   + "if($t -match '\\.exe$'){$f=$t}else{$b=[IO.Path]::GetDirectoryName($f);$f=[IO.Path]::Combine($b,'node.exe');"
@@ -181,7 +183,6 @@ const PS_PREAMBLE = "function __switchboard_launch{param([string]$n)"
   + "for($k=0;$k -lt $d;$k++){$s=[regex]::Replace($s,'([()\\]\\[%!^\"`<>&|;, *?])','^$1')};$s}) -join ' ';"
   + "$i=New-Object Diagnostics.ProcessStartInfo $f,$l;$i.UseShellExecute=$false;"
   + "$p=[Diagnostics.Process]::Start($i);$p.WaitForExit();exit $p.ExitCode};";
-const psLiteral = text => "'" + text.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&') + "'";
 
 // Shell-quote one argv token per shell family
 function quoteArgForShell(shellPath, value, cmdPasses = 1) {

@@ -329,18 +329,29 @@ the child's status. When PowerShell resolves an `ExternalScript` (a `claude.ps1`
 which it prefers over a neighbouring `.cmd`), the helper looks for a `.cmd` or
 `.bat` of the same name in the same directory (`Get-Command -CommandType
 Application`, filtered by extension: it also lists the extensionless sh shim npm
-leaves there) and reads that shim's final invocation, `"%dp0%\<target.js or
-target.exe>" %*` (npm 7 and later) or `"%~dp0\<target>" %*` (the cmd-shim
-template: pnpm, yarn classic, npm 6), ignoring the earlier bundled Node existence
-probe. The `.ps1` is bypassed only when that target is recognised and exists: a
-native target runs directly; a JavaScript target runs with the neighbouring
-`node.exe`, or `node.exe` resolved from the profile's PATH, with the script
-prepended to argv. `ProcessStartInfo` starts this target without executing either
-shim. When the `.cmd` is not recognised, or its declared target is missing, the
-`.ps1` runs as PowerShell runs it (`& $c @args`, the behaviour before #1107):
-the payload never goes through the batch file, whose `%*` would truncate it at a
-newline or hit cmd's shorter command-line limit (round 2 of #1107: pnpm's shim
-used to be mistaken for an opaque one and preferred over its `.ps1`).
+leaves there) and looks in that shim for one whole invocation line it
+understands (`SHIM_INVOCATION` in `claude-binary.js`, the same regex the headless
+resolver uses, inserted in the helper as a literal): optionally npm 7's
+`endLocal & goto #_undefined_# 2>NUL &` trailer, then either a stock Node
+spelling — `"%_prog%"` (npm 7 and later), `"%~dp0\node.exe"` or `node` (the
+cmd-shim template: pnpm, yarn classic, npm 6) — with no option, followed by the
+quoted `%dp0%` or `%~dp0` path of a `.js` target, or that quoted path of a
+`.exe` target alone, then `%*` and nothing else on the line. The bundled Node
+existence probe on the earlier lines is not an invocation and is ignored. A line
+the regex does not cover in full — an interpreter option such as `--require`
+before the script (round 3 of #1107: it was dropped when only the target suffix
+was matched), an interpreter spelled another way, a `.js` target with no
+interpreter on its line, a redirect after `%*` — is not recognised, since
+reproducing part of it would change what runs. The `.ps1` is bypassed only when
+that target is recognised and exists: a native target runs directly; a
+JavaScript target runs with the neighbouring `node.exe`, or `node.exe` resolved
+from the profile's PATH, with the script prepended to argv. `ProcessStartInfo`
+starts this target without executing either shim. When the `.cmd` is not
+recognised, or its declared target is missing, the `.ps1` runs as PowerShell
+runs it (`& $c @args`, the behaviour before #1107): the payload never goes
+through the batch file, whose `%*` would truncate it at a newline or hit cmd's
+shorter command-line limit (round 2 of #1107: pnpm's shim used to be mistaken
+for an opaque one and preferred over its `.ps1`).
 This preserves multiline and 12,000-character prompts as well as quotes and
 empty tokens, even when the PowerShell launch itself fit (#1107).
 A `.cmd` or `.bat` alone on PATH (no `.ps1`) that is recognised runs its target
@@ -407,7 +418,14 @@ that the headless resolver selects the CLI invocation rather than the Node probe
 fixture's pnpm-shaped shim (`%~dp0`) for the multiline and 12,000-character
 prompts, and with an unrecognised `claude.cmd` beside the `claude.ps1`, where
 the argv must arrive intact through the script and the batch shim must not run;
-the headless resolver is checked on the pnpm shim too. The refusal predicate's
+the headless resolver is checked on the pnpm shim too. The same file runs a
+`claude.cmd` whose Node line carries `--require setup.cjs` beside a `claude.ps1`
+that does the same: the script must run and the bootstrap must leave its mark,
+through the helper and through the headless plan (round 3 of #1107).
+`test/claude-binary.test.js` pins which invocation lines are recognised (npm 7
+with its trailer, npm's native target, pnpm) and which are not (an interpreter
+option in either spelling, a bare `.js` target, a redirect after `%*`, an
+interpreter spelled as a path). The refusal predicate's
 three outcomes (refused for a `claude.cmd`, a prefix or no `claude`; kept for a
 `claude.exe` or a `claude.ps1`; always refused for a quote or a trailing
 backslash) are pinned in `test/trigger-name-transport.test.js` with real files

@@ -31,6 +31,11 @@ const SHIMS = {
     '> "%SB_ARGV_OUT%.cmd" ECHO shim',
     `node "%~dp0${target}" %*`, '',
   ],
+  options: target => [
+    '@ECHO off',
+    '> "%SB_ARGV_OUT%.cmd" ECHO shim',
+    `node --require "%~dp0\\setup.cjs" "%~dp0\\${target}" %*`, '',
+  ],
 };
 
 function writeNpmClaude(dir, { native = false, bundled = false, shim = 'npm' } = {}) {
@@ -40,6 +45,8 @@ function writeNpmClaude(dir, { native = false, bundled = false, shim = 'npm' } =
   if (native) fs.copyFileSync(process.execPath, file);
   else fs.writeFileSync(file, 'require("fs").writeFileSync(process.env.SB_ARGV_OUT,JSON.stringify(process.argv.slice(2)))');
   if (bundled) fs.copyFileSync(process.execPath, path.join(dir, 'node.exe'));
+  if (shim === 'options') fs.writeFileSync(path.join(dir, 'setup.cjs'), 'require("fs").writeFileSync(process.env.SB_ARGV_OUT + ".setup", "bootstrap")');
+  const options = shim === 'options' ? '--require "$basedir/setup.cjs" ' : '';
   fs.writeFileSync(path.join(dir, 'claude.cmd'), SHIMS[shim](target, native).join('\r\n'));
   fs.writeFileSync(path.join(dir, 'claude.ps1'), [
     '#!/usr/bin/env pwsh', '$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent',
@@ -47,8 +54,8 @@ function writeNpmClaude(dir, { native = false, bundled = false, shim = 'npm' } =
     '[IO.File]::WriteAllText($env:SB_ARGV_OUT + ".ps1", "shim")',
     ...(native ? [`& "$basedir/${target.replace(/\\/g, '/')}" $args`, '$ret=$LASTEXITCODE'] : [
       'if (Test-Path "$basedir/node$exe") {',
-      `  & "$basedir/node$exe" "$basedir/${target.replace(/\\/g, '/')}" $args`,
-      '} else {', `  & "node$exe" "$basedir/${target.replace(/\\/g, '/')}" $args`, '}', '$ret=$LASTEXITCODE',
+      `  & "$basedir/node$exe" ${options}"$basedir/${target.replace(/\\/g, '/')}" $args`,
+      '} else {', `  & "node$exe" ${options}"$basedir/${target.replace(/\\/g, '/')}" $args`, '}', '$ret=$LASTEXITCODE',
     ]), 'exit $ret', '',
   ].join('\r\n'));
   fs.writeFileSync(path.join(dir, 'claude'), '#!/bin/sh\nexit 99\n');
