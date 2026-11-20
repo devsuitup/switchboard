@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.108 — 2026-11-20
+
 ### New
 - Codex CLI sessions found under `~/.codex/sessions` (or `$CODEX_HOME`) now appear in the sidebar under their project, with a "Codex" badge, and can be searched and read in the message viewer; they count in the heatmap and stats. Codex thread names are shown as titles. Deleting a Codex session from Switchboard is refused; new rollouts are picked up as Codex writes them, and sessions whose transcripts are gone leave the sidebar, even when the whole Codex sessions folder was removed. (#821)
 - A Codex session can be resumed and forked from its sidebar row: the tab runs `codex resume` or `codex fork` and adopts the real session id as soon as Codex writes its transcript. A forked tab adopts only a transcript Codex marked as its own: when that mark is missing, the tab keeps running without being linked to a sidebar row, rather than being guessed from the parent and the start time. A Codex row whose transcript is gone starts a fresh Codex session instead of failing. (#822)
