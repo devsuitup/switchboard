@@ -28,4 +28,21 @@ function getFolderIndexMtimeMs(folderPath) {
   return indexMtimeMs;
 }
 
-module.exports = { getFolderIndexMtimeMs };
+// see .ai/contexts/session-cache.md ("Harness folders")
+function getTranscriptsIndexMtimeMs(folderPath, files, extraMtimeMs = 0) {
+  let indexMtimeMs;
+  try {
+    indexMtimeMs = fs.statSync(folderPath).mtimeMs;
+  } catch {
+    return 0;
+  }
+  for (const filePath of files || []) {
+    try {
+      const fileMtimeMs = fs.statSync(filePath).mtimeMs;
+      if (fileMtimeMs > indexMtimeMs) indexMtimeMs = fileMtimeMs;
+    } catch {}
+  }
+  return Math.max(indexMtimeMs, extraMtimeMs || 0);
+}
+
+module.exports = { getFolderIndexMtimeMs, getTranscriptsIndexMtimeMs };

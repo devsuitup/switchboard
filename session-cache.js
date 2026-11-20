@@ -26,6 +26,7 @@ async function shutdownProducers() {
 }
 
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
+const { getHarness, DEFAULT_HARNESS, harnessForFolder, prefixedHarnesses, harnessFolderIndexMtimeMs } = require('./harnesses');
 const { setRemappedProjectReader } = require('./encode-project-path');
 const { deriveProjectPath, storedProjectPathMatchesFolder } = require('./derive-project-path');
 const { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkEntrypoint, enumerateSessionFiles, resolveJsonlPath, mergeBridgeGroups, isCanonicalWorkflowPath } = require('./read-session-file');
@@ -400,7 +401,76 @@ function sidebarRowState(row) {
   ]);
 }
 
+// see .ai/contexts/session-cache.md ("Harness folders")
+function refreshHarnessFolder(harness, folder) {
+  const dir = harness.folderPath(folder);
+  if (!dir || !fs.existsSync(dir)) return dropFolderRows(folder, { search: true });
+  const cached = new Map(getCachedByFolder(folder).map(row => [row.sessionId, row]));
+  const titles = harness.readSessionTitles ? harness.readSessionTitles() : null;
+  const files = harness.listTranscripts(dir);
+  const current = new Set();
+  const sessionsToUpsert = [];
+  const searchEntriesToUpsert = [];
+  for (const file of files) {
+    const sessionId = harness.sessionIdFromPath(file);
+    if (!sessionId) continue;
+    current.add(sessionId);
+    let stat;
+    try { stat = fs.statSync(file); } catch { continue; }
+    const row = cached.get(sessionId);
+    const title = titles instanceof Map ? titles.get(sessionId) || null : row?.aiTitle || null;
+    if (row && row.fileMtime === stat.mtime.toISOString() && (row.fileSize ?? null) === stat.size && (row.aiTitle || null) === title) continue;
+    const session = harness.readSessionFile(file, folder, null);
+    if (!session) continue;
+    sessionsToUpsert.push(session);
+    const name = getMeta(session.sessionId)?.name || session.customTitle || session.aiTitle || '';
+    searchEntriesToUpsert.push({ id: session.sessionId, type: 'session', folder,
+      title: (name ? name + ' ' : '') + session.summary, body: session.textContent });
+  }
+  let changed = false;
+  if (sessionsToUpsert.length) {
+    upsertCachedSessions(sessionsToUpsert);
+    for (const session of sessionsToUpsert) if (session.dailyMetrics) replaceSessionMetrics(session.sessionId, session.dailyMetrics);
+    for (const entry of searchEntriesToUpsert) deleteSearchSession(entry.id);
+    upsertSearchEntries(searchEntriesToUpsert);
+    changed = true;
+  }
+  for (const sessionId of cached.keys()) {
+    if (current.has(sessionId) || keepIfRunning(sessionId, folder)) continue;
+    deleteCachedSession(sessionId);
+    deleteSearchSession(sessionId);
+    changed = true;
+  }
+  setFolderMeta(folder, null, harnessFolderIndexMtimeMs(harness, dir, files));
+  return changed;
+}
+
+// see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
+function disabledHarnessIds() {
+  const disabled = getSetting ? getSetting('global')?.disabledHarnesses : null;
+  return Array.isArray(disabled) ? disabled : [];
+}
+
+function harnessReconciliationFolders(metaMap) {
+  const out = [];
+  for (const harness of prefixedHarnesses(disabledHarnessIds())) {
+    const listed = new Set(harness.listFolders());
+    for (const folder of metaMap.keys()) {
+      if (folder.startsWith(harness.folderPrefix) && !listed.has(folder)) out.push({ folder, refresh: true });
+    }
+    for (const folder of listed) {
+      const meta = metaMap.get(folder);
+      const dir = harness.folderPath(folder);
+      const refresh = !meta || !dir || harnessFolderIndexMtimeMs(harness, dir, harness.listTranscripts(dir)) > (meta.indexMtimeMs || 0);
+      out.push({ folder, refresh });
+    }
+  }
+  return out;
+}
+
 function refreshFolder(folder, opts = {}) {
+  const harness = harnessForFolder(folder);
+  if (harness.folderPrefix) return refreshHarnessFolder(harness, folder);
   opts = continuationRefreshScope(folder, opts);
   const collector = opts.continuationCollector || { deferred: new Set(), accounted: new Set() };
   const clearDeferred = () => {
@@ -786,11 +856,15 @@ function reconciliationFolders(throttle) {
   if (throttle && now - lastReconcileAt < RECONCILE_THROTTLE_MS) return [];
   lastReconcileAt = now;
   const metaMap = getAllFolderMeta();
+  if (disabledHarnessIds().includes(DEFAULT_HARNESS)) return harnessReconciliationFolders(metaMap);
   const ghostFolders = new Set(getAllCached().filter(row => {
     if (row.parentSessionId || !row.sessionId.startsWith('agent-') || parseFolderKey(row.folder).alias !== null) return false;
     try { fs.statSync(path.join(PROJECTS_DIR, row.folder, row.sessionId + '.jsonl')); return false; } catch { return true; }
   }).map(row => row.folder));
-  return fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+  let projectDirs = [];
+  try { projectDirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true }); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  return projectDirs
     .filter(d => d.isDirectory() && d.name !== '.git')
     .filter(d => {
       if (!isProjectWriteBlocked) return true;
@@ -804,7 +878,8 @@ function reconciliationFolders(throttle) {
       const refresh = ghostFolders.has(folder) || !meta || getFolderIndexMtimeMs(path.join(PROJECTS_DIR, folder)) > (meta.indexMtimeMs || 0)
         || (meta.projectPath && !storedProjectPathMatchesFolder(meta.projectPath, folder));
       return { folder, refresh: refresh && !pendingRepairFolders().includes(folder) };
-    });
+    })
+    .concat(harnessReconciliationFolders(metaMap));
 }
 
 async function reconcileCacheFromFilesystemAsync({ onFolder, throttle = true } = {}) {
@@ -1020,7 +1095,8 @@ function buildProjectsFromCache(showArchived) {
     mergedChildrenByParent.get(row.mergedIntoSessionId).push(row);
   }
 
-  const rollup = continuationRollup(cachedRows, { initialScanComplete: isInitialScanComplete?.() === true });
+  const rollup = continuationRollup(cachedRows.filter(row => getHarness(row.runtime).capabilities.continuations),
+    { initialScanComplete: isInitialScanComplete?.() === true });
   for (const row of cachedRows) {
     const rootId = rollup.get(row.mergedIntoSessionId || row.sessionId);
     if (!rootId) continue;
@@ -1067,9 +1143,11 @@ function buildProjectsFromCache(showArchived) {
   const projectMap = new Map();
   // '|' cannot occur in an alias (remote-hosts.js ALIAS_RE): the key is injective.
   const groupKey = (alias, projectPath) => (alias === null ? '' : alias) + '|' + projectPath;
+  const disabledRuntimes = new Set(disabledHarnessIds());
   for (const row of cachedRows) {
     if (row.mergedIntoSessionId || rollup.has(row.sessionId)) continue;
     if (!row.projectPath) continue;
+    if (disabledRuntimes.has(row.runtime || DEFAULT_HARNESS)) { exclude(row, 'harness-off'); continue; }
     const { alias } = parseFolderKey(row.folder);
     if (hiddenSdkIds.has(row.sessionId) || hiddenSdkIds.has(row.parentSessionId)) {
       exclude(row, 'sdk-only');
@@ -1098,6 +1176,9 @@ function buildProjectsFromCache(showArchived) {
       modified,
       messageCount,
       projectPath: row.projectPath,
+      runtime: row.runtime || DEFAULT_HARNESS,
+      runtimeLabel: (row.runtime || DEFAULT_HARNESS) === DEFAULT_HARNESS ? null : getHarness(row.runtime).label,
+      canLaunch: true,
       slug: row.slug || null,
       scheduleSlug: row.scheduleSlug || null,
       aiTitle: row.aiTitle || null,
@@ -1518,7 +1599,7 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
 
     try {
       worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
-        workerData: { projectsDir, folderPrefix, folders: fullFolders, targets, remaps: remappedProjectsSetting() },
+        workerData: { projectsDir, folderPrefix, folders: fullFolders, targets, remaps: remappedProjectsSetting(), disabledHarnesses: disabledHarnessIds() },
       });
     } catch (err) {
       settle({ ok: false, error: err.message, folders: 0, sessions: 0 });
@@ -1651,7 +1732,8 @@ function populateCacheViaWorker({ force = false } = {}, retryTimerFired = false)
 
     try {
       worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
-        workerData: { projectsDir: PROJECTS_DIR, remaps: remappedProjectsSetting(), ...(retryFolders ? { folders: retryFolders } : {}) },
+        workerData: { projectsDir: PROJECTS_DIR, remaps: remappedProjectsSetting(), disabledHarnesses: disabledHarnessIds(),
+          ...(retryFolders ? { folders: retryFolders } : {}) },
       });
     } catch (err) {
       unknownFailure = true;

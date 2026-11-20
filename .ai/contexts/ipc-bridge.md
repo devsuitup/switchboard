@@ -488,6 +488,8 @@ uninitialised submodule refuses preview/deletion before force can hide its files
 | `get-setting` / `set-setting` / `delete-setting` | Generic key/value over `settings` table |
 | `get-settings-by-prefix` | `(prefix)` accepts only the non-empty string `continuationChoice:` and returns an object of matching keys and values; other prefixes throw before reading settings. Bridge: `getSettingsByPrefix`. Used to load continuation choices before restore and reload. |
 | `get-effective-settings` | `(projectPath)` — resolves global + project overrides |
+| `get-harnesses` | `()` → `[{ id, label, available, enabled, isDefault }]` for every registered CLI adapter; `enabled` reflects `global.disabledHarnesses`. Bridge: `getHarnesses`. See cli-harnesses.md ("Picker, toggles and settings"). |
+| `get-harness-models` | `(runtime)` → the adapter's model catalog (`[{ slug, label, efforts, defaultEffort, visible }]`, Codex reads `$CODEX_HOME/models_cache.json`), `[]` when it has none. Bridge: `getHarnessModels`. |
 | `get-shell-profiles` | Configured shell list |
 | `get-schedule-creator-command` / `create-schedule-session` / `run-schedule-now` | Schedule integration |
 
@@ -602,6 +604,7 @@ An unknown remote target never falls back to local disk IO.
 | `read-clipboard` / `clipboard-has-image` | Main-process clipboard reads (text; whether an image is on it) |
 | `toggle-full-screen` / `popup-app-menu` | The frameless window's strip and ☰ menu — see window-frame.md |
 | `get-indexing-state` | `{finished}` — whether the first index pass is done; `indexing-finished` pushes the same news. See session-cache.md |
+| `get-last-known-projects` | `{defaultProjects, allProjects, savedAt}` or `null` — the last accepted paired `get-projects` reply persisted by main, for the provisional sidebar at startup. See "Last known projects (#1125)" |
 | `get-task-snapshots` | The task registry's snapshots for live sessions; pushes follow on `task-snapshot` / `task-rekey`. See session-state.md |
 | `get-activity-trace-state` | Debug-mode state for Settings → Diagnostics; `activity-trace-state` pushes changes. See `docs/activity-trace.md` |
 | `get-activity-reporting-state` / `set-activity-reporting-enabled` | ActivityWatch reporting — see activitywatch.md |
@@ -625,7 +628,7 @@ An unknown remote target never falls back to local disk IO.
 
 ### Events (main → renderer)
 
-`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`
+`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification` (`sessionId, message, kind` — `kind` is the session harness's `classifyNotification` verdict, see cli-harnesses.md), `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`
 
 `onProjectsChanged(callback)` forwards the main-side `{ cause: string[] }`
 payload. Schedules filters these causes before queuing a bounded debounce;
@@ -842,12 +845,37 @@ app session for this early-close case and remains available for later tabs.
 This warning also covers a close before node-pty has submitted the root PID.
 Release before readiness cancels the assignment silently.
 
-Jobs **never** set JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE. They retain only
-JOB_OBJECT_LIMIT_BREAKAWAY_OK (0x800): applications that explicitly request
-CREATE_BREAKAWAY_FROM_JOB keep that ability. Node detached spawn does not request
-that flag, so ordinary detached children are still members. SILENT_BREAKAWAY_OK
-is absent because it would exempt ordinary descendants. Closing job handles,
-helper death, transport/protocol failure or timeout therefore kills no members.
+Jobs set no limit flags (#1015): JOB_OBJECT_LIMIT_BREAKAWAY_OK (0x800),
+JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK (0x1000) and JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+are all absent. Closing job handles, helper death, transport/protocol failure or
+timeout therefore kills no members.
+The job is set on every local Windows PTY (main.js, trackWindowsPty, assign): Git
+bash, PowerShell, Claude and plain tabs alike, so everything below applies to
+every Windows tab, not only Git bash.
+With breakaway allowed, Git for Windows bash can launch Node outside the tab's
+job; Node's detached children then also escape. A gated native measurement with
+Git bash and Node 22 observed both launcher and detached child surviving explicit
+termination with 0x800, and both ending with zero flags. Bash still launched
+Node and its detached child successfully with zero flags. An explicit native
+CREATE_BREAKAWAY_FROM_JOB request instead fails with ERROR_ACCESS_DENIED (5),
+as measured separately; callers that require that flag cannot launch through
+this job. The live comparison on 19–20 November 2026 confirmed this error from
+inside a Git bash tab; since the job covers every local Windows PTY, the error-5
+cost of an explicit CREATE_BREAKAWAY_FROM_JOB concerns every Windows tab. Detached Node children and `cmd /c start` PowerShell
+processes survived tab close with 0x800 and ended with zero flags. Console-attached
+children, Claude and classic Win32 charmap already ended on close with 0x800;
+Store Notepad stayed outside the tab job and survived in both variants.
+An already-running Claude daemon spawned background workers outside the tab job
+in both variants. Starting that daemon from a tab was not measured; members of
+the tab job still rely on the protected-member policy below.
+Claude's srt-win sandboxed Bash tool under zero flags has NOT been measured.
+Because the job is set on every Windows tab, that unmeasured risk concerns every
+tab where Claude runs its sandboxed Bash tool, not only Git bash tabs. Codex's
+Windows sandbox ran under zero flags, but that does not establish srt-win
+compatibility. JB accepted shipping zero flags in the next beta on 20 November.
+The Windows-only windows-job-bash regression exercises the shipped helper
+through its spawn port and a real Git bash; it skips when Git for Windows is
+unavailable. It does not exercise Electron or cover every MSYS tool.
 The failed singleton logs once, settles requests false and never restarts in the
 same app session; subsequent tabs degrade to plain ConPTY close. EOF/finally
 only closes handles, with no membership scan or termination. Release also just
@@ -924,6 +952,17 @@ it does not disable the shared helper or other PTYs. An in-flight request keeps
 its own request timeout; only a genuine request timeout or protocol/process
 failure disables the helper. Late replies remain serialized before release.
 There is no new kill fallback. Legacy `terminate` still releases immediately.
+In the 19–20 November live run under zero flags, the stop went through the legacy
+path (`stop-session`, `killPty`, `record.jobs.terminate`, then
+`TerminateMembers(..., strict=false)`). codex.exe could not be opened or
+terminated (error 5), and the helper logged `terminate failed: 5` for the whole
+stop although the other members had ended; this warning does not mean every
+member survived. Legacy terminate only warns on an unreadable command line: it
+neither skips the member nor protects its descendants, so `ProtectDescendants`
+has no seed for it. Which mechanism ended the Codex subtree was not established.
+This differs from strict retained termination, which skips unreadable members and
+requires validated roster evidence. Do not infer that every process ends from the
+zero limit flags alone.
 Per-id protocol serialization is retained. Script encoding strips leading
 indentation to stay below the Windows command-line length limit.
 
@@ -975,8 +1014,10 @@ TerminateJobObject is used.
 
 A background agent whose launcher has already exited can lose its ancestry link
 to the daemon. If it has no own marker or roster identity, closing the originating
-tab ends it. This accepted rare case requires the daemon to have been cold-started
-from that tab; surviving ancestry cannot be reconstructed from an absent parent.
+tab ends it. This requires the daemon to have been cold-started from that tab;
+surviving ancestry cannot be reconstructed from an absent parent. Under flags 0
+this is no longer rare when a Git bash Claude tab cold-starts the daemon; how
+often it happens is unmeasured.
 
 Attach, detaching, backgrounding, backgrounded, hosted and non-local sessions use
 plain close. Detach releases before Ctrl-Z/write or fallback kill. Confirmed
@@ -1370,8 +1411,14 @@ What Switchboard sets *after* cleaning stays: the plain terminal's `CLAUDECODE=1
 On terminal PROJECTS_SNAPSHOT_CONFLICT, get-projects schedules the existing
 throttled projects-changed notification with cause conflict, then returns only
 {projectsError:{code:'PROJECTS_SNAPSHOT_CONFLICT',message:'Projects changed while loading; reload to retry.'}}.
-Preload recognizes that exact envelope and reconstructs a coded Error. Ordinary
-errors still reject; boolean arrays and the paired defaultProjects/allProjects
+Preload recognizes that exact envelope and reconstructs a coded Error. An
+effect-free build whose third dispatch conflicts on the live snapshot is not an
+error (#1125): get-projects returns the paired reply with `projectsStale: true`
+(boolean replies stay plain arrays) and schedules the same conflict
+notification, so the renderer renders it as any reply and the next reload
+replaces it; main logs the differing live component for the rejected case and
+the job options for a caller timeout (session-cache.md, "Projects query
+worker"). Ordinary errors still reject; boolean arrays and the paired defaultProjects/allProjects
 reply retain their successful shapes, with compact provenance on the paired
 reply. Its `projection.facts` map shares deciding inputs by opaque `scope|root`
 across both views (#742). Rows carry no `projectionFacts`; main's assembly and
@@ -1387,6 +1434,62 @@ raw prompts, names, CLI strings, paths, sockets, keys or liveVersion. Lists are
 capped at 128 with complete counts/truncation flags; oversized legitimate records
 compact before transport and remain below 64 KiB after main's timestamp. Invalid
 records or transport failures cannot break publication.
+
+## Last known projects (#1125)
+
+On a cold start with about a thousand sessions the first accepted load can
+take a minute or more, and the user saw an empty, then frozen, sidebar. The
+renderer now paints the sidebar at once from the payload the previous run
+last showed, marked provisional, and the first accepted `loadProjects` replaces
+it; the real load runs in parallel from the first millisecond and is never
+delayed by the paint.
+
+Main side, `src/main/projects/last-known-projects.js` owns the file
+`last-known-projects.json` under `app.getPath('userData')` — the same place as
+`remote-attach-profile-id`, under `SWITCHBOARD_DATA_DIR` in dev and test, never
+the user DB schema. `getProjectsSnapshot('both')` calls `remember` with the
+assembled `defaultProjects` and `allProjects` of every accepted reply (not a
+stale delivery, not a boolean reply, never the `projection`); the store
+coalesces writes two seconds apart, serializes off the IPC path, refuses a
+payload above 8 MiB (and removes the previous file, so a list that outgrew the
+cap is not shown months later), and writes `tmp` then `rename` so a crash
+leaves either the old file or the new one. The record carries a format
+version and the app version; `load` returns `null` and removes the file on a
+parse error, a foreign format, another app version (row shapes change between
+releases), or a row without `projectPath`/`sessionId` — a missing file is
+`null` without a warning. Nothing flushes at quit: the last two seconds of
+reloads may be lost, and the previous write still describes the sidebar as it
+was. `get-last-known-projects` returns `load()`.
+
+Renderer side, `paintLastKnownProjects` (app.js) runs from
+`loadStartupProjects` without being awaited. It gives up when the reply is not
+two arrays, when a real load has already committed, or when either cache is
+already filled; otherwise it fills `cachedProjects`/`cachedAllProjects`, runs
+`dedup`, sets the `Refreshing…` status only while the latest load is pending,
+and calls `refreshSidebar`. A late snapshot preserves the load failure status
+between retries and after the retry budget is exhausted; starting a retry
+sets the progress status through `loadProjects`. The
+provisional state is the class `projects-provisional` on `#sidebar-content`,
+nowhere else: `loadProjects` removes it when a load commits, and its failure
+branch shows "Could not load projects" while it is present even though the
+caches are not empty.
+
+Provisional rows are inert, not routed. A capture-phase listener on
+`#sidebar-content` swallows `click`, `auxclick`, `dblclick`, `contextmenu` and
+Enter/Space `keydown` while the class is present; the rows and headers render
+at 0.7 opacity with a progress cursor. The alternative — letting a click run
+through `openSessionNow`'s guards — was rejected: those guards assume rows from
+an accepted snapshot, so a row deleted or archived since the last run would
+still spawn `claude --resume` against a missing transcript or open a popover
+on a project that no longer exists, and the wait is a few seconds. Restore,
+trigger readiness and the background-agent paths never see provisional rows:
+they run only after `loadStartupProjects` has an accepted load, as before.
+
+Tests: `test/last-known-projects.test.js` (store), `test/app-last-known-projects.test.js`
+(paint, inertness, replacement, the race where the real load lands first, the
+all-failed startup, including a disk snapshot arriving after all five attempts
+have failed) and the remembered-reply case in
+`test/get-projects-worker-wiring.test.js`.
 
 Schedules reuse `run-schedule-now`, `read-memory`, `save-memory` and
 `schedule-run-exit` unchanged. Slice B adds deletion through the Electron-free

@@ -40,7 +40,7 @@ public static class PtyJobs {
    if (created > (spawn + 100) * 10000 + 116444736000000000L || WaitForSingleObject(process, 0) != 258) return 1168;
    job = CreateJobObject(IntPtr.Zero, null);
    if (job == IntPtr.Zero) return Error();
-   if (!Limits(job, 0x800)) return Error();
+   if (!Limits(job, 0)) return Error();
    if (!AssignProcessToJobObject(job, process)) return Error();
    Jobs.Add(id, job); job = IntPtr.Zero;
    return 0;

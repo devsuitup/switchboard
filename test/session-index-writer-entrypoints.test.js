@@ -28,7 +28,7 @@ test('the projects watcher timer logs a rejected refresh instead of leaking its 
   let watch, timer;
   const errors = [];
   const context = vm.createContext({
-    PROJECTS_DIR: 'fixture', path, console, projectsWatcher: null,
+    PROJECTS_DIR: 'fixture', path, console, projectsWatcher: null, getSetting: () => ({}),
     fs: { existsSync: () => true, watch: (_dir, _opts, callback) => { watch = callback; return { on() {} }; } },
     setTimeout: fn => { timer = fn; return 1; }, clearTimeout() {},
     detectSessionTransitions() {}, notifyRendererProjectsChanged() {},

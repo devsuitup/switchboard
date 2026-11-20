@@ -135,6 +135,7 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
 - **Terminal right-click modes** — the press is kept from the application outside Native mode; see [contexts/terminal-right-click.md](contexts/terminal-right-click.md)
 - **No automatic resume of a session live elsewhere** — restore and reload skip it, a click asks; see [contexts/cli-session-state.md](contexts/cli-session-state.md), "Live elsewhere"
 - **Background agents view** — the daemon's `--bg` sessions listed, attached, stopped, dispatched; see [contexts/bg-agents.md](contexts/bg-agents.md)
+- **Codex CLI sessions in the index** — `$CODEX_HOME/sessions` rollouts in the sidebar, search, viewer, heatmap, with a CLI badge (port of upstream's harness work, credit Ali Basiri); see [contexts/cli-harnesses.md](contexts/cli-harnesses.md)
 
 (Not exhaustive — `git log --oneline upstream/main..main` is the ground truth.)
 

@@ -151,6 +151,13 @@ function wrapInGridCard(sessionId) {
   name.className = 'grid-card-name';
   name.textContent = displayName;
   header.appendChild(name);
+  if (session?.runtimeLabel) {
+    const runtimeBadge = document.createElement('span');
+    runtimeBadge.className = 'runtime-badge';
+    runtimeBadge.dataset.runtime = session.runtime;
+    runtimeBadge.textContent = session.runtimeLabel;
+    header.appendChild(runtimeBadge);
+  }
   const project = document.createElement('span');
   project.className = 'grid-card-project';
   project.textContent = shortProject;

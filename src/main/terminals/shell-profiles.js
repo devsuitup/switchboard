@@ -216,9 +216,9 @@ function quoteArgvForShell(shellPath, argv, { env, cwd, wrapped } = {}) {
   return argv.map(a => quoteArgForShell(shellPath, a, passes)).join(' ');
 }
 
-function powershellLaunch(argv, prefix) {
+function powershellLaunch(argv, prefix, binary = 'claude') {
   const words = prefix.trim().split(/\s+/).filter(Boolean);
-  const [target, ...rest] = words.length ? [...words, 'claude'] : ['claude'];
+  const [target, ...rest] = words.length ? [...words, binary] : [binary];
   return ['__switchboard_launch', target, ...rest, ...argv].map((word, i) => (i ? psLiteral(word) : word)).join(' ');
 }
 
@@ -232,14 +232,14 @@ function fitsCommandLine(shellPath, command, extraArgs) {
 
 const survivesPowerShellNative = (token, batch) => token !== '' && !/"/.test(token) && !(batch && /[&|<>^%!\r\n]/.test(token)) && !(/\s/.test(token) && token.endsWith('\\'));
 
-function claudeCommand(shellPath, argv, { env, cwd, prefix = '', windows = isWindows, extraArgs = [], ide = false } = {}) {
+function claudeCommand(shellPath, argv, { env, cwd, prefix = '', windows = isWindows, extraArgs = [], ide = false, binary = 'claude' } = {}) {
   const wrapped = !!prefix.trim();
   const quoted = quoteArgvForShell(shellPath, argv, { env, cwd, wrapped });
-  const plain = (wrapped ? prefix + ' ' : '') + 'claude ' + quoted;
+  const plain = (wrapped ? prefix + ' ' : '') + binary + ' ' + quoted;
   if (!(windows && isPowerShellShell(shellPath))) return plain;
-  const helper = powershellLaunch(argv, prefix);
+  const helper = powershellLaunch(argv, prefix, binary);
   if (fitsCommandLine(shellPath, helper, extraArgs)) return helper;
-  const baseline = ide ? (wrapped ? prefix + ' ' : '') + 'claude ' + quoteArgvForShell(shellPath, argv.slice(0, -1), { env, cwd, wrapped }) + ' --ide' : plain;
+  const baseline = ide ? (wrapped ? prefix + ' ' : '') + binary + ' ' + quoteArgvForShell(shellPath, argv.slice(0, -1), { env, cwd, wrapped }) + ' --ide' : plain;
   if (!fitsCommandLine(shellPath, baseline, extraArgs)) return helper;
   const batch = wrapped || powershellReparsesClaude(env || {});
   if (argv.every(token => survivesPowerShellNative(token, batch))) return baseline;

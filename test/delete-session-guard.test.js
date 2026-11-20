@@ -81,6 +81,7 @@ test('the main-process delete guard reads merged member ids from the current cac
     makeDeleteSessionGuard, activeSessions: new Map([[SID, { exited: false }]]),
     bgAgents, cliSessionState, sessionHasPty: () => false, ptyPids: () => [], getAllCached: () => rows,
     sessionCache: require('../sidebar-bg-sessions'),
+    getCachedSession: id => rows.find(row => row.sessionId === id) || null, getHarness: require('../harnesses').getHarness,
   });
   const guard = vm.runInContext(source.slice(start, end) + '\ndeleteSessionGuard;', context, { filename: 'main.js' });
   assert.equal(await guard('REPRESENTATIVE'), 'session is still running in this window — use Stop on its row in the sidebar, then retry Delete');

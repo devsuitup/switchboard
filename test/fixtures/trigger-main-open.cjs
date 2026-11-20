@@ -14,7 +14,7 @@ function fixture(overrides = {}) {
     triggerRendererBridge: { consumePermit: () => null, checkPermit: () => null, markOpened: (id, session) => { marks.push([id, session]); return true; } },
     validateTriggerOpen: async permit => ({ ok: true, cwd: permit.target?.cwd }),
     ipcMain: { handle: (_name, fn) => { handler = fn; } },
-    getCachedFolder: () => null, isRemoteFolder: () => false, remoteIndexer: { findSessionAlias: () => null },
+    getCachedFolder: () => null, getCachedSession: () => null, isRemoteFolder: () => false, remoteIndexer: { findSessionAlias: () => null },
     resolveSessionRealCwd: () => null, PROJECTS_DIR: path.join(process.cwd(), '.work-files', 'absent'),
     normalizePtySize: () => ({ cols: 80, rows: 24 }),
     getSetting: () => ({}), SETTING_DEFAULTS: {}, resolveShell: () => ({ path: '/bin/bash' }),

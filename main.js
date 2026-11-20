@@ -43,7 +43,6 @@ let powerLog;
 const activityTrace = require('./src/main/shared/activity-trace');
 const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDecision } = activityTrace;
 
-const { classifyTitleActivity } = require('./classify-title-activity');
 const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./src/main/app/window-frame');
 const { createUnsavedGuard } = require('./src/main/app/unsaved-guard');
 const { inventory, runExitHandoffs } = require('./src/main/app/session-exit');
@@ -615,7 +614,7 @@ ipcMain.handle('whats-new-dismissed', async () => await whatsNew.dismissed());
 // --- Session cache helpers ---
 
 const { resolveSessionRealCwd, sessionTranscriptExists, isGitRepo } = require('./derive-project-path');
-const { getHarness } = require('./harnesses');
+const { getHarness, prefixedHarnesses, allHarnesses, DEFAULT_HARNESS } = require('./harnesses');
 const { resolveRowDeletionTargets } = require('./delete-session-target');
 
 // Session cache → session-cache.js
@@ -661,8 +660,15 @@ const projectsClient = createProjectsWorkerClient({
     return acknowledgment?.committedRevision !== undefined ? { committedRevision: acknowledgment.committedRevision }
       : { version: acknowledgment?.version ?? before.version };
   },
-  accepted: result => { if (result.reconciled) projectsReconciledAt = Date.now(); },
+  accepted: (result, { delivered = true } = {}) => {
+    if (!result.reconciled) return;
+    projectsReconciledAt = Date.now();
+    if (!delivered) notifyRendererProjectsChanged('reconcile');
+  },
 });
+// see .ai/contexts/ipc-bridge.md ("Last known projects")
+const { createLastKnownProjectsStore } = require('./src/main/projects/last-known-projects');
+const lastKnownProjects = createLastKnownProjectsStore({ dir: app.getPath('userData'), appVersion: app.getVersion(), log });
 
 const { resolveJsonlPath, readSubagentMeta } = require('./read-session-file');
 
@@ -1402,6 +1408,7 @@ ipcMain.handle('rebuild-cache', async () => {
 });
 
 ipcMain.handle('get-indexing-state', () => ({ finished: isIndexingFinished() }));
+ipcMain.handle('get-last-known-projects', () => lastKnownProjects.load());
 
 async function getProjectsSnapshot(showArchived) {
   const started = TRACE.on ? performance.now() : null;
@@ -1419,7 +1426,7 @@ async function getProjectsSnapshot(showArchived) {
     }
     const needsPopulate = !isInitialScanComplete() || (!repairPending && (!isCachePopulated() || !isSearchIndexPopulated()));
 
-    if (needsPopulate) populateCacheViaWorker();
+    if (needsPopulate) Promise.resolve(populateCacheViaWorker()).then(() => { if (isInitialScanComplete()) projectsReconciledAt = Date.now(); }, () => {});
     backfillEntrypoints();
     backfillCustomTitles();
     const result = await projectsClient.request({ reconcile: !needsPopulate && Date.now() - projectsReconciledAt >= 5000, measureBytes: TRACE.on });
@@ -1452,15 +1459,31 @@ async function getProjectsSnapshot(showArchived) {
     if (TRACE.on) {
       if (started !== null) trace('ipc.get-projects', null, { totalMs: performance.now() - started, rows: result.rows, replyBytes: result.replyBytes?.[showArchived === 'both' ? 'both' : showArchived ? 'all' : 'default'] ?? null });
     }
+    if (result.stale) {
+      notifyRendererProjectsChanged('conflict');
+      if (showArchived === 'both') reply.projectsStale = true;
+    } else if (showArchived === 'both') lastKnownProjects.remember({ defaultProjects: reply.defaultProjects, allProjects: reply.allProjects });
     return reply;
   } catch (err) {
     if (err.code === 'PROJECTS_SNAPSHOT_CONFLICT') {
+      const changed = err.reason === 'live' ? ` changed=${changedLiveComponents(err.before, err.after)}` : '';
+      log.warn(`[projects] snapshot conflict after ${err.dispatches ?? 'unknown'} dispatches: reason=${err.reason ?? 'unknown'}${changed} reconcile=${err.reconcile ?? 'unknown'}`);
       notifyRendererProjectsChanged('conflict');
       return { projectsError: { code: err.code, message: 'Projects changed while loading; reload to retry.' } };
     }
+    if (err.code === 'PROJECTS_WORKER_TIMEOUT') log.warn(`[projects] get-projects timed out after ${err.timeoutMs} ms: reconcile=${err.reconcile ?? 'unknown'} dispatches=${err.dispatches ?? 'unknown'}`);
     console.error('Error listing projects:', err);
     throw err;
   }
+}
+
+function changedLiveComponents(before, after) {
+  let snapshots;
+  try { snapshots = [JSON.parse(before), JSON.parse(after)]; } catch { return 'unknown'; }
+  if (!snapshots.every(value => value && typeof value === 'object')) return 'unknown';
+  const keys = [...new Set([...Object.keys(snapshots[0]), ...Object.keys(snapshots[1])])];
+  const changed = keys.filter(key => JSON.stringify(snapshots[0][key]) !== JSON.stringify(snapshots[1][key]));
+  return changed.length ? changed.join(',') : 'none';
 }
 
 async function getTriggerProjectSnapshot() {
@@ -1769,9 +1792,28 @@ ipcMain.handle('get-settings-by-prefix', (_event, prefix) => {
 });
 
 ipcMain.handle('set-setting', async (_event, key, value) => {
+  const disabledBefore = key === 'global' ? JSON.stringify(getSetting('global')?.disabledHarnesses || []) : null;
   await setSetting(key, value);
-  if (key === 'global') applyUpdateChannel();
+  if (key === 'global') {
+    applyUpdateChannel();
+    // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
+    if (JSON.stringify(value?.disabledHarnesses || []) !== disabledBefore) {
+      restartHarnessWatchers();
+      notifyRendererProjectsChanged('settings');
+    }
+  }
   return { ok: true };
+});
+
+// see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
+ipcMain.handle('get-harnesses', () => {
+  const disabled = new Set(getSetting('global')?.disabledHarnesses || []);
+  return allHarnesses().map(h => ({ id: h.id, label: h.label, available: h.available(), enabled: !disabled.has(h.id), isDefault: h.id === DEFAULT_HARNESS }));
+});
+
+ipcMain.handle('get-harness-models', (_event, runtime) => {
+  const harness = getHarness(runtime);
+  return typeof harness.readModelCatalog === 'function' ? harness.readModelCatalog() : [];
 });
 
 // --- IPC: remote hosts ---
@@ -2363,13 +2405,17 @@ const transcriptFollower = require('./src/main/viewer/transcript-follower').crea
 
 ipcMain.handle('read-session-jsonl', (_event, sessionId, options) => {
   if (options?.mode === 'stop') return transcriptFollower.close(sessionId, options.token, options.park === true);
-  const folder = getCachedFolder(sessionId);
+  const row = getCachedSession(sessionId);
+  const folder = row?.folder;
   if (!folder) return { error: 'Session not found in cache' };
   const folderDir = projectsDirForFolder(folder);
   if (!folderDir) return { error: 'Session belongs to a host that is no longer declared' };
-  const jsonlPath = path.join(folderDir, sessionId + '.jsonl');
+  // see .ai/contexts/cli-harnesses.md ("The message viewer")
+  const harness = getHarness(row.runtime);
+  const jsonlPath = row.sessionFile ? harness.transcriptPath(row) : path.join(folderDir, sessionId + '.jsonl');
+  if (!jsonlPath) return { error: 'Session transcript location is unknown' };
   try {
-    if (options?.mode === 'follow') return transcriptFollower.open(sessionId, jsonlPath, options.checkpoint);
+    if (options?.mode === 'follow') return transcriptFollower.open(sessionId, jsonlPath, options.checkpoint, harness.toViewerEntry);
     if (options?.mode === 'next') return transcriptFollower.read(sessionId, options.token, jsonlPath, options.final === true);
     const content = fs.readFileSync(jsonlPath, 'utf-8');
     const entries = [];
@@ -2377,7 +2423,7 @@ ipcMain.handle('read-session-jsonl', (_event, sessionId, options) => {
       if (!line.trim()) continue;
       try { entries.push(JSON.parse(line)); } catch {}
     }
-    return { entries };
+    return { entries: harness.toViewerEntries(entries) };
   } catch (err) {
     return { error: err.message };
   }
@@ -2713,16 +2759,23 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     // Parse OSC sequences (title changes, progress, notifications, etc.)
     if (data.includes('\x1b]')) {
       const oscMatches = data.matchAll(/\x1b\](\d+);([^\x07\x1b]*)(?:\x07|\x1b\\)/g);
+      // see .ai/contexts/cli-harnesses.md ("Busy and attention per harness")
+      const sessionHarness = getHarness(session.runtime);
       for (const m of oscMatches) {
         const code = m[1];
         const payload = m[2].slice(0, 120);
-        // Detect Claude CLI busy state from the OSC 0 title — see .ai/contexts/ipc-bridge.md
+        // Detect the CLI's busy state from the OSC 0 title — see .ai/contexts/ipc-bridge.md
         if (code === '0') {
-          const { busy: isBusy, idle: isIdle, via } = classifyTitleActivity(payload, { allowFallback: !session.isPlainTerminal });
+          const { busy: isBusy, idle: isIdle, attention: isAttention = false, via } = sessionHarness.classifyTitleActivity(payload, { allowFallback: !session.isPlainTerminal });
           if (isBusy) session._statusOsc.busyAt = Date.now();
           else if (isIdle) session._statusOsc.idleAt = Date.now();
-          if (LOG_DEBUG_ON) log.debug(`[OSC 0] session=${currentId} cp=${codePoints(payload, 1)} rule=${via} busy=${isBusy} idle=${isIdle} wasBusy=${!!session._cliBusy}`);
-          if (TRACE.on) trace('osc.title', currentId, { cp: codePoints(payload, 3), title: payload.slice(0, 60), busy: isBusy, idle: isIdle, rule: via, was: !!session._cliBusy, decision: busyDecision(isBusy, isIdle, !!session._cliBusy) });
+          if (LOG_DEBUG_ON) log.debug(`[OSC 0] session=${currentId} cp=${codePoints(payload, 1)} rule=${via} busy=${isBusy} idle=${isIdle} attention=${isAttention} wasBusy=${!!session._cliBusy}`);
+          if (TRACE.on) trace('osc.title', currentId, { cp: codePoints(payload, 3), title: payload.slice(0, 60), busy: isBusy, idle: isIdle, attention: isAttention, rule: via, was: !!session._cliBusy, decision: busyDecision(isBusy, isIdle, !!session._cliBusy) });
+          if (isAttention && !session._titleAttention) {
+            if (TRACE.on) trace('osc.notify', currentId, { message: payload.slice(0, 120), kind: 'attention', via: 'osc0', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('terminal-notification', currentId, payload, 'attention');
+          }
+          session._titleAttention = isAttention;
           if (isBusy && !session._cliBusy) {
             session._cliBusy = true;
             session._oscIdle = false;
@@ -2764,10 +2817,11 @@ function wireSessionPty(session, sessionId, ptyProcess) {
           }
         } else {
           // Regular notification (attention, permission, etc.)
-          log.info(`[OSC 9] session=${currentId} message="${payload}"`);
-          if (TRACE.on) trace('osc.notify', currentId, { message: payload.slice(0, 120), sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+          const kind = sessionHarness.classifyNotification(payload);
+          log.info(`[OSC 9] session=${currentId} kind=${kind} message="${payload}"`);
+          if (TRACE.on) trace('osc.notify', currentId, { message: payload.slice(0, 120), kind, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
           if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('terminal-notification', currentId, payload);
+            mainWindow.webContents.send('terminal-notification', currentId, payload, kind);
           }
         }
       }
@@ -3075,7 +3129,10 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   const resumeSourceId = sessionOptions?.forkFrom
     ? String(sessionOptions.forkFrom)
     : (!isNew ? sessionId : null);
-  if (!triggerPermit && resumeSourceId && sessionOptions?.type !== 'terminal' && sessionOptions?.type !== 'attach') {
+  // see .ai/contexts/cli-harnesses.md ("Launching through the harness")
+  const cachedRow = resumeSourceId ? getCachedSession(resumeSourceId) : null;
+  const launchHarness = getHarness(sessionOptions?.runtime || cachedRow?.runtime);
+  if (!triggerPermit && resumeSourceId && launchHarness.groupsByProject && sessionOptions?.type !== 'terminal' && sessionOptions?.type !== 'attach') {
     const realCwd = resolveSessionRealCwd(
       PROJECTS_DIR, resumeSourceId, projectPath ? encodeProjectPath(projectPath) : null
     );
@@ -3153,7 +3210,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   let projectFolder = null;
   let continuationSnapshot = null;
 
-  if (!isPlainTerminal) {
+  if (!isPlainTerminal && launchHarness.groupsByProject) {
     // Snapshot existing .jsonl files before spawning (for new session + fork detection)
     projectFolder = encodeProjectPath(spawnCwd);
     const claudeProjectDir = path.join(PROJECTS_DIR, projectFolder);
@@ -3213,8 +3270,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         // with session ID", and the banner's advice — re-click to relaunch — could
         // never work because every retry resumed the same missing id. Start it
         // instead, reusing the id the sidebar already shows.
+        const transcriptOnDisk = () => (launchHarness.groupsByProject
+          ? sessionTranscriptExists(PROJECTS_DIR, sessionId)
+          : !!(cachedRow?.sessionFile && fs.existsSync(launchHarness.transcriptPath(cachedRow))));
         const startsFresh = isNew
-          || (!triggerPermit && !sessionOptions?.forkFrom && !sessionTranscriptExists(PROJECTS_DIR, sessionId));
+          || (!triggerPermit && !sessionOptions?.forkFrom && !transcriptOnDisk());
         launchMode = sessionOptions?.forkFrom ? 'fork' : startsFresh ? 'new' : 'resume';
         if (!isNew && startsFresh && !sessionOptions?.forkFrom) {
           log.info(`[open-terminal] ${sessionId} has no transcript — starting it instead of resuming`);
@@ -3224,11 +3284,12 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
           log.warn(`[open-terminal] ${spawnCwd} is not a git repository — launching without --worktree`);
           launchOptions = { ...sessionOptions, worktree: false };
         }
-        claudeArgs.push(...getHarness().buildLaunchArgs({ sessionId, isNew: startsFresh, options: launchOptions,
+        claudeArgs.push(...launchHarness.buildLaunchArgs({ sessionId, isNew: startsFresh, options: launchOptions,
           name: triggerPermit?.name }));
       }
+      const launchSandbox = !isAttach && !!sessionOptions?.sandbox && launchHarness.capabilities.sandbox;
 
-      if (!isAttach && sessionOptions?.sandbox && process.platform !== 'linux') {
+      if (launchSandbox && process.platform !== 'linux') {
         return { ok: false, error: 'Sandbox mode requires Linux (bubblewrap)' };
       }
 
@@ -3246,7 +3307,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
 
       // Start MCP server for this session so Claude CLI sends diffs/file opens to Switchboard
       // (skip if user disabled IDE emulation in global settings)
-      if (!isAttach && sessionOptions?.mcpEmulation !== false) {
+      if (!isAttach && sessionOptions?.mcpEmulation !== false && launchHarness.capabilities.ideBridge) {
         try {
           mcpServer = await startMcpServer(sessionId, [spawnCwd], mainWindow, log);
           mcpOwnedHere = true;
@@ -3258,12 +3319,13 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         }
       }
 
-      let claudeCmd = claudeCommand(shell, claudeArgs, { env: cleanPtyEnv, cwd: spawnCwd, prefix: pre, extraArgs: shellExtraArgs, ide: ideAdded });
+      let claudeCmd = claudeCommand(shell, claudeArgs, { env: cleanPtyEnv, cwd: spawnCwd, prefix: pre, extraArgs: shellExtraArgs, ide: ideAdded,
+        binary: launchHarness.binary });
 
       // Sandbox: run claude inside a bubblewrap sandbox that only exposes the
       // project directory and Claude's own config/state dirs. Linux only —
       // bwrap has no macOS/Windows equivalent wired up here.
-      if (!isAttach && sessionOptions?.sandbox) {
+      if (launchSandbox) {
         claudeCmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgs);
         if (pre) claudeCmd = pre + ' ' + claudeCmd;
       }
@@ -3293,9 +3355,10 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       if (mcpServer) {
         ptyEnv.CLAUDE_CODE_SSE_PORT = String(mcpServer.port);
       }
+      if (!isAttach && launchMode !== 'resume' && launchHarness.launchEnv) Object.assign(ptyEnv, launchHarness.launchEnv(sessionId));
       // see docs/sandbox.md ("Schedules")
       if (projectPath) await scheduleProjects().add(projectPath);
-      if (!isAttach && sessionOptions?.sandbox) {
+      if (launchSandbox) {
         ptyEnv.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = require('./src/main/triggers/trigger-watcher').getTriggersDir();
         fs.mkdirSync(path.join(ptyEnv.SWITCHBOARD_SANDBOX_TRIGGERS_DIR, 'processed'), { recursive: true });
         // Directories the sandboxed claude must still reach beyond the cwd:
@@ -3351,7 +3414,13 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     preLaunch: !isAttach && !!sessionOptions?.preLaunchCmd,
     // Recorded so a reattach can report it too — the renderer badges sandboxed
     // sessions, and a reattached session is still inside the same sandbox.
-    sandbox: !!sessionOptions?.sandbox,
+    sandbox: !isAttach && !!sessionOptions?.sandbox && launchHarness.capabilities.sandbox,
+    // see .ai/contexts/cli-harnesses.md ("Launching: a session that learns its id afterwards")
+    runtime: launchHarness.id,
+    pendingLaunch: !isPlainTerminal && !isAttach && launchMode !== 'resume' && launchHarness.matchesLaunch
+      && launchHarness.needsIdDetection({ isNew: true, options: sessionOptions })
+      ? { tag: launchHarness.originatorTag(sessionId), forkFrom: sessionOptions?.forkFrom || null, projectPath: spawnCwd, spawnedAt: Date.now() }
+      : null,
     mcpServer, mcpError, _openedAt: Date.now(),
     // see docs/automation.md — the trigger watcher's politeness guard
     composerState: createComposerState(),
@@ -3361,6 +3430,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   mcpOwnedHere = false;
   activeSessions.set(sessionId, session);
   if (!isPlainTerminal) revealIfSdkSession(sessionId);
+  if (session.pendingLaunch) armLaunchSweep();
   if (isAttach) notifyRendererProjectsChanged('session-attach');
   if (!isPlainTerminal && !panelOwnerId) activityReporter.sessionStarted({ sessionId, project: projectPath });
 
@@ -3378,7 +3448,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   }
 
   return {
-    ok: true, reattached: false, sandbox: !!sessionOptions?.sandbox,
+    ok: true, reattached: false, sandbox: session.sandbox,
     mcpState: mcpError ? 'failed' : getMcpState(sessionId),
     mcpError,
     generation: session.generation,
@@ -3837,15 +3907,19 @@ function getMergedMemberIds(id) {
 
 const deleteSessionGuard = makeDeleteSessionGuard({
   activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids,
-  getMergedMemberIds,
+  getMergedMemberIds, getCachedSession, getHarness,
 });
 
 // --- fs.watch on projects directory ---
 let projectsWatcher = null;
 
 function startProjectsWatcher() {
+  if (projectsWatcher) { projectsWatcher.close(); projectsWatcher = null; }
+  flushProjectsBeforeExit = async () => {};
   let flushChain = Promise.resolve();
   if (!fs.existsSync(PROJECTS_DIR)) return;
+  // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
+  const claudeIndexing = () => !getSetting('global')?.disabledHarnesses?.includes('claude');
 
   // pendingChanges: folder → Set<relativePath> | true.
   //   Set<string>  — only the listed files changed (targeted refresh, fast path)
@@ -3856,6 +3930,7 @@ function startProjectsWatcher() {
   const pendingWorkflowTitles = new Set();
   const workflowTitles = new Map();
   let debounceTimer = null;
+  let watcher = null;
 
   flushProjectsBeforeExit = async () => {
     if (debounceTimer) clearTimeout(debounceTimer);
@@ -3870,6 +3945,7 @@ function startProjectsWatcher() {
 
   async function applyChanges() {
     debounceTimer = null;
+    if (projectsWatcher !== watcher) return;
     // Drain pendingChanges into a local copy so events arriving during the
     // synchronous flush land in a fresh batch for the next tick.
     const work = new Map(pendingChanges);
@@ -3885,7 +3961,7 @@ function startProjectsWatcher() {
         }
       }
     }
-    for (const filename of snapshots) {
+    for (const filename of claudeIndexing() ? snapshots : []) {
       try {
         const snapshot = JSON.parse(await fs.promises.readFile(path.join(PROJECTS_DIR, filename), 'utf8'));
         const title = typeof snapshot.workflowName === 'string' && snapshot.workflowName.trim()
@@ -3902,12 +3978,15 @@ function startProjectsWatcher() {
     }
     let activityChanged = false;
     for (const [folder, scope] of work) {
+      if (projectsWatcher !== watcher) return;
       const folderPath = path.join(PROJECTS_DIR, folder);
       let folderChanged;
       if (fs.existsSync(folderPath)) {
         detectSessionTransitions(folder);
+        if (!claudeIndexing()) continue;
         folderChanged = await writer.refreshFolder(folder, scope === true ? undefined : { files: scope });
       } else {
+        if (!claudeIndexing()) continue;
         folderChanged = await writer.dropFolderRows(folder);
       }
       changed = folderChanged === true || changed;
@@ -3937,6 +4016,7 @@ function startProjectsWatcher() {
 
   try {
     projectsWatcher = fs.watch(PROJECTS_DIR, { recursive: true }, (_eventType, filename) => {
+      if (projectsWatcher !== watcher) return;
       if (!filename) return;
 
       // filename is relative, e.g. "folder-name/sessions-index.json" or "folder-name/abc.jsonl"
@@ -3964,12 +4044,79 @@ function startProjectsWatcher() {
       debounceTimer = setTimeout(() => flushChanges().catch(err => log.error('[projects] watcher refresh failed:', err.message)), 500);
     });
 
+    watcher = projectsWatcher;
     projectsWatcher.on('error', (err) => {
       console.error('Projects watcher error:', err);
     });
   } catch (err) {
     console.error('Failed to start projects watcher:', err);
   }
+}
+
+// see .ai/contexts/session-cache.md ("Harness folders")
+const harnessWatchers = [];
+function startHarnessWatchers() {
+  for (const harness of prefixedHarnesses(getSetting('global')?.disabledHarnesses)) {
+    const root = harness.sessionsRoot();
+    if (!fs.existsSync(root)) continue;
+    const pendingFolders = new Set();
+    let debounceTimer = null;
+    const flush = async () => {
+      debounceTimer = null;
+      const folders = [...pendingFolders];
+      pendingFolders.clear();
+      let changed = false;
+      for (const folder of folders) {
+        // see .ai/contexts/cli-harnesses.md ("Launching: a session that learns its id afterwards")
+        if (sessionTransitions.hasPendingLaunches()) {
+          const dir = harness.folderPath(folder);
+          try { if (dir) sessionTransitions.resolvePendingLaunches(harness, harness.listTranscripts(dir)); }
+          catch (err) { log.error(`[launch-detect] ${harness.id} ${folder}:`, err.message); }
+        }
+        try { if (await writer.refreshFolder(folder)) changed = true; }
+        catch (err) { log.error(`[harness-watch] ${harness.id} ${folder}:`, err.message); }
+      }
+      if (changed) notifyRendererProjectsChanged('watcher');
+    };
+    try {
+      const watcher = fs.watch(root, { recursive: true }, (_eventType, filename) => {
+        if (!filename) return;
+        const folder = harness.watchFolderKey(filename.split(path.sep));
+        if (!folder) return;
+        pendingFolders.add(folder);
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => flush().catch(err => log.error(`[harness-watch] ${harness.id} refresh failed:`, err.message)), 500);
+      });
+      watcher.on('error', err => log.error(`[harness-watch] ${harness.id}:`, err.message));
+      harnessWatchers.push(watcher);
+      log.info(`[harness-watch] watching ${harness.id} at ${root}`);
+    } catch (err) {
+      log.error(`[harness-watch] failed to watch ${harness.id}:`, err.message);
+    }
+  }
+}
+
+// see .ai/contexts/cli-harnesses.md ("Launching: a session that learns its id afterwards")
+let launchSweepTimer = null;
+function armLaunchSweep() {
+  if (launchSweepTimer) return;
+  launchSweepTimer = setInterval(() => {
+    if (!sessionTransitions.hasPendingLaunches()) { clearInterval(launchSweepTimer); launchSweepTimer = null; return; }
+    try { sessionTransitions.sweepPendingLaunches(); }
+    catch (err) { log.error('[launch-detect] sweep failed:', err.message); }
+  }, 3000);
+  launchSweepTimer.unref?.();
+}
+
+function stopHarnessWatchers() {
+  for (const watcher of harnessWatchers.splice(0)) watcher.close();
+  if (launchSweepTimer) { clearInterval(launchSweepTimer); launchSweepTimer = null; }
+}
+
+function restartHarnessWatchers() {
+  if (!projectsWatcher) startProjectsWatcher();
+  for (const watcher of harnessWatchers.splice(0)) watcher.close();
+  startHarnessWatchers();
 }
 
 // --- IPC: app version ---
@@ -4086,6 +4233,7 @@ if (!app.isPackaged) {
     buildMenu();
     createWindow();
     startProjectsWatcher();
+    startHarnessWatchers();
     // No declared host => no timer and no ssh call. see .ai/contexts/session-cache.md ("Remote SSH hosts")
     remoteIndexer.start();
     syncRemoteWatchers();
@@ -4328,6 +4476,7 @@ function stopNonDatabaseResources(closeTrace = false) {
     () => localTranscriptTracker.dispose(), () => unsubscribeTaskJobs(),
     () => { taskRecordsStopped = Promise.resolve().then(() => taskRecords.dispose()); return taskRecordsStopped; },
     () => { if (projectsWatcher) { projectsWatcher.close(); projectsWatcher = null; } },
+    () => stopHarnessWatchers(),
     () => projectDeleteMain.dispose(),
     () => cliSessionState.stop(), () => bgAgents.stop(), () => remoteIndexer.dispose(),
     () => remoteWatcher.stopAll(), () => remoteActivityTracker.dispose(),

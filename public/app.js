@@ -256,7 +256,7 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
         projectPath: entry.session.projectPath,
         active: sessionId === activeSessionId,
         ...(entry.attach ? { bg: true, ...(typeof entry.attachJobId === 'string' && entry.attachJobId ? { attachJobId: entry.attachJobId } : {}) } : {}),
-        ...(fresh ? { fresh: true } : {}),
+        ...(fresh ? { fresh: true, ...(entry.session.runtime ? { runtime: entry.session.runtime } : {}) } : {}),
       });
     }
     const liveAttach = (id) => { const open = openSessions.get(id); return !!open && !open.closed && !!open.attach; };
@@ -276,7 +276,7 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
     for (const { item, index, keepAttached } of held) {
       const active = heldActive ? heldActive.item === item : !!keepAttached && item.sessionId === activeSessionId;
       const attachJobId = openSessions.get(item.sessionId)?.attachJobId || item.attachJobId;
-      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true } : {}), ...(item.bg || (keepAttached && liveAttach(item.sessionId)) ? { bg: true, ...(typeof attachJobId === 'string' && attachJobId ? { attachJobId } : {}) } : {}) });
+      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true, ...(item.runtime ? { runtime: item.runtime } : {}) } : {}), ...(item.bg || (keepAttached && liveAttach(item.sessionId)) ? { bg: true, ...(typeof attachJobId === 'string' && attachJobId ? { attachJobId } : {}) } : {}) });
     }
     if (!set.some(e => e.active)) {
       const opening = set.find(e => pendingSessions.get(e.sessionId)?.openingActive);
@@ -413,6 +413,14 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
     for (const item of pending) restoreInFlight.set(item.sessionId, item);
     const skippedNow = [];
     const startedAs = new Map();
+    let harnessLabels = null;
+    const harnessLabel = async runtime => {
+      if (!harnessLabels) {
+        harnessLabels = new Map();
+        try { for (const h of (await window.api.getHarnesses?.()) || []) if (h?.id) harnessLabels.set(h.id, h.label); } catch {}
+      }
+      return harnessLabels.get(runtime) || null;
+    };
     try {
       const liveById = await liveElsewhereMany(pending.filter(item => !startsFresh(item)).map(item => item.sessionId), { api: window.api });
       for (const [position, item] of list.entries()) {
@@ -425,6 +433,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
             if (window.isDeletedProjectRestoreTarget?.(item)) continue;
             delete options.worktree;
             delete options.worktreeName;
+            if (item.runtime) { options.runtime = item.runtime; options.runtimeLabel = await harnessLabel(item.runtime); }
             const newId = await launchNewSession(project, options, item.sessionId);
             if (newId) startedAs.set(item.sessionId, newId);
           } finally {
@@ -1155,18 +1164,21 @@ window.api.onRemoteResizeAllowed((sessionId) => {
 });
 
 // --- Terminal notifications (iTerm2 OSC 9 — "needs attention") ---
-window.api.onTerminalNotification((sessionId, message) => {
-  if (window.ATRACE) window.atrace('recv.terminal-notification', sessionId, { message: String(message).slice(0, 120), active: sessionId === activeSessionId });
-  // Only mark as needing attention for "attention" messages, not "waiting for input"
-  // Matches all four CLI notification types:
-  // 1. "Claude Code needs your attention"         → attention
-  // 2. "Claude Code needs your approval for the plan" → approval, needs your
-  // 3. "Claude needs your permission to use {tool}"   → permission, needs your
-  // 4. "Claude Code wants to enter plan mode"         → wants to enter
-  if (/attention|approval|permission|needs your|wants to enter/i.test(message) && sessionId !== activeSessionId) {
+// see .ai/contexts/cli-harnesses.md ("Busy and attention per harness")
+function terminalNotificationState(message, kind) {
+  if (kind === 'attention' || kind === 'idle') return kind;
+  if (/attention|approval|permission|needs your|wants to enter/i.test(message)) return 'attention';
+  if (/waiting for your input/i.test(message)) return 'idle';
+  return null;
+}
+
+window.api.onTerminalNotification((sessionId, message, kind) => {
+  if (window.ATRACE) window.atrace('recv.terminal-notification', sessionId, { message: String(message).slice(0, 120), kind: kind || null, active: sessionId === activeSessionId });
+  const state = terminalNotificationState(message, kind);
+  if (state === 'attention' && sessionId !== activeSessionId) {
     setAttention(sessionId, true, 'onTerminalNotification');
-  } else if (/waiting for your input/i.test(message)) {
-    // "Claude is waiting for your input" — delayed idle notification, mark response-ready
+  } else if (state === 'idle') {
+    // see .ai/contexts/cli-harnesses.md ("Busy and attention per harness")
     setActivity(sessionId, false, 'onTerminalNotification');
   }
 
@@ -2214,6 +2226,7 @@ async function loadProjects({ resort = false } = {}) {
     if (obsolete()) return state.outcome;
     state.committed = job.generation;
     state.outcome = { accepted: true, generation: job.generation };
+    sidebarContent.classList.remove('projects-provisional');
     setRemoteHostLabels(globalSettings?.remoteHosts);
     cachedProjects = defaultProjects;
     cachedAllProjects = allProjects;
@@ -2300,7 +2313,7 @@ async function loadProjects({ resort = false } = {}) {
     if (state.latest === job && !obsolete()) {
       state.reportedErrors.add(error);
       console.warn('[switchboard] project reload failed', error);
-      if (!cachedProjects.length) {
+      if (!cachedProjects.length || sidebarContent.classList.contains('projects-provisional')) {
         loadingStatus.textContent = 'Could not load projects. Reload to retry.';
         loadingStatus.className = 'active';
         loadingStatus.style.display = '';
@@ -2402,6 +2415,7 @@ async function launchNewSession(project, sessionOptions, restoreSessionId, flags
     messageCount: 0,
     modified: new Date().toISOString(),
     created: new Date().toISOString(),
+    ...(sessionOptions?.runtime ? { runtime: sessionOptions.runtime, runtimeLabel: sessionOptions.runtimeLabel || null, canLaunch: true } : {}),
   };
 
   // Track as pending (no .jsonl yet)
@@ -3128,8 +3142,39 @@ async function restoreStartupSessions({ projectsLoaded = true } = {}) {
   } finally { window._startupResumeResolutions = null; }
 }
 
+// see .ai/contexts/ipc-bridge.md ("Last known projects")
+async function paintLastKnownProjects() {
+  let last = null;
+  try { last = await window.api.getLastKnownProjects?.(); }
+  catch (error) { console.warn('[switchboard] last known projects unavailable', error); }
+  if (!last || !Array.isArray(last.defaultProjects) || !Array.isArray(last.allProjects)) return false;
+  if (loadProjects.state?.committed || cachedProjects.length || cachedAllProjects.length) return false;
+  if (!paintLastKnownProjects.guarded) {
+    paintLastKnownProjects.guarded = true;
+    const inert = event => {
+      if (!sidebarContent.classList.contains('projects-provisional')) return;
+      if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+      event.stopPropagation();
+      event.preventDefault();
+    };
+    for (const type of ['click', 'auxclick', 'dblclick', 'contextmenu', 'keydown']) sidebarContent.addEventListener(type, inert, true);
+  }
+  sidebarContent.classList.add('projects-provisional');
+  cachedProjects = last.defaultProjects;
+  cachedAllProjects = last.allProjects;
+  dedup([...cachedAllProjects, ...cachedProjects]);
+  if (loadProjects.state?.latest?.pending) {
+    loadingStatus.textContent = 'Refreshing…';
+    loadingStatus.className = 'active';
+    loadingStatus.style.display = '';
+  }
+  refreshSidebar({ resort: true });
+  return true;
+}
+
 // see .ai/contexts/session-cache.md ("Projects query worker")
 async function loadStartupProjects() {
+  if (typeof paintLastKnownProjects === 'function') paintLastKnownProjects().catch(error => console.warn('[switchboard] last known projects paint failed', error));
   let loaded = false;
   for (let attempt = 0; attempt < 2; attempt++) {
     try { await loadProjects(); loaded = true; break; }
