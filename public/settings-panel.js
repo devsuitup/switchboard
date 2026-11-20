@@ -359,7 +359,7 @@
         <div class="settings-field">
           <div class="settings-field-info">
             <span class="settings-label">Hide SDK-launched Sessions</span>
-            <div class="settings-description">Hide sessions started by a program through the Claude Agent SDK (headless runs, review agents) rather than typed in a terminal. Scheduled tasks stay visible.</div>
+            <div class="settings-description">Hide sessions started by a program rather than typed in a terminal: Claude Agent SDK runs and non-interactive codex exec runs (headless runs, review agents). Scheduled tasks stay visible.</div>
           </div>
           <div class="settings-field-control">
             <label class="settings-toggle"><input type="checkbox" id="sv-hide-sdk" ${hideSdkValue ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>

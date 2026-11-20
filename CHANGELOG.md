@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Changed
+- Codex sessions run non-interactively by a program (`codex exec`: scripted reviews and fixes) are now left out of the sidebar and grid like Claude Agent SDK sessions, under the same **Hide SDK-launched Sessions** setting. They still count in the heatmap and are found by search; the ones you have open stay listed. Codex sessions already indexed are re-checked once at the next start. (#1145)
+
 ### Fixed
 - Claude and Codex sessions in `.work-files/worktrees/<name>`, and Codex sessions in `.worktrees`, `.claude-worktrees` and `.claude/worktrees`, appear under their existing repository, including nested worktrees and sessions already indexed. Repository settings, archive and hidden state follow the group, and project deletion removes the session metadata it previews for both runtimes. Resume and fork use the recorded worktree directory and refuse to launch if it no longer exists; Claude sessions in a deleted `.claude/worktrees` directory are refused instead of starting in the repository. (#1137)
 - A conversation running as a background job (`claude --bg`) no longer slips into a project's collapsed "Older" rows: while its job is alive it stays visible and sorts with the running sessions, and the Running filter lists it, whatever the date of its last indexed message. (#1146)
