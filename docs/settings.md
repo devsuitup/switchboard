@@ -133,8 +133,16 @@ The **What is sent** explanation expands when selected.
 
 ### Archived
 
-The existing archived-project list and Unarchive actions are here. Folder and
-session archive management will be added separately.
+Projects are grouped by host, with Local first. Each row shows its name, full path
+(also in the tooltip), Project and legacy badges, and an archive date for new
+archives. Worktree entries keep their own rows and paths. Filter by name, path,
+host label or alias; Escape clears the filter. Host headers fold with Enter or
+Space. Select rows or a host group to unarchive several projects together.
+
+**Unarchive** applies immediately and offers a ten-second **Undo**. The row's
+**More actions** menu offers **Copy path** and **Delete project…**. Delete opens
+the same preview and confirmation as the sidebar, without unarchiving first.
+Folder and session archive management will be added separately.
 
 ### Advanced
 
@@ -150,6 +158,8 @@ The **What it records** explanation expands when selected.
 - `hiddenProjects`: projects archived with **Archive Project**, including legacy
   hidden entries, and projects deleted from Switchboard (kept out of the sidebar;
   not listed in **Archived projects**). `hiddenProjectKinds` records which is which.
+- `hiddenProjectArchivedAt`: archive timestamps keyed by the exact hidden entry;
+  older entries without a timestamp display no date.
 - `archivedProjects`, a setting of its own: folders hidden with
   [Archive folder](session-browser.md#archive-a-folder), each with the session
   ids it held and the schedule files it disabled.

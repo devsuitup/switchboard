@@ -48,7 +48,7 @@ async function setup(t, settings = {}, beforeInit = () => {}) {
   }, { get: (target, key) => target[key] || (() => Promise.resolve({})) });
   for (const [name, id] of Object.entries({ memoryContent: 'memory-content', memoryViewer: 'memory-viewer', placeholder: 'placeholder', terminalArea: 'terminal-area', statsViewer: 'stats-viewer', statsContent: 'stats-content', settingsViewer: 'settings-viewer', jsonlViewer: 'jsonl-viewer', sidebarContent: 'sidebar-content', sessionFilters: 'session-filters', searchBar: 'search-bar', searchInput: 'search-input' })) w[name] = w.document.getElementById(id);
   Object.assign(w, { activeTab: 'sessions', searchGeneration: 0, gridViewActive: false, activeSessionId: null, projectsChangedWhileAway: false, refreshSidebar() {}, memoryPanel: { open: (...args) => calls.push(args) }, setRemoteHostLabels() {}, CSS: { escape: value => value.replace(/\\/g, '\\\\') } });
-  for (const file of ['setting-defaults.js', 'icons.js', 'utils.js', 'shortcuts.js', 'terminal-themes.js', 'app-notices.js', 'memory-workfiles-view.js', 'schedules-view.js', 'settings-panel.js']) {
+  for (const file of ['setting-defaults.js', 'icons.js', 'utils.js', 'shortcuts.js', 'terminal-themes.js', 'app-notices.js', 'memory-workfiles-view.js', 'schedules-view.js', 'archived-manager.js', 'settings-panel.js']) {
     const filename = path.join(root, 'public', file);
     vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx, { filename });
   }

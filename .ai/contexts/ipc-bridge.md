@@ -1,5 +1,48 @@
 # Context: ipc-bridge
 
+## Archived projects manager (#863 slice 2)
+
+`settings-panel.js` mounts `renderArchivedProjects` from `archived-manager.js`
+after the shared renderer helpers, dialogs, notices and sidebar controller.
+It passes a copy of hidden entries/kinds, archive timestamps, cached projects and
+the working remote-host list. Host edits update labels without saving. The manager
+groups Local first, then configured hosts in order, then unknown aliases; it never
+collapses a worktree entry into its repository. The filter, selections and folds
+are local to the mounted list. Filtering clears selections outside the results.
+Counts exclude deleted entries. Missing timestamps and unknown session counts
+are omitted, never invented. Names use `shortProjectPath` (last two segments).
+
+Unarchive uses the exact stored entry via `unarchiveProject`, sequentially for a
+bulk action. Successful entries leave the list, reload projects and get one B8
+ten-second Undo notice. Undo calls `archiveProjectSettings(path, folderKey)` and
+reads the new writer timestamp. After reopening Settings, Undo refreshes the
+currently mounted manager; a pending action does not consume its Undo notice.
+The notice stores its entry array and load generation. A later accepted project
+reload invalidates it if any restored entry has been hidden or deleted again;
+an older in-flight reload cannot invalidate a newer notice.
+Failed entries remain, with `appAlert`; partial
+bulk successes still have Undo. Row actions are locked during a request.
+
+Delete builds `{projectPath, remoteAlias, folder, sessions}` from the exact entry;
+`folder` is the host-qualified encoded path. Local worktree entries disable Delete
+project with a visible reason: delete the worktree from the sidebar or delete its
+repository. The real
+planner maps a worktree folder to the repository and refuses the conflicting
+worktree path hint. Parsing uses the shared `parseFolderKey` and `isValidAlias` in
+`public/utils.js`, re-exported by main's `remote-hosts.js`. An empty remote path
+means `/`, matching the writer. For other entries it calls the existing
+`confirmAndDeleteProjectFolder`, retaining preview tokens, options,
+refusal handling and committed-result semantics. After cancellation or refusal,
+the manager unlocks the controls before returning focus to the Delete button;
+unlocking keeps unavailable worktree actions disabled. It never calls
+Unarchive before Delete. The overflow also copies the full path through
+`writeClipboard`. No new IPC or launch code is introduced.
+
+Native controls provide Tab navigation; Enter/Space folds host groups and Escape
+clears the filter. ResizeObserver alone controls the 720px stacked layout and
+480px search disclosure. New surfaces use existing dark chrome tokens. Folder
+archives and archived sessions are not listed in this slice.
+
 **Purpose**: The trust boundary between the Electron main process (Node, full filesystem) and the renderer (Chromium, sandboxed). The renderer can only call what `preload.js` exposes via `contextBridge`; everything else is denied.
 
 This file is the **canonical inventory** of the IPC surface. When you add a new IPC, you change three places — main handler, preload bridge, renderer caller — and every IPC name should appear here.
@@ -495,8 +538,8 @@ pages are `general`, `sessions`, `keyboard`, `automation`, `remote`, `integratio
 
 The panel reparents existing rows into named regions before wiring their handlers.
 Hidden pages remain in the DOM, preserving every field id and the one Save path.
-Archive content and project footer actions retain their existing behavior until
-their later #863 slices. The new shell adds no trigger controls or archive APIs.
+The Archived projects manager is documented above; project footer actions retain
+their existing behavior until their later #863 slice. The new shell adds no trigger controls or archive APIs.
 The host-list and refresh defaults now live in `SETTING_DEFAULTS`.
 
 Each page scrolls independently; navigation and the footer stay outside that
@@ -1527,9 +1570,21 @@ leaves either the old file or the new one. The record carries a format
 version and the app version; `load` returns `null` and removes the file on a
 parse error, a foreign format, another app version (row shapes change between
 releases), or a row without `projectPath`/`sessionId` — a missing file is
-`null` without a warning. Nothing flushes at quit: the last two seconds of
-reloads may be lost, and the previous write still describes the sidebar as it
-was. `get-last-known-projects` returns `load()`.
+`null` without a warning. At quit, `shutdownForExit` starts `flush()` alongside
+the PTY exit drains within the existing shared 1500 ms shutdown budget (#1136).
+It awaits the snapshot writes only after metadata drains and `closeDb`, so a
+slow snapshot cannot consume the database writes' budget. A second `flush()`
+starts just before `closeDb` to capture a `remember()` received during the drain.
+On Windows shutdown, restart or logoff, Electron does not emit `before-quit`:
+`query-session-end` / `session-end` use the unsaved guard's `externalFlush`,
+bound through `flushForLogoff` to `drainForUpdate`. That non-destructive path
+also flushes last known projects alongside the other writes within its 1500 ms budget.
+This cancels the pending debounce and awaits the atomic write of the latest
+remembered reply, including any already-running write. With no pending work it
+does not touch the file. Write failures are logged by the store; an unexpected
+flush rejection or throw is logged by shutdown without skipping the remaining
+cleanup. A stalled write cannot extend the drain budget, so a forced timeout
+can still lose the latest snapshot. `get-last-known-projects` returns `load()`.
 
 Renderer side, `paintLastKnownProjects` (app.js) runs from
 `loadStartupProjects` without being awaited. It gives up when the reply is not
@@ -1555,7 +1610,11 @@ on a project that no longer exists, and the wait is a few seconds. Restore,
 trigger readiness and the background-agent paths never see provisional rows:
 they run only after `loadStartupProjects` has an accepted load, as before.
 
-Tests: `test/last-known-projects.test.js` (store), `test/app-last-known-projects.test.js`
+Tests: `test/last-known-projects.test.js` (store),
+`test/last-known-projects-quit.test.js` (quit before debounce, no-op, failure and
+shared deadline, database ordering and a reply during the drain),
+`test/session-exit-main.test.js` (Windows logoff persistence and flush failures),
+`test/app-last-known-projects.test.js`
 (paint, inertness, replacement, the race where the real load lands first, the
 all-failed startup, including a disk snapshot arriving after all five attempts
 have failed) and the remembered-reply case in

@@ -189,6 +189,7 @@ function setupSettingsPanelDom() {
   evalInWindow(dom, path.join(PUBLIC_DIR, 'setting-defaults.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'utils.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'shortcuts.js'));
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'archived-manager.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'settings-panel.js'));
 
   return {

@@ -385,6 +385,11 @@ one yes/no question per candidate.
 | Changes, Touched | file rows with state badge | click opens diff | see `.ai/contexts/changes-view.md` | | `No changes` / `No changes in the session directory` (`file-panel.js:1505`); `No files touched by the file tools` (`touched-files-view.js:387`) |
 | Transcript viewer | messages | — | — | — | `No messages found in this session.` (`jsonl-viewer.js:789`); error in the same style (`758`) |
 
+Settings › Archived has management rows grouped by host. Selection, Unarchive
+and More actions stay visible; the latter contains Copy path and Delete project.
+A narrow viewer stacks the actions below the metadata, using ResizeObserver
+breakpoints rather than a user mode.
+
 **Divergences.**
 1. Three markups for the same name/state/project triple (sidebar row, Agents
    row, grid card).

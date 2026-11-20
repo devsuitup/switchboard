@@ -142,6 +142,11 @@ function applyDeletionUnit(db, { category, target }) {
       if (typeof row.projectPath !== 'string') return true;
       try { return groupedOwner({ alias: project.alias, projectPath: row.projectPath }).key !== project.key; } catch { return true; }
     });
+    if (current.hiddenProjectArchivedAt) {
+      current.hiddenProjectArchivedAt = { ...current.hiddenProjectArchivedAt };
+      delete current.hiddenProjectArchivedAt[hiddenEntry];
+      if (!Object.keys(current.hiddenProjectArchivedAt).length) delete current.hiddenProjectArchivedAt;
+    }
     db.setSetting('global', { ...current, hiddenProjects, hiddenProjectKinds: { ...current.hiddenProjectKinds, [hiddenEntry]: 'delete' },
       ...(current.hiddenProjectScopes || Object.keys(scopes).length ? { hiddenProjectScopes: scopes } : {}),
       ...(current.openWorkingSet ? { openWorkingSet } : {}) });

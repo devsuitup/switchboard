@@ -8,6 +8,12 @@ const vm = require('node:vm');
 const shared = require('../public/setting-defaults');
 const { setup } = require('./fixtures/browser-mode.cjs');
 
+test('browser settings fixture loads the Archived renderer dependency', t => {
+  const h = setup();
+  t.after(() => h.destroy());
+  assert.equal(typeof h.window.renderArchivedProjects, 'function', 'Archived renderer must be loaded before Settings opens');
+});
+
 function effectiveReader(rows, notices = []) {
   const filename = path.join(__dirname, '../main.js');
   const source = fs.readFileSync(filename, 'utf8');

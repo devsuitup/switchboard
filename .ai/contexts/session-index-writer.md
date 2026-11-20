@@ -190,6 +190,15 @@ named-column upserts are unchanged. See [cli-harnesses.md](cli-harnesses.md).
 
 `hideProject(entry, kind, scope?)` persists optional `{ alias }`
 records in `global.hiddenProjectScopes` through the existing writer command.
+For `kind: 'archive'`, that same atomic patch records `Date.now()` in the additive
+`global.hiddenProjectArchivedAt[entry]` map. The archive IPC already uses this
+command, so no separate renderer write or patch race is introduced. Unhide,
+re-add and worktree cleanup remove the matching timestamp. Both `hideProject`
+with kind Delete and the deletion engine's finalization remove it too. The writer
+omits `hiddenProjectArchivedAt` when the map becomes empty, preserving the old
+global-record shape; timestamps for unrelated entries remain intact. Legacy entries
+without a timestamp stay undated; re-archiving (including Undo of Unarchive)
+records a new date. No stored entry or worktree key is regrouped.
 Archive retirement compares scopes in both the facade snapshot and writer-side
 stale check. Unhide and re-add clear the matching entry and its scope. Local
 worktree cleanup deletes cached rows for the path on every host and removes the

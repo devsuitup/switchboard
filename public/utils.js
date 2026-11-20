@@ -1,5 +1,21 @@
 // --- Utility functions (shared across renderer modules) ---
 
+const FOLDER_SEP = '::';
+const ALIAS_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
+
+function isValidAlias(alias) {
+  return typeof alias === 'string' && ALIAS_RE.test(alias) && !alias.includes(FOLDER_SEP);
+}
+
+function parseFolderKey(key) {
+  const s = key == null ? '' : String(key);
+  const i = s.indexOf(FOLDER_SEP);
+  if (i < 0) return { alias: null, folder: s };
+  const alias = s.slice(0, i);
+  if (!isValidAlias(alias)) return { alias: null, folder: s };
+  return { alias, folder: s.slice(i + FOLDER_SEP.length) };
+}
+
 let remoteDisplayHosts = [];
 
 function setRemoteHostLabels(hosts) {
@@ -113,5 +129,5 @@ function shellEscape(path) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { remoteHostLabel, cleanDisplayName };
+  module.exports = { remoteHostLabel, cleanDisplayName, isValidAlias, parseFolderKey };
 }

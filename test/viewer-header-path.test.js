@@ -45,7 +45,7 @@ test('Settings selects retain their alias and carry the shared select class when
     w.PERMISSION_MODES = [{ value: null }];
     w.TERMINAL_THEMES = { default: { label: 'Default' } };
     w.escapeHtml = text => String(text ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
-    for (const file of ['setting-defaults.js', 'shortcuts.js', 'settings-panel.js']) vm.runInContext(source(file), dom.getInternalVMContext());
+    for (const file of ['setting-defaults.js', 'shortcuts.js', 'archived-manager.js', 'settings-panel.js']) vm.runInContext(source(file), dom.getInternalVMContext());
     await w.openSettingsViewer('global');
     const selects = [...w.document.querySelectorAll('#settings-viewer-body select')];
     assert.ok(selects.length >= 4);
