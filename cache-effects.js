@@ -52,10 +52,15 @@ function createCacheEffects(read) {
       }
     },
     deleteCachedSession: id => rows.set(id, null),
-    deleteCachedFolder: folder => { for (const row of adapter.getCachedByFolder(folder)) rows.set(row.sessionId, null); folders.set(folder, null); },
+    deleteCachedFolder: (folder, opts) => {
+      for (const row of adapter.getCachedByFolder(folder)) rows.set(row.sessionId, null);
+      const previous = opts?.preserveFullIndex ? adapter.getFolderMeta(folder) : null;
+      folders.set(folder, opts?.preserveFullIndex && previous?.fullIndexPending ? { ...previous, projectPath: null, indexMtimeMs: 0 } : null);
+    },
     touchCachedModified: (id, modified) => { const row = rowFor(id); if (row) Object.assign(row, { modified, fileMtime: modified }); },
     setCachedFileSize: (id, fileSize) => { const row = rowFor(id); if (row) row.fileSize = fileSize; },
-    setFolderMeta: (folder, projectPath, indexMtimeMs) => folders.set(folder, { folder, projectPath, indexMtimeMs }),
+    setFolderMeta: (folder, projectPath, indexMtimeMs) => folders.set(folder, { ...adapter.getFolderMeta(folder), folder, projectPath, indexMtimeMs }),
+    invalidateFullIndex: folder => folders.set(folder, { ...adapter.getFolderMeta(folder), fullIndexVersion: null, fullIndexConfig: null }),
     setName: (id, name, source = 'user') => meta.set(id, applySessionName(metaFor(id), id, name, source, rowFor(id)?.customTitle ?? null)),
     setSetting: (key, value) => settings.set(key, value),
     replaceSessionMetrics() {}, deleteSearchFolder() {}, deleteSearchSession() {}, upsertSearchEntries() {},

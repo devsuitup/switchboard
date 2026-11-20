@@ -2,6 +2,61 @@
 
 **Purpose**: index every Claude session JSONL on disk into a queryable SQLite cache so the sidebar renders without re-scanning `~/.claude/projects/` and so search is full-text. Watches the projects directory for changes and refreshes incrementally.
 
+## Full-content observations (#1144 A1)
+
+A1 retains the unconditional full startup scan. `fullReadStamp` is a nullable
+JSON filesystem observation, not `fileMtime`, `fileSize`, directory mtime or a
+completion timestamp. Format 1 records runtime, the relative transcript path,
+decimal BigInt dev/ino/birthtimeNs/mtimeNs/ctimeNs/size, and dependencies. Claude
+subagents include the sidecar observation or confirmed absence; Codex includes
+the effective external title. Readers check the source before and after all
+eager content/auxiliary reads and require bytes through the observed EOF. A
+raced read proposes null; partial trailing JSON keeps existing parser semantics.
+Claude certificates reuse the initial and final BigInt stats used by the
+incremental indexes. Subagent metadata is read only after validating the agent
+identity and before the final observation.
+
+The shared Claude full reader covers new watcher rows, pinned-mtime size changes,
+message-count recovery, filtered bridge rereads, scan-worker full/subset reads
+and deletion-driven bridge promotion, including nested, legacy and workflow
+subagents. Codex's full parser covers both harness scans and refreshes. The
+unused main-side folder reader is not a publication path. Header/count/size,
+touch, continuation and title/entrypoint backfills never advance the stamp.
+Header refreshes clear it, including a project-path correction at an unchanged
+source stamp and the no-summary merge, because the header replaces the full
+read's display timestamp.
+Message-count recovery's display-mtime override explicitly clears its candidate.
+
+The writer facade separates candidates from durable certificates. It nulls
+affected certificates before replacement and finalizes them only after cache,
+metrics and staged search publication ACK. Finalization compares the folder
+token and materialized row witness, protecting concurrent header overwrites.
+Projects reconciliation effects use the same boundary. See
+[session-index-writer.md](session-index-writer.md) for pending/seal semantics.
+
+`SESSION_CONTENT_INDEX_VERSION` in `src/main/session-index/full-read-state.js`
+versions parser, merge, metrics and search semantics independently of schema
+migrations. The golden test parses the checked-in Claude golden fixture plus
+bridge and Codex fixtures, canonicalizes filesystem witnesses and paths, and
+compares SHA-256 with `CONTENT_GOLDEN_DIGESTS[version]`. Keep published ledger
+entries immutable: covered output changes need a new version and digest. Extend
+the corpus when parser changes introduce new semantics; a finite corpus cannot
+detect every possible semantic change.
+The golden digest parses a disposable LF-normalized copy of the Claude fixture,
+preserving the basename. This makes its byte-sensitive output independent of an
+existing CRLF working copy; `.gitattributes` alone does not rewrite that copy.
+The golden test also pins every recorded ledger entry independently of the
+current version lookup. Normalization is confined to the test fixture; production
+certificates continue to observe actual source bytes.
+
+`folder-indexed` diagnostics are emitted once after the folder writer response,
+including its seal when applicable, with runtime/mode/reason, enumerated/read/
+skipped/deleted/failed counts, read operations, actual body and auxiliary bytes,
+scan/write durations and `ok`. Bridge rereads count again in operations/bytes,
+but once in distinct files. Auxiliary cwd, sidecar and title bytes are separate.
+No transcript text or absolute source paths are logged. Aggregate status text
+is unchanged. A1 adds no user-visible changelog entry (`no-changelog`).
+
 Manual `rebuild-cache` calls `populateCacheViaWorker({ force: true })`. A forced
 scan clears failed-folder retry scope and backoff, including an exhausted retry
 budget, and scans all projects. Concurrent callers still share the in-flight

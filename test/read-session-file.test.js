@@ -20,6 +20,37 @@ function cleanup(dir) {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+test('full read reuses its initial bigint stat for the certificate', t => {
+  const root = mkTmp();
+  t.after(() => cleanup(root));
+  const file = path.join(root, 'source.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ type: 'user', message: { content: 'stat budget' } }) + '\n');
+  const statSync = fs.statSync;
+  let reads = 0;
+  t.mock.method(fs, 'statSync', (target, options) => {
+    if (target === file && options?.bigint) reads++;
+    return statSync(target, options);
+  });
+  assert.ok(readSessionFile(file, 'folder', root).fullReadStamp);
+  assert.equal(reads, 2, 'one bigint stat before reading and one after');
+});
+
+test('rejected subagent without an agent id does not read its metadata body', t => {
+  const root = mkTmp();
+  t.after(() => cleanup(root));
+  const file = path.join(root, 'unknown.jsonl'), meta = file.replace('.jsonl', '.meta.json');
+  fs.writeFileSync(file, JSON.stringify({ type: 'user', isSidechain: true, message: { content: 'no identity' } }) + '\n');
+  fs.writeFileSync(meta, JSON.stringify({ description: 'unusable metadata' }));
+  const read = fs.readFileSync;
+  let reads = 0;
+  t.mock.method(fs, 'readFileSync', (target, ...args) => {
+    if (target === meta) reads++;
+    return read(target, ...args);
+  });
+  assert.equal(readSessionFile(file, 'folder', root, { parentSessionId: 'parent' }), null);
+  assert.equal(reads, 0, 'agent identity is checked before reading metadata');
+});
+
 test('subagentSessionId formats parent and agent ids into the expected colon-delimited string', () => {
   assert.equal(subagentSessionId('parent', 'agent'), 'sub:parent:agent');
   const parent = '11111111-2222-3333-4444-555555555555';

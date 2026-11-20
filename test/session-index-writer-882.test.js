@@ -110,7 +110,7 @@ test('882b mixed effects distinguish upserts from deletions and folder deletes d
   assert.deepEqual(events, [[['b'], undefined], [['a'], { upsertOnly: true }]]);
   events.length = 0;
   deleteFolder = true;
-  await writer.refreshFolder('folder');
+  await assert.doesNotReject(writer.refreshFolder('folder'), 'ordinary folder deletion must not require full-index metadata');
   assert.deepEqual(events, [[null, undefined]], 'folder deletes subsume per-session invalidation');
 });
 

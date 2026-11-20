@@ -7,6 +7,8 @@ const { setRemappedProjectReader } = require('../encode-project-path');
 const { readSessionFile, enumerateSessionFiles, mergeBridgeGroups, subagentSessionId, isCanonicalWorkflowPath } = require('../read-session-file');
 const { classifyTranscriptPath } = require('../subagent-attribution');
 const { prefixedHarnesses, readHarnessFolder } = require('../harnesses');
+const { enumerateReads, measureFolder } = require('../src/main/session-index/read-counters');
+const { fullIndexConfig } = require('../src/main/session-index/full-read-state');
 
 const PROJECTS_DIR = workerData.projectsDir;
 const REMAPS = workerData.remaps && typeof workerData.remaps === 'object' ? workerData.remaps : {};
@@ -27,7 +29,9 @@ function readFolderFromFilesystem(folder) {
   const sessions = [];
   const indexMtimeMs = getFolderIndexMtimeMs(folderPath);
 
-  for (const { filePath, parentSessionId, workflowRunId } of enumerateSessionFiles(folderPath)) {
+  const files = enumerateSessionFiles(folderPath);
+  enumerateReads(files.map(entry => entry.filePath));
+  for (const { filePath, parentSessionId, workflowRunId } of files) {
     try {
       const s = readSessionFile(filePath, key, projectPath, { parentSessionId, workflowRunId });
       if (s) sessions.push(s);
@@ -64,6 +68,7 @@ function readFolderFileSubsetFromFilesystem(folder, files, existingRows) {
   const freshRows = [];
   const goneIds = [];
   const scanFiles = new Set(files || []);
+  enumerateReads([...scanFiles].map(file => path.join(folderPath, file)));
   for (const rel of scanFiles) {
     const classified = classifyTranscriptPath(rel);
     if (!classified) continue;
@@ -138,9 +143,10 @@ try {
   for (let i = 0; i < folders.length; i++) {
     current++;
     try {
-      const result = readFolderFromFilesystem(folders[i]);
+      const { result, counters } = measureFolder(() => readFolderFromFilesystem(folders[i]));
+      if (result) Object.assign(result, { counters, fullIndexConfig: scanConfig() });
       stripBridgeEvidence(result);
-      parentPort.postMessage({ type: 'folder', result, current, total, rejected: result ? null : lastRejected,
+      parentPort.postMessage({ type: 'folder', result, counters, folder: FOLDER_PREFIX + folders[i], current, total, rejected: result ? null : lastRejected,
         unverifiedLocalFolder: !result && FOLDER_PREFIX === '' ? folders[i] : null });
     } catch (error) {
       failedFolders.push(folders[i]);
@@ -150,17 +156,20 @@ try {
   for (const { harness, folder } of harnessFolders) {
     current++;
     try {
-      parentPort.postMessage({ type: 'folder', result: readHarnessFolder(harness, folder), current, total });
+      const { result, counters } = measureFolder(() => readHarnessFolder(harness, folder));
+      if (result) Object.assign(result, { counters, fullIndexConfig: scanConfig() });
+      parentPort.postMessage({ type: 'folder', result, counters, folder, current, total });
     } catch (error) {
       failedFolders.push(folder);
       parentPort.postMessage({ type: 'folder', folder, error: error.message, current, total });
     }
   }
   for (const t of targets) {
-    const result = readFolderFileSubsetFromFilesystem(t && t.folder, t && t.files, t && t.existingRows);
+    const { result, counters } = measureFolder(() => readFolderFileSubsetFromFilesystem(t && t.folder, t && t.files, t && t.existingRows));
+    if (result) Object.assign(result, { counters, fullIndexConfig: scanConfig() });
     current++;
     stripBridgeEvidence(result);
-    parentPort.postMessage({ type: 'folder', result, current, total });
+    parentPort.postMessage({ type: 'folder', result, counters, folder: FOLDER_PREFIX + (t && t.folder), current, total });
   }
   parentPort.postMessage({ type: 'done', ok: failedFolders.length === 0, failedFolders, total,
     ...(failedFolders.length ? { error: 'folder scan failed' } : {}) });
@@ -174,4 +183,8 @@ function stripBridgeEvidence(result) {
     delete row.messageUuidsComplete;
     delete row.messageSignatures;
   }
+}
+
+function scanConfig() {
+  return fullIndexConfig({ remappedProjects: REMAPS, disabledHarnesses: workerData.disabledHarnesses }, PROJECTS_DIR);
 }
