@@ -90,6 +90,24 @@ test('parses a rollout into the shape the cache expects', () => {
   });
 });
 
+test('a codex exec rollout is marked like an SDK session; interactive originators are not', () => {
+  const codex = require('../harnesses/codex');
+  const turns = [['user', 'review this change'], ['assistant', 'done']];
+  withFixture({ [NAME]: rollout({ cwd: '/p', turns, meta: { originator: 'codex_exec', source: 'exec', thread_source: 'user' } }) }, dir => {
+    assert.equal(codex.readSessionFile(path.join(dir, NAME), 'f').entrypoint, 'sdk-codex-exec');
+  });
+  for (const meta of [
+    { originator: 'codex_cli_rs', source: 'cli', thread_source: 'user' },
+    { originator: 'switchboard_abc123', source: 'cli' },
+    { originator: 'codex_vscode' },
+    {},
+  ]) {
+    withFixture({ [NAME]: rollout({ cwd: '/p', turns, meta }) }, dir => {
+      assert.equal(codex.readSessionFile(path.join(dir, NAME), 'f').entrypoint, '', JSON.stringify(meta));
+    });
+  }
+});
+
 test('the session id comes from the file name, not session_meta', () => {
   const codex = require('../harnesses/codex');
   withFixture({ [NAME]: rollout({ cwd: '/p', turns: [['user', 'hi']] }) }, dir => {

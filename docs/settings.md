@@ -99,7 +99,7 @@ controls are grouped here. See [Launching sessions](launching-sessions.md).
 |---|---|---|---|
 | Max Visible Sessions | `visibleSessionCount` | 10 (1–100) | Sessions shown per project before `+ N older` |
 | Session Max Age (days) | `sessionMaxAgeDays` | 3 (1–365) | Older sessions go behind `+ N older`; older projects start collapsed |
-| Hide SDK-launched Sessions | `hideSdkSessions` | on | Leaves out of the sidebar and grid the sessions a program started through the Claude Agent SDK; scheduled tasks stay — see [Session browser](session-browser.md#sessions-started-by-a-program) |
+| Hide SDK-launched Sessions | `hideSdkSessions` | on | Leaves out of the sidebar and grid the sessions a program started: Claude Agent SDK runs and non-interactive `codex exec` runs; scheduled tasks stay — see [Session browser](session-browser.md#sessions-started-by-a-program) |
 
 ### Keyboard
 
