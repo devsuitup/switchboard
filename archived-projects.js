@@ -27,6 +27,7 @@ function groupedHiddenMatcher(hiddenProjects, scopes) {
 function relatedEntries(project, records) {
   const alias = project.remoteAlias || null;
   return Object.keys(records || {}).filter(entry => {
+    if (entry === entryOf(project)) return true;
     const parsed = parseFolderKey(entry);
     return parsed.alias === alias && (visibilityPath(archivedEntry(alias, parsed.folder), alias) === visibilityPath(entryOf(project), alias)
       || alias === null && visibilityPath(archivedEntry(null, resolveWorktreePath(parsed.folder))) === visibilityPath(entryOf(project)));

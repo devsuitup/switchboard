@@ -3059,7 +3059,10 @@ the project directory.
 
 Archive, hide and delete entries retain their original keys. An entry for W
 affects only sessions sourced in W, never the repository R's own sessions or R
-as a whole (D1/D3). Codex uses its raw cwd; Claude uses the source transcript
+as a whole (D1/D3). The pre-upgrade membership also restricts the runtime (D4):
+entries for `.worktrees`, `.claude-worktrees` and `.claude/worktrees` apply only
+to Codex; Claude already belonged to R. Entries for `.work-files/worktrees`
+apply to both runtimes. Codex uses its raw cwd; Claude uses the source transcript
 folder, carried as `sourceFolder` in the projects payload, or recorded cwd when
 available. Claude's cached `projectPath`/projected `cwd` can already be R and
 does not establish a worktree source. Folder matching accepts the exact encoded
@@ -3072,6 +3075,7 @@ moving keys, or expanding the stored known-ID set (D2). R's archive counts a
 regrouped session as known when its last activity (`modified`, falling back to
 `created`) is at or before `archivedAt`; an undated regrouped session is known
 on every listing. A genuinely newer unknown session still retires the archive.
+Archiving R covers its worktrees, and a new session in a worktree reopens R (D5).
 W archives filter only W sessions inside R. Hidden entries and delete tombstones
 apply even with Show archived; host scopes and remote identity stay intact.
 The common hidden matcher also supplies the exact main/renderer checks, without
@@ -3085,7 +3089,15 @@ original offer under its own lease and schedule root. Skipped retirement filters
 only the corresponding source sessions. `test/archive-worktree-compat.test.js`
 exercises these operations through the writer and production worker fixture.
 Restore and working-set persistence prefer indexed project identity to a saved
-pre-upgrade W path. A null folder metadata path does not widen targeted refresh;
+pre-upgrade W path. An unindexed continuation keeps the saved path rather than
+inheriting the previous row's identity. Failed background restores retain their
+saved slot and position; persistence also works when the session map is absent.
+Hidden matching reads only runtime, source folder and raw Codex cwd, and does
+not construct session evidence when the hidden list is empty. Descriptor-only
+background sessions supply their raw cwd. Main projection diagnostics classify
+rows removed through W as `hidden-project`. Remote root archives retain the raw
+`host::` key for matching and retirement.
+A null folder metadata path does not widen targeted refresh;
 the existing truthy-path guard is covered by the grouping regression.
 
 `test/harness-worktree-grouping.test.js` exercises the production modules with

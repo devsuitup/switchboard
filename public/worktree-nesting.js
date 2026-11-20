@@ -30,6 +30,8 @@ function worktreeGroupingPath(value) {
 }
 
 function sessionUnderPath(session, projectPath, alias = null) {
+  if (!alias && session.runtime !== 'codex'
+    && /[/\\](?:\.worktrees|\.claude-worktrees|\.claude[/\\]worktrees)[/\\][^/\\]+[/\\]?$/i.test(projectPath)) return false;
   const target = visibilityPath(projectPath, alias);
   const cwd = visibilityPath(session.runtime === 'claude' ? session.recordedCwd : session.cwd || (session.runtime === 'codex' ? session.projectPath : null), alias);
   if (cwd && (cwd === target || cwd.startsWith(target + '/'))) return true;
@@ -65,10 +67,9 @@ function projectHiddenMatcher(hiddenProjects, hiddenProjectScopes = {}, normaliz
     const target = normalizeTarget(projectPath, alias);
     return entries.some(entry => (entry.alias === null || entry.alias === alias)
       && (!entry.scope || !Object.prototype.hasOwnProperty.call(entry.scope, 'alias') || entry.scope.alias === alias)
-      && ((alias && entry.remotePath !== null ? entry.remotePath : entry.path) === target
-        || entry.worktree && (session
-          ? sessionUnderPath(session, entry.sourcePath, alias)
-          : typeof target === 'string' && target.startsWith((alias && entry.remotePath !== null ? entry.remotePath : entry.path) + '/'))));
+      && (entry.worktree && session ? sessionUnderPath(session, entry.sourcePath, alias)
+        : (alias && entry.remotePath !== null ? entry.remotePath : entry.path) === target
+          || entry.worktree && typeof target === 'string' && target.startsWith((alias && entry.remotePath !== null ? entry.remotePath : entry.path) + '/')));
   };
 }
 

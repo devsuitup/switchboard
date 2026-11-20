@@ -1440,11 +1440,11 @@ async function getProjectsSnapshot(showArchived) {
       const kept = await writer.applyAndPersistArchived(merged, archived);
       if (projection) {
         const global = getSetting('global') || {};
+        const hidden = require('./public/worktree-nesting').projectHiddenMatcher(global.hiddenProjects, global.hiddenProjectScopes);
         for (const project of merged) {
           if (kept.some(p => p.projectPath === project.projectPath && (p.remoteAlias || null) === (project.remoteAlias || null))) continue;
-          const filterReason = require('./public/worktree-nesting').isProjectHidden(global.hiddenProjects, project.remoteAlias || null, project.projectPath, global.hiddenProjectScopes)
-            ? 'hidden-project' : 'archived';
           for (const row of project.sessions) {
+            const filterReason = hidden(project.remoteAlias || null, project.projectPath, row) ? 'hidden-project' : 'archived';
             factsByMember ??= diagnostics.indexProjectionFacts(projection);
             const facts = factsByMember.get(diagnostics.projectionScope(project.remoteAlias, project.projectPath) + '|' + row.sessionId.toLowerCase());
             if (facts) projection.removedInputs[facts.scope + '|' + facts.rootId] = { ...facts.inputs, filterReason };

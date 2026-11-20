@@ -83,6 +83,19 @@ test('file-list workers hide local memory under a local scope', async t => {
   }
 });
 
+test('file-list workers hide a harness worktree memory folder without hiding repository memory', async t => {
+  const f = fixture(t);
+  const cwd = path.join(f.project, '.work-files', 'worktrees', 'lane');
+  fs.mkdirSync(cwd, { recursive: true });
+  const folder = encodeProjectPath(cwd);
+  f.write(path.join(f.options.projectsDir, folder, 'session.jsonl'), JSON.stringify({ cwd }) + '\n');
+  f.write(path.join(f.options.projectsDir, folder, 'memory', 'worktree.md'), 'private worktree memory');
+  const query = shipped(t, f.options);
+  const result = await query('memory', { hiddenProjects: [cwd] });
+  assert.equal(result.view.projects.some(p => p.folder === folder), false, 'hidden W memory must not reappear under R');
+  assert.ok(result.view.projects.some(p => p.folder === encodeProjectPath(f.project)), 'repository memory stays visible');
+});
+
 for (const kind of ['listMemories']) {
   test(`${kind} builds one hidden matcher per call across project folders`, t => {
     const f = fixture(t);

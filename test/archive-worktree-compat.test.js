@@ -100,3 +100,29 @@ for (const target of ['repo', 'cwd']) test(`explicit unarchive of ${target} work
   assert.equal(await h.writer.clearArchivedEntry(null, h[target]), true);
   assert.deepEqual(plain(h.db.getSetting('archivedProjects')), {});
 });
+
+for (const layout of ['.worktrees', '.claude-worktrees', '.claude/worktrees', '.work-files/worktrees']) {
+  for (const mode of ['hide', 'delete', 'archive']) test(`legacy ${layout} ${mode} retains only its former group membership`, supported, async t => {
+    const h = await setup(t);
+    const cwd = path.join(h.repo, layout, 'lane');
+    fs.mkdirSync(cwd, { recursive: true });
+    const claude = { ...h.claude, sourceFolder: encodeProjectPath(cwd), recordedCwd: cwd };
+    const codex = { ...h.codex, cwd };
+    h.projects[0].sessions = [h.own, claude, codex];
+    const both = layout === '.work-files/worktrees';
+    const expected = both ? ['own'] : ['own', 'claude'];
+    if (mode === 'archive') h.db.setSetting('archivedProjects', { [cwd]: { ...h.record, knownSessionIds: ['codex', 'claude'] } });
+    else h.db.setSetting('global', { hiddenProjects: [cwd], hiddenProjectKinds: { [cwd]: mode } });
+    const shown = await h.writer.applyAndPersistArchived(h.projects, false);
+    assert.deepEqual(shown.flatMap(p => p.sessions.map(s => s.sessionId)), expected, 'legacy W affects only its pre-upgrade runtime group');
+    if (mode !== 'archive') {
+      h.db.upsertCachedSessions([h.own, { ...claude, folder: encodeProjectPath(cwd) }, { ...codex, projectPath: cwd, folder: 'codex:source' }]);
+      cache.init({ PROJECTS_DIR: path.join(h.root, 'projects'), db: h.db, activeSessions: new Map(), getMainWindow: () => null, log: console });
+      assert.deepEqual(cache.buildProjectsFromCache(true).flatMap(p => p.sessions.map(s => s.sessionId)).sort(), expected.slice().sort());
+    } else if (!both) {
+      h.projects[0].sessions.push({ ...claude, sessionId: 'new-claude', modified: '2026-11-21T10:00:00Z' });
+      await h.writer.applyAndPersistArchived(h.projects, false);
+      assert.ok(h.db.getSetting('archivedProjects')[cwd], 'new Claude session cannot retire a former Codex-only W archive');
+    }
+  });
+}

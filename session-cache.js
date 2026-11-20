@@ -1160,7 +1160,7 @@ function buildProjectsFromCache(showArchived) {
       sdkOnlyProjectKeys.add(groupKey(alias, groupingPath));
       continue;
     }
-    if (hidden(alias, groupingPath, { ...row, cwd: row.runtime === 'codex' ? row.projectPath : null })) { exclude(row, 'hidden-project'); continue; }
+    if (global.hiddenProjects?.length && hidden(alias, groupingPath, { runtime: row.runtime, folder: row.folder, cwd: row.runtime === 'codex' ? row.projectPath : null })) { exclude(row, 'hidden-project'); continue; }
     const meta = metadataFor(row.sessionId);
     const children = mergedChildrenByParent.get(row.sessionId) || [];
     const orderedChildren = [...children].sort((a, b) =>

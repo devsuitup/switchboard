@@ -254,7 +254,7 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
       if (fresh && (entry.session.remoteAlias || pendingSessions.get(sessionId).restorable === false)) continue;
       set.push({
         sessionId,
-        projectPath: sessionMap.get(sessionId)?.projectPath || entry.session.projectPath,
+        projectPath: (typeof sessionMap !== 'undefined' && sessionMap.get(sessionId)?.projectPath) || entry.session.projectPath,
         active: sessionId === activeSessionId,
         ...(entry.attach ? { bg: true, ...(typeof entry.attachJobId === 'string' && entry.attachJobId ? { attachJobId: entry.attachJobId } : {}) } : {}),
         ...(fresh ? { fresh: true, ...(entry.session.runtime ? { runtime: entry.session.runtime } : {}) } : {}),
@@ -529,7 +529,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           memoryNotify: notice => showAppNotice(notice),
           resolveRow: candidate => {
             const row = indexedRowOf(candidate.sessionId);
-            return row ? rowHeadSession(row) : { ...s, projectPath: s.projectPath || item.projectPath, sessionId: candidate.sessionId, headSessionId: candidate.sessionId, mergedMemberIds: [] };
+            return row ? rowHeadSession(row) : { ...s, projectPath: item.projectPath || s.projectPath, sessionId: candidate.sessionId, headSessionId: candidate.sessionId, mergedMemberIds: [] };
           },
           notify: notice => { continuationNotice = notice; }, resolutions: window._startupResumeResolutions,
           onHold: reason => { holdReason = reason; } });

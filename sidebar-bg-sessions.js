@@ -250,7 +250,7 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, options
     if (!visible) {
       if (!descriptor || localRows.has(head) || !descriptor.cwd) continue;
       const projectPath = resolveWorktreePath(descriptor.cwd);
-      if (hidden(null, projectPath) || (!showArchived && metaMap.get(descriptor.sessionId)?.archived)) continue;
+      if (hidden(null, projectPath, { cwd: descriptor.cwd }) || (!showArchived && metaMap.get(descriptor.sessionId)?.archived)) continue;
       let project = projects.find(p => !p.remoteAlias && p.projectPath === projectPath);
       if (!project) {
         project = { folder: encodeProjectPath(projectPath), projectPath, remoteAlias: null,

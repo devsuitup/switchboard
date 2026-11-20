@@ -58,7 +58,7 @@ function listMemories(options, readContent) {
       for (const folder of folders) {
         const folderPath = path.join(PROJECTS_DIR, folder);
         const projectPath = deriveProjectPath(folderPath, folder);
-        if (projectPath && hidden(null, projectPath)) continue;
+        if (projectPath && hidden(null, projectPath, { sourceFolder: folder })) continue;
 
         const shortName = projectPath
           ? projectPath.split(/[\\/]/).filter(Boolean).slice(-2).join('/')
