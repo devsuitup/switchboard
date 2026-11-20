@@ -12,7 +12,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - The Changes list can be viewed as a tree: a toolbar button switches between the flat list (the default) and files grouped under collapsible folders. The choice is remembered. (#828)
 
 ### Changed
-- Settings now has pages with keyboard navigation and remembers the last page you opened. Edits stay across pages, an unsaved-changes count appears at the start of the footer, and saving keeps Settings open. (#863)
+- Settings now has pages with keyboard navigation and remembers the last page you opened. Edits stay across pages, an unsaved-changes count appears at the start of the footer, and saving keeps Settings open with the saved host rows and inherited project values displayed. (#863)
 - Removed the per-project Work Files sidebar tab. Open session files from Touched or terminal path links; files in `.work-files/` stay on disk. (#1018)
 - At startup the sidebar shows the projects and sessions from your previous run right away, greyed out and not yet clickable, instead of an empty list while the index loads; it is replaced by the current list as soon as the first load finishes, within seconds on a warm start. (#1125)
 

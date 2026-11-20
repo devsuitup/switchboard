@@ -296,15 +296,72 @@ test('Save displays normalized values and a clean baseline in global and project
       }
       const fields = [['worktree-name', '  branch  ', 'branch'], ['pre-launch', '  env  ', 'env'], ['add-dirs', '  /tmp  ', '/tmp']];
       if (scope === 'global') fields.push(['visible-count', '', '10'], ['max-age', '', '3'], ['remote-refresh', '0', '5']);
+      if (scope === 'global') {
+        h.q('#sv-remote-add').click();
+        for (const [selector, value] of [['.rh-alias', '  myhost  '], ['.rh-label', ' Lab ']]) {
+          h.q(selector).value = value;
+          h.q(selector).dispatchEvent(new h.w.Event('input', { bubbles: true }));
+        }
+        h.q('#sv-remote-add').click();
+      }
       for (const [id, value] of fields) h.q('#sv-' + id).value = value;
       h.q('#sv-save-btn').click();
       await settle();
       for (const [id, , expected] of fields) assert.equal(h.q('#sv-' + id).value, expected, `${scope}: ${id} shows saved value`);
+      if (scope === 'global') {
+        assert.equal(JSON.stringify(h.saved.global.remoteHosts), JSON.stringify([{ alias: 'myhost', label: 'Lab', enabled: true }]));
+        assert.equal(h.w.document.querySelectorAll('.remote-host-row').length, 1, 'Save removes the empty host row');
+        assert.equal(h.q('.rh-alias').value, 'myhost');
+        assert.equal(h.q('.rh-label').value, 'Lab');
+        assert.equal(h.q('.rh-enabled').checked, true);
+      }
       assert.equal(h.q('#sv-unsaved').textContent, '');
       await h.open(scope);
       for (const [id, , expected] of fields) assert.equal(h.q('#sv-' + id).value, expected, `${scope}: ${id} survives reopen`);
     });
   }
+});
+
+test('saving Use global default displays inherited values and a clean baseline', async t => {
+  const { SETTING_DEFAULTS } = require('../public/setting-defaults');
+  const h = setup(t);
+  h.saved.global = { permissionMode: 'plan', worktree: false, worktreeName: 'global-branch', browserMode: 'off', sandbox: false, preLaunchCmd: 'global-env', addDirs: null };
+  h.saved['project:/project'] = { permissionMode: 'auto', worktree: true, worktreeName: 'project-branch', browserMode: 'claude-in-chrome', sandbox: true, preLaunchCmd: 'project-env', addDirs: '/project-extra' };
+  await h.open('project');
+  const fields = { permissionMode: 'perm-mode', worktree: 'worktree', worktreeName: 'worktree-name', browserMode: 'browser-mode', sandbox: 'sandbox', preLaunchCmd: 'pre-launch', addDirs: 'add-dirs' };
+  for (const field of Object.keys(fields)) h.q(`[data-field="${field}"]`).click();
+  h.q('#sv-save-btn').click();
+  await settle();
+  assert.equal(JSON.stringify(h.saved['project:/project']), '{}');
+  for (const [field, id] of Object.entries(fields)) {
+    const control = h.q('#sv-' + id);
+    const expected = h.saved.global[field] ?? SETTING_DEFAULTS[field];
+    assert.equal(control.disabled, true);
+    assert.equal(control.type === 'checkbox' ? control.checked : control.value, expected, `${field} displays inherited value`);
+  }
+  assert.equal(h.q('#sv-unsaved').textContent, '');
+});
+
+test('host normalization preserves edits made while Save is pending', async t => {
+  const h = setup(t);
+  await h.open();
+  h.q('#sv-remote-add').click();
+  h.q('.rh-alias').value = '  myhost  ';
+  h.q('.rh-alias').dispatchEvent(new h.w.Event('input', { bubbles: true }));
+  let release;
+  h.w.api.remoteHostsApply = () => new Promise(resolve => { release = resolve; });
+  h.q('#sv-save-btn').click();
+  await settle();
+  h.q('.rh-label').value = 'pending label';
+  h.q('.rh-label').dispatchEvent(new h.w.Event('input', { bubbles: true }));
+  h.q('#sv-remote-add').click();
+  release();
+  await settle();
+  assert.equal(h.saved.global.remoteHosts[0].label, '');
+  assert.equal(h.q('.rh-alias').value, '  myhost  ');
+  assert.equal(h.q('.rh-label').value, 'pending label');
+  assert.equal(h.w.document.querySelectorAll('.remote-host-row').length, 2);
+  assert.match(h.q('#sv-unsaved').textContent, /1 unsaved change/);
 });
 
 test('normalization preserves pending edits and compares them with the saved baseline', async t => {

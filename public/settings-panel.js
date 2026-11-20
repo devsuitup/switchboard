@@ -95,7 +95,7 @@
     const shellProfileValue = fieldValue('shellProfile');
 
     // Working copy of the global-only host list, written back on Save.
-    const remoteHosts = (!isProject && Array.isArray(current.remoteHosts) ? current.remoteHosts : SETTING_DEFAULTS.remoteHosts)
+    let remoteHosts = (!isProject && Array.isArray(current.remoteHosts) ? current.remoteHosts : SETTING_DEFAULTS.remoteHosts)
       .filter(h => h && typeof h === 'object')
       .map(h => ({ alias: String(h.alias || ''), label: String(h.label || ''), enabled: h.enabled !== false }));
     const remoteRefreshMinutes = Math.max(1, Math.round((Number(current.remoteRefreshMs) || SETTING_DEFAULTS.remoteRefreshMs) / 60000));
@@ -697,6 +697,7 @@
     harnessToggles.forEach(t => t.addEventListener('change', syncHarnessLock));
     syncHarnessLock();
 
+    let renderRemoteHosts;
     if (!isProject) {
       const list = settingsViewerBody.querySelector('#sv-archived-projects');
       const deleted = current.hiddenProjectKinds || {};
@@ -728,7 +729,7 @@
 
       const listEl = settingsViewerBody.querySelector('#sv-remote-hosts');
 
-      function renderRemoteHosts() {
+      renderRemoteHosts = () => {
         listEl.innerHTML = remoteHosts.map((h, i) => `
           <div class="remote-host-row" data-i="${i}">
             <label class="settings-toggle"><input type="checkbox" class="rh-enabled" ${h.enabled ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
@@ -755,7 +756,7 @@
           });
         });
         updateDirty();
-      }
+      };
       renderRemoteHosts();
 
       settingsViewerBody.querySelector('#sv-remote-add').addEventListener('click', () => {
@@ -779,19 +780,19 @@
     }
 
     // Use-global checkboxes toggle field disabled state
+    const inheritedControls = {
+      permissionMode: 'sv-perm-mode',
+      worktree: 'sv-worktree',
+      worktreeName: 'sv-worktree-name',
+      browserMode: 'sv-browser-mode',
+      sandbox: 'sv-sandbox',
+      preLaunchCmd: 'sv-pre-launch',
+      addDirs: 'sv-add-dirs',
+    };
     settingsViewerBody.querySelectorAll('.use-global-cb').forEach(cb => {
       cb.addEventListener('change', () => {
         const field = cb.dataset.field;
-        const fieldMap = {
-          permissionMode: 'sv-perm-mode',
-          worktree: 'sv-worktree',
-          worktreeName: 'sv-worktree-name',
-          browserMode: 'sv-browser-mode',
-          sandbox: 'sv-sandbox',
-          preLaunchCmd: 'sv-pre-launch',
-          addDirs: 'sv-add-dirs',
-        };
-        const input = settingsViewerBody.querySelector('#' + fieldMap[field]);
+        const input = settingsViewerBody.querySelector('#' + inheritedControls[field]);
         if (input) input.disabled = cb.checked;
       });
     });
@@ -983,12 +984,25 @@
         'sv-max-age': settings.sessionMaxAgeDays,
         'sv-remote-refresh': settings.remoteRefreshMs === undefined ? undefined : settings.remoteRefreshMs / 60000,
       };
+      if (isProject) {
+        for (const [field, id] of Object.entries(inheritedControls)) {
+          if (!(field in settings)) normalizedControls[id] = globalSettings[field] ?? SETTING_DEFAULTS[field];
+        }
+      }
       trackedControls.forEach((control, index) => {
         if (normalizedControls[control.id] === undefined) return;
         const normalized = String(normalizedControls[control.id]);
-        if (controlValue(control) === submitted.values[index]) control.value = normalized;
+        if (controlValue(control) === submitted.values[index]) {
+          if (control.type === 'checkbox') control.checked = normalizedControls[control.id];
+          else control.value = normalized;
+        }
         submitted.values[index] = normalized;
       });
+      if (!isProject && !rejectedHosts && JSON.stringify(remoteHosts) === submitted.hosts) {
+        remoteHosts = settings.remoteHosts;
+        renderRemoteHosts();
+        submitted.hosts = JSON.stringify(remoteHosts);
+      }
 
       const saveBtn = settingsViewerBody.querySelector('#sv-save-btn');
       saveBtn.textContent = rejectedHosts ? 'Some changes not saved' : deferred ? '✓ Applied' : '✓ Saved';
