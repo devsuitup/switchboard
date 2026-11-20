@@ -48,7 +48,9 @@ Remote members still require their exact host/path. Visibility compatibility
 does not regroup stored archive/hide/delete keys: W entries affect only W source
 sessions, never R's own sessions (D1/D3), restricted to their pre-upgrade runtime
 membership (D4): `.work-files/worktrees` covers both runtimes; the other three
-supported layouts cover Codex only because Claude already belonged to R.
+supported layouts cover Codex only within R's group because Claude already
+belonged to R when R existed. If R is missing, Claude remains grouped at W;
+an exact W hide/delete entry continues hiding that group with session evidence.
 Archive compatibility is read-only at
 match time (D2); retirement alone changes state and preserves W schedule offers.
 See the archive compatibility section in `session-cache.md`.

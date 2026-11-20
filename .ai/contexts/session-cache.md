@@ -3061,7 +3061,10 @@ Archive, hide and delete entries retain their original keys. An entry for W
 affects only sessions sourced in W, never the repository R's own sessions or R
 as a whole (D1/D3). The pre-upgrade membership also restricts the runtime (D4):
 entries for `.worktrees`, `.claude-worktrees` and `.claude/worktrees` apply only
-to Codex; Claude already belonged to R. Entries for `.work-files/worktrees`
+to Codex within R's group; Claude already belonged to R when R existed.
+When R is missing, path resolution leaves Claude grouped at W itself, so an
+exact W hide/delete entry still hides that group, even with session evidence.
+Entries for `.work-files/worktrees`
 apply to both runtimes. Codex uses its raw cwd; Claude uses the source transcript
 folder, carried as `sourceFolder` in the projects payload, or recorded cwd when
 available. Claude's cached `projectPath`/projected `cwd` can already be R and
@@ -3088,6 +3091,10 @@ and are collected onto the visible repository; re-enable/dismiss operate on each
 original offer under its own lease and schedule root. Skipped retirement filters
 only the corresponding source sessions. `test/archive-worktree-compat.test.js`
 exercises these operations through the writer and production worker fixture.
+Schedule unarchive normalizes registry candidates and the target once with the
+schedule path normalizer, then passes identity normalization to the hidden-parent
+check. The matcher must not case-fold those paths again using the host platform;
+injected Linux/macOS comparisons remain case-sensitive on a Windows test host.
 Restore and working-set persistence prefer indexed project identity to a saved
 pre-upgrade W path. An unindexed continuation keeps the saved path rather than
 inheriting the previous row's identity. Failed background restores retain their

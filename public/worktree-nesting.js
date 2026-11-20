@@ -67,16 +67,16 @@ function projectHiddenMatcher(hiddenProjects, hiddenProjectScopes = {}, normaliz
     const target = normalizeTarget(projectPath, alias);
     return entries.some(entry => (entry.alias === null || entry.alias === alias)
       && (!entry.scope || !Object.prototype.hasOwnProperty.call(entry.scope, 'alias') || entry.scope.alias === alias)
-      && (entry.worktree && session ? sessionUnderPath(session, entry.sourcePath, alias)
-        : (alias && entry.remotePath !== null ? entry.remotePath : entry.path) === target
-          || entry.worktree && typeof target === 'string' && target.startsWith((alias && entry.remotePath !== null ? entry.remotePath : entry.path) + '/')));
+      && ((alias && entry.remotePath !== null ? entry.remotePath : entry.path) === target
+        || entry.worktree && (session ? sessionUnderPath(session, entry.sourcePath, alias)
+          : typeof target === 'string' && target.startsWith((alias && entry.remotePath !== null ? entry.remotePath : entry.path) + '/'))));
   };
 }
 
-function isHiddenRepositoryWorktree(projectPath, alias, hiddenProjects, hiddenProjectScopes) {
+function isHiddenRepositoryWorktree(projectPath, alias, hiddenProjects, hiddenProjectScopes, normalize = visibilityPath) {
   const parentPath = worktreeParentPath(projectPath);
   if (parentPath === null) return false;
-  return isProjectHidden(hiddenProjects, alias, parentPath, hiddenProjectScopes);
+  return isProjectHidden(hiddenProjects, alias, parentPath, hiddenProjectScopes, normalize);
 }
 
 if (typeof module !== 'undefined' && module.exports) {

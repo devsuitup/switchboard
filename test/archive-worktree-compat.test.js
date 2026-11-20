@@ -9,7 +9,8 @@ const { createSessionIndexWriter } = require('../session-index-writer');
 const { encodeProjectPath } = require('../encode-project-path');
 const cache = require('../session-cache');
 const { groupedHiddenMatcher } = require('../archived-projects');
-const { isProjectHidden } = require('../public/worktree-nesting');
+const { isProjectHidden, projectHiddenMatcher } = require('../public/worktree-nesting');
+const { resolveWorktreePath } = require('../derive-project-path');
 const supported = { skip: !openStore.supported && 'real SQLite requires Node 22 or matching native ABI' };
 const plain = value => JSON.parse(JSON.stringify(value));
 
@@ -124,5 +125,29 @@ for (const layout of ['.worktrees', '.claude-worktrees', '.claude/worktrees', '.
       await h.writer.applyAndPersistArchived(h.projects, false);
       assert.ok(h.db.getSetting('archivedProjects')[cwd], 'new Claude session cannot retire a former Codex-only W archive');
     }
+  });
+}
+
+for (const layout of ['.worktrees', '.claude-worktrees', '.claude/worktrees']) {
+  for (const kind of ['hide', 'delete']) test(`missing repository preserves exact Claude ${layout} ${kind}`, supported, async t => {
+    const h = await setup(t);
+    const repo = path.join(h.root, 'gone'), cwd = path.join(repo, layout, 'lane');
+    assert.equal(fs.existsSync(repo), false);
+    assert.equal(resolveWorktreePath(cwd), cwd, 'missing R leaves Claude grouped at W');
+    const claude = { ...h.claude, folder: encodeProjectPath(cwd), cwd, projectPath: cwd };
+    const siblingPath = cwd + '-other';
+    const sibling = { ...claude, sessionId: 'sibling', folder: encodeProjectPath(siblingPath), cwd: siblingPath, projectPath: siblingPath };
+    assert.equal(projectHiddenMatcher([cwd])(null, cwd, claude), true, 'exact W group must remain hidden with Claude session evidence');
+    h.db.setSetting('global', { hiddenProjects: [cwd], hiddenProjectKinds: { [cwd]: kind } });
+    const projects = [
+      { projectPath: h.repo, sessions: [h.own] },
+      { projectPath: cwd, sessions: [claude] },
+      { projectPath: siblingPath, sessions: [sibling] },
+    ];
+    const shown = await h.writer.applyAndPersistArchived(projects, true);
+    assert.deepEqual(shown.flatMap(p => p.sessions.map(s => s.sessionId)).sort(), ['own', 'sibling']);
+    h.db.upsertCachedSessions([h.own, claude, sibling]);
+    cache.init({ PROJECTS_DIR: path.join(h.root, 'projects'), db: h.db, activeSessions: new Map(), getMainWindow: () => null, log: console });
+    assert.deepEqual(cache.buildProjectsFromCache(true).flatMap(p => p.sessions.map(s => s.sessionId)).sort(), ['own', 'sibling']);
   });
 }

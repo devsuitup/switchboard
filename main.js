@@ -911,7 +911,7 @@ async function unarchivedScheduleProjects(projectPath) {
   const target = normalizeArchivedProjectPath(projectPath);
   return (await scheduleProjects().list()).filter(p => {
     const candidate = normalizeArchivedProjectPath(p);
-    return candidate === target || isHiddenRepositoryWorktree(candidate, null, [target]);
+    return candidate === target || isHiddenRepositoryWorktree(candidate, null, [target], undefined, value => value);
   });
 }
 
