@@ -569,9 +569,10 @@ test('A2 a deleted source recreated before publication is retained and reselecte
       }
       return emit.call(this, event, message, ...args);
     });
-    assert.equal((await f.restart()).ok, false, 'reappeared source rejects the stale deletion plan');
+    assert.equal((await f.restart()).ok, true, 'reappeared source is deferred without failing population');
     assert.ok(f.db.getCachedSession('ordinary'), 'stale deletion cannot remove its row');
-    assert.equal((await f.restart({ force: true })).ok, true);
+    assert.ok(f.db.getFolderMeta(f.folder).fullIndexPending, 'reappeared source leaves the folder pending');
+    assert.equal((await f.restart()).ok, true);
     assert.equal(f.db.connection.prepare("SELECT count(*) AS n FROM search_fts WHERE search_fts MATCH 'recreatedunique'").get().n, 1);
   });
 

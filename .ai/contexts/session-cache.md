@@ -101,14 +101,22 @@ removal of `cache_meta` and the once-per-folder rejected-cwd warning. Live-row
 retention still applies to that drop.
 
 Every parsed file is checked again after sibling/bridge reads and before
-publication. Raced dependency groups are withheld; unrelated stable rows may
-publish. Per-file deferred generations clear only after the accepted writer ACK
-and cannot clear newer deferrals. A zero folder marker alone never forces full
-reading. Across restart the missing/mismatching body certificate selects the
-deferred file. Parsed results rejected as stale are resnapshotted on bounded
+publication. Raced files defer their dependency group: existing rows remain,
+and a newly discovered parsed row can publish without a certificate. Stable
+neighbors publish normally. The folder stays pending and unsealed, but counts
+as completed for population and `initial_scan_complete`; the next warm start
+re-reads it. A newly uncertified header row changed since selection is also
+deferred instead of repeatedly invalidating the folder. Deferred generations
+clear only after an accepted writer ACK and cannot clear newer observations.
+A zero folder marker alone never forces full reading. Watcher and reconciliation
+still discover new and changed sessions in a repair-marked folder; neither
+clears its repair marker nor seals it. Parsed results rejected as stale are resnapshotted on bounded
 retry, never blindly replayed. A stale folder is selected again within the same
 population, with at most two fresh folder attempts; unrelated folders are not
-rescanned. Population has no wall-clock deadline. Explicit remote/subset scans
+rescanned. Retry snapshot failures remain scoped to their folder so later
+folders can publish. Shutdown prevents new retry workers and terminates admitted
+retry workers through the same registered scan-worker set. Population has no
+wall-clock deadline. Explicit remote/subset scans
 retain the ten-minute ceiling. Population returns `{ok,...}`; initial completion,
 Projects reconciliation time and continuation-choice sweeping require success.
 

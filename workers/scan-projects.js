@@ -8,7 +8,7 @@ const { readSessionFile, enumerateSessionFiles, mergeBridgeGroups, subagentSessi
 const { classifyTranscriptPath } = require('../subagent-attribution');
 const { prefixedHarnesses, readHarnessFolder } = require('../harnesses');
 const { enumerateReads, measureFolder } = require('../src/main/session-index/read-counters');
-const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, observation, fullReadStamp, matchesFullRead, sourceRelativePath, safeRelativePath } = require('../src/main/session-index/full-read-state');
+const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, observation, fullReadStamp, matchesFullRead, sourceRelativePath, safeRelativePath, deferStartupSources } = require('../src/main/session-index/full-read-state');
 
 const PROJECTS_DIR = workerData.projectsDir;
 const REMAPS = workerData.remaps && typeof workerData.remaps === 'object' ? workerData.remaps : {};
@@ -26,7 +26,7 @@ function readForScan(file, key, projectPath, opts = {}) {
   const stamp = row?.fullReadStamp || (readObservation.before && fullReadStamp(file, 'claude', relativePath,
     readObservation.before, readObservation.bytes,
     opts.parentSessionId ? { meta: observation(file.replace(/\.jsonl$/, '.meta.json')) } : {}, readObservation.dependencies));
-  if (!stamp || (row && !row.fullReadStamp)) { startupRead.failed.add(relativePath); return null; }
+  if (!stamp || (row && !row.fullReadStamp)) { startupRead.failed.add(relativePath); return row; }
   startupRead.checks.set(relativePath, stamp);
   return row;
 }
@@ -180,20 +180,9 @@ function readStartupFolder(folder) {
         deferred.push(relativePath);
       }
     }
-    if (deferred.length) {
-      const rejected = new Set(deferred.map(relativePath => byPath.get(relativePath)?.sessionId
-        || sessionIdFromRel(relativePath, classifyTranscriptPath(relativePath))));
-      const groups = new Set([...rows, ...result.sessions].filter(row => rejected.has(row.sessionId)).map(row => row.bridgeSessionId).filter(Boolean));
-      for (const row of [...rows, ...result.sessions]) if (groups.has(row.bridgeSessionId)) rejected.add(row.sessionId);
-      for (const [relativePath, row] of byPath) if (rejected.has(row.sessionId) && !deferred.includes(relativePath)) deferred.push(relativePath);
-      result.sessions = result.sessions.filter(row => !rejected.has(row.sessionId));
-      result.toDelete = (result.toDelete || []).filter(id => !rejected.has(id));
-      result.partial = true;
-      result.indexMtimeMs = 0;
-      for (const relativePath of deferred) startupRead.checks.delete(relativePath);
-    }
     Object.assign(result, { startup: true, reason: reason || (selected.size ? 'changed' : 'unchanged'),
       checks: [...startupRead.checks], deferred, goneFolder, inventory: entry, metadataIds: rows.map(row => row.sessionId) });
+    deferStartupSources(result, deferred);
     return result;
   } finally { startupRead = null; }
 }

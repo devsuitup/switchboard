@@ -44,7 +44,7 @@ const { conversationMeta } = require('./conversation-meta');
 const { cleanDisplayName } = require('./public/utils');
 const { isHostedJob } = require('./src/main/bg-agents/bg-agents-roster');
 const { state: TRACE, trace } = require('./src/main/shared/activity-trace');
-const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, matchesFullRead, observation, nameDerivationWitness, sourceRelativePath } = require('./src/main/session-index/full-read-state');
+const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, matchesFullRead, observation, nameDerivationWitness, sourceRelativePath, startupInventoryMatches, deferStartupSources } = require('./src/main/session-index/full-read-state');
 
 /**
  * Session cache module.
@@ -483,6 +483,7 @@ function harnessReconciliationFolders(metaMap) {
 }
 
 function refreshFolder(folder, opts = {}) {
+  if (pendingRepairFolders().includes(folder)) cacheBackend.invalidateFullIndex?.(folder);
   const harness = harnessForFolder(folder);
   if (harness.folderPrefix) return refreshHarnessFolder(harness, folder);
   opts = continuationRefreshScope(folder, opts);
@@ -491,7 +492,6 @@ function refreshFolder(folder, opts = {}) {
     for (const file of deferredContinuationFiles.get(folder) || []) collector.accounted.add(file);
     if (!opts.managedContinuations) applyContinuationRefresh(folder, collector, true);
   };
-  if (pendingRepairFolders().includes(folder)) return false;
   // null when the key names a host no longer declared — treated as vanished.
   const folderPath = resolveFolderDir(folder);
   if (!folderPath || !fs.existsSync(folderPath)) {
@@ -898,7 +898,7 @@ function reconciliationFolders(throttle) {
       const refresh = ghostFolders.has(folder) || !meta || getFolderIndexMtimeMs(path.join(PROJECTS_DIR, folder)) > (meta.indexMtimeMs || 0)
         || (meta.projectPath && (!storedProjectPathMatchesFolder(meta.projectPath, folder)
           || resolveWorktreePath(meta.projectPath) !== meta.projectPath));
-      return { folder, refresh: refresh && !pendingRepairFolders().includes(folder) };
+      return { folder, refresh };
     })
     .concat(harnessReconciliationFolders(metaMap));
 }
@@ -1551,17 +1551,24 @@ async function publishScannedFolder(msg) {
   try {
     if (msg.error) throw new Error(msg.error);
     if (result?.startup) {
-      applyContinuationRefresh(result.folder, { deferred: new Set((result.deferred || []).map(file => file.split('/').join(path.sep))), accounted: new Set() });
-      const currentConfig = startupConfig();
-      if (result.fullIndexConfig !== currentConfig || JSON.stringify(getCachedByFolder(result.folder)) !== JSON.stringify(result.inventory.rows)
-        || JSON.stringify(getFolderMeta(result.folder) || null) !== JSON.stringify(result.inventory.meta)) {
-        throw Object.assign(new Error('Startup inventory changed before publication'), { code: 'WRITER_STALE' });
-      }
+      const raced = [];
       for (const [relativePath, stamp] of result.checks) {
         const file = path.join(PROJECTS_DIR, result.folder, relativePath);
         if (stamp === null ? observation(file) !== null : !matchesFullRead(file, stamp, 'claude', relativePath)) {
-          throw Object.assign(new Error('Startup source changed before publication'), { code: 'SCAN_RACE' });
+          raced.push(relativePath);
         }
+      }
+      for (const row of result.sessions) {
+        const current = getCachedSession(row.sessionId);
+        const previous = result.inventory.rows.find(entry => entry.sessionId === row.sessionId);
+        const relativePath = sourceRelativePath(row);
+        if (current && previous && relativePath && !current.fullReadStamp && JSON.stringify(current) !== JSON.stringify(previous)) raced.push(relativePath);
+      }
+      deferStartupSources(result, raced);
+      if (result.deferredIds?.length) result.sessions = result.sessions.filter(row => !result.deferredIds.includes(row.sessionId) || !getCachedSession(row.sessionId));
+      applyContinuationRefresh(result.folder, { deferred: new Set((result.deferred || []).map(file => file.split('/').join(path.sep))), accounted: new Set() });
+      if (result.fullIndexConfig !== startupConfig() || !startupInventoryMatches(cacheBackend, result)) {
+        throw Object.assign(new Error('Startup inventory changed before publication'), { code: 'WRITER_STALE' });
       }
     }
     const written = result?.partial ? await writer.writeScannedFolderPartial(result)
@@ -1584,10 +1591,10 @@ async function publishScannedFolder(msg) {
       applyContinuationRefresh(result.folder, { deferred: new Set(), versions: new Map(result.inventory.deferralVersions || []),
         accounted: new Set(result.checks.map(([relativePath]) => relativePath.split('/').join(path.sep))) }, true);
     }
-    if (result?.deferred?.length) { ok = false; throw new Error('Startup files deferred after a source race'); }
+    if (result?.startup && result.deferred?.length && result.fullIndexDeferred) ok = true;
     if (result?.startup && !ok) throw new Error('Startup folder publication is not sealed');
     if (result?.startup && ok && result.goneFolder && !result.unverified) await writer.completeGoneFolder(result.folder);
-    if (result?.startup && ok && pendingRepairFolders().includes(result.folder)) await writer.completeRepairFolders([result.folder]);
+    if (result?.startup && ok && !result.deferred?.length && pendingRepairFolders().includes(result.folder)) await writer.completeRepairFolders([result.folder]);
     return written;
   } finally {
     log?.info('[session-cache] folder-indexed ' + JSON.stringify({
@@ -1626,6 +1633,7 @@ function scanFoldersViaWorker(options) {
   return promise;
 }
 function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, fileSubsets, startup, onFolder }) {
+  if (stopping) return Promise.resolve({ ok: false, error: 'indexer shutting down' });
   return new Promise((resolve) => {
     const hasFolders = Array.isArray(folders) && folders.length > 0;
     const subsets = fileSubsets instanceof Map ? fileSubsets : null;
@@ -1685,13 +1693,15 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
             sessions += await publishScannedFolder(msg);
           } catch (err) {
             const folder = msg.folder || msg.result?.folder;
-            if (startup && folder && (startup.attempt || 0) < 2 && err.code === 'WRITER_STALE' && startup.config === startupConfig()) {
-              const retry = await scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders: [],
-                startup: { ...startupSnapshot(startup.force, [folder]), attempt: (startup.attempt || 0) + 1 },
-                onFolder: retryMsg => { msg = { ...retryMsg, current: msg.current, total: msg.total }; } });
-              if (retry.ok) { sessions += retry.sessions; onFolder?.(msg, sessions); return; }
-              err = new Error(retry.error);
-            }
+            try {
+              if (!stopping && startup && folder && (startup.attempt || 0) < 2 && err.code === 'WRITER_STALE' && startup.config === startupConfig()) {
+                const retry = await scanFoldersViaWorker({ projectsDir, folderPrefix, folders: [],
+                  startup: { ...startupSnapshot(startup.force, [folder]), attempt: (startup.attempt || 0) + 1 },
+                  onFolder: retryMsg => { msg = { ...retryMsg, current: msg.current, total: msg.total }; } });
+                if (retry.ok) { sessions += retry.sessions; onFolder?.(msg, sessions); return; }
+                err = new Error(retry.error);
+              }
+            } catch (retryError) { err = retryError; }
             if (!writeError || (folder && !failedFolders.size)) writeError = err.message;
             if (folder) failedFolders.add(folder);
             else unknownFailure = true;

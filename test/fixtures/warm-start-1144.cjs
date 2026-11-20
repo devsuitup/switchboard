@@ -7,13 +7,14 @@ const cache = require('../../session-cache');
 const { createSessionIndexWriter } = require('../../session-index-writer');
 const { encodeProjectPath } = require('../../encode-project-path');
 
-async function fixture(t) {
+async function fixture(t, { separateReader = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-1144-'));
   const previous = process.env.SWITCHBOARD_DATA_DIR;
   process.env.SWITCHBOARD_DATA_DIR = path.join(root, 'data');
   const db = openStore(), worker = require('./project-deletion-worker.cjs')(db);
+  const reader = separateReader ? openStore({ readonly: true }) : db;
   const calls = [], logs = [], descriptors = [], statuses = [], activeSessions = new Map();
-  const writer = createSessionIndexWriter({ readonlyBackend: db, client: {
+  const writer = createSessionIndexWriter({ readonlyBackend: reader, client: {
     ready: Promise.resolve(), request: async (name, ...args) => {
       calls.push({ name, args });
       return worker.client.request(name, ...args);
@@ -27,6 +28,7 @@ async function fixture(t) {
   initialize();
   t.after(async () => {
     await cache.shutdownProducers();
+    if (reader !== db) reader.closeDb();
     db.closeDb();
     process.env.SWITCHBOARD_DATA_DIR = previous;
     fs.rmSync(root, { recursive: true, force: true });
@@ -46,7 +48,38 @@ async function fixture(t) {
     initialize();
     return cache.populateCacheViaWorker(opts);
   };
-  return { root, projects, dir, folder, db, writer, worker, cache, calls, logs, descriptors, statuses, activeSessions, write, scans, restart };
+  return { root, projects, dir, folder, db, reader, writer, worker, cache, calls, logs, descriptors, statuses, activeSessions, write, scans, restart };
+}
+
+async function assertRebuildOracle(t, f) {
+  const assert = require('node:assert/strict');
+  const incrementalData = process.env.SWITCHBOARD_DATA_DIR;
+  await cache.shutdownProducers();
+  process.env.SWITCHBOARD_DATA_DIR = path.join(f.root, 'reference');
+  const reference = openStore();
+  t.after(() => reference.closeDb());
+  for (const table of ['session_meta', 'session_meta_fields']) {
+    for (const row of f.db.connection.prepare('SELECT * FROM ' + table).all()) {
+      const columns = Object.keys(row);
+      reference.connection.prepare(`INSERT INTO ${table} (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`).run(...columns.map(key => row[key]));
+    }
+  }
+  const worker = require('./project-deletion-worker.cjs')(reference);
+  const writer = createSessionIndexWriter({ readonlyBackend: reference, client: worker.client });
+  try {
+    await writer.ready;
+    writer.initializeCache({ PROJECTS_DIR: f.projects, activeSessions: new Map(), getMainWindow: () => null,
+      log: { info() {}, warn() {}, error() {} } });
+    assert.equal((await cache.populateCacheViaWorker({ force: true })).ok, true, 'separate store full rebuild succeeds');
+    await cache.shutdownProducers();
+    reference.closeDb();
+    const referenceReader = openStore({ readonly: true });
+    process.env.SWITCHBOARD_DATA_DIR = incrementalData;
+    const incrementalReader = openStore({ readonly: true });
+    try {
+      assert.deepEqual(logicalIndex(incrementalReader), logicalIndex(referenceReader), 'all logical index tables equal a separate full rebuild');
+    } finally { incrementalReader.closeDb(); referenceReader.closeDb(); }
+  } finally { process.env.SWITCHBOARD_DATA_DIR = incrementalData; }
 }
 
 function logicalIndex(db) {
@@ -65,4 +98,4 @@ function logicalIndex(db) {
   };
 }
 
-module.exports = { fixture, logicalIndex, supported: openStore.supported };
+module.exports = { fixture, logicalIndex, assertRebuildOracle, supported: openStore.supported };

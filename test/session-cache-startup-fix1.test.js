@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
-const { fixture, logicalIndex, supported } = require('./fixtures/warm-start-1144.cjs');
+const { fixture, assertRebuildOracle, supported } = require('./fixtures/warm-start-1144.cjs');
 const sqlite = { skip: !supported && 'SQLite requires native binding or Node 22' };
 const line = (cwd, content) => JSON.stringify({ type: 'user', cwd, uuid: content, timestamp: '2024-01-02T00:00:00.000Z', message: { content } }) + '\n';
 
@@ -22,11 +22,7 @@ for (const variant of ['zero-byte', 'no-sidechain', 'empty-content']) {
     fs.writeFileSync(sub, variant === 'zero-byte' ? '' : JSON.stringify(entry) + '\n');
     assert.equal((await f.restart()).ok, true, 'warm null subagent completes');
     assert.equal(f.db.getCachedSession('sub:parent:null'), null);
-    const incremental = logicalIndex(f.db);
-    await f.writer.setSetting('initial_scan_complete', false);
-    assert.equal((await f.restart({ force: true })).ok, true, 'cold null subagent completes');
-    assert.equal(f.db.isInitialScanComplete(), true);
-    assert.deepEqual(logicalIndex(f.db), incremental, 'null subagent equals full rebuild');
+    await assertRebuildOracle(t, f);
   });
 }
 
@@ -49,6 +45,8 @@ test('startup replans a folder refreshed by its watcher before publication', sql
   assert.equal((await f.restart()).ok, true, 'same population replans a concurrent watcher refresh');
   assert.equal(f.db.getCachedSession('live').messageCount, 2);
   assert.equal(f.db.getCachedSession('other').messageCount, 2);
+  assert.equal((await f.restart()).ok, true);
+  await assertRebuildOracle(t, f);
 });
 
 for (const at of ['beginFullIndex', 'effects']) {
@@ -65,6 +63,7 @@ for (const at of ['beginFullIndex', 'effects']) {
     };
     assert.equal((await f.restart()).ok, true, 'unrelated producer cannot fail the folder');
     assert.equal(injections, 1, 'no full rescan for unrelated commits');
+    await assertRebuildOracle(t, f);
   });
 }
 
@@ -84,6 +83,7 @@ test('startup replans a row changed after begin and before effects', sqlite, asy
   };
   assert.equal((await f.restart()).ok, true);
   assert.equal(f.db.getCachedSession('source').messageCount, 3, 'fresh selection must include the concurrent appended turn');
+  await assertRebuildOracle(t, f);
 });
 
 test('unrelated commits between startup chunks leave the folder publication intact', sqlite, async t => {
@@ -104,6 +104,7 @@ test('unrelated commits between startup chunks leave the folder publication inta
   assert.ok(injected);
   await injected;
   assert.equal(f.scans().length, 1, 'unrelated commit does not require a new scan');
+  await assertRebuildOracle(t, f);
 });
 
 test('startup population has no subset deadline while its publication is pending', sqlite, async t => {
@@ -157,6 +158,7 @@ test('startup replan is bounded when the folder changes on every publication', s
   const f = await fixture(t);
   f.write('source');
   assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+  fs.appendFileSync(path.join(f.dir, 'source.jsonl'), line(f.root, 'selected change'));
   const emit = Worker.prototype.emit;
   let attempts = 0;
   t.mock.method(Worker.prototype, 'emit', function (event, message, ...args) {

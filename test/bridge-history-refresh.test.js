@@ -277,9 +277,11 @@ test('a failed repair retains its marker until an acknowledged population retrie
     assert.equal((await cache.reindexRepairedFolders()).ok, false);
     assert.deepEqual(Array.from(f.db.getSetting('bridge_uuid_reindex_folders')), [f.folder], 'spec 1144 section 3: repair clears only after full publication ACK');
     f.write('new');
-    assert.equal(await f.writer.refreshFolder(f.folder, { files: new Set(['new.jsonl']) }), false);
+    assert.equal(await f.writer.refreshFolder(f.folder, { files: new Set(['new.jsonl']) }), true, 'watcher discovers sessions without a restart');
+    assert.ok(f.db.getCachedSession('new'), 'watcher publishes the new session while repair is pending');
     assert.equal(cache.reconcileCacheFromFilesystem(), undefined);
-    assert.equal(f.db.getCachedSession('new'), null, 'watcher cannot certify an outstanding repair');
+    assert.deepEqual(Array.from(f.db.getSetting('bridge_uuid_reindex_folders')), [f.folder]);
+    assert.equal(f.db.getFolderMeta(f.folder).fullIndexVersion, null, 'watcher cannot certify an outstanding repair');
     assert.equal((await cache.reindexRepairedFolders()).ok, false, 'retry backoff prevents an immediate repair loop');
     assert.equal(attempts, 1);
     f.writer.writeScannedFolder = write;
@@ -289,6 +291,15 @@ test('a failed repair retains its marker until an acknowledged population retrie
     assert.deepEqual(Array.from(f.db.getSetting('bridge_uuid_reindex_folders')), []);
     assert.equal((await cache.reindexRepairedFolders()).folders, 0);
   });
+
+test('reconcile discovers new sessions while retaining a pending repair', t => {
+  const f = fixture(t);
+  f.settings.set('bridge_uuid_reindex_folders', [f.folder]);
+  f.write('reconciled', [f.msg('new', '01')]);
+  cache.reconcileCacheFromFilesystem({ throttle: false });
+  assert.ok(f.rows.has('reconciled'), 'reconcile discovers sessions without a restart');
+  assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders'), [f.folder]);
+});
 
 test('pruning an undeclared host clears its pending repair through the main dropFolder callback', { timeout: 9000 }, async t => {
   const f = fixture(t);

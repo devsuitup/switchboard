@@ -75,11 +75,55 @@ function nameDerivationWitness(meta, collision = false) {
     transcriptTitle: meta?.nameTranscriptTitle ?? null, collision });
 }
 
-function folderReadWitness(db, folder) {
-  const rows = db.getCachedByFolder(folder);
-  return JSON.stringify({ rows, meta: db.getFolderMeta(folder) || null,
+function startupTouchedIds(result) {
+  return result.partial ? [...new Set([...result.sessions.map(row => row.sessionId), ...(result.toDelete || [])])].sort() : null;
+}
+
+function startupInventoryMatches(db, result) {
+  const ids = startupTouchedIds(result);
+  const inventory = result.inventory;
+  const metadata = new Map(inventory.metadata || []);
+  return folderReadWitness(db, result.folder, ids) === folderReadWitness({
+    getCachedByFolder: () => inventory.rows, getFolderMeta: () => inventory.meta,
+    getMeta: id => metadata.get(id),
+  }, result.folder, ids);
+}
+
+function deferStartupSources(result, paths) {
+  if (!paths.length) return;
+  const { classifyTranscriptPath } = require('../../../subagent-attribution');
+  const rows = [...result.inventory.rows, ...result.sessions];
+  const deferred = new Set([...(result.deferred || []), ...paths]);
+  const rejected = new Set([...deferred].map(relativePath => {
+    const known = rows.find(row => sourceRelativePath(row) === relativePath);
+    if (known) return known.sessionId;
+    const parsed = classifyTranscriptPath(relativePath);
+    return parsed?.parentSessionId ? 'sub:' + parsed.parentSessionId + ':' + parsed.agentId : path.posix.basename(relativePath, '.jsonl');
+  }));
+  const groups = new Set(rows.filter(row => rejected.has(row.sessionId)).map(row => row.bridgeSessionId).filter(Boolean));
+  for (const row of rows) if (groups.has(row.bridgeSessionId)) {
+    rejected.add(row.sessionId);
+    const relativePath = sourceRelativePath(row) || (!row.parentSessionId && row.sessionId + '.jsonl');
+    if (relativePath) deferred.add(relativePath);
+  }
+  for (const row of result.sessions) if (rejected.has(row.sessionId)) row.fullReadStamp = null;
+  const existing = new Set(result.inventory.rows.map(row => row.sessionId));
+  result.sessions = result.sessions.filter(row => !rejected.has(row.sessionId) || !existing.has(row.sessionId));
+  result.toDelete = (result.toDelete || []).filter(id => !rejected.has(id));
+  result.checks = result.checks.filter(([relativePath]) => !deferred.has(relativePath));
+  result.deferred = [...deferred];
+  result.deferredIds = [...rejected];
+  result.partial = true;
+  result.indexMtimeMs = 0;
+}
+
+function folderReadWitness(db, folder, sessionIds = null) {
+  const all = db.getCachedByFolder(folder);
+  const rows = (sessionIds ? all.filter(row => sessionIds.includes(row.sessionId)) : all).sort((a, b) => a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0);
+  const meta = db.getFolderMeta(folder) || null;
+  return JSON.stringify({ rows, meta: sessionIds && meta ? { ...meta, indexMtimeMs: undefined } : meta,
     metadata: rows.map(row => [row.sessionId, db.getMeta(row.sessionId, true) || null]) });
 }
 
 module.exports = { SESSION_CONTENT_INDEX_VERSION, CONTENT_GOLDEN_DIGESTS, observation, relativeSource, fullReadStamp, fullIndexConfig, rowWitness,
-  matchesFullRead, sourceRelativePath, safeRelativePath, nameDerivationWitness, folderReadWitness };
+  matchesFullRead, sourceRelativePath, safeRelativePath, nameDerivationWitness, folderReadWitness, startupTouchedIds, startupInventoryMatches, deferStartupSources };

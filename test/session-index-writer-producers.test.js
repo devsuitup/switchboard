@@ -151,7 +151,7 @@ async function publicationFixture(t, intercept = () => {}) {
     result: () => ({ folder, projectPath: f.root, sessions: [row], indexMtimeMs: 1 }) };
 }
 
-test('unchanged watcher refresh sends only its existing folder-meta effects; repair sends none', { skip: sqliteSkip }, async t => {
+test('unchanged watcher refresh updates folder metadata and leaves pending repair uncertified', { skip: sqliteSkip }, async t => {
   const f = await publicationFixture(t);
   await f.writer.writeScannedFolder(f.result());
   f.calls.length = 0;
@@ -161,7 +161,10 @@ test('unchanged watcher refresh sends only its existing folder-meta effects; rep
   f.db.setSetting('bridge_uuid_reindex_folders', [f.folder]);
   f.calls.length = 0;
   await f.writer.refreshFolder(f.folder);
-  assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.calls.map(call => call.name), ['effects']);
+  assert.deepEqual(f.calls[0].args[0].map(effect => effect.name), ['invalidateFullIndex', 'setFolderMeta']);
+  assert.equal(f.db.getFolderMeta(f.folder).fullIndexVersion, null);
+  assert.deepEqual(Array.from(f.db.getSetting('bridge_uuid_reindex_folders')), [f.folder]);
 });
 
 test('header refresh clears certificate even when the source stamp has not changed', { skip: sqliteSkip }, async t => {

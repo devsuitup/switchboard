@@ -49,6 +49,7 @@ function makeFakeDb({ initialScanComplete }) {
     setInitialScanComplete: () => { calls.setInitialScanComplete++; },
     deleteCachedFolder: (folder) => calls.deleteCachedFolder.push(folder),
     getCachedByFolder: () => [],
+    getCachedSession: () => null,
     getFolderMeta: () => null,
     upsertCachedSessions: (rows) => calls.upsertCachedSessions.push(rows),
     touchCachedModified: () => {},

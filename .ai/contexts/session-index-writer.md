@@ -719,16 +719,21 @@ Parser/merge/metric/search output changes must bump
 [session-cache.md](session-cache.md), "Full-content observations".
 
 A2 startup checks the captured row/folder/configuration inventory and source
-observations before queueing. The facade checks that folder's rows and metadata
-again when the queued computation starts. Begin compares its folder witness;
-startup effects compare the folder rows, metadata and pending token inside each
-transaction, then retain the resulting witness for the next chunk. Unrelated
-writer commits do not invalidate startup. Other effect producers retain their
+observations before queueing. Subset witnesses cover only upserted/deleted rows
+and their metadata, plus the folder's project path, content version/configuration
+and pending token. The watcher mtime watermark is not a content fence. Full-folder
+replacement still witnesses the entire folder. Rows are sorted by session ID
+on both readonly and writable connections. The facade checks the same inventory
+when computation starts; begin and each effect transaction check the same row
+scope, retaining the resulting witness for the next chunk. Unrelated row header
+refreshes and writer commits do not invalidate startup. Other effect producers retain their
 existing revision guard. `WRITER_STALE` returns to population for up to two fresh
 folder selections, without replaying stale parsed rows. Deletion-only subsets use the
-pending/seal protocol. Deferred files are withheld from all derived effects;
-an accepted stable subset can retain its previous full baseline while failed
-files stay individually uncertified. Deferred generations clear after ACK.
+pending/seal protocol. Deferred existing rows and bridge groups remain untouched;
+newly parsed rows may appear without certificates. Deferred publication leaves
+the folder pending and unsealed while population completes successfully.
+Watcher publication of a marked repair also leaves it unsealed. Deferred
+generations clear after ACK only for the accepted paths.
 
 `deriveCachedName` checks the expected body stamp and metadata witness, applies
 existing transcript-name rules and repairs only a changed search title. After

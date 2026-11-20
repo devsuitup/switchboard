@@ -213,7 +213,7 @@ async function drain() {
           let committed = 0;
           const acknowledgment = await transaction(message.command, () => {
             assertWorkflow(message);
-            if (folderFence && (message.folderWitness ?? folderFence.witness) !== folderReadWitness(db, folderFence.folder)) {
+            if (folderFence && (message.folderWitness ?? folderFence.witness) !== folderReadWitness(db, folderFence.folder, folderFence.sessionIds)) {
               throw Object.assign(new Error('Startup folder changed between writer effects'), { code: 'WRITER_STALE' });
             }
             let next = unit, result, count = 0, elapsed = 0, certified = true;
@@ -240,7 +240,7 @@ async function drain() {
             committed = count;
             return ['certifyFullReads', 'deriveCachedNames'].includes(message.command) ? certified : result;
           });
-          if (folderFence) message.folderWitness = folderReadWitness(db, folderFence.folder);
+          if (folderFence) message.folderWitness = folderReadWitness(db, folderFence.folder, folderFence.sessionIds);
           if (message.command === 'deriveCachedNames') message.namesDerived = (message.namesDerived ?? true) && acknowledgment.result;
           if (message.command === 'certifyFullReads') {
             const previous = message.certificateReceipt;
