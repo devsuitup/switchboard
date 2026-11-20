@@ -49,8 +49,16 @@ An attachment error displays the backend message and leaves the worker running.
 If the job record no longer exists, its background entry is released with a
 notice; a later sidebar click follows the normal resume checks, including
 protection for a conversation running elsewhere. Background preparations run
-concurrently, keep their saved slots while pending, and do not delay interactive
+two at a time, keep their saved slots while pending, and do not delay interactive
 tabs or working-set saves.
+
+The session that was active when Switchboard closed opens first and is shown as
+soon as its terminal is up; the other tabs open behind it, interactive sessions
+one at a time and background sessions two at a time, without taking the focus.
+If that session is slow to come back (its wait is bounded to 20 seconds) or
+cannot be reopened, the first tab that is ready is shown meanwhile, and the slow
+one opens behind it without taking the focus. The tab order still follows the
+saved order once every tab is open.
 
 ### A session with no transcript yet
 

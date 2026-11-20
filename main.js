@@ -1937,7 +1937,7 @@ ipcMain.handle('get-active-terminals', () => {
 });
 
 // --- IPC: stop-session ---
-const { sendToBackground, respawnRoute, createContinuationReader, holdBackgroundExit, cancellationIn } = require('./src/main/bg-agents/bg-handoff');
+const { sendToBackground, createContinuationReader, holdBackgroundExit, cancellationIn } = require('./src/main/bg-agents/bg-handoff');
 
 const backgroundHandoffs = new WeakMap();
 
@@ -1997,7 +1997,7 @@ function persistBackgroundHandoff(context) {
   }
 }
 
-async function handleSendToBackground(_event, sessionId) {
+async function handleSendToBackground(_event, sessionId, options) {
   const session = activeSessions.get(sessionId);
   const oldId = session?.realSessionId || sessionId;
   const projectFolder = session?.projectFolder, exitDrain = session?.exitDrain;
@@ -2005,6 +2005,7 @@ async function handleSendToBackground(_event, sessionId) {
     ? createContinuationReader(path.join(PROJECTS_DIR, session.projectFolder, oldId + '.jsonl'), oldId)
     : async () => null;
   const result = await sendToBackground(sessionId, {
+    force: options?.force === true,
     getSession: id => activeSessions.get(id),
     getStatus: id => cliSessionState.getStatus(id)?.status,
     write: (entry, text) => writePty(entry, text, sessionId),
@@ -2024,37 +2025,16 @@ async function handleSendToBackground(_event, sessionId) {
     },
     schedule: (fn, ms) => { const timer = setTimeout(fn, ms); if (typeof timer.unref === 'function') timer.unref(); },
     kill: entry => killPty(entry, sessionId),
-    decideRoute: async (id, entry) => {
-      const lookup = bgAgents.findRestoreJob(id, undefined, { ignoreUnrelatedInvalid: true });
-      if (!lookup.known && !lookup.missing) return respawnRoute({ oldId: id, lookup });
-      const check = lookup.job ? await bgAgents.conversationCheck(lookup.job.id, { workerLiveness: 'all' }) : null;
-      if (lookup.job && !check.known) return respawnRoute({ oldId: id, lookup, check });
-      const continuations = new Map();
-      for (const sid of new Set([id, lookup.job?.resumeTarget, ...(check?.continuationSessionIds || [])].filter(Boolean))) {
-        const continuation = await bgAgents.continuationJobCheck(sid, {
-          excludeJobId: lookup.job?.id, workerLiveness: new Map(lookup.job ? [[lookup.job.id, check.workerLiveness]] : []),
-        });
-        if (!continuation.known) return { route: 'refuse', error: `Cannot check conversation continuations (${continuation.reason}). Check the Agents view, then retry.` };
-        if (continuation.job) continuations.set(continuation.job.id, continuation.job);
-      }
-      if (continuations.size) {
-        return { route: 'refuse', error: 'This conversation already runs in the background; open it from the sidebar.' };
-      }
-      if (!lookup.job) return respawnRoute({ oldId: id, lookup });
-      let owned = { known: true, job: null };
-      for (const sid of new Set([id, ...check.sessionIds].map(s => s.toLowerCase()))) {
-        owned = bgAgents.liveJobCheck(sid, { workerLiveness: new Map([[lookup.job.id, check.workerLiveness]]) });
-        if (!owned.known || owned.job) break;
-      }
-      const elsewhere = [];
-      const elsewhereIds = new Set([id, lookup.job.resumeTarget, ...check.sessionIds].filter(Boolean).map(s => s.toLowerCase()));
-      for (const sid of elsewhereIds) elsewhere.push(await cliSessionState.liveElsewhereChecked(sid, () => false, () => [entry.pty.pid]));
-      return respawnRoute({ oldId: id, lookup, check, owned, elsewhere });
+    checkContinuations: async id => {
+      const continuation = await bgAgents.continuationJobCheck(id);
+      const owners = continuation.jobs || (continuation.known && continuation.job ? [continuation.job] : []);
+      if (owners.length) return { refuse: 'This conversation already runs in background job' + (owners.length > 1 ? 's ' : ' ') + owners.map(job => job.id).join(', ') + '. Open it from the sidebar instead.' };
+      if (!continuation.known) log.info(`[bg-handoff] ${id} continuation liveness unknown (${continuation.reason}); /bg goes ahead`);
+      return null;
     },
-    respawnJob: job => unsubscribeBgAgents.respawnForHandoff(job, [oldId, job.resumeTarget].filter(Boolean)),
   });
-  if (result.ok && !result.respawned && session?.projectFolder) detectSessionTransitions(session.projectFolder);
-  if (result.ok && !result.respawned) {
+  if (result.ok && session?.projectFolder) detectSessionTransitions(session.projectFolder);
+  if (result.ok) {
     persistBackgroundHandoff({ session, sourceKey: sessionId, sourceId: oldId,
       targetId: result.sessionId, jobId: result.jobId, projectFolder, exitDrain });
   }

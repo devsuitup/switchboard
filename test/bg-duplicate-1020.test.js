@@ -6,8 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const bg = require('../src/main/bg-agents/bg-agents');
 const { init } = require('../src/main/bg-agents/bg-agents-ipc');
-const { sendToBackground, createContinuationReader } = require('../src/main/bg-agents/bg-handoff');
-const { createComposerState } = require('../src/main/terminals/composer-state');
+const { createContinuationReader } = require('../src/main/bg-agents/bg-handoff');
 
 const SID = '11111111-1111-4111-8111-111111111111';
 const NEXT = '22222222-2222-4222-8222-222222222222';
@@ -70,55 +69,6 @@ function fixture(t, state = 'stopped') {
   };
   return { root, file, descriptors, fork, calls, checks, cliCalls, handlers, writeJob, cli, delivery, publishWorker };
 }
-
-function handoff(h, { exitAt = 600, forkAt = Infinity, uncertain = false, descriptor = true, prior = false, respawnResult } = {}) {
-  let now = 0, forked = false;
-  const session = { kind: 'local-pty', realSessionId: SID, cwd: h.root, composerState: createComposerState() };
-  if (prior) fs.appendFileSync(h.file, link(PRIOR));
-  const read = createContinuationReader(h.file, SID);
-  const advance = async ms => {
-    now += ms;
-    if (!forked && now >= forkAt) { h.fork(); forked = true; if (!descriptor) h.descriptors.length = 0; }
-    if (now >= exitAt) session.exited = true;
-  };
-  return sendToBackground(SID, {
-    getSession: () => session, getStatus: () => 'idle', write: () => true, tapOutput: () => () => {},
-    readContinuationIds: () => uncertain && session.exited ? null : read(), readDescriptors: () => h.descriptors,
-    now: () => now, delay: advance, waitForChange: advance,
-    decideRoute: async () => ({ route: 'respawn', job: { id: 'aaaaaaaa' } }),
-    respawnJob: async () => { h.calls.push(['respawn']); return respawnResult || { ok: true, attached: true }; },
-  }).then(result => ({ result, now }));
-}
-
-for (const [label, exitAt, forkAt] of [['before exit detection', 6500, 5800], ['just after exit', 600, 5800]]) {
-  test('1020 handoff adopts fork ' + label, async t => {
-    const h = fixture(t);
-    const { result } = await handoff(h, { exitAt, forkAt, prior: true });
-    assert.deepEqual(h.calls, [], 'a CLI continuation must prevent a second writer');
-    assert.equal(result.ok, true);
-    assert.equal(result.jobId, 'bbbbbbbb');
-    assert.equal(result.sessionId, NEXT);
-    assert.notEqual(result.respawned, true);
-  });
-}
-
-for (const options of [{ uncertain: true }, { forkAt: 5800, descriptor: false }]) {
-  test('1020 handoff refuses uncertain exit ' + JSON.stringify(options), async t => {
-    const h = fixture(t);
-    const { result } = await handoff(h, options);
-    assert.deepEqual(h.calls, [], 'uncertainty must never create a writer');
-    assert.equal(result.ok, false);
-    assert.match(result.error, /not.*respawn|nothing.*relaunch|not.*relaunch/i);
-  });
-}
-
-test('1020 handoff waits a bounded grace then respawns with a readable unchanged transcript', async t => {
-  const h = fixture(t);
-  const { result, now } = await handoff(h, { prior: true });
-  assert.ok(now >= 10600 && now <= 15600, 'allow the measured 5.5 second fork plus margin');
-  assert.equal(result.respawned, true);
-  assert.deepEqual(h.calls, [['respawn']]);
-});
 
 for (const channel of ['check-bg-agent-verb', 'bg-agent-verb']) {
   test('1020 ' + channel + ' refuses a live continuation', async t => {
@@ -497,26 +447,6 @@ test('1033fix a rejection escaping checkVerb is not held', async t => {
   assert.equal(h.calls.length, 1);
 });
 
-test('1033fix handoff keeps unknown-result advice once with no double period', async t => {
-  const h = fixture(t);
-  const { result } = await handoff(h, { respawnResult: { ok: false,
-    error: 'Respawn result is unknown (timeout). Check the Agents view before retrying.' } });
-  assert.doesNotMatch(result.error, /\.\./, 'handoff must not duplicate the final period');
-  assert.equal((result.error.match(/check the Agents view/ig) || []).length, 1, 'handoff must give the recovery advice only once');
-});
-
-test('1033fix2 refused handoff strips the final period of a real checkVerb error', async t => {
-  const h = fixture(t, 'running');
-  h.cli.readWorkerProcessEvidence = () => ({ processTableFresh: false });
-  const refusal = await h.handlers.get('check-bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
-  assert.equal(refusal.ok, false);
-  assert.match(refusal.error, /Check the Agents view, then retry\.$/);
-  const { result } = await handoff(h, { respawnResult: { ...refusal, refused: true } });
-  assert.equal(result.code, 'respawn-failed');
-  assert.doesNotMatch(result.error, /\.\./, 'a real checkVerb refusal must not duplicate the final period');
-  assert.ok(result.error.includes(refusal.error + ' Respawn it from the Agents view'));
-});
-
 for (const state of ['stopped', 'failed']) {
   test('1020fix2 ' + state + ' continuation permits Respawn while daemon runs', async t => {
     const h = fixture(t);
@@ -588,3 +518,41 @@ test('1020fix blocked restore notice Respawn click reaches the verb and attaches
   assert.equal(opened.length, 1, 'recovery attaches the resulting live fork');
   assert.equal(opened[0][2].backgroundRestoreJobId, 'aaaaaaaa');
 });
+
+test('1020 continuationJobCheck lists every live owner when the continuations are ambiguous', async t => {
+  const h = fixture(t);
+  h.fork();
+  fs.appendFileSync(h.file, line({ type: 'continued-in', sessionId: SID, continuedInSessionId: PRIOR }));
+  fs.writeFileSync(path.join(h.root, PRIOR + '.jsonl'), line({ type: 'user', sessionId: PRIOR }));
+  h.writeJob('cccccccc', PRIOR, 'working');
+  h.descriptors.push({ kind: 'bg', sessionId: PRIOR, jobId: 'cccccccc', cwd: h.root });
+  const result = await bg.continuationJobCheck(SID);
+  assert.equal(result.known, false);
+  assert.match(result.reason, /multiple live continuation jobs/);
+  assert.deepEqual(result.jobs.map(job => job.id).sort(), ['bbbbbbbb', 'cccccccc'], 'the conflict names its owners instead of reading as unknown');
+});
+
+test('1020 continuationJobCheck keeps a proven live owner when a later continuation tail is torn', async t => {
+  const h = fixture(t);
+  h.fork();
+  fs.appendFileSync(path.join(h.root, NEXT + '.jsonl'), '{"type":"continued-in","sessionId":');
+  assert.equal(bg.liveJobCheck(NEXT).job.id, 'bbbbbbbb', 'the continuation is a live job before the torn tail is read');
+  const result = await bg.continuationJobCheck(SID);
+  assert.equal(result.known, false);
+  assert.match(result.reason, /cannot read conversation continuations/);
+  assert.deepEqual((result.jobs || []).map(job => job.id), ['bbbbbbbb'], 'an uncertain later read must not erase the owner already established');
+});
+
+for (const other of ['cccccccc', '0000cccc']) {
+  test('1020 continuationJobCheck keeps a proven live owner when another job ' + other + ' of the same continuation has unknown liveness', async t => {
+    const h = fixture(t);
+    h.fork();
+    h.writeJob(other, NEXT, 'working');
+    fs.writeFileSync(path.join(h.root, 'daemon', 'roster.json'), line({ proto: 1, updatedAt: new Date().toISOString(), workers: {} }));
+    assert.equal(bg.liveJobCheck(NEXT, { excludeJobId: other }).job.id, 'bbbbbbbb', 'a live descriptor proves job bbbbbbbb owns the continuation');
+    const result = await bg.continuationJobCheck(SID);
+    assert.equal(result.known, false);
+    assert.match(result.reason, new RegExp('worker liveness unknown for continuation job ' + other));
+    assert.deepEqual((result.jobs || []).map(job => job.id), ['bbbbbbbb'], 'an uncertain sibling job must not erase the owner proven for the same continuation');
+  });
+}

@@ -133,6 +133,7 @@ let restoringWorkingSet = false;
 let restoreRunDepth = 0;
 let persistWorkingSetTimer = null;
 const RESTORE_STAGGER_MS = 500;
+const RESTORE_ACTIVE_WAIT_MS = 20000;
 const LIVE_ELSEWHERE_NOTICE_MS = 15000;
 
 // Cold-cache retry-until-indexed: see .ai/contexts/session-cache.md.
@@ -413,6 +414,42 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
     for (const item of pending) restoreInFlight.set(item.sessionId, item);
     const skippedNow = [];
     const startedAs = new Map();
+    // see .ai/contexts/bg-agents.md ("Restore of background sessions")
+    const savedActive = list.find(i => i.active) || null;
+    const activeItem = savedActive && !startsFresh(savedActive) ? savedActive : null;
+    const reorderRestoredTabs = () => {
+      const order = new Map(restoreSavedIndex);
+      for (const [id, newId] of startedAs) order.set(newId, order.get(id));
+      const entries = [...openSessions];
+      const saved = entries.filter(([id]) => order.has(id)).sort(([a], [b]) => order.get(a) - order.get(b));
+      let savedPosition = 0;
+      const ordered = entries.map(entry => order.has(entry[0]) ? saved[savedPosition++] : entry);
+      openSessions.clear();
+      for (const [id, entry] of ordered) openSessions.set(id, entry);
+    };
+    const RESTORE_BACKGROUND_CONCURRENCY = 2;
+    const activeWaitMs = typeof RESTORE_ACTIVE_WAIT_MS === 'number' ? RESTORE_ACTIVE_WAIT_MS : 20000;
+    let activeGate = null, activeGatePending = false;
+    const nothingShown = () => !activeSessionId || !openSessions.has(activeSessionId);
+    const showWhenOpened = item => ({ activate: nothingShown() && (!activeGatePending || item === activeItem), activeFrom: activeSessionId });
+    const restoredFallbackId = () => {
+      const shownItem = savedActive || list[list.length - 1];
+      const activeId = shownItem && (startedAs.get(shownItem.sessionId) || shownItem.sessionId);
+      const restoredIds = new Set([...list.map(item => startedAs.get(item.sessionId) || item.sessionId), ...skippedWorkingSetEntries.keys()]);
+      const opened = id => openSessions.has(id) && !openingSessions.has(id);
+      return activeId && opened(activeId) ? activeId
+        : [...openSessions.keys()].find(id => restoredIds.has(id) && opened(id) && !openSessions.get(id).closed);
+    };
+    const fillEmptyScreen = () => {
+      const fallbackId = restoredFallbackId();
+      if (fallbackId && nothingShown()) showSession(fallbackId);
+    };
+    let backgroundSlots = 0;
+    const backgroundWaiters = [];
+    const acquireBackgroundSlot = () => backgroundSlots < RESTORE_BACKGROUND_CONCURRENCY
+      ? (backgroundSlots++, Promise.resolve())
+      : new Promise(resolve => backgroundWaiters.push(resolve)).then(() => { backgroundSlots++; });
+    const releaseBackgroundSlot = () => { backgroundSlots--; backgroundWaiters.shift()?.(); };
     let harnessLabels = null;
     const harnessLabel = async runtime => {
       if (!harnessLabels) {
@@ -423,8 +460,11 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
     };
     try {
       const liveById = await liveElsewhereMany(pending.filter(item => !startsFresh(item)).map(item => item.sessionId), { api: window.api });
-      for (const [position, item] of list.entries()) {
+      const ordered = activeItem ? [activeItem, ...list.filter(item => item !== activeItem)] : [...list];
+      for (const item of ordered) {
+        const position = list.indexOf(item);
         if (window.isDeletedProjectRestoreTarget?.(item)) continue;
+        if (activeGate && item.bg !== true) await activeGate;
         if (startsFresh(item)) {
           if (!restoreInFlight.has(item.sessionId)) continue;
           try {
@@ -434,7 +474,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
             delete options.worktree;
             delete options.worktreeName;
             if (item.runtime) { options.runtime = item.runtime; options.runtimeLabel = await harnessLabel(item.runtime); }
-            const newId = await launchNewSession(project, options, item.sessionId);
+            const newId = await launchNewSession(project, options, item.sessionId, showWhenOpened(item));
             if (newId) startedAs.set(item.sessionId, newId);
           } finally {
             restoreInFlight.delete(item.sessionId);
@@ -456,16 +496,12 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           const session = s;
           const task = (async () => {
             try {
-              const background = await prepareBackgroundRestore(session, item);
-              if (background && !window.isDeletedProjectRestoreTarget?.(item)) await openSession(session, undefined, { automatic: true, fromRestore: true, allowBgAttach: true, continuationResolved: true, ...background });
-              const order = new Map(restoreSavedIndex);
-              for (const [id, newId] of startedAs) order.set(newId, order.get(id));
-              const entries = [...openSessions];
-              const saved = entries.filter(([id]) => order.has(id)).sort(([a], [b]) => order.get(a) - order.get(b));
-              let savedPosition = 0;
-              const ordered = entries.map(entry => order.has(entry[0]) ? saved[savedPosition++] : entry);
-              openSessions.clear();
-              for (const [id, entry] of ordered) openSessions.set(id, entry);
+              await acquireBackgroundSlot();
+              try {
+                const background = await prepareBackgroundRestore(session, item);
+                if (background && !window.isDeletedProjectRestoreTarget?.(item)) await openSession(session, undefined, { automatic: true, fromRestore: true, allowBgAttach: true, continuationResolved: true, ...showWhenOpened(item), ...background });
+              } finally { releaseBackgroundSlot(); }
+              reorderRestoredTabs();
             } finally {
               restoreInFlight.delete(originalId);
               schedulePersistWorkingSet();
@@ -473,6 +509,17 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           })();
           task.catch(err => showSessionActionFailure('Restore', session, err.message || String(err), 'Open it from the sidebar to retry restoring.'));
           backgroundTasks.push(task);
+          if (item === activeItem) {
+            let timer;
+            activeGatePending = true;
+            const activeFrom = activeSessionId;
+            const expired = new Promise(resolve => { timer = setTimeout(resolve, activeWaitMs); });
+            activeGate = Promise.race([task.catch(() => {}), expired]).then(() => {
+              activeGatePending = false;
+              clearTimeout(timer);
+              if (activeSessionId === activeFrom) fillEmptyScreen();
+            });
+          }
           continue;
         }
         let holdReason = { waitingForIndex: false };
@@ -509,7 +556,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         let blockedBy;
         try {
           opened = await openSession(s, undefined, {
-            automatic: true, fromRestore: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId || item.bg === true,
+            automatic: true, fromRestore: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId || item.bg === true, ...showWhenOpened(item),
             onBlocked: part => { blockedBy = { session: part.sessionId === s.sessionId ? s : { sessionId: part.sessionId, projectPath: part.live?.cwd }, live: part.live }; },
           });
         } finally {
@@ -522,6 +569,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           else if (live) skippedNow.push({ session: s, live });
           continue;
         }
+        reorderRestoredTabs();
         if (openSessions.has(s.sessionId) && !openSessions.get(s.sessionId).closed) {
           clearAppNotice(sessionActionNoticeId('Restore', originalSession));
           if (continuationNotice) showAppNotice(continuationNotice);
@@ -548,11 +596,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
     if (!indexingRetried && retryAfterIndexing && restoreIndexingDone && skippedNow.some(item => item.continuation)) {
       await markRestoreIndexingDone();
     }
-    const activeItem = list.find(i => i.active) || list[list.length - 1];
-    const activeId = activeItem && (startedAs.get(activeItem.sessionId) || activeItem.sessionId);
-    if (activeId && openSessions.has(activeId)) {
-      showSession(activeId);
-    }
+    fillEmptyScreen();
   } finally {
     try { await Promise.allSettled(backgroundTasks); }
     finally { restoreRunDepth--; }
@@ -1883,7 +1927,13 @@ async function sendSessionToBackground(sessionId) {
     const count = activeSubagentsByParent.get(sessionId)?.size || 0;
     if (count && !await appConfirm({ title: 'Send to background?', message: `${count} subagent${count === 1 ? '' : 's'} are running in this session. Claude may stop them when the session moves to the background. Send it anyway?`, confirmLabel: 'Send to background', cancelLabel: 'Cancel' })) return;
     if (openSessions.get(sessionId) !== oldEntry) return;
-    const result = await window.api.sendSessionToBackground(sessionId);
+    let result = await window.api.sendSessionToBackground(sessionId);
+    if (result?.code === 'busy') {
+      // see .ai/contexts/bg-agents.md ("Send to background")
+      if (!await appConfirm({ title: 'Send to background now?', message: 'Claude is working in this session. Sending /bg now interrupts the running tool: Claude sees it as killed and finishes the turn in the background. Wait for the turn to end, or send it now.', confirmLabel: 'Send now' })) return;
+      if (openSessions.get(sessionId) !== oldEntry) return;
+      result = await window.api.sendSessionToBackground(sessionId, { force: true });
+    }
     if (!result?.ok) throw new Error(result?.error || 'The handoff backend is unavailable or returned no result');
     destination = { ...source, sessionId: result.sessionId };
     clearAppNotice(sessionActionNoticeId('Send to background', source));
@@ -2154,7 +2204,7 @@ const sessionMap = new Map();
 
 function dedup(projects) {
   dedup.projectionKeys ||= new WeakMap();
-  const known = ['bgJobId', 'bgSessionId', 'identityJobId', 'identitySessionId', 'descriptorOnly', 'headSessionId', 'mergedMemberIds', 'conversationParts', 'mergedMemberStatuses', 'status', 'statusUpdatedAt', 'waitingFor', 'remoteAlias', 'placeholder', 'remoteAttachable', 'remoteActiveAt'];
+  const known = ['bgJobId', 'bgSessionId', 'bgJobName', 'identityJobId', 'identitySessionId', 'descriptorOnly', 'headSessionId', 'mergedMemberIds', 'conversationParts', 'mergedMemberStatuses', 'status', 'statusUpdatedAt', 'waitingFor', 'remoteAlias', 'placeholder', 'remoteAttachable', 'remoteActiveAt'];
   for (const p of projects) {
     for (let i = 0; i < p.sessions.length; i++) {
       const s = p.sessions[i];
@@ -2436,6 +2486,7 @@ async function launchNewSession(project, sessionOptions, restoreSessionId, flags
     proj.sessions.unshift(session);
   }
   const keepFocus = flags.activate === false;
+  const mayShow = () => flags.activate !== false && (flags.activeFrom === undefined || activeSessionId === flags.activeFrom);
   refreshSidebar({ keepFocus });
 
   const entry = createTerminalEntry(session);
@@ -2474,7 +2525,7 @@ async function launchNewSession(project, sessionOptions, restoreSessionId, flags
     if (flags.triggerAction) throw Object.assign(new Error(result?.error || 'session open failed'), { reason: result?.reason || 'session open failed' });
     entry.terminal.write(`\r\nError: ${result?.error || 'The terminal backend is unavailable'}\r\n`);
     entry.closed = true;
-    if (flags.activate !== false) showSession(sessionId);
+    if (mayShow()) showSession(sessionId);
     return null;
   }
   if (flags.triggerAction) entry.triggerGeneration = result.generation;
@@ -2482,7 +2533,7 @@ async function launchNewSession(project, sessionOptions, restoreSessionId, flags
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
   setSessionSandboxed(sessionId, result.sandbox);
 
-  if (flags.activate !== false) showSession(sessionId);
+  if (mayShow()) showSession(sessionId);
   schedulePersistWorkingSet();
   pollActiveSessions();
   return sessionId;
@@ -2633,6 +2684,15 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
     if (clearDormantRow(openId)) schedulePersistWorkingSet();
     if (mayShow()) showSession(openId);
     return triggerAction ? { ok: true, generation: ptyGenerations.get(openId) } : undefined;
+  }
+  // see .ai/contexts/bg-agents.md ("The sidebar")
+  if (!automatic && !customOptions && !triggerAction && !reattachOnly && !chooseAgain && /^[0-9a-f]{8}$/i.test(String(session.bgJobId || ''))
+    && typeof session.bgSessionId === 'string' && session.bgSessionId.toLowerCase() === String(session.sessionId).toLowerCase()) {
+    let current = null;
+    try { current = await window.api.getSessionLiveElsewhere(session.sessionId); } catch { current = null; }
+    if (current?.kind === 'bg' && typeof current.jobId === 'string' && current.jobId.toLowerCase() === session.bgJobId.toLowerCase()) {
+      customOptions = { type: 'attach', jobId: current.jobId, cwd: current.cwd || session.projectPath };
+    } else if (live === undefined) live = current;
   }
   const backgroundHeld = !backgroundRestoreJobId && !reattachOnly && customOptions?.type !== 'attach'
     && (dormantWorkingSet.get(session.sessionId) || skippedWorkingSetEntries.get(session.sessionId));
