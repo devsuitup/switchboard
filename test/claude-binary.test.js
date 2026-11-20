@@ -106,11 +106,33 @@ test('a JavaScript target with no interpreter on its line, or one followed by mo
   }
 });
 
-test('the npm 7 shim, with its endLocal trailer before "%_prog%", is unwrapped to node on its cli.js', () => {
-  const shim = '@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL & "%_prog%"  "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*\r\n';
-  const cli = `${NPM}\\node_modules\\@anthropic-ai\\claude-code\\cli.js`;
-  const r = resolveWindowsClaude(['--name', 'a\nb'], { PATH: `${NPM};C:\\node` }, deps({ [`${NPM}\\claude.cmd`]: shim, [cli]: '', 'C:\\node\\node.exe': '' }));
-  assert.deepEqual(r, { program: 'C:\\node\\node.exe', args: [cli, '--name', 'a\nb'], verbatim: false });
+const NPM_HEAD = '@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\n';
+const NPM_TRAILERS = {
+  'cmd-shim 4.1.0 to 9.0.0 (npm 7.24 to 11)': 'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & ',
+  'cmd-shim 9.0.2': 'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & set PATHEXT=%PATHEXT:;.JS;=;% & ',
+};
+
+for (const [generator, trailer] of Object.entries(NPM_TRAILERS)) {
+  test(`the npm shim of ${generator}, with its title trailer before "%_prog%", is unwrapped to node on its cli.js`, () => {
+    const shim = `${NPM_HEAD}${trailer}"%_prog%"  "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*\r\n`;
+    const cli = `${NPM}\\node_modules\\@anthropic-ai\\claude-code\\cli.js`;
+    const r = resolveWindowsClaude(['--name', 'a\nb'], { PATH: `${NPM};C:\\node` }, deps({ [`${NPM}\\claude.cmd`]: shim, [cli]: '', 'C:\\node\\node.exe': '' }));
+    assert.deepEqual(r, { program: 'C:\\node\\node.exe', args: [cli, '--name', 'a\nb'], verbatim: false });
+  });
+}
+
+test('an npm-shaped trailer that runs another command before "%_prog%" is not unwrapped', () => {
+  for (const trailer of [
+    'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & set NODE_OPTIONS=--require setup.cjs & ',
+    'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & set PATHEXT=%PATHEXT:;.JS;=;% & set NODE_PATH=%dp0% & ',
+    'endLocal & goto #_undefined_# 2>NUL || echo on & ',
+  ]) {
+    const shim = `${NPM_HEAD}${trailer}"%_prog%"  "%dp0%\\cli.js" %*\r\n`;
+    const files = { [`${NPM}\\claude.cmd`]: shim, [`${NPM}\\cli.js`]: '', 'C:\\node\\node.exe': '' };
+    const r = resolveWindowsClaude(['--name', 'review'], { PATH: `${NPM};C:\\node`, ComSpec: 'C:\\Windows\\System32\\cmd.exe' }, deps(files));
+    assert.equal(r.program, 'C:\\Windows\\System32\\cmd.exe', trailer);
+    assert.equal(r.verbatim, true);
+  }
 });
 
 test('a pnpm claude.cmd shim, which spells its target with %~dp0, runs node on the cli.js it points to', () => {

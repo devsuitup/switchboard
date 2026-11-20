@@ -6,7 +6,7 @@ const path = require('path');
 
 const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
 // see .ai/contexts/bg-agents.md ("Running the CLI"): the whole cmd-shim invocation line, or nothing
-const SHIM_INVOCATION = /^\s*@?(?:endlocal\s*&\s*goto\s+#_undefined_#\s+2>nul\s*&\s*)?(?:(?:"%_prog%"|"(?:%dp0%|%~dp0)\\node\.exe"|node(?:\.exe)?)\s+"(?:%dp0%|%~dp0)\\([^"\r\n]+\.js)"|"(?:%dp0%|%~dp0)\\([^"\r\n]+\.exe)")\s+%\*\s*$/im;
+const SHIM_INVOCATION = /^\s*@?(?:endlocal\s*&\s*goto\s+#_undefined_#\s+2>nul\s*\|\|\s*title\s+%comspec%\s*&\s*(?:set\s+pathext=%pathext:;\.js;=;%\s*&\s*)?)?(?:(?:"%_prog%"|"(?:%dp0%|%~dp0)\\node\.exe"|node(?:\.exe)?)\s+"(?:%dp0%|%~dp0)\\([^"\r\n]+\.js)"|"(?:%dp0%|%~dp0)\\([^"\r\n]+\.exe)")\s+%\*\s*$/im;
 
 function shimTarget(shim) {
   const m = SHIM_INVOCATION.exec(shim);

@@ -5,14 +5,22 @@ const path = require('node:path');
 
 const TARGET_DIR = 'node_modules\\@anthropic-ai\\claude-code';
 
+// see .ai/contexts/bg-agents.md ("Running the CLI"): the invocation lines cmd-shim 4.1.0 to 9.0.0, then 9.0.2, write
+const NPM_TRAILERS = {
+  title: 'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & ',
+  pathext: 'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & set PATHEXT=%PATHEXT:;.JS;=;% & ',
+};
+
 const SHIMS = {
-  npm: (target, native) => [
+  npm: (target, native, trailer) => [
     '@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start',
     'SETLOCAL', 'CALL :find_dp0',
-    'IF EXIST "%dp0%\\node.exe" (', '  SET "_prog=%dp0%\\node.exe"',
-    ') ELSE (', '  SET "_prog=node"', '  SET PATHEXT=%PATHEXT:;.JS;=;%', ')',
+    ...(native ? [] : [
+      '', 'IF EXIST "%dp0%\\node.exe" (', '  SET "_prog=%dp0%\\node.exe"',
+      ') ELSE (', '  SET "_prog=node"', '  SET PATHEXT=%PATHEXT:;.JS;=;%', ')', '',
+    ]),
     '> "%SB_ARGV_OUT%.cmd" ECHO shim',
-    `endLocal & goto #_undefined_# 2>NUL & ${native ? '' : '"%_prog%" '}"%dp0%\\${target}" %*`, '',
+    native ? `"%dp0%\\${target}"   %*` : `${NPM_TRAILERS[trailer]}"%_prog%"  "%dp0%\\${target}" %*`, '',
   ],
   pnpm: (target, native) => [
     '@SETLOCAL',
@@ -38,7 +46,7 @@ const SHIMS = {
   ],
 };
 
-function writeNpmClaude(dir, { native = false, bundled = false, shim = 'npm' } = {}) {
+function writeNpmClaude(dir, { native = false, bundled = false, shim = 'npm', trailer = 'title' } = {}) {
   const target = `${TARGET_DIR}\\${native ? 'cli.exe' : 'cli.js'}`;
   const file = path.join(dir, target);
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -47,7 +55,7 @@ function writeNpmClaude(dir, { native = false, bundled = false, shim = 'npm' } =
   if (bundled) fs.copyFileSync(process.execPath, path.join(dir, 'node.exe'));
   if (shim === 'options') fs.writeFileSync(path.join(dir, 'setup.cjs'), 'require("fs").writeFileSync(process.env.SB_ARGV_OUT + ".setup", "bootstrap")');
   const options = shim === 'options' ? '--require "$basedir/setup.cjs" ' : '';
-  fs.writeFileSync(path.join(dir, 'claude.cmd'), SHIMS[shim](target, native).join('\r\n'));
+  fs.writeFileSync(path.join(dir, 'claude.cmd'), SHIMS[shim](target, native, trailer).join('\r\n'));
   fs.writeFileSync(path.join(dir, 'claude.ps1'), [
     '#!/usr/bin/env pwsh', '$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent',
     '$exe=""', 'if ($PSVersionTable.PSVersion -lt "6.0" -or $IsWindows) { $exe=".exe" }', '$ret=0',
@@ -61,4 +69,4 @@ function writeNpmClaude(dir, { native = false, bundled = false, shim = 'npm' } =
   fs.writeFileSync(path.join(dir, 'claude'), '#!/bin/sh\nexit 99\n');
 }
 
-module.exports = { writeNpmClaude };
+module.exports = { writeNpmClaude, NPM_TRAILERS };

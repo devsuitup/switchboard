@@ -331,10 +331,12 @@ which it prefers over a neighbouring `.cmd`), the helper looks for a `.cmd` or
 Application`, filtered by extension: it also lists the extensionless sh shim npm
 leaves there) and looks in that shim for one whole invocation line it
 understands (`SHIM_INVOCATION` in `claude-binary.js`, the same regex the headless
-resolver uses, inserted in the helper as a literal): optionally npm 7's
-`endLocal & goto #_undefined_# 2>NUL &` trailer, then either a stock Node
-spelling — `"%_prog%"` (npm 7 and later), `"%~dp0\node.exe"` or `node` (the
-cmd-shim template: pnpm, yarn classic, npm 6) — with no option, followed by the
+resolver uses, inserted in the helper as a literal): optionally npm's
+`endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% &` trailer (cmd-shim
+4.1.0 to 9.0.0, npm 7.24 to 11), with `set PATHEXT=%PATHEXT:;.JS;=;% &` after
+it for cmd-shim 9.0.2, then either a stock Node spelling — `"%_prog%"` (that
+cmd-shim), `"%~dp0\node.exe"` or `node` (the cmd-shim template: pnpm, yarn
+classic, npm 6) — with no option, followed by the
 quoted `%dp0%` or `%~dp0` path of a `.js` target, or that quoted path of a
 `.exe` target alone, then `%*` and nothing else on the line. The bundled Node
 existence probe on the earlier lines is not an invocation and is ignored. A line
@@ -422,10 +424,16 @@ the headless resolver is checked on the pnpm shim too. The same file runs a
 `claude.cmd` whose Node line carries `--require setup.cjs` beside a `claude.ps1`
 that does the same: the script must run and the bootstrap must leave its mark,
 through the helper and through the headless plan (round 3 of #1107).
-`test/claude-binary.test.js` pins which invocation lines are recognised (npm 7
-with its trailer, npm's native target, pnpm) and which are not (an interpreter
-option in either spelling, a bare `.js` target, a redirect after `%*`, an
-interpreter spelled as a path). The refusal predicate's
+`test/claude-binary.test.js` pins which invocation lines are recognised (npm
+with either real trailer, npm's native target, pnpm) and which are not (an
+interpreter option in either spelling, a bare `.js` target, a redirect after
+`%*`, an interpreter spelled as a path, another command in the trailer).
+`test/stock-npm-shim-windows.test.js` (Windows only) runs the two real npm
+trailer lines through the headless plan and through the helper under Windows
+PowerShell, with a multi-line prompt, a quote and an empty token, and checks
+that .NET reads the same target from those lines as the JS regex (round 4 of
+#1107: the fixture's shortened `2>NUL &` trailer had hidden that every stock
+npm 7+ shim was opaque). The refusal predicate's
 three outcomes (refused for a `claude.cmd`, a prefix or no `claude`; kept for a
 `claude.exe` or a `claude.ps1`; always refused for a quote or a trailing
 backslash) are pinned in `test/trigger-name-transport.test.js` with real files
