@@ -1510,9 +1510,14 @@ leaves either the old file or the new one. The record carries a format
 version and the app version; `load` returns `null` and removes the file on a
 parse error, a foreign format, another app version (row shapes change between
 releases), or a row without `projectPath`/`sessionId` — a missing file is
-`null` without a warning. Nothing flushes at quit: the last two seconds of
-reloads may be lost, and the previous write still describes the sidebar as it
-was. `get-last-known-projects` returns `load()`.
+`null` without a warning. At quit, `shutdownForExit` awaits `flush()` alongside
+the PTY exit drains within the existing shared 1500 ms shutdown budget (#1136).
+This cancels the pending debounce and awaits the atomic write of the latest
+remembered reply, including any already-running write. With no pending work it
+does not touch the file. Write failures are logged by the store; an unexpected
+flush rejection or throw is logged by shutdown without skipping the remaining
+cleanup. A stalled write cannot extend the drain budget, so a forced timeout
+can still lose the latest snapshot. `get-last-known-projects` returns `load()`.
 
 Renderer side, `paintLastKnownProjects` (app.js) runs from
 `loadStartupProjects` without being awaited. It gives up when the reply is not
@@ -1538,7 +1543,9 @@ on a project that no longer exists, and the wait is a few seconds. Restore,
 trigger readiness and the background-agent paths never see provisional rows:
 they run only after `loadStartupProjects` has an accepted load, as before.
 
-Tests: `test/last-known-projects.test.js` (store), `test/app-last-known-projects.test.js`
+Tests: `test/last-known-projects.test.js` (store),
+`test/last-known-projects-quit.test.js` (quit before debounce, no-op, failure and
+shared deadline), `test/app-last-known-projects.test.js`
 (paint, inertness, replacement, the race where the real load lands first, the
 all-failed startup, including a disk snapshot arriving after all five attempts
 have failed) and the remembered-reply case in

@@ -4512,7 +4512,9 @@ function shutdownForExit() {
     for (const [id, session] of sessions) {
       if (!session.exited) killPty(session, id);
     }
-    await Promise.all(exitDrains);
+    await Promise.all([...exitDrains, Promise.resolve().then(() => lastKnownProjects.flush()).catch(error => {
+      log.error('[shutdown] last known projects flush failed:', error);
+    })]);
     await flushProjectsBeforeExit();
     await flushWindowBounds();
     await sessionCache.shutdownProducers();

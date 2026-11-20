@@ -65,6 +65,7 @@ async function run() {
   const reader = { shutdown: async () => { readersStopped++; } };
   const context = vm.createContext({
     managedBrowser: { stopForQuit() {} },
+    lastKnownProjects: { flush: async () => {} },
     require: name => name === './shutdown-exit'
       ? { exitWithWatchdog: () => setTimeout(() => process.kill(process.pid, 'SIGKILL'), 1100) } : require(name),
     console, process: { pid: process.pid, kill(pid, signal) {
