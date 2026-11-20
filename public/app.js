@@ -256,7 +256,7 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
         projectPath: entry.session.projectPath,
         active: sessionId === activeSessionId,
         ...(entry.attach ? { bg: true, ...(typeof entry.attachJobId === 'string' && entry.attachJobId ? { attachJobId: entry.attachJobId } : {}) } : {}),
-        ...(fresh ? { fresh: true } : {}),
+        ...(fresh ? { fresh: true, ...(entry.session.runtime ? { runtime: entry.session.runtime } : {}) } : {}),
       });
     }
     const liveAttach = (id) => { const open = openSessions.get(id); return !!open && !open.closed && !!open.attach; };
@@ -276,7 +276,7 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
     for (const { item, index, keepAttached } of held) {
       const active = heldActive ? heldActive.item === item : !!keepAttached && item.sessionId === activeSessionId;
       const attachJobId = openSessions.get(item.sessionId)?.attachJobId || item.attachJobId;
-      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true } : {}), ...(item.bg || (keepAttached && liveAttach(item.sessionId)) ? { bg: true, ...(typeof attachJobId === 'string' && attachJobId ? { attachJobId } : {}) } : {}) });
+      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true, ...(item.runtime ? { runtime: item.runtime } : {}) } : {}), ...(item.bg || (keepAttached && liveAttach(item.sessionId)) ? { bg: true, ...(typeof attachJobId === 'string' && attachJobId ? { attachJobId } : {}) } : {}) });
     }
     if (!set.some(e => e.active)) {
       const opening = set.find(e => pendingSessions.get(e.sessionId)?.openingActive);
@@ -413,6 +413,14 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
     for (const item of pending) restoreInFlight.set(item.sessionId, item);
     const skippedNow = [];
     const startedAs = new Map();
+    let harnessLabels = null;
+    const harnessLabel = async runtime => {
+      if (!harnessLabels) {
+        harnessLabels = new Map();
+        try { for (const h of (await window.api.getHarnesses?.()) || []) if (h?.id) harnessLabels.set(h.id, h.label); } catch {}
+      }
+      return harnessLabels.get(runtime) || null;
+    };
     try {
       const liveById = await liveElsewhereMany(pending.filter(item => !startsFresh(item)).map(item => item.sessionId), { api: window.api });
       for (const [position, item] of list.entries()) {
@@ -425,6 +433,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
             if (window.isDeletedProjectRestoreTarget?.(item)) continue;
             delete options.worktree;
             delete options.worktreeName;
+            if (item.runtime) { options.runtime = item.runtime; options.runtimeLabel = await harnessLabel(item.runtime); }
             const newId = await launchNewSession(project, options, item.sessionId);
             if (newId) startedAs.set(item.sessionId, newId);
           } finally {

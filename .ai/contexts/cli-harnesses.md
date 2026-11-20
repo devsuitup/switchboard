@@ -248,7 +248,11 @@ the delete guard refuses the row before that check.
 
 Renderer: `forkSession` passes `runtime` and `runtimeLabel` of the forked row
 in the options; `launchNewSession` copies them onto the pending row so the
-badge shows at once. The picker that starts a fresh Codex session is #824; the
+badge shows at once. A fresh entry of the saved working set carries the
+pending row's `runtime` (`persistWorkingSet`, including held entries), and
+`runRestore` passes it back with the label from `get-harnesses` when it starts
+such an entry anew: a fresh Codex tab quit before its first prompt restarts
+on Codex, not on the default CLI (`restore-fresh-runtime.test.js`). The picker that starts a fresh Codex session is #824; the
 `canLaunch` projection is now `true` for every row.
 
 Tests: `harness-codex-launch.test.js` (argv goldens, tag and env, matching
