@@ -483,6 +483,38 @@ uninitialised submodule refuses preview/deletion before force can hide its files
 
 ### Settings
 
+`openSettingsViewer(scope, projectPath, folderKey, { section })` accepts an optional
+fourth argument in the renderer, read through `arguments[3]` to preserve the
+three-parameter declaration checked by the existing folder-key source test.
+It does not add IPC. The explicit section wins
+over `localStorage`'s `settingsSection:global` or `settingsSection:project`; unknown
+ids fall back to `general` or `launch`, and storage failures are ignored. Global
+pages are `general`, `sessions`, `keyboard`, `automation`, `remote`, `integrations`,
+`archived`, `advanced`; project pages are `launch`, `project`.
+
+The panel reparents existing rows into named regions before wiring their handlers.
+Hidden pages remain in the DOM, preserving every field id and the one Save path.
+Archive content and project footer actions retain their existing behavior until
+their later #863 slices. The new shell adds no trigger controls or archive APIs.
+The host-list and refresh defaults now live in `SETTING_DEFAULTS`.
+
+Each page scrolls independently; navigation and the footer stay outside that
+scroll. A viewer ResizeObserver selects the horizontal navigation below 720 px;
+there is no layout preference. It disconnects on close or reopen. Navigation uses
+roving tabindex, arrow keys, Home/End and Tab into the selected page.
+
+The unsaved counter compares control values with their rendered `data-initial`
+values, plus snapshots of the host list and shortcuts; live reporting/debug
+switches are excluded. Save captures the submitted snapshot before awaiting any
+IPC, so later edits remain dirty; rejected host rows remain dirty too. The
+Save button is disabled during the request, so completions cannot overtake each
+other; fields stay editable. The SDK filter and IDE notice compare against the
+last applied values on repeated Saves. Save refreshes those snapshots, uses the
+existing `saved` class for 1.5 seconds and stays open. Cancel still discards
+without a prompt.
+Explanatory reporting/diagnostics prose uses native details/summary disclosure.
+See `test/dom-settings-nav.test.js` for the DOM contract.
+
 | IPC | Notes |
 |---|---|
 | `get-setting` / `set-setting` / `delete-setting` | Generic key/value over `settings` table |

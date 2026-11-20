@@ -5,13 +5,18 @@
   const settingsViewer = document.getElementById('settings-viewer');
   const settingsViewerTitle = document.getElementById('settings-viewer-title');
   const settingsViewerBody = document.getElementById('settings-viewer-body');
+  let settingsResizeObserver = null;
+  let savedFlashTimer = null;
 
   function closeSettingsViewer() {
+    settingsResizeObserver?.disconnect();
+    clearTimeout(savedFlashTimer);
     settingsViewer.style.display = 'none';
     const terminalArea = document.getElementById('terminal-area');
     const terminalHeader = document.getElementById('terminal-header');
     const placeholder = document.getElementById('placeholder');
-    const gridViewActive = localStorage.getItem('gridViewActive') === '1';
+    let gridViewActive = false;
+    try { gridViewActive = localStorage.getItem('gridViewActive') === '1'; } catch {}
     const activeSessionId = sessionStorage.getItem('activeSessionId') || null;
     // Check if there's an active session with an open terminal
     if (activeSessionId && window._openSessions && window._openSessions.has(activeSessionId)) {
@@ -25,6 +30,9 @@
   }
 
   async function openSettingsViewer(scope, projectPath, folderKey) {
+    const options = arguments[3] || {};
+    settingsResizeObserver?.disconnect();
+    clearTimeout(savedFlashTimer);
     const isProject = scope === 'project';
     const settingsKey = isProject ? 'project:' + projectPath : 'global';
     const current = normalizeBrowserSettings((await window.api.getSetting(settingsKey)) || {});
@@ -74,21 +82,21 @@
     const addDirsValue = fieldValue('addDirs');
     const visCountValue = fieldValue('visibleSessionCount');
     const maxAgeValue = fieldValue('sessionMaxAgeDays');
-    const hideSdkValue = fieldValue('hideSdkSessions');
+    let hideSdkValue = fieldValue('hideSdkSessions');
     const themeValue = fieldValue('terminalTheme');
     const rightClickValue = fieldValue('terminalRightClick');
     const restoreStartupValue = fieldValue('restoreOnStartup');
-    const mcpEmulationValue = fieldValue('mcpEmulation');
+    let mcpEmulationValue = fieldValue('mcpEmulation');
     const schedulesTabValue = fieldValue('schedulesTab');
     const autoUpdateValue = fieldValue('autoUpdate');
     const receiveBetaVersionsValue = fieldValue('receiveBetaVersions');
     const shellProfileValue = fieldValue('shellProfile');
 
     // Working copy of the global-only host list, written back on Save.
-    const remoteHosts = (!isProject && Array.isArray(current.remoteHosts) ? current.remoteHosts : [])
+    const remoteHosts = (!isProject && Array.isArray(current.remoteHosts) ? current.remoteHosts : SETTING_DEFAULTS.remoteHosts)
       .filter(h => h && typeof h === 'object')
       .map(h => ({ alias: String(h.alias || ''), label: String(h.label || ''), enabled: h.enabled !== false }));
-    const remoteRefreshMinutes = Math.max(1, Math.round((Number(current.remoteRefreshMs) || 300000) / 60000));
+    const remoteRefreshMinutes = Math.max(1, Math.round((Number(current.remoteRefreshMs) || SETTING_DEFAULTS.remoteRefreshMs) / 60000));
 
     // Live switch, not a form field — main owns the state. See docs/activity-trace.md.
     let traceState = { enabled: false };
@@ -514,6 +522,153 @@
     </div>
   `;
 
+    const form = settingsViewerBody.querySelector('.settings-form');
+    const footer = form.querySelector('.settings-btn-row');
+    const pageDefs = isProject
+      ? [['launch', 'Launch'], ['project', 'This project']]
+      : [['general', 'General'], ['sessions', 'Sessions'], ['keyboard', 'Keyboard'], ['automation', 'Automation'], ['remote', 'Remote hosts'], ['integrations', 'Integrations'], ['archived', 'Archived'], ['advanced', 'Advanced']];
+    const layout = document.createElement('div');
+    layout.className = 'settings-layout';
+    layout.innerHTML = `<nav class="settings-nav" aria-label="Settings sections"><ul>${pageDefs.map(([id, label]) => `<li><button type="button" data-section="${id}" aria-controls="settings-page-${id}" tabindex="-1">${label}</button></li>`).join('')}</ul></nav><div class="settings-pages"></div>`;
+    form.prepend(layout);
+    const pages = new Map(pageDefs.map(([id, label]) => {
+      const page = document.createElement('section');
+      page.className = 'settings-page';
+      page.id = 'settings-page-' + id;
+      page.dataset.section = id;
+      page.setAttribute('role', 'region');
+      page.setAttribute('aria-labelledby', 'settings-heading-' + id);
+      page.hidden = true;
+      page.innerHTML = `<h2 id="settings-heading-${id}" tabindex="-1">${label}</h2>`;
+      layout.querySelector('.settings-pages').append(page);
+      return [id, page];
+    }));
+    function moveGroup(pageId, title, ids) {
+      const group = document.createElement('div');
+      group.className = 'settings-section';
+      const heading = document.createElement('h3');
+      heading.className = 'settings-section-title';
+      heading.textContent = title;
+      group.append(heading);
+      for (const id of ids) {
+        const row = form.querySelector('#' + id)?.closest('.settings-field');
+        if (row) group.append(row);
+      }
+      if (group.children.length > 1) pages.get(pageId).append(group);
+    }
+    const launchPage = isProject ? 'launch' : 'sessions';
+    moveGroup(launchPage, 'Launch', ['sv-pre-launch', 'sv-add-dirs', 'sv-worktree', 'sv-worktree-name', 'sv-browser-mode', 'sv-sandbox']);
+    moveGroup(launchPage, 'Claude', ['sv-perm-mode']);
+    if (isProject) {
+      const placeholder = document.createElement('p');
+      placeholder.className = 'settings-description';
+      placeholder.textContent = 'Project actions are available below.';
+      pages.get('project').append(placeholder);
+    } else {
+      moveGroup('general', 'Startup', ['sv-restore-startup']);
+      moveGroup('general', 'Shell', ['sv-shell-profile']);
+      moveGroup('general', 'Terminal', ['sv-terminal-theme', 'sv-right-click']);
+      moveGroup('general', 'IDE', ['sv-mcp-emulation']);
+      const harnessGroup = form.querySelector('.sv-harness-toggle')?.closest('.settings-section');
+      if (harnessGroup) pages.get('sessions').insertBefore(harnessGroup, pages.get('sessions').lastElementChild);
+      moveGroup('sessions', 'Codex', ['sv-codex-sandbox', 'sv-codex-approval', 'sv-codex-model', 'sv-codex-effort']);
+      moveGroup('sessions', 'Sidebar list', ['sv-visible-count', 'sv-max-age', 'sv-hide-sdk']);
+      moveGroup('automation', 'Schedules', ['sv-schedules-tab']);
+      for (const [pageId, selector] of [['general', '#sv-auto-update'], ['keyboard', '.settings-shortcut-btn'], ['remote', '#sv-remote-hosts'], ['integrations', '#sv-activity-reporting'], ['advanced', '#sv-activity-trace'], ['archived', '#sv-archived-projects']]) {
+        pages.get(pageId).append(form.querySelector(selector).closest('.settings-section'));
+      }
+      for (const pageId of ['integrations', 'advanced']) {
+        const row = pages.get(pageId).querySelectorAll('.settings-field')[1];
+        const details = document.createElement('details');
+        details.className = 'settings-details';
+        const summary = document.createElement('summary');
+        summary.textContent = row.querySelector('.settings-label').textContent;
+        details.append(summary, row.querySelector('.settings-description'));
+        row.replaceWith(details);
+      }
+    }
+    for (const section of [...form.children]) {
+      if (section.classList.contains('settings-section')) section.remove();
+    }
+    form.querySelectorAll('div.settings-section-title').forEach(old => {
+      const heading = document.createElement('h3');
+      heading.className = old.className;
+      heading.textContent = old.textContent;
+      old.replaceWith(heading);
+    });
+    const navButtons = [...layout.querySelectorAll('.settings-nav button')];
+    const storageKey = 'settingsSection:' + (isProject ? 'project' : 'global');
+    function selectPage(id) {
+      if (!pages.has(id)) id = pageDefs[0][0];
+      for (const [pageId, page] of pages) page.hidden = pageId !== id;
+      for (const button of navButtons) {
+        const selected = button.dataset.section === id;
+        button.classList.toggle('active', selected);
+        button.tabIndex = selected ? 0 : -1;
+        if (selected) button.setAttribute('aria-current', 'page');
+        else button.removeAttribute('aria-current');
+      }
+      try { localStorage.setItem(storageKey, id); } catch {}
+    }
+    for (const [index, button] of navButtons.entries()) {
+      button.addEventListener('click', () => selectPage(button.dataset.section));
+      button.addEventListener('keydown', event => {
+        let next;
+        if (event.key === 'ArrowDown' || event.key === 'ArrowRight') next = (index + 1) % navButtons.length;
+        if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') next = (index + navButtons.length - 1) % navButtons.length;
+        if (event.key === 'Home') next = 0;
+        if (event.key === 'End') next = navButtons.length - 1;
+        if (next !== undefined) {
+          event.preventDefault();
+          navButtons[next].click();
+          navButtons[next].focus();
+        } else if (event.key === 'Tab' && !event.shiftKey) {
+          event.preventDefault();
+          const page = pages.get(button.dataset.section);
+          (page.querySelector('input:not(:disabled), select:not(:disabled), button:not(:disabled), summary') || page.querySelector('h2')).focus();
+        }
+      });
+    }
+    let remembered;
+    try { remembered = localStorage.getItem(storageKey); } catch {}
+    selectPage(options.section ?? remembered);
+    settingsViewer.classList.remove('settings-narrow');
+    if (typeof ResizeObserver !== 'undefined') {
+      settingsResizeObserver = new ResizeObserver(entries => {
+        for (const entry of entries) {
+          if (entry.target === settingsViewer && entry.contentRect.width > 0) settingsViewer.classList.toggle('settings-narrow', entry.contentRect.width < 720);
+        }
+      });
+      settingsResizeObserver.observe(settingsViewer);
+    }
+    const unsaved = document.createElement('span');
+    unsaved.id = 'sv-unsaved';
+    unsaved.className = 'settings-unsaved';
+    unsaved.setAttribute('role', 'status');
+    footer.prepend(unsaved);
+    const trackedControls = [...form.querySelectorAll('input, select')].filter(control => !['sv-activity-trace', 'sv-activity-reporting'].includes(control.id));
+    const controlValue = control => String(control.type === 'checkbox' ? control.checked : control.value);
+    let initialHosts;
+    let initialShortcuts;
+    function dirtySnapshot() {
+      return { values: trackedControls.map(controlValue), hosts: JSON.stringify(remoteHosts), shortcuts: JSON.stringify(scShortcuts) };
+    }
+    function resetDirty(snapshot = dirtySnapshot()) {
+      trackedControls.forEach((control, index) => { control.dataset.initial = snapshot.values[index]; });
+      initialHosts = snapshot.hosts;
+      initialShortcuts = snapshot.shortcuts;
+      updateDirty();
+    }
+    function updateDirty() {
+      const count = trackedControls.filter(control => controlValue(control) !== control.dataset.initial).length
+        + Number(JSON.stringify(remoteHosts) !== initialHosts)
+        + Number(JSON.stringify(scShortcuts) !== initialShortcuts);
+      unsaved.textContent = count ? `● ${count} unsaved change${count === 1 ? '' : 's'}` : '';
+    }
+    resetDirty();
+    form.addEventListener('input', updateDirty);
+    form.addEventListener('change', updateDirty);
+
     // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
     const harnessToggles = [...settingsViewerBody.querySelectorAll('.sv-harness-toggle')];
     const syncHarnessLock = () => {
@@ -586,6 +741,7 @@
             renderRemoteHosts();
           });
         });
+        updateDirty();
       }
       renderRemoteHosts();
 
@@ -648,6 +804,7 @@
         if (capturingBtn === btn) {
           scShortcuts = { ...scShortcuts, [id]: normalizeShortcuts(null)[id] };
           stopShortcutCapture();
+          updateDirty();
           btn.blur();
           return;
         }
@@ -667,6 +824,7 @@
         if (!binding) return; // chord incomplete — keep listening
         scShortcuts = { ...scShortcuts, [id]: binding };
         stopShortcutCapture();
+        updateDirty();
         btn.blur();
       });
       // Losing focus (click elsewhere, panel dismissed, tab switch) cancels capture.
@@ -678,8 +836,10 @@
     const project = isProject ? cachedAllProjects.find(p => p.projectPath === projectPath && (!folderKey || p.folder === folderKey)) : null;
 
     // Save button
-    settingsViewerBody.querySelector('#sv-save-btn').addEventListener('click', async () => {
+    async function saveSettings() {
       let settings = {};
+      let rejectedHosts = false;
+      const submitted = dirtySnapshot();
 
       if (isProject) {
         // Only save fields where "use global" is unchecked
@@ -736,12 +896,14 @@
             return false;
           });
         const statusEl = settingsViewerBody.querySelector('#sv-remote-status');
+        rejectedHosts = rejected.length > 0;
+        if (rejectedHosts) submitted.hosts = JSON.stringify(settings.remoteHosts);
         if (statusEl) {
           statusEl.textContent = rejected.length
             ? 'Not saved (an ssh alias may only contain letters, digits, dot, dash or underscore): ' + rejected.join(', ')
             : '';
         }
-        settings.remoteRefreshMs = Math.max(1, parseInt(settingsViewerBody.querySelector('#sv-remote-refresh').value, 10) || 5) * 60000;
+        settings.remoteRefreshMs = Math.max(1, parseInt(settingsViewerBody.querySelector('#sv-remote-refresh').value, 10) || SETTING_DEFAULTS.remoteRefreshMs / 60000) * 60000;
       }
       stopShortcutCapture();
 
@@ -782,9 +944,12 @@
         } else if (typeof refreshSidebar === 'function') {
           refreshSidebar();
         }
+        hideSdkValue = settings.hideSdkSessions;
         // Re-arm the remote refresher so a host added here pulls immediately.
         try { await window.api.remoteHostsApply(); } catch {}
       }
+
+      if (!form.isConnected) return;
 
       // Notify if IDE Emulation changed
       if (!isProject && settings.mcpEmulation !== mcpEmulationValue) {
@@ -795,12 +960,27 @@
         saveBtn.parentElement.insertBefore(notice, saveBtn);
         setTimeout(() => notice.remove(), 8000);
       }
+      mcpEmulationValue = settings.mcpEmulation;
 
       const saveBtn = settingsViewerBody.querySelector('#sv-save-btn');
-      saveBtn.textContent = deferred ? '✓ Applied' : '✓ Saved';
-      saveBtn.style.background = '#2ea043';
-      saveBtn.style.color = '#fff';
-      setTimeout(() => closeSettingsViewer(), 600);
+      saveBtn.textContent = rejectedHosts ? 'Some changes not saved' : deferred ? '✓ Applied' : '✓ Saved';
+      saveBtn.classList.toggle('saved', !rejectedHosts);
+      resetDirty(submitted);
+      clearTimeout(savedFlashTimer);
+      savedFlashTimer = setTimeout(() => {
+        saveBtn.classList.remove('saved');
+        saveBtn.textContent = 'Save Settings';
+      }, 1500);
+    }
+    const saveButton = form.querySelector('#sv-save-btn');
+    saveButton.addEventListener('click', async () => {
+      if (saveButton.disabled) return;
+      saveButton.disabled = true;
+      try {
+        await saveSettings();
+      } finally {
+        saveButton.disabled = false;
+      }
     });
 
     // Cancel button
