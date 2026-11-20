@@ -83,6 +83,18 @@ test('a fork is graded by its own tag only: the parent\'s tag, a sibling\'s tag 
   assert.equal(codex.matchesLaunch(signals, pending), 'tag');
 });
 
+test('a fresh launch\'s cwd fallback never grades a rollout that declares a fork parent', () => {
+  const at = Date.parse('2026-11-20T12:00:00Z');
+  const pending = { tag: codex.originatorTag('fresh-only'), forkFrom: null, projectPath: '/p', spawnedAt: at };
+  const signals = { sessionId: REAL_ID, originator: 'codex_cli_rs', forkedFrom: 'parent', cwd: '/p', startedAt: new Date(at + 1000).toISOString() };
+  assert.equal(codex.matchesLaunch(signals, pending), false, 'a rollout with forked_from_id belongs to some fork, not to a fresh launch');
+  signals.forkedFrom = null;
+  assert.equal(codex.matchesLaunch(signals, pending), 'cwd', 'positive control: the same header without a parent is the fresh fallback');
+  signals.forkedFrom = 'parent';
+  signals.originator = pending.tag;
+  assert.equal(codex.matchesLaunch(signals, pending), 'tag', 'the launch\'s own tag still wins over the header shape');
+});
+
 const PARENT_REAL = '22222222-2222-4222-8222-222222222222';
 const FORK_REAL = '33333333-3333-4333-8333-333333333333';
 const OTHER_REAL = '44444444-4444-4444-8444-444444444444';
@@ -171,4 +183,24 @@ test('a lone fork whose rollout carries the parent\'s inherited tag stays pendin
   assert.equal(f.activeSessions.get(OTHER_REAL), fork.session);
   assert.equal(fork.session.pendingLaunch, null);
   assert.deepEqual(f.events, [['session-forked', 'inherited-fork', OTHER_REAL, 'fork']]);
+});
+
+test('an untagged fork rollout is not donated to a fresh launch open in the same cwd; the fresh launch still adopts its own rollout', t => {
+  const f = transitionsFixture(t);
+  const fresh = f.pend('mixed-fresh', null), fork = f.pend('mixed-fork', PARENT_REAL);
+  const forkFile = f.rollout(FORK_REAL, { originator: 'codex_cli_rs', forked_from_id: PARENT_REAL });
+  assert.equal(codex.matchesLaunch(codex.readLaunchSignals(forkFile), fork.session.pendingLaunch), false, 'accepted rule: the fork does not guess');
+  assert.equal(transitions.resolvePendingLaunches(codex, [forkFile]), 0,
+    'a rollout that declares a fork parent is never the fresh launch\'s by cwd and start time');
+  assert.equal(f.activeSessions.get('mixed-fresh'), fresh.session);
+  assert.ok(fresh.session.pendingLaunch);
+  assert.ok(fork.session.pendingLaunch);
+  assert.equal(f.activeSessions.has(FORK_REAL), false);
+  assert.deepEqual(f.events, []);
+  const freshFile = f.rollout(OTHER_REAL, { originator: 'codex_cli_rs' });
+  assert.equal(transitions.resolvePendingLaunches(codex, [forkFile, freshFile]), 1, 'the parentless rollout is the fresh launch\'s cwd fallback');
+  assert.equal(f.activeSessions.get(OTHER_REAL), fresh.session);
+  assert.equal(fresh.session.pendingLaunch, null);
+  assert.ok(fork.session.pendingLaunch, 'the untagged fork stays pending');
+  assert.deepEqual(f.events, [['session-forked', 'mixed-fresh', OTHER_REAL, 'new']]);
 });

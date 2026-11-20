@@ -209,7 +209,13 @@ rollout appears. `session-transitions.js` owns the adoption:
   fork` honours `CODEX_INTERNAL_ORIGINATOR_OVERRIDE` is not measured; if it
   copies the parent's originator instead, a fork stays under its temporary id
   for the tab's lifetime, which is the accepted outcome. The cwd fallback
-  refuses a rollout whose originator is any `switchboard_` tag.
+  refuses a rollout whose originator is any `switchboard_` tag, and a rollout
+  whose header declares `forked_from_id`: such a rollout belongs to some fork,
+  so a fresh launch open beside an untagged fork in the same cwd cannot take
+  the fork's rollout (round-5 review of #1132: before this rule the fork
+  refused it and the fresh tab adopted it). The fork stays pending. A resume
+  has no `pendingLaunch` at all (`launchMode !== 'resume'` in main's launch
+  block), so there is no resume-side fallback to guard.
 - Adoption is exact first: a candidate graded `'tag'` by a pending session goes
   to that session, and nothing else may take it. `session-transitions.js` keeps,
   per candidate id, every pending launch the candidate ever matched
@@ -261,7 +267,8 @@ Codex row with and without its rollout, the re-key through
 `session-transitions`, two forks of one parent with and without tags);
 `codex-launch-ownership.test.js` (a tagged rollout stays with its exited,
 removed or already adopted owner; an untagged fork rollout stays pending
-before and after the first observation, with one or two forks open).
+before and after the first observation, with one or two forks open, and is
+not donated to a fresh launch open in the same cwd).
 
 ## Busy and attention per harness (#823)
 
