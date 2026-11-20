@@ -148,6 +148,17 @@ function createWriterCommands(db) {
   }
   return {
     ...createSessionRequestCommands(db),
+    beginFullIndex(folder, token, control) {
+      const revision = db.getSetting('_writer_revision') || 0;
+      if (control?.expectedRevision !== undefined && control.expectedRevision !== revision) throw requestError('WRITER_STALE', 'Index producer snapshot changed before begin');
+      const previous = db.beginFullIndex(folder, token);
+      return control?.receipt ? { previous, committedRevision: revision + 1 } : previous;
+    },
+    sealFullIndex(...args) {
+      const beforeRevision = db.getSetting('_writer_revision') || 0;
+      const sealed = db.sealFullIndex(...args);
+      return args[5]?.receipt ? { sealed, beforeRevision, committedRevision: beforeRevision + (sealed ? 1 : 0) } : sealed;
+    },
     readProjectArchiveEpochs: epochs,
     patchGlobal: patch,
     cleanupWorktree(projectPath) {

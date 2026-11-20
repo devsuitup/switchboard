@@ -219,12 +219,15 @@ function producerTargets(command, args) {
       for (const id of values[1]) sessions.push({ id });
       inspect('upsertSearchEntries', [values[2]]);
     } else if (['setCachedEntrypoints', 'setCachedCustomTitles'].includes(name)) for (const row of values[0]) sessions.push({ id: row.sessionId });
+    else if (name === 'invalidateFullRead') sessions.push({ id: values[0] });
     else if (['setName', 'renameSession', 'toggleStar', 'setStarred', 'setArchived', 'replaceSessionMetrics', 'deleteCachedSession', 'deleteSearchSession', 'touchCachedModified', 'setCachedContinuationIndex', 'setCachedFileSize', 'rekeySessionMeta'].includes(name)) {
       sessions.push({ id: values[0] });
       if (name === 'rekeySessionMeta') sessions.push({ id: values[1] });
-    } else if (['setFolderMeta', 'deleteCachedFolder', 'deleteSearchFolder', 'dropRemoteFolder', 'completeRepairFolders'].includes(name)) {
+    } else if (['setFolderMeta', 'deleteCachedFolder', 'deleteSearchFolder', 'dropRemoteFolder', 'completeRepairFolders',
+      'beginFullIndex', 'sealFullIndex', 'invalidateFullIndex', 'certifyFullRead'].includes(name)) {
       for (const folder of name === 'completeRepairFolders' ? values[0] : [values[0]]) folders.push(folder);
       if (name === 'setFolderMeta' && values[1]) projects.push({ alias: parseFolderKey(values[0]).alias, projectPath: values[1], folder: values[0] });
+      if (name === 'beginFullIndex') for (const projectPath of values[2]?.projects || []) projects.push({ alias: parseFolderKey(values[0]).alias, projectPath, folder: values[0] });
     }
   };
   inspect(command, args);

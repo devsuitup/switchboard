@@ -29,10 +29,12 @@ function resolveJsonlPath(projectsDir, row) {
 }
 
 /** Read sidecar { agentType, description } if present. */
-function readSubagentMeta(jsonlPath) {
+function readSubagentMeta(jsonlPath, observation) {
   const metaPath = jsonlPath.replace(/\.jsonl$/, '.meta.json');
   try {
-    return JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    const bytes = require('./src/main/session-index/read-counters').readAuxiliaryFile(metaPath);
+    if (observation) { observation.read = true; observation.bytes = bytes.length; }
+    return JSON.parse(bytes.toString('utf8'));
   } catch {
     return null;
   }
@@ -71,7 +73,7 @@ function attachMessageSignatures(row, filePath, lines) {
     configurable: true,
     get() {
       const signatures = [];
-      for (const line of lines || fs.readFileSync(filePath, 'utf8').split('\n')) {
+      for (const line of lines || require('./src/main/session-index/read-counters').readBodyFile(filePath).toString('utf8').split('\n')) {
         let entry;
         try { entry = JSON.parse(line); } catch { continue; }
         if (entry.type !== 'user' && entry.type !== 'assistant' &&
@@ -204,10 +206,16 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
   const excludedMessageUuids = opts.excludedMessageUuids;
   const excludedMessageSignatures = opts.excludedMessageSignatures;
   try {
+    const { observation, relativeSource, fullReadStamp } = require('./src/main/session-index/full-read-state');
+    const before = observation(filePath);
+    const metaPath = isSubagent ? filePath.replace(/\.jsonl$/, '.meta.json') : null;
+    const dependencies = metaPath ? { meta: observation(metaPath) } : {};
+    const certificate = bytes => fullReadStamp(filePath, 'claude', relativeSource(filePath, opts.parentSessionId), before, bytes,
+      metaPath ? { meta: observation(metaPath) } : {}, dependencies);
     const big = fs.statSync(filePath, { bigint: true });
     const stamp = continuationStamp(big);
     const stat = isSubagent ? { size: Number(big.size), mtime: new Date(continuationMtime(big)), birthtime: new Date(Number((big.birthtimeNs + 500000n) / 1000000n)) } : fs.statSync(filePath);
-    const fileBytes = fs.readFileSync(filePath);
+    const fileBytes = require('./src/main/session-index/read-counters').readBodyFile(filePath);
     const content = fileBytes.toString('utf8');
     const lines = content.split('\n').filter(Boolean);
     let summary = '';
@@ -343,11 +351,13 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
         if (m) agentId = m[1];
       }
       if (!agentId) return null;
-      const meta = readSubagentMeta(filePath) || {};
+      const metaObservation = { read: false };
+      const meta = readSubagentMeta(filePath, metaObservation) || {};
       const subagentType = meta.agentType || null;
       const description = meta.description || null;
       return {
         sessionId: subagentSessionId(opts.parentSessionId, agentId),
+        fullReadStamp: dependencies.meta && (!metaObservation.read || BigInt(metaObservation.bytes) !== BigInt(dependencies.meta.size)) ? null : certificate(fileBytes.length),
         folder, projectPath,
         summary: description || summary,
         firstPrompt: summary,
@@ -396,8 +406,10 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     if (bridgeSessionId) {
       attachMessageSignatures(row, filePath, messageUuidsComplete ? null : lines);
     }
+    row.fullReadStamp = certificate(fileBytes.length);
     return row;
   } catch {
+    require('./src/main/session-index/read-counters').failedRead(filePath);
     return null;
   }
 }

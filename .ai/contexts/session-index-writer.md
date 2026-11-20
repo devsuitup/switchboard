@@ -647,3 +647,46 @@ history guard and preserves the committed ACK/settings bookkeeping. The original
 transaction error path is unchanged. The full worker is tested with a real guarded
 SQLite fixture and the real client/facade; generation replacement uses a fake
 worker in `test/session-index-writer-recovery.test.js`, without Electron.
+# Full-content publication (#1144 A1)
+
+The writable store reconciles nullable `session_cache.fullReadStamp` and
+`cache_meta.fullIndexVersion/fullIndexConfig/fullIndexPending` columns through
+idempotent ALTERs. Adding these columns does not set `mustReindex`, delete cache
+or metadata, or clear initial completeness. Readonly snapshots and metadata
+overlays retain the fields. FTS absence or recreation durably clears folder
+version/config before writer readiness; reopening before population cannot
+recover an obsolete seal from an ephemeral bootstrap flag.
+
+A producer operation ACKs `beginFullIndex` before its replacement effects.
+Its first replacement effect invalidates the old folder seal even if begin
+failed or its outcome is unknown. A scan's folder drop removes session rows
+while retaining the metadata row and pending token; project deletion still
+deletes the complete metadata row. Ordinary setFolderMeta preserves the fields.
+
+Affected rows lose certificates before materialized replacement. Candidates
+are withheld from upserts, then published as separately ACKed final effects
+after all body, metrics and staged FTS work. `certifyFullRead` compares the
+folder token and materialized row witness. `sealFullIndex` compares the token
+and captured canonical configuration (sorted remaps, deduplicated/sorted
+disabled harness IDs, resolved source roots). A full scan records the content
+version; a partial operation restores only an existing full baseline.
+
+Begin/effect failure leaves conservative state. Begin failure still submits
+the existing write. A seal with unknown outcome is logged, never retried or
+compensated: it either leaves pending state or committed a valid seal over
+fully ACKed effects. A newer folder token supersedes older work. Certification
+does not use global writer revision as its freshness fence. Projects replies
+retain their independent revision-continuity check and return the final owned
+ACK rather than silently accepting a revision changed by another producer.
+
+The commands bracket producer operations at the facade. They do not alter
+the generic chunk scheduler, producer-unit packing, transaction budgets,
+admission or deadlines (#1135). Certificate commands participate in existing
+project-deletion ownership fencing. Repair invalidates its folder seal before
+scanning; A1 keeps the existing finally-based repair-marker clearing, so that
+marker is never evidence of successful completion.
+
+Parser/merge/metric/search output changes must bump
+`SESSION_CONTENT_INDEX_VERSION` and add an immutable golden digest entry; see
+[session-cache.md](session-cache.md), "Full-content observations". A1 records
+these fields without enabling any startup skipping.
