@@ -701,8 +701,9 @@ and captured canonical configuration (sorted remaps, deduplicated/sorted
 disabled harness IDs, resolved source roots). A full scan records the content
 version; a partial operation restores only an existing full baseline.
 
-Begin/effect failure leaves conservative state. Begin failure still submits
-the existing write. Certificate rejection or failure skips that folder's seal;
+Begin/effect failure leaves conservative state. Legacy producers still submit
+their existing write on begin failure; A2 startup rejects that publication and
+replans from a fresh snapshot. Certificate rejection or failure skips that folder's seal;
 transport failure is logged as an unknown outcome and never rejects an already
 committed body. A seal with unknown outcome is logged, never retried or
 compensated: it either leaves pending state or committed a valid seal over
@@ -719,10 +720,49 @@ The commands bracket producer operations at the facade. They do not alter
 the generic chunk scheduler, producer-unit packing, transaction budgets,
 admission or deadlines (#1135). Certificate commands participate in existing
 project-deletion ownership fencing. Repair invalidates its folder seal before
-scanning; A1 keeps the existing finally-based repair-marker clearing, so that
-marker is never evidence of successful completion.
+scanning and joins startup population; its marker clears only after successful
+sealed publication.
 
 Parser/merge/metric/search output changes must bump
 `SESSION_CONTENT_INDEX_VERSION` and add an immutable golden digest entry; see
-[session-cache.md](session-cache.md), "Full-content observations". A1 records
-these fields without enabling any startup skipping.
+[session-cache.md](session-cache.md), "Full-content observations".
+
+A2 startup checks the captured row/folder/configuration inventory and source
+observations before queueing. Subset witnesses cover only upserted/deleted rows
+and their metadata, plus the folder's project path, content version/configuration
+and pending token. The watcher mtime watermark is not a content fence. Full-folder
+replacement still witnesses the entire folder. Rows are sorted by session ID
+on both readonly and writable connections. The facade checks the same inventory
+when computation starts; begin and each effect transaction check the same row
+scope, retaining the resulting witness for the next chunk. Unrelated row header
+refreshes and writer commits do not invalidate startup. Other effect producers retain their
+existing revision guard. `WRITER_STALE` returns to population for up to two fresh
+folder selections, without replaying stale parsed rows. Deletion-only subsets use the
+pending/seal protocol. A deferred ordinary row publishes the bytes read without
+a certificate when its current row still equals the selected inventory row (or
+the row is new). A newer watcher replacement and existing deferred bridge groups
+remain untouched. Converting a full result to a subset retains deletion of
+inventory rows absent from the full read, excluding deferred IDs.
+Deferred publication leaves the folder pending and unsealed while population completes successfully.
+Watcher publication of a marked repair also leaves it unsealed. Deferred
+generations clear after ACK only for the accepted paths, even when neighboring
+paths remain deferred. Name derivation also runs for non-deferred rows after
+that ACK; neither operation certifies a deferred source or seals its folder.
+
+`deriveCachedName` checks the expected body stamp and metadata witness, applies
+existing transcript-name rules and repairs only a changed search title. After
+that command ACK, `certifyNameDerivation` checks the post-effect witness again.
+A concurrent user rename rejects certification. Collision suppression records
+no completed witness, so removal of a collision descriptor is retried even
+when the body is unchanged. Both commands keep session deletion fences.
+
+Startup uses `deriveCachedNames` to batch a folder's candidates in one request.
+Each row derives and certifies in one worker unit; the existing adaptive chunk
+budgets still apply. The batch binds all session deletion owners on admission,
+and every unit checks its own binding before writing. The single-row facade
+retains its separate ACK protocol for existing callers.
+
+The obsolete single-row worker `certifyFullRead` command is removed; certificate
+units invoke the store method directly inside `certifyFullReads`. The real
+worker facade test uses 80 certificates and an intervening setting write to
+prove `continuous:false` returns the body ACK.

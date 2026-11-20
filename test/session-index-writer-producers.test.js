@@ -95,6 +95,35 @@ test('batched certificates retain rejection across bounded transactions and repo
   assert.equal(await worker.client.request('certifyFullReads', 'folder', 'token', certificates), false, 'superseded folder token rejects the batch');
 });
 
+test('facade returns the body acknowledgment when real certificate chunks contain an unrelated revision', { skip: sqliteSkip }, async t => {
+  const f = durableFixture(t), db = f.store;
+  const worker = require('./fixtures/project-deletion-worker.cjs')(db);
+  let bodyAck, certificateAck, interleaved;
+  const writer = createSessionIndexWriter({ readonlyBackend: db, client: { ready: Promise.resolve(), request: async (name, ...args) => {
+    const ack = await worker.client.request(name, ...args);
+    if (name === 'effects') bodyAck = ack;
+    if (name === 'certifyFullReads') certificateAck = ack;
+    return ack;
+  } } });
+  await writer.ready;
+  writer.initializeCache({ PROJECTS_DIR: f.root, activeSessions: new Map(), getMainWindow: () => null, log: console });
+  const original = db.certifyFullRead;
+  db.certifyFullRead = (...args) => {
+    if (!interleaved) interleaved = worker.client.request('setSetting', 'during-first-certificate-chunk', true);
+    return original(...args);
+  };
+  const rows = Array.from({ length: 80 }, (_, i) => ({ sessionId: 'facade-' + i, folder: 'folder', projectPath: f.root,
+    summary: 'body', fullReadStamp: 'candidate' }));
+  const result = await writer.applyProjectsWorkerEffects({ keptLiveRows: [], effects: [
+    { name: 'upsertCachedSessions', args: [rows] },
+    ...rows.map(row => ({ name: 'replaceSessionMetrics', args: [row.sessionId, []] })),
+  ] });
+  await interleaved;
+  assert.equal(certificateAck.continuous, false, 'real worker detects the interleaved setting between certificate chunks');
+  assert.deepEqual(result, bodyAck, 'facade returns exactly the body receipt when certificate continuity is false');
+  assert.notDeepEqual(result, certificateAck);
+});
+
 async function publicationFixture(t, intercept = () => {}) {
   const f = durableFixture(t), db = f.store, calls = [], notifications = [], warnings = [];
   const commands = createWriterCommands(db);
@@ -122,7 +151,7 @@ async function publicationFixture(t, intercept = () => {}) {
     result: () => ({ folder, projectPath: f.root, sessions: [row], indexMtimeMs: 1 }) };
 }
 
-test('unchanged watcher refresh sends only its existing folder-meta effects; repair sends none', { skip: sqliteSkip }, async t => {
+test('unchanged watcher refresh updates folder metadata and leaves pending repair uncertified', { skip: sqliteSkip }, async t => {
   const f = await publicationFixture(t);
   await f.writer.writeScannedFolder(f.result());
   f.calls.length = 0;
@@ -132,7 +161,10 @@ test('unchanged watcher refresh sends only its existing folder-meta effects; rep
   f.db.setSetting('bridge_uuid_reindex_folders', [f.folder]);
   f.calls.length = 0;
   await f.writer.refreshFolder(f.folder);
-  assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.calls.map(call => call.name), ['effects']);
+  assert.deepEqual(f.calls[0].args[0].map(effect => effect.name), ['invalidateFullIndex', 'setFolderMeta']);
+  assert.equal(f.db.getFolderMeta(f.folder).fullIndexVersion, null);
+  assert.deepEqual(Array.from(f.db.getSetting('bridge_uuid_reindex_folders')), [f.folder]);
 });
 
 test('header refresh clears certificate even when the source stamp has not changed', { skip: sqliteSkip }, async t => {
@@ -157,7 +189,7 @@ for (const fault of ['interleaved-header', 'certificate-timeout', 'unrelated-wri
   test('certificate stage does not fail committed body: ' + fault, { skip: sqliteSkip }, async t => {
     let interleaved = false;
     const f = await publicationFixture(t, (name, args, db) => {
-      const certificate = name === 'certifyFullReads' || (name === 'effects' && args[0].some(effect => effect.name === 'certifyFullRead'));
+      const certificate = name === 'certifyFullReads';
       if (!certificate) return;
       if (fault === 'certificate-timeout') throw Object.assign(new Error('certificate outcome unknown'), { code: 'WRITER_TIMEOUT' });
       if (!interleaved) {
@@ -165,7 +197,6 @@ for (const fault of ['interleaved-header', 'certificate-timeout', 'unrelated-wri
         if (fault === 'interleaved-header') db.touchCachedModified('source', '2030-01-01T00:00:00.000Z');
         db.setSetting('_writer_revision', (db.getSetting('_writer_revision') || 0) + 1);
       }
-      if (name === 'effects') assert.equal(args[1], undefined, 'certificates cannot fence on the global writer revision');
     });
     await assert.doesNotReject(f.writer.writeScannedFolder(f.result()), 'committed body resolves despite certificate failure');
     assert.equal(f.db.getCachedSession('source').summary, f.row.summary);
@@ -260,7 +291,7 @@ test('real writer queue preserves folder token through drop and certifies after 
   assert.equal(db.getFolderMeta('folder')?.fullIndexPending, 'token', 'worker folder drop retains pending token');
   await send('setSetting', 'unrelated', true);
   const witness = require('../src/main/session-index/full-read-state').rowWitness(db.getCachedSession('source'));
-  assert.equal(await send('certifyFullRead', 'folder', 'token', 'source', 'stamp', witness), true);
+  assert.equal(await send('certifyFullReads', 'folder', 'token', [{ sessionId: 'source', stamp: 'stamp', witness }]), true);
   assert.equal(await send('sealFullIndex', 'folder', 'token', 1, 'config'), true);
   assert.equal(db.getCachedSession('source').fullReadStamp, 'stamp');
   await send('drain');
@@ -439,7 +470,7 @@ test('certificate commands retain project-deletion producer fencing', { skip: sq
   const { bindDeletionProducer } = require('../src/main/projects/project-delete-writer');
   const baseline = bindDeletionProducer(db, 'setFolderMeta', ['folder', f.root, 1], true);
   assert.ok(baseline.length > 0);
-  for (const name of ['beginFullIndex', 'sealFullIndex', 'invalidateFullIndex', 'certifyFullRead', 'certifyFullReads']) {
+  for (const name of ['beginFullIndex', 'sealFullIndex', 'invalidateFullIndex', 'certifyFullReads']) {
     assert.deepEqual(bindDeletionProducer(db, name, ['folder', 'token', 'source'], true), baseline, name + ' binds the same project owner');
   }
 });
@@ -495,10 +526,12 @@ test('all journal producers reject transport failure without reconstructing or r
 
 function fixture(writer, db = {}) {
   let worker;
+  let workerStarted;
+  const ready = new Promise(resolve => { workerStarted = resolve; });
   const errors = [], sent = [], logs = [];
   let terminated = false;
   class ScanWorker extends EventEmitter {
-    constructor() { super(); worker = this; }
+    constructor() { super(); worker = this; workerStarted(); }
     terminate() { terminated = true; return Promise.resolve(); }
   }
   const filename = path.join(__dirname, '../session-cache.js');
@@ -512,8 +545,9 @@ function fixture(writer, db = {}) {
   const cache = context.module.exports;
   cache.init({ PROJECTS_DIR: 'fixture', activeSessions: new Map(), getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: (...args) => sent.push(args) } }),
     log: { warn() {}, info: value => logs.push(value), error: (...args) => errors.push(args.join(' ')) },
-    db: { getSetting: () => null, isInitialScanComplete: () => false, setInitialScanComplete() {}, ...db }, writer });
-  return { cache, worker: () => worker, errors, sent, logs, terminated: () => terminated };
+    db: { getSetting: () => null, getAllCached: () => [], getAllMeta: () => new Map(), getAllFolderMeta: () => new Map(),
+      isInitialScanComplete: () => false, setInitialScanComplete() {}, ...db }, writer });
+  return { cache, ready, worker: () => worker, errors, sent, logs, terminated: () => terminated };
 }
 
 test('population drains folder acknowledgments before done and exit can complete the scan', async () => {
@@ -526,6 +560,7 @@ test('population drains folder acknowledgments before done and exit can complete
     async setInitialScanComplete() { calls.push('complete'); },
   });
   const populated = f.cache.populateCacheViaWorker();
+  await f.ready;
   f.worker().emit('message', { type: 'folder', result: {}, current: 1, total: 1 });
   f.worker().emit('message', { type: 'done', ok: true });
   f.worker().emit('exit', 0);
@@ -572,7 +607,7 @@ test('full scan counts actual body bytes including filtered bridge rereads and a
   assert.ok(result.counters.auxiliaryBytesRead > 0, 'cwd discovery bytes are separate');
 });
 
-test('failed repair invalidates its full seal while clearing the repair marker exactly as today', { skip: sqliteSkip }, async t => {
+test('failed repair invalidates its full seal and retains the repair marker for coordinated retry', { skip: sqliteSkip }, async t => {
   const f = durableFixture(t), db = f.store;
   db.setFolderMeta('folder', f.root, 1);
   db.connection.exec("UPDATE cache_meta SET fullIndexVersion = 1, fullIndexConfig = 'old'");
@@ -584,12 +619,13 @@ test('failed repair invalidates its full seal while clearing the repair marker e
   }, db);
   await new Promise(resolve => setImmediate(resolve));
   const completed = scan.cache.reindexRepairedFolders();
+  await scan.ready;
   scan.worker().emit('message', { type: 'folder', result: { folder: 'folder', sessions: [] }, current: 1, total: 1 });
   scan.worker().emit('message', { type: 'done', ok: false, error: 'repair read failed' });
   scan.worker().emit('exit', 0);
   await completed;
   assert.equal(db.getFolderMeta('folder').fullIndexVersion, null, 'repair failure cannot retain a valid seal');
-  assert.equal(db.getSetting('bridge_uuid_reindex_folders').length, 0, 'A1 retains the existing finally-based repair clearing');
+  assert.equal(db.getSetting('bridge_uuid_reindex_folders').length, 1, 'A2 clears repair markers only after successful publication');
 });
 
 test('full scan counters publish after ACK and report rejection once', async () => {
@@ -599,6 +635,7 @@ test('full scan counters publish after ACK and report rejection once', async () 
     const started = new Promise(resolve => { entered = resolve; });
     const f = fixture({ async writeScannedFolder() { entered(); await gate; if (fail) throw new Error('FTS rejected'); return 1; }, async setInitialScanComplete() {} });
     const populated = f.cache.populateCacheViaWorker();
+    await f.ready;
     f.worker().emit('message', { type: 'folder', result: { folder: 'folder', sessions: [], counters: { bytesRead: 123, readOperations: 3 } }, current: 1, total: 1 });
     f.worker().emit('message', { type: 'done', ok: true });
     f.worker().emit('exit', 0);
@@ -628,6 +665,7 @@ test('a failed folder write prevents scan completeness while later folders still
     async setInitialScanComplete() { completed = true; },
   });
   const populated = f.cache.populateCacheViaWorker();
+  await f.ready;
   f.worker().emit('message', { type: 'folder', result: { folder: 'broken' }, current: 1, total: 2 });
   f.worker().emit('message', { type: 'folder', result: { folder: 'healthy' }, current: 2, total: 2 });
   f.worker().emit('message', { type: 'done', ok: true });

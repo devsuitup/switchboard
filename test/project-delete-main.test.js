@@ -269,7 +269,7 @@ test('a fifteen-second background CLI still produces a small-project preview', s
 function startupFixture(projectDeleteHolds, overrides = {}) {
   const filename = path.join(__dirname, '..', 'main.js'), source = fs.readFileSync(filename, 'utf8');
   const start = source.lastIndexOf('    try {', source.indexOf('scheduleIpc.init(log, runScheduleCommand'));
-  const end = source.indexOf('    // Full cache rebuild', start);
+  const end = source.indexOf('    populateCacheViaWorker(', start);
   assert.ok(start > 0 && end > start, 'startup callbacks must be extractable without running Electron');
   const order = [], errors = [];
   const context = vm.createContext({

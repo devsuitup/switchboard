@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Changed
+- After a restart, Switchboard re-reads only Claude Code transcripts changed since the previous run. Codex history is still re-read in full. (#1144)
 - Settings → Archived groups projects by host, shows their paths and archive dates, and filters by name, path or host. Restore one or several projects with Undo, or delete an archived project through the existing preview without restoring it first. For local worktree entries, Delete project explains how to delete the worktree or its repository. (#863)
 - Codex sessions run non-interactively by a program (`codex exec`: scripted reviews and fixes) are now left out of the sidebar and grid like Claude Agent SDK sessions, under the same **Hide SDK-launched Sessions** setting. They still count in the heatmap and are found by search; the ones you have open stay listed. Codex sessions already indexed are re-checked once at the next start. (#1145)
 

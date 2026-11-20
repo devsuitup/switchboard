@@ -21,6 +21,207 @@ const os = require('os');
 const path = require('path');
 const { Worker } = require('worker_threads');
 const { encodeProjectPath } = require('../encode-project-path');
+const { readSessionFile } = require('../read-session-file');
+const { fullIndexConfig } = require('../src/main/session-index/full-read-state');
+let originalCodexHome, isolatedCodexHome;
+test.before(() => {
+  originalCodexHome = process.env.CODEX_HOME;
+  isolatedCodexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-a2-codex-'));
+  process.env.CODEX_HOME = isolatedCodexHome;
+});
+test.after(() => { process.env.CODEX_HOME = originalCodexHome; fs.rmSync(isolatedCodexHome, { recursive: true, force: true }); });
+
+function startupScan(t, mutate, fault, derive) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-a2-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const folder = encodeProjectPath(root), dir = path.join(root, folder), file = path.join(dir, 'source.jsonl');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(file, JSON.stringify({ type: 'user', cwd: root, timestamp: '2024-01-01', message: { content: 'indexed body' } }) + '\n');
+  const row = readSessionFile(file, folder, root);
+  const config = fullIndexConfig({}, root);
+  mutate?.({ root, dir, file, row });
+  const filename = require.resolve('../workers/scan-projects'), native = require('node:module').createRequire(filename);
+  const messages = [];
+  const wrappedFs = new Proxy(fs, { get(target, key) {
+    const value = target[key];
+    if (typeof value !== 'function') return value;
+    return (...args) => { fault?.(key, args, { root, dir, file }); return value(...args); };
+  } });
+  require('node:vm').runInNewContext(fs.readFileSync(filename, 'utf8'), { Buffer, console, process,
+    require: name => name === 'worker_threads' ? { parentPort: { postMessage: msg => messages.push(msg) },
+      workerData: { projectsDir: root, folders: [], startup: { config, inventory: [{ folder, rows: [row],
+        meta: { projectPath: root, fullIndexVersion: 1, fullIndexConfig: config, fullIndexPending: null } }] } } }
+      : name === 'fs' || name === 'node:fs' ? wrappedFs
+      : name === '../derive-project-path' && derive ? { ...native(name), deriveProjectPath: derive } : (() => {
+        assert.ok(!/sqlite|session-index-store|database/.test(name), 'the scan worker cannot import a SQLite backend');
+        return native(name);
+      })(),
+  }, { filename });
+  return { messages, folder, row };
+}
+
+test('A2 startup inventory selects confirmed vanished files for explicit partial deletion', t => {
+  const { messages } = startupScan(t, ({ file, dir, row }) => {
+    fs.unlinkSync(file);
+    fs.writeFileSync(path.join(dir, 'neighbor.jsonl'), JSON.stringify({ type: 'user', cwd: row.projectPath, message: { content: 'neighbor' } }) + '\n');
+  });
+  const result = messages.find(message => message.type === 'folder')?.result;
+  assert.ok(result?.toDelete?.includes('source'), 'confirmed missing source is selected for deletion');
+});
+
+test('startup drops an unresolved cwd after derivation exhausts its budget like a full scan', t => {
+  const { messages } = startupScan(t, null, null, (_dir, _folder, opts) => {
+    opts?.onIncomplete?.();
+    return null;
+  });
+  const folder = messages.find(message => message.type === 'folder');
+  assert.equal(messages.at(-1).ok, true, 'cwd budget exhaustion does not fail the population');
+  assert.ok(folder.unverifiedLocalFolder, 'unresolved cwd uses the full-scan folder drop');
+});
+
+test('A2 startup inventory reports inaccessible scope without authorizing deletion', t => {
+  const { messages } = startupScan(t, null, (method, args, { dir }) => {
+    if (method === 'readdirSync' && args[0] === dir) throw Object.assign(new Error('inaccessible fixture'), { code: 'EACCES' });
+  });
+  assert.equal(messages.at(-1).ok, false, 'incomplete inventory fails the population');
+  assert.ok(messages.every(message => !message.result?.toDelete?.length), 'inaccessible rows are retained');
+});
+
+test('A2 startup stable bookkeeping-only rewrite removes its previously indexed row', t => {
+  const { messages } = startupScan(t, ({ file, row }) => fs.writeFileSync(file, JSON.stringify({ type: 'system', cwd: row.projectPath, message: 'bookkeeping' }) + '\n'));
+  assert.ok(messages.find(message => message.type === 'folder')?.result?.toDelete?.includes('source'),
+    'stable complete parse with no indexable session deletes the old row');
+});
+
+for (const variant of ['zero-byte', 'no-sidechain', 'empty-content']) {
+  test('M23 stable subagent null row is deleted without deferral: ' + variant, t => {
+    const { messages } = startupScan(t, ({ dir, row }) => {
+      const file = path.join(dir, 'parent', 'subagents', 'agent-null.jsonl');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const entry = { type: 'user', isSidechain: true, cwd: row.projectPath, message: { content: 'indexed subagent' } };
+      fs.writeFileSync(file, JSON.stringify(entry) + '\n');
+      Object.assign(row, readSessionFile(file, row.folder, row.projectPath, { parentSessionId: 'parent' }));
+      if (variant === 'no-sidechain') delete entry.isSidechain;
+      if (variant === 'empty-content') entry.message.content = '';
+      fs.writeFileSync(file, variant === 'zero-byte' ? '' : JSON.stringify(entry) + '\n');
+    });
+    const result = messages.find(message => message.type === 'folder')?.result;
+    assert.ok(result?.toDelete?.includes('sub:parent:null'), 'stable null subagent deletes its cached row');
+    assert.equal(result.deferred.length, 0, 'stable null subagent is never deferred');
+  });
+}
+
+for (const scope of ['root', 'folder', 'nested']) {
+  test('A2 inventory retains inaccessible ' + scope + ' scope', t => {
+    const { messages } = startupScan(t, ({ root, dir }) => {
+      const blocked = scope === 'root' ? root : scope === 'folder' ? dir : path.join(dir, 'parent');
+      if (scope === 'nested') fs.mkdirSync(blocked);
+      const readdir = fs.readdirSync;
+      t.mock.method(fs, 'readdirSync', function (file, ...args) {
+        if (file === blocked) throw Object.assign(new Error('incomplete ' + scope), { code: 'EACCES' });
+        return readdir.call(this, file, ...args);
+      });
+    });
+    assert.equal(messages.at(-1).ok, false);
+    assert.ok(messages.every(message => !message.result?.toDelete?.length));
+  });
+}
+
+test('M23 a null subagent with a sidecar race retains its cached row', t => {
+  const { messages } = startupScan(t, ({ dir, row }) => {
+    const file = path.join(dir, 'parent', 'subagents', 'agent-race.jsonl');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const entry = { type: 'user', isSidechain: true, cwd: row.projectPath, message: { content: 'indexed' } };
+    fs.writeFileSync(file, JSON.stringify(entry) + '\n');
+    Object.assign(row, readSessionFile(file, row.folder, row.projectPath, { parentSessionId: 'parent' }));
+    delete entry.isSidechain;
+    fs.writeFileSync(file, JSON.stringify(entry) + '\n');
+    const read = fs.readFileSync;
+    t.mock.method(fs, 'readFileSync', (target, ...args) => {
+      const bytes = read(target, ...args);
+      if (target === file) fs.writeFileSync(file.replace('.jsonl', '.meta.json'), '{"description":"raced"}');
+      return bytes;
+    });
+  });
+  const result = messages.find(message => message.type === 'folder')?.result;
+  assert.ok(result?.deferred.includes('parent/subagents/agent-race.jsonl'), 'null parse with a raced dependency must remain deferred');
+  assert.ok(!result.toDelete.includes('sub:parent:race'), 'raced null parse cannot delete the prior row');
+});
+
+test('A2 whole missing root plans deletion while failed body reads defer', t => {
+  const gone = startupScan(t, ({ root }) => fs.rmSync(root, { recursive: true }));
+  assert.ok(gone.messages.find(message => message.type === 'folder').result.toDelete.includes('source'));
+  const failed = startupScan(t, ({ file }) => {
+    fs.appendFileSync(file, '\n');
+    const read = fs.readFileSync;
+    t.mock.method(fs, 'readFileSync', function (name, ...args) {
+      if (name === file) throw Object.assign(new Error('unreadable body'), { code: 'EIO' });
+      return read.call(this, name, ...args);
+    });
+  });
+  const result = failed.messages.find(message => message.type === 'folder').result;
+  assert.ok(result.deferred.includes('source.jsonl'));
+  assert.ok(!result.toDelete.includes('source'));
+});
+
+test('A2 source migration preserves a subagent logical identity at its new path', t => {
+  const { messages } = startupScan(t, ({ dir, row }) => {
+    const oldFile = path.join(dir, 'parent', 'agent-a.jsonl');
+    fs.mkdirSync(path.dirname(oldFile));
+    fs.writeFileSync(oldFile, JSON.stringify({ type: 'user', isSidechain: true, message: { content: 'subagent body' } }) + '\n');
+    Object.assign(row, readSessionFile(oldFile, row.folder, row.projectPath, { parentSessionId: 'parent' }));
+    const newFile = path.join(dir, 'parent', 'subagents', 'agent-a.jsonl');
+    fs.mkdirSync(path.dirname(newFile));
+    fs.renameSync(oldFile, newFile);
+  });
+  const result = messages.find(message => message.type === 'folder')?.result;
+  assert.ok(result?.sessions.some(row => row.sessionId === 'sub:parent:a'), 'moved subagent is upserted from its real new path');
+  assert.ok(!result.toDelete?.includes('sub:parent:a'), 'the removed old path must not delete the replacement logical row');
+});
+
+test('A2 sidecar-only changes select the saved subagent source path', t => {
+  const { messages } = startupScan(t, ({ dir, row }) => {
+    const file = path.join(dir, 'parent', 'subagents', 'agent-a.jsonl');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ type: 'user', isSidechain: true, message: { content: 'subagent body' } }) + '\n');
+    Object.assign(row, readSessionFile(file, row.folder, row.projectPath, { parentSessionId: 'parent' }));
+    fs.writeFileSync(file.replace('.jsonl', '.meta.json'), JSON.stringify({ description: 'new sidecar description' }));
+  });
+  assert.equal(messages.find(message => message.type === 'folder')?.result?.sessions.find(row => row.sessionId === 'sub:parent:a')?.description,
+    'new sidecar description', 'a metadata sidecar change invalidates the full-read observation');
+});
+
+test('A2 ambiguous legacy and nested sources force the existing full enumeration policy', t => {
+  const { messages } = startupScan(t, ({ dir, row }) => {
+    const legacy = path.join(dir, 'parent', 'agent-a.jsonl');
+    const nested = path.join(dir, 'parent', 'subagents', 'agent-a.jsonl');
+    fs.mkdirSync(path.dirname(nested), { recursive: true });
+    const body = JSON.stringify({ type: 'user', isSidechain: true, message: { content: 'duplicate identity' } }) + '\n';
+    fs.writeFileSync(legacy, body);
+    Object.assign(row, readSessionFile(legacy, row.folder, row.projectPath, { parentSessionId: 'parent' }));
+    fs.writeFileSync(nested, body);
+  });
+  const result = messages.find(message => message.type === 'folder').result;
+  assert.ok(!result.partial, 'two physical sources for one identity require full enumeration');
+  assert.equal(result.reason, 'changed-layout', 'canonical nested layout supersedes the cached legacy source');
+});
+
+test('A2 failed folder diagnostics retain bytes read before the failure', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'counter-a2-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'read.jsonl');
+  fs.writeFileSync(file, 'known bytes');
+  const counters = require('../src/main/session-index/read-counters');
+  assert.throws(() => counters.measureFolder(() => {
+    counters.enumerateReads([file]);
+    counters.readBodyFile(file);
+    throw new Error('later inaccessible directory');
+  }), error => {
+    assert.equal(error.counters?.bytesRead, 11, 'failed scopes must retain actual completed read bytes');
+    assert.equal(error.counters.filesFailed, 1);
+    return true;
+  });
+});
 
 function writeSession(projectsDir, name, cwd = path.join(projectsDir, name)) {
   const folderPath = path.join(projectsDir, encodeProjectPath(cwd));
@@ -29,11 +230,11 @@ function writeSession(projectsDir, name, cwd = path.join(projectsDir, name)) {
   fs.writeFileSync(path.join(folderPath, 'session.jsonl'), line + '\n', 'utf8');
 }
 
-function runWorker(projectsDir) {
+function runWorker(projectsDir, data = {}) {
   return new Promise((resolve, reject) => {
     const messages = [];
     const worker = new Worker(path.join(__dirname, '..', 'workers', 'scan-projects.js'), {
-      workerData: { projectsDir },
+      workerData: { projectsDir, ...data },
     });
     const timer = setTimeout(() => {
       worker.terminate();
@@ -49,6 +250,29 @@ function runWorker(projectsDir) {
     worker.on('error', (err) => { clearTimeout(timer); reject(err); });
   });
 }
+
+test('A2 explicit Claude scopes do not widen the coordinated Codex full phase', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-phase-a2-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = path.join(root, 'codex');
+  t.after(() => { process.env.CODEX_HOME = previous; });
+  const day = path.join(process.env.CODEX_HOME, 'sessions', '2026', '08', '26');
+  fs.mkdirSync(day, { recursive: true });
+  const id = '01a03f6c-fdf9-7c83-86e3-c388f81d765c';
+  fs.writeFileSync(path.join(day, 'rollout-2026-08-26T11-55-02-' + id + '.jsonl'), [
+    { type: 'session_meta', payload: { id, cwd: root, originator: 'codex_cli_rs' } },
+    { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'text', text: 'codex body' }] } },
+  ].map(row => JSON.stringify(row)).join('\n') + '\n');
+  const restricted = await runWorker(root, { folders: [], targets: [] });
+  assert.equal(restricted.filter(message => message.type === 'folder').length, 0, 'explicit empty folders never trigger implicit harness reads');
+  const coordinated = await runWorker(root, { folders: [], disabledHarnesses: ['claude'], startup: { inventory: [], config: fullIndexConfig({ disabledHarnesses: ['claude'] }, root) } });
+  const results = coordinated.filter(message => message.type === 'folder');
+  assert.equal(results.length, 1, 'Codex is visited once even with Claude disabled');
+  assert.equal(results[0].result.folder, 'codex/2026/08/26');
+  assert.equal(results[0].result.sessions[0].runtime, 'codex');
+  assert.equal(results[0].result.projectPath, null);
+});
 
 test('scan-projects worker streams one folder message per folder, then a final done message', async () => {
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-scan-'));
