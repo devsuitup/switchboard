@@ -41,7 +41,7 @@ function setup(t) {
   }, { get: (target, key) => target[key] || (() => Promise.resolve({})) });
   loadAppFunctions(ctx, { functions: ['saveGlobalSettings'], declarations: ['_persistChain'] });
   loadAppFunctions(ctx, { sourcePath: path.join(root, 'public/sidebar.js'), functions: ['isProjectDeleting', 'projectDeletionKey', 'paintProjectDeletionBusy'], declarations: ['deletingProjectKeys', 'projectDeletionUnavailable'] });
-  for (const file of ['setting-defaults.js', 'utils.js', 'app-notices.js', 'shortcuts.js', 'terminal-themes.js', 'remote-enrol-panel.js', 'settings-panel.js']) {
+  for (const file of ['setting-defaults.js', 'utils.js', 'app-notices.js', 'shortcuts.js', 'terminal-themes.js', 'remote-enrol-panel.js', 'archived-manager.js', 'settings-panel.js']) {
     const filename = path.join(root, 'public', file);
     vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx, { filename });
   }

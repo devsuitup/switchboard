@@ -184,7 +184,7 @@ async function settingsPanel(h) {
   h.window.api.platform = 'win32';
   h.window.api.getShellProfiles = async () => [];
   h.window.api.setSetting = async (_key, value) => Object.assign(h.settings, value);
-  for (const file of ['setting-defaults.js', 'shortcuts.js', 'terminal-themes.js', 'remote-enrol-panel.js', 'settings-panel.js']) h.evalPublic(file);
+  for (const file of ['setting-defaults.js', 'shortcuts.js', 'terminal-themes.js', 'remote-enrol-panel.js', 'archived-manager.js', 'settings-panel.js']) h.evalPublic(file);
   loadAppFunctions(h.context, { functions: ['saveGlobalSettings'], declarations: ['_persistChain'] });
   await h.window.openSettingsViewer('global');
 }
@@ -194,13 +194,13 @@ test('Settings displays archived host labels and unarchives with the original al
   h.settings.hiddenProjects = ['planificator::/srv/<app>', 'removed::/srv/old', '/srv/local'];
   await settingsPanel(h);
   const list = h.document.querySelector('#sv-archived-projects');
-  assert.match(list.textContent, /VPS::\/srv\/<app>/);
-  assert.match(list.textContent, /removed::\/srv\/old/);
+  assert.match(list.textContent, /VPS.*\/srv\/<app>/s);
+  assert.equal([...list.querySelectorAll('.archived-host-label')].at(-1).textContent, 'removed (1)');
   assert.match(list.textContent, /\/srv\/local/);
   assert.equal(list.querySelector('app'), null);
   const calls = [];
   h.window.api.unarchiveProject = async key => { calls.push(key); return { ok: true }; };
-  list.querySelector('button').click();
+  list.querySelector('[data-entry="planificator::/srv/<app>"] .archived-unarchive').click();
   await settle();
   assert.deepEqual(calls, ['planificator::/srv/<app>']);
 });
@@ -210,18 +210,18 @@ test('Settings refreshes archived host names while editing the label and preserv
   h.settings.hiddenProjects = ['planificator::/srv/<app>'];
   await settingsPanel(h);
   const list = h.document.querySelector('#sv-archived-projects');
-  assert.match(list.textContent, /VPS::\/srv\/<app>/);
+  assert.match(list.textContent, /VPS.*\/srv\/<app>/s);
   const input = h.document.querySelector('.rh-label');
   input.value = 'Renamed VPS <img src=x>';
   input.dispatchEvent(new h.window.Event('input', { bubbles: true }));
-  assert.match(list.textContent, /Renamed VPS <img src=x>::\/srv\/<app>/);
+  assert.match(list.textContent, /Renamed VPS <img src=x>.*\/srv\/<app>/s);
   assert.equal(list.querySelector('img'), null);
   input.value = '   ';
   input.dispatchEvent(new h.window.Event('input', { bubbles: true }));
-  assert.match(list.textContent, /planificator::\/srv\/<app>/);
+  assert.equal(list.querySelector('.archived-host-label').textContent, 'planificator (1)');
   const calls = [];
   h.window.api.unarchiveProject = async key => { calls.push(key); return { ok: true }; };
-  list.querySelector('button').click();
+  list.querySelector('[data-entry="planificator::/srv/<app>"] .archived-unarchive').click();
   await settle();
   assert.deepEqual(calls, ['planificator::/srv/<app>']);
   assert.deepEqual(h.settings.hiddenProjects, ['planificator::/srv/<app>']);

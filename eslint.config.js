@@ -64,6 +64,8 @@ const rendererCrossFileGlobals = {
   agentsCliEntryCount: 'readonly',
   agentsSnapshotRevision: 'readonly',
   remoteHostLabel: 'readonly',
+  parseFolderKey: 'readonly',
+  worktreeGroupingPath: 'readonly',
   remoteHostState: 'readonly',
   setRemoteHostLabels: 'readonly',
   writtenActivitySnapshot: 'readonly',
@@ -213,6 +215,7 @@ const rendererCrossFileGlobals = {
   wireRemoteEnrolControls: 'readonly',
   renderActivityReportingStatus: 'readonly',
   renderActivityTraceFiles: 'readonly',
+  renderArchivedProjects: 'readonly',
   openActivityTraceFile: 'readonly',
   showResumeSessionDialog: 'readonly',
   showSendPromptDialog: 'readonly',
@@ -881,4 +884,5 @@ module.exports = [
       globals: { ...globals.node },
     },
   },
+  { files: ['public/archived-manager.js'], languageOptions: { globals: { module: 'writable', renderArchivedProjects: 'off' } } },
 ];

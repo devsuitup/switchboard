@@ -117,7 +117,11 @@ function createSessionRequestCommands(db) {
 // see .ai/contexts/session-index-writer.md
 function createWriterCommands(db) {
   const settings = { getSetting: db.getSetting, setSetting: db.setSetting, scheduleName: () => null };
-  const patch = fields => db.setSetting('global', { ...(db.getSetting('global') || {}), ...assertHarnessSettings(fields) });
+  const patch = fields => {
+    const global = { ...(db.getSetting('global') || {}), ...assertHarnessSettings(fields) };
+    if (global.hiddenProjectArchivedAt && !Object.keys(global.hiddenProjectArchivedAt).length) delete global.hiddenProjectArchivedAt;
+    return db.setSetting('global', global);
+  };
   const entryProject = entry => { const { alias, folder } = parseFolderKey(entry); return { alias, projectPath: alias && folder === '' ? '/' : folder }; };
   const groupProjects = groups => archive.validArchiveGroups(groups).map(group => ({ alias: parseFolderKey(group.folderKey).alias, projectPath: group.projectPath }));
   const fence = project => db.projectDeletion?.fence(projectIdentity(project).key) || { epoch: 0, blocked: 0 };
@@ -194,6 +198,10 @@ function createWriterCommands(db) {
           fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
           delete fields.hiddenProjectScopes[projectPath];
         }
+        if (global.hiddenProjectArchivedAt) {
+          fields.hiddenProjectArchivedAt = { ...global.hiddenProjectArchivedAt };
+          delete fields.hiddenProjectArchivedAt[projectPath];
+        }
         patch(fields);
       }
       archive.clearArchivedEntry(db.getSetting, db.setSetting, null, projectPath);
@@ -217,6 +225,11 @@ function createWriterCommands(db) {
       guard([scope ? { alias: scope.alias, projectPath: entryProject(entry).projectPath } : entryProject(entry)], proof);
       const global = db.getSetting('global') || {};
       const fields = {};
+      if (kind === 'archive' || global.hiddenProjectArchivedAt) {
+        fields.hiddenProjectArchivedAt = { ...global.hiddenProjectArchivedAt };
+        if (kind === 'archive') fields.hiddenProjectArchivedAt[entry] = Date.now();
+        else delete fields.hiddenProjectArchivedAt[entry];
+      }
       if (scope || global.hiddenProjectScopes) {
         fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
         if (scope && (!(global.hiddenProjects || []).includes(entry) || Object.hasOwn(global.hiddenProjectScopes || {}, entry))) fields.hiddenProjectScopes[entry] = scope;
@@ -237,6 +250,10 @@ function createWriterCommands(db) {
       const kinds = { ...global.hiddenProjectKinds };
       delete kinds[entry];
       const fields = { hiddenProjects: (global.hiddenProjects || []).filter(p => p !== entry), hiddenProjectKinds: kinds };
+      if (global.hiddenProjectArchivedAt) {
+        fields.hiddenProjectArchivedAt = { ...global.hiddenProjectArchivedAt };
+        delete fields.hiddenProjectArchivedAt[entry];
+      }
       if (global.hiddenProjectScopes) {
         fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
         delete fields.hiddenProjectScopes[entry];
@@ -253,6 +270,10 @@ function createWriterCommands(db) {
         if (global.hiddenProjectScopes) {
           fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
           delete fields.hiddenProjectScopes[projectPath];
+        }
+        if (global.hiddenProjectArchivedAt) {
+          fields.hiddenProjectArchivedAt = { ...global.hiddenProjectArchivedAt };
+          delete fields.hiddenProjectArchivedAt[projectPath];
         }
         patch(fields);
       }

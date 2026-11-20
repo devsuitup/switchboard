@@ -107,6 +107,11 @@ word read from it; raw CLI words move to tooltips/detail.
 - **Rendering.** Rebuilt whole on every `projects-changed` (#543, open), SVG
   buttons via `innerHTML` per row (`sidebar.js:1764-1806`).
 
+**Management-row variant.** Settings › Archived uses a management-row variant: checkbox, name and badges,
+full path with tooltip, available date/count metadata, always-visible Unarchive
+and a More actions disclosure. Its host headers fold with Enter/Space and offer
+select-all. Rows themselves are not focus targets.
+
 **Proposed convergence.** One row built from a cloned `<template>`;
 focusable with roving `tabindex`, Enter opens; a merged-row mark (member
 count) in the meta line; Agents rows and grid headers reuse its
@@ -292,6 +297,11 @@ focus) with a form body.
 semantics; their action buttons become B4.
 
 ## B11. Empty state
+
+Archived projects distinguishes an empty list (how to Archive Project) from an
+unmatched filter (the query plus Clear filter). It does not claim to list folder
+or session archives yet.
+
 
 - **Job.** Say why a list is empty and what to do next.
 - **Instances.** `index.html:54`; `index.html:46`; `agents-view.js:376,

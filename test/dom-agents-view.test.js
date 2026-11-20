@@ -132,6 +132,7 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
     evalFile(dom, path.join(PUBLIC, 'setting-defaults.js'));
     evalFile(dom, path.join(PUBLIC, 'shortcuts.js'));
     evalFile(dom, path.join(PUBLIC, 'terminal-themes.js'));
+    evalFile(dom, path.join(PUBLIC, 'archived-manager.js'));
     evalFile(dom, path.join(PUBLIC, 'settings-panel.js'));
     loadAppFunctions(dom.getInternalVMContext(), { functions: ['saveGlobalSettings'], declarations: ['_persistChain'] });
   }
