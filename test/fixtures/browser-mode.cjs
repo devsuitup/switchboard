@@ -38,7 +38,7 @@ function setup({ rows = {}, effective = {}, platform = 'linux' } = {}) {
   loadAppFunctions(dom.getInternalVMContext(), { functions: ['saveGlobalSettings'], declarations: ['_persistChain'] });
   loadAppFunctions(dom.getInternalVMContext(), { sourcePath: path.join(__dirname, '../../public/sidebar.js'),
     functions: ['isProjectDeleting', 'projectDeletionKey', 'paintProjectDeletionBusy'], declarations: ['deletingProjectKeys', 'projectDeletionUnavailable'] });
-  for (const name of ['modal-stack', 'setting-defaults', 'utils', 'shortcuts', 'terminal-themes', 'settings-panel', 'dialogs']) {
+  for (const name of ['modal-stack', 'setting-defaults', 'utils', 'shortcuts', 'terminal-themes', 'worktree-nesting', 'archived-manager', 'settings-panel', 'dialogs']) {
     const filename = path.join(__dirname, '../../public', name + '.js');
     vm.runInContext(fs.readFileSync(filename, 'utf8'), dom.getInternalVMContext(), { filename });
   }

@@ -132,7 +132,7 @@ test('archive IPC records its date through the writer without dating legacy entr
   assert.ok(dates[h.projectPath] <= Date.now());
   assert.equal(dates['/legacy'], undefined);
   await h.invoke('unarchive-project', h.projectPath);
-  assert.equal(h.getSetting('global').hiddenProjectArchivedAt[h.projectPath], undefined);
+  assert.equal(Object.hasOwn(h.getSetting('global'), 'hiddenProjectArchivedAt'), false);
 });
 
 for (const alias of [null, 'server']) {
@@ -494,7 +494,7 @@ test('Settings lists legacy and remote archived projects safely and Unarchive re
   await dom.window.openSettingsViewer('global');
   const list = dom.document.querySelector('#sv-archived-projects');
   assert.ok(list, 'Archived projects must have a Settings list');
-  assert.match(list.textContent, /server.*\/srv\/<project>/s);
+  assert.equal([...list.querySelectorAll('.archived-host-label')].at(-1).textContent, 'server (1)');
   assert.equal(list.querySelector('project'), null);
   const button = list.querySelector('.archived-unarchive');
   assert.equal(button.textContent, 'Unarchive');

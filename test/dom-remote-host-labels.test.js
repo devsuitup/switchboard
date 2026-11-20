@@ -195,7 +195,7 @@ test('Settings displays archived host labels and unarchives with the original al
   await settingsPanel(h);
   const list = h.document.querySelector('#sv-archived-projects');
   assert.match(list.textContent, /VPS.*\/srv\/<app>/s);
-  assert.match(list.textContent, /removed.*\/srv\/old/s);
+  assert.equal([...list.querySelectorAll('.archived-host-label')].at(-1).textContent, 'removed (1)');
   assert.match(list.textContent, /\/srv\/local/);
   assert.equal(list.querySelector('app'), null);
   const calls = [];
@@ -218,7 +218,7 @@ test('Settings refreshes archived host names while editing the label and preserv
   assert.equal(list.querySelector('img'), null);
   input.value = '   ';
   input.dispatchEvent(new h.window.Event('input', { bubbles: true }));
-  assert.match(list.textContent, /planificator.*\/srv\/<app>/s);
+  assert.equal(list.querySelector('.archived-host-label').textContent, 'planificator (1)');
   const calls = [];
   h.window.api.unarchiveProject = async key => { calls.push(key); return { ok: true }; };
   list.querySelector('[data-entry="planificator::/srv/<app>"] .archived-unarchive').click();

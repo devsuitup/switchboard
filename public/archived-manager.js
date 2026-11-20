@@ -15,12 +15,11 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, ho
   const bulk = container.querySelector('.archived-bulk');
   const search = container.querySelector('.archived-search-toggle');
   const identity = entry => {
-    const separator = entry.indexOf('::');
-    const remoteAlias = separator < 0 ? null : entry.slice(0, separator);
-    const projectPath = separator < 0 ? entry : entry.slice(separator + 2);
+    const { alias: remoteAlias, folder: entryPath } = parseFolderKey(entry);
+    const projectPath = remoteAlias && entryPath === '' ? '/' : entryPath;
     const folder = (remoteAlias === null ? '' : remoteAlias + '::') + encodeProjectPath(projectPath);
     const cached = projects.find(p => (p.remoteAlias || null) === remoteAlias && p.projectPath === projectPath);
-    return { projectPath, remoteAlias, folder, sessions: cached?.sessions || [], cached, name: shortProjectPath(projectPath) };
+    return { projectPath, remoteAlias, folder, sessions: cached?.sessions || [], cached, name: shortProjectPath(projectPath) || projectPath };
   };
   const reload = async () => {
     if (typeof loadProjects === 'function') await Promise.resolve(loadProjects()).catch(error => {
@@ -43,7 +42,7 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, ho
   }
   function lock(value) {
     busy = value;
-    container.querySelectorAll('.archived-select, .archived-select-all, .archived-unarchive, .archived-delete').forEach(control => { control.disabled = busy; });
+    container.querySelectorAll('.archived-select, .archived-select-all, .archived-unarchive, .archived-delete').forEach(control => { control.disabled = busy || control.dataset.unavailable === 'true'; });
     selection();
   }
   async function undo(restored) {
@@ -79,13 +78,15 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, ho
     if (restored.length) {
       render(); filter.focus(); await reload();
       const noticeId = 'archived-restored:' + restored.join('|');
-      showAppNotice({ id: noticeId, kind: 'undo', dismissOnAction: false,
+      const notice = showAppNotice({ id: noticeId, kind: 'undo', dismissOnAction: false,
         message: restored.length === 1 ? `Project "${identity(restored[0]).name}" restored.` : `${restored.length} projects restored.`,
         actionLabel: 'Undo', onAction: () => {
           if (busy) return;
           clearAppNotice(noticeId);
           return undo(restored);
         } });
+      notice.dataset.restoredEntries = JSON.stringify(restored);
+      notice.dataset.loadGeneration = loadProjects.state?.started || 0;
     }
     if (errors.length) await fail('Could not unarchive project', errors, button.isConnected ? button : filter);
   }
@@ -97,7 +98,10 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, ho
         archived = archived.filter(item => item !== entry); selected.delete(entry); render(); filter.focus();
       }
     } catch (error) { await fail('Could not delete project', [error.message], button); }
-    finally { lock(false); }
+    finally {
+      lock(false);
+      if (button.isConnected && !button.disabled) button.focus();
+    }
   }
   function render() {
     if (container.isConnected) onCount?.(archived.length);
@@ -121,14 +125,15 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, ho
         <div class="archived-group-header"><button type="button" class="archived-group-toggle" role="button" aria-expanded="${!folded.has(alias)}" data-alias="${escapeHtml(alias || '')}" title="${escapeHtml(alias || 'Local')}"><span aria-hidden="true">${folded.has(alias) ? '▸' : '▾'}</span> <span class="archived-host-label">${escapeHtml(label)} (${group.length})</span></button>
         <label><input type="checkbox" class="archived-select-all" aria-label="Select all in ${escapeHtml(label)}" ${busy ? 'disabled' : ''}> Select all</label></div>
         <div class="archived-group-rows" ${folded.has(alias) ? 'hidden' : ''}>${group.map(entry => {
-          const p = identity(entry), date = typeof dates[entry] === 'number' && Number.isFinite(dates[entry]) ? new Date(dates[entry]) : null;
+          const p = identity(entry), unavailable = p.remoteAlias === null && worktreeGroupingPath(p.projectPath) !== p.projectPath;
+          const date = typeof dates[entry] === 'number' && Number.isFinite(dates[entry]) ? new Date(dates[entry]) : null;
           return `<div class="archived-row" data-entry="${escapeHtml(entry)}">
             <input type="checkbox" class="archived-select" data-entry="${escapeHtml(entry)}" aria-label="Select ${escapeHtml(p.name)}" ${busy ? 'disabled' : ''}>
             <div class="archived-main"><div class="archived-name"><strong>${escapeHtml(p.name)}</strong> <span class="archived-badge">Project</span>${kinds[entry] === undefined ? ' <span class="archived-badge">legacy</span>' : ''}${alias ? ` <span class="archived-badge" title="${escapeHtml(label)}">${escapeHtml(alias)}</span>` : ''}</div>
             <div class="archived-path" title="${escapeHtml(p.projectPath)}">${escapeHtml(p.projectPath)}</div>
             <div class="archived-meta">${date && Number.isFinite(date.getTime()) ? `<time datetime="${date.toISOString()}">archived ${escapeHtml(date.toLocaleDateString())}</time>` : ''}${p.cached ? ` <span>${p.sessions.length} session${p.sessions.length === 1 ? '' : 's'}</span>` : ''}</div></div>
             <div class="archived-actions"><button type="button" class="settings-action-btn archived-unarchive" ${busy ? 'disabled' : ''}>Unarchive</button>
-            <details class="archived-overflow"><summary aria-label="More actions for ${escapeHtml(p.name)}">⋯</summary><div class="archived-menu"><button type="button" class="settings-action-btn archived-copy">Copy path</button><button type="button" class="settings-action-btn archived-delete" ${busy ? 'disabled' : ''}>Delete project…</button></div></details></div>
+            <details class="archived-overflow"><summary aria-label="More actions for ${escapeHtml(p.name)}">⋯</summary><div class="archived-menu"><button type="button" class="settings-action-btn archived-copy">Copy path</button><button type="button" class="settings-action-btn archived-delete" data-unavailable="${unavailable}" ${busy || unavailable ? 'disabled' : ''}>Delete project…</button>${unavailable ? '<span class="archived-delete-reason">Delete the worktree from the sidebar, or delete its repository.</span>' : ''}</div></details></div>
           </div>`;
         }).join('')}</div></section>`;
     }).join('');

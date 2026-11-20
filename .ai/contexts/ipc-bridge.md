@@ -17,13 +17,24 @@ bulk action. Successful entries leave the list, reload projects and get one B8
 ten-second Undo notice. Undo calls `archiveProjectSettings(path, folderKey)` and
 reads the new writer timestamp. After reopening Settings, Undo refreshes the
 currently mounted manager; a pending action does not consume its Undo notice.
+The notice stores its entry array and load generation. A later accepted project
+reload invalidates it if any restored entry has been hidden or deleted again;
+an older in-flight reload cannot invalidate a newer notice.
 Failed entries remain, with `appAlert`; partial
 bulk successes still have Undo. Row actions are locked during a request.
 
 Delete builds `{projectPath, remoteAlias, folder, sessions}` from the exact entry;
-`folder` is the host-qualified encoded path, including for a worktree. It calls
-the existing `confirmAndDeleteProjectFolder`, retaining preview tokens, options,
-Cancel focus, refusal handling and committed-result semantics. It never calls
+`folder` is the host-qualified encoded path. Local worktree entries disable Delete
+project with a visible reason: delete the worktree from the sidebar or delete its
+repository. The real
+planner maps a worktree folder to the repository and refuses the conflicting
+worktree path hint. Parsing uses the shared `parseFolderKey` and `isValidAlias` in
+`public/utils.js`, re-exported by main's `remote-hosts.js`. An empty remote path
+means `/`, matching the writer. For other entries it calls the existing
+`confirmAndDeleteProjectFolder`, retaining preview tokens, options,
+refusal handling and committed-result semantics. After cancellation or refusal,
+the manager unlocks the controls before returning focus to the Delete button;
+unlocking keeps unavailable worktree actions disabled. It never calls
 Unarchive before Delete. The overflow also copies the full path through
 `writeClipboard`. No new IPC or launch code is introduced.
 

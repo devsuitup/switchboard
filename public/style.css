@@ -4215,10 +4215,8 @@ body { display: flex; flex-direction: column; }
 .archived-empty { color: var(--text-muted); padding: 24px 12px; text-align: center; }
 .settings-narrow .archived-row { grid-template-columns: auto minmax(0, 1fr); }
 .settings-narrow .archived-actions { grid-column: 2; }
-.settings-narrow .settings-action-btn { background: var(--control-surface); border: 1px solid var(--control-border); color: var(--text-muted); font: inherit; font-size: 12px; padding: 6px 16px; border-radius: 8px; cursor: pointer; }
-.settings-action-btn:enabled:hover { background: var(--accent-wash); border-color: var(--accent-border); color: var(--accent); }
-.settings-action-btn:disabled { opacity: 0.6; cursor: default; }
-.archived-toolbar { flex-wrap: wrap; }
+.settings-narrow .archived-toolbar { flex-wrap: wrap; }
+.archived-delete-reason { color: var(--text-muted); font-size: 12px; padding: 4px; }
 .settings-compact .archived-search-toggle { display: inline-block; }
 .settings-compact .archived-filter { display: none; }
 .settings-compact .archived-search-open .archived-filter { display: block; flex-basis: 100%; order: 1; }

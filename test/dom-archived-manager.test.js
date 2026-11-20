@@ -6,6 +6,26 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { setupSidebarDom } = require('./dom-setup');
 const { loadAppFunctions } = require('./app-source');
+const { createProjectDeletePlanner } = require('../src/main/projects/project-delete-plan');
+const { identity } = require('../src/main/projects/project-delete-identity');
+
+function plannerFor(h) {
+  const folder = p => h.w.encodeProjectPath(p);
+  return createProjectDeletePlanner({
+    waitForIndex: async () => {},
+    readSnapshot: async () => ({ complete: true, initialScanComplete: true, revision: '1', declaredHosts: ['vps'],
+      projects: [
+        { alias: null, projectPath: entries[0], folderKeys: [folder(entries[0]), folder(entries[1])] },
+        { alias: null, projectPath: entries[1], folderKeys: [] },
+        { alias: 'vps', projectPath: '/srv/beta', folderKeys: ['vps::' + folder('/srv/beta')] },
+        { alias: 'vps', projectPath: '/', folderKeys: ['vps::' + folder('/')] },
+      ] }),
+    discoverOwnership: async () => ({ complete: true, groups: [], members: [], candidates: [] }),
+    discoverSchedules: async () => ({ complete: true, schedules: [], candidates: [] }),
+    readRuntimeState: async () => ({ complete: true, tabs: [], jobs: [], candidates: [] }),
+    readRevision: async () => '1',
+  });
+}
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const entries = ['/repo/alpha', '/repo/alpha/.work-files/worktrees/topic', 'vps::/srv/beta', 'removed::/old/gamma', '/gone'];
 
@@ -170,12 +190,15 @@ test('removing or renaming a working host falls back to the archived alias immed
   assert.match(h.q('#sv-archived-projects .archived-list').textContent, /vps \(1\)/);
 });
 
-for (const entry of [entries[0], entries[1], entries[2]]) test(`Delete from Archived previews exact identity, Cancel keeps it, Confirm uses accepted token: ${entry}`, async t => {
+for (const entry of [entries[0], entries[2]]) test(`Delete from Archived previews exact identity, Cancel keeps it, Confirm uses accepted token: ${entry}`, async t => {
   const h = await setup(t);
-  h.w.api.previewProjectDelete = async request => { h.calls.preview.push(request); return { ok: true, token: 'token', plan: {
-    project: { projectPath: request.projectPath }, fingerprint: 'fp', categories: { settings: { available: true }, sessions: { available: true } },
-    counts: {}, groups: [], members: [], tabs: [], jobs: [], stops: [], schedules: [], warnings: [], refusals: [],
-  } }; };
+  const planner = plannerFor(h);
+  h.w.api.previewProjectDelete = async request => {
+    h.calls.preview.push(request);
+    const result = await planner.preview(JSON.parse(JSON.stringify(request)));
+    assert.equal(result.ok, true, JSON.stringify(result));
+    return { ...result, token: 'token' };
+  };
   h.w.api.deleteProject = async request => { h.calls.execute.push(request); return { ok: true, state: 'committed', operationId: 'op', invalidation: { sessionIds: [], restoreTargets: [] } }; };
   h.w.applyProjectDeletion = async () => {};
   const row = h.rows().find(r => r.dataset.entry === entry);
@@ -183,12 +206,72 @@ for (const entry of [entries[0], entries[1], entries[2]]) test(`Delete from Arch
   row.querySelector('.archived-delete').click(); await settle();
   const remote = entry.includes('::'), projectPath = remote ? '/srv/beta' : entry;
   assert.equal(h.calls.preview[0].projectPath, projectPath);
-  assert.equal(h.calls.preview[0].folderKey, (remote ? 'vps::' : '') + h.w.encodeProjectPath(projectPath));
+  const planned = await planner.preview(JSON.parse(JSON.stringify(h.calls.preview[0])));
+  assert.equal(planned.ok, true, 'the renderer folderKey must resolve in the real planner');
+  assert.equal(planned.plan.project.key, identity({ alias: remote ? 'vps' : null, projectPath }).key);
   assert.equal(h.document.activeElement, h.q('.choice-dialog-cancel'));
   h.q('.choice-dialog-cancel').click(); await settle();
   assert.equal(h.calls.execute.length, 0); assert.equal(h.rows().length, 4);
+  assert.equal(h.document.activeElement, row.querySelector('.archived-delete'), 'Cancel returns focus to the enabled Delete button');
   h.rows().find(r => r.dataset.entry === entry).querySelector('.archived-delete').click(); await settle();
   h.q('.choice-dialog-confirm').click(); await settle();
-  assert.deepEqual(JSON.parse(JSON.stringify(h.calls.execute)), [{ token: 'token', fingerprint: 'fp' }]);
+  const accepted = await planner.preview(JSON.parse(JSON.stringify(h.calls.preview.at(-1))));
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls.execute)), [{ token: 'token', fingerprint: accepted.plan.fingerprint }]);
   assert.equal(h.calls.restore.length, 0); assert.equal(h.rows().some(r => r.dataset.entry === entry), false);
+});
+
+
+test('local worktree Delete is disabled with a visible alternative and real planner refusal', async t => {
+  const h = await setup(t), planner = plannerFor(h);
+  const refused = await planner.preview({ projectPath: entries[1], folderKey: h.w.encodeProjectPath(entries[1]),
+    options: { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false } });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.code, 'IDENTITY_UNAVAILABLE');
+  const row = h.rows().find(r => r.dataset.entry === entries[1]);
+  assert.equal(row.querySelector('.archived-delete').disabled, true, 'worktree cannot be deleted as a project');
+  row.querySelector('details').open = true;
+  assert.match(row.querySelector('.archived-delete-reason')?.textContent || '', /Delete the worktree.*repository/i);
+  h.q('.archived-unarchive').click(); await settle();
+  assert.equal(row.querySelector('.archived-delete').disabled, true, 'unlock must preserve the worktree refusal');
+});
+
+test('remote root has a visible path and Delete resolves through the real planner', async t => {
+  const h = await setup(t, true);
+  h.settings.hiddenProjects = ['vps::'];
+  await h.w.openSettingsViewer('global', null, null, { section: 'archived' });
+  assert.equal(h.q('.archived-path').textContent, '/', 'empty remote path represents the root');
+  assert.equal(h.q('.archived-name strong').textContent, '/');
+  const planner = plannerFor(h);
+  h.w.api.previewProjectDelete = async request => {
+    h.calls.preview.push(request);
+    return { ...await planner.preview(JSON.parse(JSON.stringify(request))), token: 'root' };
+  };
+  h.q('.archived-delete').click(); await settle();
+  assert.equal(h.calls.preview[0].projectPath, '/');
+  assert.ok(h.q('.choice-dialog-cancel'), 'root preview reaches the shared confirmation');
+  h.q('.choice-dialog-cancel').click(); await settle();
+});
+
+test('invalid host prefix stays a local path rather than creating a remote host', async t => {
+  const h = await setup(t, true);
+  h.settings.hiddenProjects = ['/repo/not an alias::part'];
+  await h.w.openSettingsViewer('global', null, null, { section: 'archived' });
+  assert.equal(h.q('.archived-host-label').textContent, 'Local (1)');
+  assert.equal(h.q('.archived-path').textContent, '/repo/not an alias::part');
+});
+
+test('restored Undo is invalidated when a later reload reports a deletion', async t => {
+  const h = await setup(t);
+  h.q('.archived-unarchive').click(); await settle();
+  const undo = h.q('.app-notice-action');
+  assert.ok(undo);
+  h.settings.hiddenProjects.push(entries[0]);
+  h.settings.hiddenProjectKinds[entries[0]] = 'delete';
+  h.w.api.getProjects = async () => ({ defaultProjects: [], allProjects: [] });
+  h.w.api.getActiveTerminals = async () => [];
+  h.w.loadingStatus = h.document.createElement('div');
+  h.w.reportActivityFocus = h.w.reportActivityTitles = h.w.refreshSidebar = h.w.renderDefaultStatus = () => {};
+  await loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects'] }).loadProjects();
+  assert.equal(undo.isConnected, false, 'deleted project must lose its restore Undo');
+  assert.equal(h.settings.hiddenProjectKinds[entries[0]], 'delete');
 });

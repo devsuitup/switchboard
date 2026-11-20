@@ -2297,6 +2297,11 @@ async function loadProjects({ resort = false } = {}) {
       const entry = notice.dataset.noticeId.slice('archive-project:'.length);
       if (!hiddenProjects.includes(entry) || globalSettings?.hiddenProjectKinds?.[entry] === 'delete') clearAppNotice(notice.dataset.noticeId);
     }
+    for (const notice of document.querySelectorAll('#app-notices [data-notice-id^="archived-restored:"]')) {
+      if (job.generation <= Number(notice.dataset.loadGeneration || 0)) continue;
+      const entries = JSON.parse(notice.dataset.restoredEntries || '[]');
+      if (entries.some(entry => hiddenProjects.includes(entry) || globalSettings?.hiddenProjectKinds?.[entry] === 'delete')) clearAppNotice(notice.dataset.noticeId);
+    }
     for (const [sid, pending] of [...pendingSessions]) {
       const realExists = allProjects.some(p => p.projectPath === pending.projectPath
         && (p.remoteAlias || null) === (pending.session.remoteAlias || null)

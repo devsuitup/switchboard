@@ -82,12 +82,6 @@ word read from it; raw CLI words move to tooltips/detail.
 
 ## B3. Session row
 
-Settings ? Archived uses a management-row variant: checkbox, name and badges,
-full path with tooltip, available date/count metadata, always-visible Unarchive
-and a More actions disclosure. Its host headers fold with Enter/Space and offer
-select-all. Rows themselves are not focus targets.
-
-
 - **Job.** One sidebar entry for a session (or a merged set of transcripts).
 - **Anatomy, in order** (`buildSessionItem`, `sidebar.js:1655-1827`): pin
   (`1686-1690`) · B1 (`1693-1697`) · info: badges (B15: remote alias
@@ -112,6 +106,11 @@ select-all. Rows themselves are not focus targets.
   name/state/project triple.
 - **Rendering.** Rebuilt whole on every `projects-changed` (#543, open), SVG
   buttons via `innerHTML` per row (`sidebar.js:1764-1806`).
+
+**Management-row variant.** Settings › Archived uses a management-row variant: checkbox, name and badges,
+full path with tooltip, available date/count metadata, always-visible Unarchive
+and a More actions disclosure. Its host headers fold with Enter/Space and offer
+select-all. Rows themselves are not focus targets.
 
 **Proposed convergence.** One row built from a cloned `<template>`;
 focusable with roving `tabindex`, Enter opens; a merged-row mark (member
