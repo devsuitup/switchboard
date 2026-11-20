@@ -105,15 +105,20 @@ test('scope memoizes repeated identities and failures only for one read', suppor
     ...['bad-one', 'bad-two'].map(sessionId => ({ sessionId, folder: '-local', projectPath: broken })),
     { sessionId: 'foreign', folder: 'remote::-local', projectPath: h.project.projectPath },
   ]);
-  const filename = require.resolve('../src/main/projects/project-delete-progress'), nativeRequire = createRequire(filename);
-  const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module, exports: module.exports, process,
-    require: id => id === '../shared/normalize-project-path' ? { normalizeProjectPath(value) {
-      calls.set(value, (calls.get(value) || 0) + 1);
-      if (value === broken) throw new Error('path resolution failed');
-      return nativeRequire(id).normalizeProjectPath(value);
-    } } : nativeRequire(id) }, { filename });
-  const p = module.exports.createProjectDeleteProgress(h.db);
+  const loaded = new Map();
+  function load(filename) {
+    if (loaded.has(filename)) return loaded.get(filename);
+    const nativeRequire = createRequire(filename), module = { exports: {} };
+    vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module, exports: module.exports, process,
+      require: id => id === '../shared/normalize-project-path' ? { normalizeProjectPath(value) {
+        calls.set(value, (calls.get(value) || 0) + 1);
+        if (value === broken) throw new Error('path resolution failed');
+        return nativeRequire(id).normalizeProjectPath(value);
+      } } : ['./project-delete-owner', './project-delete-identity'].includes(id) ? load(nativeRequire.resolve(id)) : nativeRequire(id) }, { filename });
+    loaded.set(filename, module.exports);
+    return module.exports;
+  }
+  const p = load(require.resolve('../src/main/projects/project-delete-progress')).createProjectDeleteProgress(h.db);
   for (let read = 1; read <= 2; read++) {
     const scope = p.readScope({ project: h.project }).scope;
     assert.deepEqual(Array.from(scope.rows, row => row.sessionId), ['one', 'two']);

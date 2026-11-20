@@ -46,12 +46,19 @@ function* cwdsInWindow(fd, start, fileSize) {
   }
 }
 
-const WORKTREE_DIRS = ['.worktrees', '.claude-worktrees', path.join('.claude', 'worktrees')];
+const WORKTREE_DIRS = ['.worktrees', '.claude-worktrees', '.claude/worktrees', '.work-files/worktrees'];
+const WORKTREE_PATH_RE = new RegExp('^(.+?)[/\\\\](?:' + WORKTREE_DIRS
+  .map(dir => dir.replace(/\./g, '\\.').replace(/\//g, '[/\\\\]')).join('|') + ')[/\\\\][^/\\\\]+[/\\\\]?$', process.platform === 'win32' ? 'i' : '');
+const WORKTREE_FOLDER_SUFFIXES = WORKTREE_DIRS.map(dir => encodeProjectPath('/' + dir + '/'));
 
 function mayBeWorktreeFolderOf(cwd, folderName) {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return false;
+  const candidate = process.platform === 'win32' ? folderName.toLowerCase() : folderName;
   for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
-    if (WORKTREE_DIRS.some((wt) => encodedFolderMayExtend(folderName, path.join(dir, wt) + path.sep))) return true;
+    if (WORKTREE_DIRS.some((wt) => {
+      const prefix = path.join(dir, wt) + path.sep;
+      return encodedFolderMayExtend(candidate, process.platform === 'win32' ? prefix.toLowerCase() : prefix);
+    })) return true;
     if (path.dirname(dir) === dir) return false;
   }
 }
@@ -115,16 +122,21 @@ function rememberUnresolved(filePath, folderName, stat, rejected) {
   unresolvedMemo.set(filePath, { folderName, size: stat.size, mtimeMs: stat.mtimeMs, rejected });
 }
 
-function resolveWorktreePath(cwd) {
-  if (!cwd) return cwd;
-  // Detect worktree paths: <project>/.claude-worktrees/<name>, <project>/.worktrees/<name>, or <project>/.claude/worktrees/<name>
-  // Separators: accept both / and \ so Windows cwds collapse too.
-  const worktreeMatch = cwd.match(/^(.+?)[/\\]\.(?:claude[/\\]worktrees|claude-worktrees|worktrees)[/\\][^/\\]+[/\\]?$/);
-  if (worktreeMatch) {
-    const parent = worktreeMatch[1];
-    if (fs.existsSync(parent)) return parent;
+function* worktreeAncestorPaths(cwd) {
+  if (!cwd) return;
+  let worktreeMatch;
+  while ((worktreeMatch = cwd.match(WORKTREE_PATH_RE))) {
+    cwd = worktreeMatch[1];
+    yield cwd;
   }
-  return cwd;
+}
+
+function resolveWorktreePath(cwd) {
+  let resolved = cwd;
+  for (const parent of worktreeAncestorPaths(cwd)) {
+    if (fs.existsSync(parent)) resolved = parent;
+  }
+  return resolved;
 }
 
 function deriveProjectPath(folderPath, folderName, opts) {
@@ -267,7 +279,11 @@ function storedProjectPathMatchesFolder(projectPath, folder) {
   if (verifiedTranscriptCwd(projectPath, folder)) return true;
   if (typeof projectPath !== 'string' || !path.isAbsolute(projectPath)) return false;
   const base = encodeProjectPath(path.resolve(projectPath));
-  return folder.startsWith(base) && /^--(?:claude-)?worktrees-./.test(folder.slice(base.length));
+  const suffix = folder.slice(base.length);
+  const layoutSuffix = process.platform === 'win32' ? suffix.toLowerCase() : suffix;
+  const candidate = process.platform === 'win32' ? folder.toLowerCase() : folder;
+  const prefixBase = process.platform === 'win32' ? base.toLowerCase() : base;
+  return candidate.startsWith(prefixBase) && WORKTREE_FOLDER_SUFFIXES.some(prefix => layoutSuffix.startsWith(prefix) && layoutSuffix.length > prefix.length);
 }
 
 function resolveSessionRealCwd(projectsDir, sessionId, preferredFolder) {
@@ -290,4 +306,4 @@ function resolveSessionRealCwd(projectsDir, sessionId, preferredFolder) {
   return null;
 }
 
-module.exports = { deriveProjectPath, storedProjectPathMatchesFolder, resolveWorktreePath, extractCwdFromJsonl, extractVerifiedCwdFromJsonl, resolveSessionRealCwd, sessionTranscriptExists, isGitRepo };
+module.exports = { deriveProjectPath, storedProjectPathMatchesFolder, resolveWorktreePath, worktreeAncestorPaths, extractCwdFromJsonl, extractVerifiedCwdFromJsonl, resolveSessionRealCwd, sessionTranscriptExists, isGitRepo };

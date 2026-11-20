@@ -30,13 +30,14 @@ test('failed automatic background restore and failed manual retry retain the sav
     { sessionId: 'z', projectPath: '/z', active: false, bg: true, attachJobId: 'job-z' },
   ];
   const h = setup(t, { a: [], z: [] }, { savedEntries: saved, live: { z: { kind: 'bg', jobId: 'job-z' } } });
+  const expected = [{ ...saved[0], projectPath: h.rows.get('a').projectPath }, saved[1]];
   const open = h.dom.window.api.openTerminal;
   h.dom.window.api.openTerminal = async (...args) => args[0] === 'z' ? { ok: false, error: 'attach unavailable' } : open(...args);
   await h.restore();
-  assert.deepEqual(h.settings().openWorkingSet, saved);
+  assert.deepEqual(h.settings().openWorkingSet, expected, 'successful restore uses indexed identity; failed background slot stays saved');
   await h.app.openSession(h.rows.get('z'), { type: 'attach', jobId: 'job-z' });
   await h.app.persistWorkingSet();
-  assert.deepEqual(h.settings().openWorkingSet, saved);
+  assert.deepEqual(h.settings().openWorkingSet, expected, 'failed retry retains the exact background slot and order');
 });
 
 function handoff(t, { result = { ok: true, sessionId: 'new', jobId: '1234abcd', cwd: '/bg' }, answer = true, agents = 0, existing = false } = {}) {

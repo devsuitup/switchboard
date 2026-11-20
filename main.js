@@ -911,7 +911,7 @@ async function unarchivedScheduleProjects(projectPath) {
   const target = normalizeArchivedProjectPath(projectPath);
   return (await scheduleProjects().list()).filter(p => {
     const candidate = normalizeArchivedProjectPath(p);
-    return candidate === target || isHiddenRepositoryWorktree(candidate, null, [target]);
+    return candidate === target || isHiddenRepositoryWorktree(candidate, null, [target], undefined, value => value);
   });
 }
 
@@ -1440,11 +1440,11 @@ async function getProjectsSnapshot(showArchived) {
       const kept = await writer.applyAndPersistArchived(merged, archived);
       if (projection) {
         const global = getSetting('global') || {};
+        const hidden = require('./public/worktree-nesting').projectHiddenMatcher(global.hiddenProjects, global.hiddenProjectScopes);
         for (const project of merged) {
           if (kept.some(p => p.projectPath === project.projectPath && (p.remoteAlias || null) === (project.remoteAlias || null))) continue;
-          const filterReason = require('./public/worktree-nesting').isProjectHidden(global.hiddenProjects, project.remoteAlias || null, project.projectPath, global.hiddenProjectScopes)
-            ? 'hidden-project' : 'archived';
           for (const row of project.sessions) {
+            const filterReason = hidden(project.remoteAlias || null, project.projectPath, row) ? 'hidden-project' : 'archived';
             factsByMember ??= diagnostics.indexProjectionFacts(projection);
             const facts = factsByMember.get(diagnostics.projectionScope(project.remoteAlias, project.projectPath) + '|' + row.sessionId.toLowerCase());
             if (facts) projection.removedInputs[facts.scope + '|' + facts.rootId] = { ...facts.inputs, filterReason };
@@ -3096,14 +3096,6 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     }
   }
 
-  // For a Claude resume, spawn in the session's real recorded cwd (e.g. its
-  // worktree) rather than the possibly-collapsed projectPath — otherwise
-  // `claude --resume` can't find the conversation. Forks resume too (they run
-  // `claude --resume <forkFrom> --fork-session` despite isNew being true), so
-  // they need the fork source's real cwd. Only the spawn side moves:
-  // project-level settings stay keyed on the collapsed projectPath, which is
-  // also what the renderer header uses to display the shell profile. Genuinely
-  // new sessions and plain terminals keep the requested projectPath.
   let spawnCwd = projectPath;
   if (triggerPermit?.mode === 'resume') spawnCwd = triggerPermit.target.cwd;
   const resumeSourceId = sessionOptions?.forkFrom
@@ -3112,11 +3104,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   // see .ai/contexts/cli-harnesses.md ("Launching through the harness")
   const cachedRow = resumeSourceId ? getCachedSession(resumeSourceId) : null;
   const launchHarness = getHarness(sessionOptions?.runtime || cachedRow?.runtime);
-  if (!triggerPermit && resumeSourceId && launchHarness.groupsByProject && sessionOptions?.type !== 'terminal' && sessionOptions?.type !== 'attach') {
-    const realCwd = resolveSessionRealCwd(
+  if (!triggerPermit && resumeSourceId && sessionOptions?.type !== 'terminal' && sessionOptions?.type !== 'attach') {
+    const realCwd = launchHarness.groupsByProject ? resolveSessionRealCwd(
       PROJECTS_DIR, resumeSourceId, projectPath ? encodeProjectPath(projectPath) : null
-    );
-    if (realCwd && fs.existsSync(realCwd)) spawnCwd = realCwd;
+    ) : cachedRow?.projectPath;
+    if (realCwd) spawnCwd = realCwd;
   }
 
   // see .ai/contexts/bg-agents.md ("Attach")
@@ -3146,6 +3138,10 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   try {
   // Spawn new PTY
   if (!fs.existsSync(spawnCwd)) {
+    if (resumeSourceId && !isAttach && sessionOptions?.type !== 'terminal') {
+      const isWorktree = spawnCwd !== projectPath && !require('./derive-project-path').worktreeAncestorPaths(spawnCwd).next().done;
+      return { ok: false, error: `Cannot open session: its ${isWorktree ? 'worktree' : 'project directory'} ${spawnCwd} no longer exists` };
+    }
     return { ok: false, error: `project directory no longer exists: ${spawnCwd}` };
   }
 

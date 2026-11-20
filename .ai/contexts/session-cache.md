@@ -406,7 +406,7 @@ A kept row is recorded with its folder. On PTY exit, `main.js` calls `releaseLiv
 
 ## Non-obvious behaviors
 
-- **`resolveWorktreePath` collapses `<repo>/.worktrees/<name>`, `<repo>/.claude-worktrees/<name>` and `<repo>/.claude/worktrees/<name>` → `<repo>`** when the parent dir exists. Consequence: many `~/.claude/projects/-home-...workspace-myproject--worktrees-X` folders derive to the same projectPath. Callers that list unique projects must dedupe.
+- **`resolveWorktreePath` collapses `<repo>/.worktrees/<name>`, `<repo>/.claude-worktrees/<name>`, `<repo>/.claude/worktrees/<name>` and `<repo>/.work-files/worktrees/<name>` → `<repo>`** while the parent dir exists, repeating to a fixed point for nested layouts. The worktree itself may be deleted. Layout matching (including encoded-layout gates and stored metadata suffixes) is case-insensitive on win32 only. A second refresh/reconcile reuses the final metadata without opening transcripts again. Callers that list unique projects must dedupe.
 - **Two-table sidebar payload**: projects are aggregated, but each session row has its own `subagentType` field. A `null`/empty `subagentType` means it's a parent session; anything else (e.g. `'general-purpose'`, `'researcher'`) marks a subagent.
 - **`fs.watch` debouncing**: the watcher batches per-folder events in a `pendingChanges = Map<folder, Set<filename> | true>` for 500 ms (debounced, in `main.js`) before flushing to `refreshFolder`. A `true` value means "full walk needed" (rare path).
 - **The same raw watcher callback also feeds a second, lighter-weight signal that bypasses this debounce entirely** (issue #246 step 4): for a top-level session transcript with no live PTY in `activeSessions`, it sends `session-transcript-activity` straight to the renderer, coalesced to ≤1/s per session by `local-transcript-activity.js`. This exists so a session launched outside Switchboard gets a busy indicator without waiting on the cache refresh — see `.ai/contexts/session-state.md` ("The local-transcript adapter") and `.ai/contexts/ipc-bridge.md`.
@@ -3078,6 +3078,102 @@ The shared global save merges unrelated current keys but removes legacy `chrome`
 when the patch supplies `browserMode`, so merging cannot undo the Settings
 panel's migration. Patches unrelated to Browser leave that migration untouched.
 
+## Repository grouping for harness worktrees (#1137)
+
+`derive-project-path.js` uses one layout list for `.worktrees`,
+`.claude-worktrees`, `.claude/worktrees` and `.work-files/worktrees`.
+It supplies the cwd collapse pattern, the moved-transcript scan gate and the
+encoded-folder suffixes accepted for stored repository metadata. Collapse
+accepts both separators and one optional trailing separator, requires exactly
+one worktree name after the layout, and examines every matching ancestor,
+retaining the outermost existing one even when an intermediate worktree is gone.
+The worktree itself need not exist. Layout matching is case-insensitive only
+on win32, including the moved-transcript gate and metadata suffix check.
+This remains a path-layout heuristic, not a Git-registration check.
+
+Local folder reconciliation refreshes metadata whose project path still
+collapses to a parent, even if the index mtime has not changed. `refreshFolder`
+then re-derives that metadata from verified transcripts. When the project path
+changes, a targeted refresh expands to the whole folder so unchanged sessions
+move together. Once migrated, matching parent metadata is reused normally.
+Remote folder metadata retains its existing reuse policy.
+
+Only the grouping identity changes. Transcripts and their recorded cwd are
+untouched; `resolveSessionRealCwd` returns the verified worktree cwd for resume,
+fork and Changes, and Touched retains its transcript-based cwd resolution.
+The dedicated delete dialog and renderer worktree labels/icons are separate
+follow-ups. Codex keeps its raw cwd in the cached row; the renderer receives
+the collapsed identity as `projectPath` and the cached path as `cwd`.
+Resume defaults therefore use the repository's sandbox and approval settings.
+The projects builder uses a separate collapsed grouping path. Main uses the
+source row's raw cwd on Codex resume/fork and the verified transcript cwd on
+Claude resume/fork, refusing a deleted cwd instead of launching in the group.
+The refusal calls it a worktree only when the missing cwd has a supported
+worktree layout and differs from the requested project; otherwise it names
+the project directory.
+
+Archive, hide and delete entries retain their original keys. An entry for W
+affects only sessions sourced in W, never the repository R's own sessions or R
+as a whole (D1/D3). The pre-upgrade membership also restricts the runtime (D4):
+entries for `.worktrees`, `.claude-worktrees` and `.claude/worktrees` apply only
+to Codex within R's group; Claude already belonged to R when R existed.
+When R is missing, path resolution leaves Claude grouped at W itself, so an
+exact W hide/delete entry still hides that group, even with session evidence.
+Entries for `.work-files/worktrees`
+apply to both runtimes. Codex uses its raw cwd; Claude uses the source transcript
+folder, carried as `sourceFolder` in the projects payload, or recorded cwd when
+available. Claude's cached `projectPath`/projected `cwd` can already be R and
+does not establish a worktree source. Folder matching accepts the exact encoded
+W and nested supported worktree layouts; it does not accept a sibling whose
+name merely starts with W. Encoding is lossy; arbitrary descendant paths need
+recorded cwd evidence instead of a guessed decode.
+
+Compatibility is computed at match time without writing a migration marker,
+moving keys, or expanding the stored known-ID set (D2). R's archive counts a
+regrouped session as known when its last activity (`modified`, falling back to
+`created`) is at or before `archivedAt`; an undated regrouped session is known
+on every listing. A genuinely newer unknown session still retires the archive.
+Archiving R covers its worktrees, and a new session in a worktree reopens R (D5).
+W archives filter only W sessions inside R. Hidden entries and delete tombstones
+apply even with Show archived; host scopes and remote identity stay intact.
+The common hidden matcher also supplies the exact main/renderer checks, without
+normalizing a stored W entry into R. Legacy separate worktree groups retain
+their existing hidden-repository marker behavior.
+
+The writer retires the original R or W entry and leases both relevant identities.
+Unarchiving either exact entry works. Schedule offers keep their original keys
+and are collected onto the visible repository; re-enable/dismiss operate on each
+original offer under its own lease and schedule root. Skipped retirement filters
+only the corresponding source sessions. `test/archive-worktree-compat.test.js`
+exercises these operations through the writer and production worker fixture.
+Schedule unarchive normalizes registry candidates and the target once with the
+schedule path normalizer, then passes identity normalization to the hidden-parent
+check. The matcher must not case-fold those paths again using the host platform;
+injected Linux/macOS comparisons remain case-sensitive on a Windows test host.
+Restore and working-set persistence prefer indexed project identity to a saved
+pre-upgrade W path. An unindexed continuation keeps the saved path rather than
+inheriting the previous row's identity. Failed background restores retain their
+saved slot and position; persistence also works when the session map is absent.
+Hidden matching reads only runtime, source folder and raw Codex cwd, and does
+not construct session evidence when the hidden list is empty. Descriptor-only
+background sessions supply their raw cwd. Main projection diagnostics classify
+rows removed through W as `hidden-project`. Remote root archives retain the raw
+`host::` key for matching and retirement.
+A null folder metadata path does not widen targeted refresh;
+the existing truthy-path guard is covered by the grouping regression.
+
+`test/harness-worktree-grouping.test.js` exercises the production modules with
+disposable transcripts and the SQLite conversation-store fixture. It seeds
+old exact worktree metadata with current mtimes, checks full/targeted refresh
+and reconciliation through the sidebar payload, and checks byte-for-byte
+transcript preservation. A filename-bearing VM executes only the shipped
+launch cwd-selection block for resume/fork. `open-terminal-attach.test.js`
+also executes the shipped IPC handler with a stub PTY boundary, checking cwd,
+missing-worktree refusals and Codex pending-launch ownership. Neither loads
+Electron nor launches a PTY. Mixed Claude/Codex fixtures cover existing and
+deleted worktrees; nested migration checks zero transcript opens on the next
+refresh and reconcile.
+
 ## Harness folders (#821)
 
 A folder key with a harness prefix (`codex/2026/08/26`) belongs to a CLI whose
@@ -3120,9 +3216,16 @@ recursive `fs.watch` per prefixed harness root, events mapped to a key by
 linked continuation on these rows and is inert.
 
 Kept as #821 required: the Claude cwd trust (#385) is not applied — a date
-folder cannot encode a cwd — and the transcript's own cwd is the project;
-`buildProjectsFromCache` files the row under that cwd next to Claude rows and
-the continuation rollup only sees rows whose harness has
+folder cannot encode a cwd — and the transcript's own cwd remains the cached
+session's `projectPath`, for launch and ownership matching.
+`buildProjectsFromCache` computes a separate `groupingPaths` map for local
+non-project-folder harnesses, collapsing that cwd with `resolveWorktreePath`.
+Project keys, folders, missing/hidden state and projection scopes use this
+grouping path; the renderer session uses it as `projectPath` and exposes the
+raw cached cwd separately as `cwd`. Existing Codex rows therefore
+group immediately without a schema migration or transcript reindex. Remote
+paths are not collapsed against the local filesystem. The
+continuation rollup only sees rows whose harness has
 `capabilities.continuations`; subagent rollups key on `parentSessionId`, which
 these rows never have; project remap rewrites files under a Claude folder and
 never touches a rollout, so a remapped project keeps its Codex rows under the

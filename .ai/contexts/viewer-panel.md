@@ -40,6 +40,9 @@ to `workers/file-lists-query.js`; `file-lists.js` keeps `listMemories`.
 Main snapshots hidden projects and live roots; the worker adds roots derived
 from project folders and uses the shared `isAllowedMemoryPath` and `scan-md-files`
 guards. One lazy filesystem worker serves Memory independently of Projects.
+Memory filtering passes the original transcript folder to the shared hidden
+matcher, so a hidden/deleted `.work-files/worktrees` entry still hides that
+worktree's memory after its project path has collapsed to the repository.
 The client follows the Projects client pattern: one in-flight scan, one coalesced
 pending scan, fixed 30-second deadlines from caller registration, a five-minute
 dispatch ceiling, worker termination after errors or unobserved timed-out work,

@@ -9,7 +9,7 @@ const { resolveJsonlPath, subagentSessionId } = require('../../../read-session-f
 const { classifyTranscriptPath } = require('../../../subagent-attribution');
 const { durableRowLinks, fail } = require('./project-delete-identity');
 const { encodeProjectPath } = require('../../../encode-project-path');
-const { worktreeParentPath } = require('../../../public/worktree-nesting');
+const { worktreeAncestorPaths } = require('../../../derive-project-path');
 const { parseFrontmatter, isRunnerScheduleFileName, scheduleStateKey } = require('../schedules/schedule-runner');
 
 function createProjectDeleteInventory(deps) {
@@ -85,6 +85,19 @@ function createProjectDeleteInventory(deps) {
       if (parent === current) return;
       current = parent;
     }
+  }
+  async function groupingPath(c, cwd) {
+    let resolved = cwd;
+    for (const parent of worktreeAncestorPaths(cwd)) {
+      try {
+        await real(c, parent);
+        resolved = parent;
+      } catch (error) {
+        propagate(error);
+        if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+      }
+    }
+    return resolved;
   }
   async function unlinked(c, file) {
     let current = file;
@@ -182,7 +195,10 @@ function createProjectDeleteInventory(deps) {
     }));
     snapshot.initialScanComplete = settings.initial_scan_complete === true;
     snapshot.declaredHosts = (settings.remoteHosts || []).map(row => row.alias);
-    for (const row of [...snapshot.folders, ...snapshot.sessions]) if (parseFolderKey(row.folder).alias === null) await registerPath(c, row.projectPath);
+    for (const row of [...snapshot.folders, ...snapshot.sessions]) if (parseFolderKey(row.folder).alias === null) {
+      await registerPath(c, row.projectPath);
+      row.projectPath = await groupingPath(c, row.projectPath);
+    }
     for (const root of [deps.projectsDir, deps.dataDir, ...(settings.scheduleProjects || [])]) await registerPath(c, root);
     const projects = new Map();
     function add(alias, projectPath, folder) {
@@ -221,9 +237,8 @@ function createProjectDeleteInventory(deps) {
     const belongs = async (cwd, subagent = false) => {
       if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return false;
       await registerPath(c, cwd);
-      const normalized = normalize(c, cwd), selected = normalize(c, project.projectPath);
-      const parent = normalized.match(/^(.+?)\/\.(?:claude\/worktrees|claude-worktrees|worktrees|work-files\/worktrees)\/[^/]+\/?$/)?.[1];
-      return normalized === selected || parent === selected || (subagent && normalized.startsWith(selected + '/'));
+      const normalized = normalize(c, await groupingPath(c, cwd)), selected = normalize(c, project.projectPath);
+      return normalized === selected || (subagent && normalized.startsWith(selected + '/'));
     };
     const ownFolders = new Set(snapshot.folders.filter(row => owned(c, { alias: null, projectPath: row.projectPath }, project)
       && parseFolderKey(row.folder).alias === null).map(row => row.folder));
@@ -246,12 +261,10 @@ function createProjectDeleteInventory(deps) {
     const groupMap = new Map(), localById = new Map(local.map(row => [row.sessionId, row]));
     for (const row of local) {
       const owner = { alias: null, projectPath: row.projectPath };
-      const child = worktreeParentPath(row.projectPath?.replaceAll('\\', '/'))
-        || row.projectPath?.replaceAll('\\', '/').match(/^(.+)\/\.work-files\/worktrees\/[^/]+\/?$/)?.[1];
-      if (!owned(c, owner, project) && (!child || normalize(c, child) !== normalize(c, project.projectPath))) continue;
+      if (!owned(c, owner, project)) continue;
       const runtime = row.runtime || 'claude';
       const previous = groupMap.get(row.folder);
-      const group = { ...owner, folderKey: row.folder, runtime, ...(child ? { parentProjectPath: child } : {}), verified: !previous || previous.runtime === runtime };
+      const group = { ...owner, folderKey: row.folder, runtime, verified: !previous || previous.runtime === runtime };
       if (folderOwners.get(row.folder).size !== 1 || folderOwners.get(row.folder).has(null)) {
         group.verified = false;
         candidate(row.folder, 'Mixed folder ownership must be resolved.');

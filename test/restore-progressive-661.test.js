@@ -126,6 +126,25 @@ function setup({ savedSet, activeWaitMs = 20000, fresh = false }) {
     tabs: () => JSON.parse(JSON.stringify(vm.runInContext('[...openSessions.keys()]', ctx))) };
 }
 
+for (const bg of [false, true]) test(`legacy W restore uses indexed R project (background=${bg})`, async t => {
+  const h = setup({ savedSet: [{ sessionId: 'legacy', projectPath: '/repo/.work-files/worktrees/old', active: true, bg }] });
+  t.after(() => h.dom.window.close());
+  vm.runInContext("sessionMap.get('legacy').projectPath = '/repo'", h.ctx);
+  const done = h.restore();
+  await h.settle();
+  if (bg) { h.pendingRestores.shift().resolve(); await h.settle(); }
+  assert.equal(vm.runInContext("openSessions.get('legacy').session.projectPath", h.ctx), '/repo', 'indexed grouping wins over saved W');
+  h.pendingOpens.shift().resolve(); await h.settle(); await done;
+});
+
+test('persisting an old open W tab prefers its indexed repository', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'legacy', projectPath: '/repo/.work-files/worktrees/old' }] });
+  t.after(() => h.dom.window.close());
+  vm.runInContext("openSessions.set('legacy', { session: { ...sessionMap.get('legacy') } }); sessionMap.get('legacy').projectPath = '/repo'", h.ctx);
+  await vm.runInContext('persistWorkingSet()', h.ctx);
+  assert.equal((await h.dom.window.api.getSetting('global')).openWorkingSet[0].projectPath, '/repo', 'persist indexed grouping');
+});
+
 test('the saved active session opens first and is shown before the others open', async (t) => {
   const savedSet = [
     { sessionId: 'a', projectPath: '/pa' },

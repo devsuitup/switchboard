@@ -891,7 +891,7 @@ const projectDeletionRestoreTargets = new Map();
 const projectDeletionWriteKeys = new Map();
 window.isDeletedProjectRestoreTarget = item => [...projectDeletionRestoreTargets].some(([key, { ids }]) =>
   ids.has(item?.sessionId) && typeof item.projectPath === 'string' &&
-  projectDeletionKey({ projectPath: item.projectPath, alias: JSON.parse(key)[0] }) === key);
+  projectDeletionKey({ projectPath: JSON.parse(key)[0] ? item.projectPath : window.worktreeGroupingPath(item.projectPath), alias: JSON.parse(key)[0] }) === key);
 window.clearReappearedProjectDeletionTargets = generation => {
   for (const project of cachedAllProjects) {
     const key = projectDeletionKey(project);

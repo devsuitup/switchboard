@@ -16,6 +16,19 @@ const OLD = '11111111-1111-4111-8111-111111111111';
 const MID = '22222222-2222-4222-8222-222222222222';
 const HEAD = '33333333-3333-4333-8333-333333333333';
 
+test('a hidden harness worktree suppresses its descriptor-only background session', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bg-hidden-worktree-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cwd = path.join(root, '.work-files', 'worktrees', 'lane');
+  fs.mkdirSync(cwd, { recursive: true });
+  cache.init({ PROJECTS_DIR: path.join(root, 'projects'), activeSessions: new Map(), getMainWindow: () => null, log: console,
+    getLocalDescriptors: () => [{ sessionId: HEAD, kind: 'bg', jobId: '33333333', cwd }],
+    getLocalJobs: () => new Map([['33333333', { state: 'working', sessionId: HEAD }]]),
+    db: { getAllCached: () => [], getAllMeta: () => new Map(), getAllFolderMeta: () => new Map(),
+      getSetting: key => key === 'global' ? { hiddenProjects: [cwd] } : null } });
+  assert.deepEqual(cache.buildProjectsFromCache(false), [], 'descriptor-only W session must stay hidden');
+});
+
 test('A-T7 running sidebar job needs a live descriptor and accepts its state', t => {
   const h = setup(t, { state: 'running', indexedHead: true });
   assert.equal(bgAgents.getCachedJobs().get('33333333').state, 'running');

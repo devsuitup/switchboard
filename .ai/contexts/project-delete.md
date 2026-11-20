@@ -1,5 +1,67 @@
 # Project deletion (#474 A4a–A4d, E)
 
+## Repository session grouping (#1137)
+
+Inventory projects, folders and local cached session ownership use the same
+worktree ancestor enumeration as `resolveWorktreePath`. Existence checks stay
+inside the inventory's bounded asynchronous filesystem ports and memoized
+realpath reads. Missing intermediate worktrees do not stop the collapse.
+The snapshot is a projection; it does not rewrite durable rows. Transcript cwd
+verification uses that same collapse before admitting a member. The planner
+therefore selects Claude and Codex backing groups together, including nested
+layouts, while retaining its grouped `member.cwd` ownership contract. Physical
+worktree removal remains a separate explicit selection. Remote paths keep
+their host identity and are never collapsed through the local filesystem.
+
+`project-delete-owner.js` projects durable local ownership through
+`resolveWorktreePath` before canonical identity comparison. Durable scope,
+manifest validation, per-chunk session and folder checks, and producer bindings
+all use that projection. The raw cache/folder paths remain unchanged; their
+original values remain in the scope digest. A manifest must still name every
+selected durable member and cannot claim another repository's sessions or
+worktrees. Remote ownership retains its exact path and host.
+
+Producer bindings cover cached rows and links, supplied new row paths and folder
+fallbacks with the same repository epoch. Producers received before admission
+retain their old binding; newly received producers cannot publish into a blocked
+repository. Stored deletion history already names an operation identity and is
+not regrouped. A blocked older worktree fence remains a competing ownership
+candidate and refuses new producers. A sealed W history with an explicitly
+reopened, unblocked fence and an epoch at least as high as every historical
+owned epoch is history only when live evidence binds the target to R. The
+indexed history query also rejects any unsealed operation. This applies to
+session and folder history; a target with historical evidence only retains its
+exact historical owner. Operation IDs and receipt keys keep their original
+canonical identity contract. Already bound producers keep their captured key
+and epoch, so reopening does not grant an old producer new authority.
+
+Grouped ownership is filesystem-dependent: existence of an ancestor can change
+the grouping between independent evaluations. The bind call memoizes grouped
+keys, and producer bindings keep those keys thereafter. Manifest and per-chunk
+checks deliberately recompute ownership so a changed filesystem can refuse
+deletion rather than reuse stale ownership. This limit is documented instead of
+adding a long-lived cache that could authorize a stale destructive operation.
+
+Finalization prunes acknowledged saved working-set members by grouped owner;
+the renderer applies the same supported-layout projection to acknowledged IDs.
+Remote members still require their exact host/path. Visibility compatibility
+does not regroup stored archive/hide/delete keys: W entries affect only W source
+sessions, never R's own sessions (D1/D3), restricted to their pre-upgrade runtime
+membership (D4): `.work-files/worktrees` covers both runtimes; the other three
+supported layouts cover Codex only within R's group because Claude already
+belonged to R when R existed. If R is missing, Claude remains grouped at W;
+an exact W hide/delete entry continues hiding that group with session evidence.
+Archive compatibility is read-only at
+match time (D2); retirement alone changes state and preserves W schedule offers.
+See the archive compatibility section in `session-cache.md`.
+
+The plain-Node regression in `test/project-delete-grouped-ownership.test.js`
+composes the production inventory, planner and writer with disposable SQLite
+and transcript files. It covers grouped scope/validation, foreign rejection,
+complete metadata/search deletion, per-chunk ownership changes, producer fences,
+legacy receipt identities and remote ownership. Physical worktree and transcript
+removal remain separate from this metadata operation.
+
 ## Superseded previews (#1106)
 
 The service retains one pending preview controller per webContents and canonical

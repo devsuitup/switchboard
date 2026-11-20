@@ -16,6 +16,31 @@ const supported = { skip: !openStore.supported && 'real SQLite requires Node 22 
 const options = { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: true };
 const budget = () => ({ signal: new AbortController().signal, deadline: 10000, limit: 20000 });
 
+test('delete preview includes exactly the sidebar repository sessions across Codex layouts', supported, async t => {
+  const h = await setup(t);
+  const cache = require('../session-cache');
+  h.db.upsertCachedSessions([{ ...h.db.getCachedSession('child'), projectPath: h.project.projectPath }]);
+  h.db.setFolderMeta('child', h.project.projectPath, 1);
+  const layouts = ['.work-files/worktrees/a', '.claude/worktrees/b', '.worktrees/c',
+    '.claude-worktrees/d', '.work-files/worktrees/gone/.claude/worktrees/nested'];
+  if (process.platform === 'win32') layouts.push('.WORK-FILES/WORKTREES/UPPER');
+  for (const [i, layout] of layouts.entries()) {
+    const id = `codex-wt-${i}`, cwd = path.join(h.project.projectPath, layout), folder = `codex/day-${i}`;
+    const file = path.join(h.root, 'codex', `${id}.jsonl`);
+    h.write(file, JSON.stringify({ type: 'session_meta', payload: { id, cwd } }) + '\n');
+    h.db.upsertCachedSessions([{ sessionId: id, folder, projectPath: cwd, runtime: 'codex', sessionFile: file }]);
+  }
+  cache.init({ PROJECTS_DIR: h.projectsDir, activeSessions: new Map(), getMainWindow: () => null, log: console, db: h.db });
+  cache.setRemoteRoots(new Map());
+  const sidebar = cache.buildProjectsFromCache(true).find(project => project.projectPath === h.project.projectPath && !project.remoteAlias);
+  const expected = [...new Set(sidebar.sessions.flatMap(row => [row.sessionId, ...(row.mergedMemberIds || [])]))].sort();
+  const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.plan.refusals, []);
+  assert.deepEqual(result.plan.members.map(row => row.id).sort(), expected, 'preview must match sidebar repository membership');
+  assert.ok(result.plan.members.some(row => row.id === 'codex-wt-4'), 'nested Codex session must be present');
+});
+
 function deadlineClock() {
   let time = 0, id = 0;
   const timers = new Map();
@@ -36,7 +61,7 @@ for (const method of ['discoverOwnership', 'readRuntimeState']) {
         if (!hangs) time.schedule(() => { active--; resolve({ state: 'stopped', source: row.id }); }, 3000);
       });
     } });
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 3; i++) {
       const id = 'extra-' + i;
       h.write(path.join(h.projectsDir, 'local', id + '.jsonl'), JSON.stringify({ type: 'user', sessionId: id, cwd: h.project.projectPath }) + '\n');
       h.db.upsertCachedSessions([{ sessionId: id, folder: 'local', projectPath: h.project.projectPath, runtime: 'claude' }]);
@@ -267,12 +292,12 @@ async function setup(t, overrides = {}) {
   return { root, db, deps, inventory, writer, project, projectsDir, files, write, schedule, child };
 }
 
-test('A4c1 production planner inventory keeps child worktree, disabled files and all continuation parts without writes', supported, async t => {
+test('A4c1 production planner inventory includes grouped worktree sessions and keeps disabled files without writes', supported, async t => {
   const h = await setup(t), before = h.db.changeCount();
   const result = await createProjectDeletePlanner(h.inventory).preview({ projectPath: h.project.projectPath, options });
   assert.equal(result.ok, true, JSON.stringify(result));
-  assert.deepEqual(result.plan.members.map(row => row.id).sort(), ['codex', 'continuation', 'head', 'subagent:head:worker']);
-  assert.ok(result.plan.groups.some(group => group.projectPath.replaceAll('\\', '/').toLowerCase() === h.child.replaceAll('\\', '/').toLowerCase() && group.effect === 'kept'));
+  assert.deepEqual(result.plan.members.map(row => row.id).sort(), ['child', 'codex', 'continuation', 'head', 'subagent:head:worker']);
+  assert.ok(result.plan.groups.some(group => group.folderKey === 'child' && group.effect === 'selected'));
   assert.equal(result.plan.schedules.length, 2); assert.equal(result.plan.tabs[0].id, 'dormant');
   assert.equal(result.plan.refusals.length, 0, JSON.stringify(result.plan.refusals));
   assert.equal(h.db.changeCount(), before, 'preview never refreshes, seeds or writes');

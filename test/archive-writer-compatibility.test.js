@@ -46,7 +46,7 @@ async function setup(t) {
     normalizeHosts: () => [], parseFolderKey: require('../src/main/remote/remote-hosts').parseFolderKey,
     isInitialScanComplete: () => true, isCachePopulated: () => true, isSearchIndexPopulated: () => true,
     populateCacheViaWorker: () => assert.fail('warm cache populated'), backfillEntrypoints() {}, backfillCustomTitles() {},
-    writer, projectsClient: { request: async () => structuredClone({ defaultProjects: projects, allProjects: projects, rows: 1 }) },
+    writer, projectsClient: { request: async () => structuredClone({ defaultProjects: projects, allProjects: projects, rows: 1, projection: projects.projection }) },
     mergePlaceholderSessions: rows => rows, annotateRemoteAttachable: rows => rows, notifyRendererProjectsChanged() {},
   });
   return { root, db, writer, messages, projects, invoke };
@@ -128,4 +128,18 @@ test('remote root guards retain supplied epoch proofs and refuse a later deletio
   await h.writer.setSetting('archivedProjects', { [entry]: { knownSessionIds: [] } });
   await assert.doesNotReject(h.writer.applyAndPersistArchived(h.projects, false));
   assert.ok(h.db.getSetting('archivedProjects')[entry], 'blocked root retirement retains its exact archive key');
+});
+
+test('get-projects diagnostics identify a group removed through hidden worktree sessions', supported, async t => {
+  const h = await setup(t), repo = h.projects[0].projectPath;
+  const cwd = path.join(repo, '.work-files', 'worktrees', 'lane');
+  fs.mkdirSync(cwd, { recursive: true });
+  h.projects[0].sessions = [{ sessionId: 'worktree', runtime: 'codex', cwd, projectPath: repo }];
+  const { projectionScope } = require('../public/session-projection-diagnostics');
+  const key = projectionScope(null, repo) + '|worktree';
+  h.projects.projection = { facts: { [key]: { filterReason: null } }, removedInputs: {} };
+  await h.writer.setSetting('global', { hiddenProjects: [cwd] });
+  const reply = await h.invoke(null, 'both');
+  assert.deepEqual(reply.defaultProjects, []);
+  assert.equal(reply.projection.removedInputs[key].filterReason, 'hidden-project', 'W-filtered group diagnostics must name hidden-project');
 });
