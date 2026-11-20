@@ -106,6 +106,30 @@ test('1156: late assignment updates the tracked assignment used by evidence clos
   assert.ok(f.writes.some(line => line.startsWith('terminate-retained ')));
 });
 
+test('1156: a failed evidence stop during startup preserves late recovery for the live tab', async t => {
+  const f = fixture(t), first = f.tab(897);
+  await f.tick(100); await first.initial;
+  await f.tick(1000);
+  assert.equal(f.children.length, 2);
+  const pty = f.tab(898);
+  const session = { pty, kind: 'local-pty', generation: 1 };
+  const stopping = stopPtyWithEvidence(session, 'tab', { platform: 'win32' });
+  await f.tick(100);
+  assert.equal(await pty.initial, false);
+  assert.equal((await stopping).code, 'IDENTITY');
+  assert.equal(pty._agent.exitCode, undefined, 'failed evidence stop leaves the tab alive');
+  await f.tick(2000);
+  assert.equal(f.children.length, 3);
+  f.children[2].stdout.emit('data', 'ready\n'); await flush();
+  const assignments = f.writes.filter(line => line.startsWith('assign '));
+  assert.equal(assignments.filter(line => line.endsWith(' 898 100')).length, 1,
+    'the still-live tab must receive a late assignment after its failed evidence stop');
+  const proof = await stopPtyWithEvidence(session, 'tab', { platform: 'win32' });
+  assert.equal(proof.ended, true, 'a later evidence stop must use the recovered job');
+  const id = assignments.find(line => line.endsWith(' 898 100')).split(' ')[1];
+  assert.ok(f.writes.includes(`terminate-retained ${id}`));
+});
+
 for (const spawnError of [false, true]) {
   test(`1156: autonomous retries exhaust three starts (${spawnError ? 'spawn error' : 'timeout'})`, async t => {
     const f = fixture(t, { spawnError }), pty = f.tab(897);

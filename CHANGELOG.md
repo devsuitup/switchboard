@@ -10,7 +10,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - After restarting the app or Windows, the sidebar shows the projects as they were at exit, even if the last project load finished just before you closed the app or signed out. (#1136)
-- On Windows, child processes of tabs restored at a slow start are now ended when the tab closes once cleanup recovers automatically. Children spawned before recovery cannot be captured. (#1140, #1156)
+- On Windows, a slow start no longer leaves tabs without process cleanup: tabs already open, restored ones included, are covered once cleanup starts, and programs they launch afterwards end when the tab closes. Programs launched before that can keep running. (#1140, #1156)
 - Claude and Codex sessions in `.work-files/worktrees/<name>`, and Codex sessions in `.worktrees`, `.claude-worktrees` and `.claude/worktrees`, appear under their existing repository, including nested worktrees and sessions already indexed. Repository settings, archive and hidden state follow the group, and project deletion removes the session metadata it previews for both runtimes. Archiving a repository covers its worktrees' sessions; a new session in a worktree reopens the repository. Resume and fork use the recorded worktree directory and refuse to launch if it no longer exists; Claude sessions in a deleted `.claude/worktrees` directory are refused instead of starting in the repository. (#1137)
 - A conversation running as a background job (`claude --bg`) no longer slips into a project's collapsed "Older" rows: while its job is alive it stays visible and sorts with the running sessions, and the Running filter lists it, whatever the date of its last indexed message. (#1146)
 

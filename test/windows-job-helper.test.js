@@ -111,6 +111,23 @@ test('a timed-out start followed by a successful retry gives the next tabs jobs'
   assert.equal(warnings.some(line => line.includes('stale warning')), false);
 });
 
+for (const operation of ['terminate', 'release', 'observe']) {
+  test(`1156: ${operation} cannot restart a failed helper after backoff without waiting tabs`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+    t.mock.method(performance, 'now', () => Date.now());
+    const f = fixture(t);
+    const assignment = f.helper.assign('untracked', 897, 100);
+    t.mock.timers.tick(5000);
+    assert.equal(await assignment, false);
+    t.mock.timers.tick(999);
+    assert.equal(f.invocations.length, 1);
+    t.mock.timers.tick(1);
+    const result = f.helper[operation]('untracked');
+    assert.equal(f.invocations.length, 1, `${operation} must not restart after backoff expires`);
+    assert.equal(await result, operation === 'observe' ? null : false);
+  });
+}
+
 for (const failure of ['timeout', 'spawn error']) {
   test(`permanently failing helper stops after three starts (${failure})`, async t => {
     t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });

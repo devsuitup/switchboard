@@ -88,7 +88,7 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
         clearTimeout(retryTimer);
         for (const [id, entry] of lateAssignments) {
           lateAssignments.delete(id);
-          if (entry.current()) entry.onLateAssignment(request('assign', id, entry.args, entry.current));
+          if (entry.lateCurrent()) entry.onLateAssignment(request('assign', id, entry.args, entry.lateCurrent));
         }
         continue;
       }
@@ -270,8 +270,8 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
       if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid || !Number.isSafeInteger(spawnTime)) return Promise.resolve(false);
       const args = ` ${pid} ${spawnTime}`;
       return request('assign', id, args, current).then(assigned => {
-        if (!assigned && failed && !ready && attempts < MAX_START_ATTEMPTS && onLateAssignment && lateCurrent()) {
-          lateAssignments.set(id, { args, current: lateCurrent, onLateAssignment });
+        if (!assigned && failed && !ready && attempts < MAX_START_ATTEMPTS && onLateAssignment && current()) {
+          lateAssignments.set(id, { args, current, lateCurrent, onLateAssignment });
           scheduleRetry();
         }
         return assigned;
