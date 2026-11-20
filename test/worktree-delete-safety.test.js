@@ -486,7 +486,7 @@ test('link containment resolves the root and targets with the same native resolv
   let shown;
   await assert.doesNotReject(async () => { shown = await instrumented.readStatus(f.root, f.root, f.runGit); });
   assert.equal(shown.ok, true);
-  assert.equal(rootResolutions, 1, 'resolve the scan root with the same native resolver as its link targets');
+  assert.equal(rootResolutions, 2, 'the registration match and the scan root both use the same native resolver as the link targets');
 });
 
 test('nonempty uninitialised gitlinks refuse even when status does not list the gitlink', async t => {

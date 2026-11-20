@@ -11,6 +11,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Removed the per-project Work Files sidebar tab. Open session files from Touched or terminal path links; files in `.work-files/` stay on disk. (#1018)
 
 ### Fixed
+- The Delete worktree dialog accepts Windows short (8.3) folder names, and no longer waits on unreachable drives or shares to list running sessions. Paths containing a `.` or `..` segment, including Windows backslash separators, are refused before the dialog. (#855)
 - A trigger dropped while Switchboard indexes transcripts is delivered without waiting for a whole indexing batch to finish; waits of 200 ms or more on the index writer are logged. (#1073)
 - Terminals opened by a Switchboard that was itself started from a Claude Code shell no longer inherit that shell's `GIT_EDITOR=true`, so `git commit` without `-m` opens your editor instead of aborting on an empty message. A `GIT_EDITOR` you set yourself is kept. (#673)
 - File triggers recover after a successful project reload even if every startup load failed, instead of remaining stuck with "renderer not ready" until the window restarts. (#1123)
