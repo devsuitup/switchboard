@@ -211,7 +211,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     const metaPath = isSubagent ? filePath.replace(/\.jsonl$/, '.meta.json') : null;
     const dependencies = metaPath ? { meta: observation(metaPath) } : {};
     const certificate = bytes => fullReadStamp(filePath, 'claude', relativeSource(filePath, opts.parentSessionId), before, bytes,
-      metaPath ? { meta: observation(metaPath) } : {}, dependencies);
+      metaPath ? { meta: observation(metaPath) } : {}, dependencies, observation(filePath, finalStat));
     const big = fs.statSync(filePath, { bigint: true });
     const stamp = continuationStamp(big);
     const stat = isSubagent ? { size: Number(big.size), mtime: new Date(continuationMtime(big)), birthtime: new Date(Number((big.birthtimeNs + 500000n) / 1000000n)) } : fs.statSync(filePath);
@@ -337,7 +337,10 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
 
     const fallbackDate = stat.mtime.toISOString().slice(0, 10);
     const dailyMetrics = extractDailyMetrics(lines, fallbackDate, cutoff, excludedMessageUuids, excludedMessageSignatures);
-    const stable = matchesContinuationStamp(stamp, fs.statSync(filePath, { bigint: true }));
+    const metaObservation = { read: false };
+    const meta = isSubagent ? readSubagentMeta(filePath, metaObservation) || {} : null;
+    const finalStat = fs.statSync(filePath, { bigint: true });
+    const stable = matchesContinuationStamp(stamp, finalStat);
     const countIndex = stable
       ? messageCountIndex(fileBytes, big, messageCount, tailMessageCount, !!(cutoff || excludedMessageUuids || excludedMessageSignatures)) : null;
 
@@ -351,8 +354,6 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
         if (m) agentId = m[1];
       }
       if (!agentId) return null;
-      const metaObservation = { read: false };
-      const meta = readSubagentMeta(filePath, metaObservation) || {};
       const subagentType = meta.agentType || null;
       const description = meta.description || null;
       return {

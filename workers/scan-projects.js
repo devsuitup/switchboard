@@ -169,7 +169,7 @@ try {
     if (result) Object.assign(result, { counters, fullIndexConfig: scanConfig() });
     current++;
     stripBridgeEvidence(result);
-    parentPort.postMessage({ type: 'folder', result, counters, folder: FOLDER_PREFIX + t.folder, current, total });
+    parentPort.postMessage({ type: 'folder', result, counters, folder: FOLDER_PREFIX + (t && t.folder), current, total });
   }
   parentPort.postMessage({ type: 'done', ok: failedFolders.length === 0, failedFolders, total,
     ...(failedFolders.length ? { error: 'folder scan failed' } : {}) });

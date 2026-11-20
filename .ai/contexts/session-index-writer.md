@@ -657,14 +657,21 @@ overlays retain the fields. FTS absence or recreation durably clears folder
 version/config before writer readiness; reopening before population cannot
 recover an obsolete seal from an ephemeral bootstrap flag.
 
-A producer operation ACKs `beginFullIndex` before its replacement effects.
+A producer computes its effects first and ACKs `beginFullIndex` only for full
+row replacements (including an empty full-folder scan). A no-op watcher refresh
+keeps its single folder-meta effects request; a pending-repair early exit sends
+nothing. The begin receipt advances the body snapshot revision.
 Its first replacement effect invalidates the old folder seal even if begin
 failed or its outcome is unknown. A scan's folder drop removes session rows
 while retaining the metadata row and pending token; project deletion still
 deletes the complete metadata row. Ordinary setFolderMeta preserves the fields.
+The drop remains a `deleteCachedFolder` effect, including through worker chunking,
+so observers still receive the broad `null` invalidation. Deleted-file counters
+include dropped rows absent from the replacement, even when begin failed or a
+subset only deletes files. Certificate SQL statements are prepared once per store.
 
 Affected rows lose certificates before materialized replacement. Candidates
-are withheld from upserts, then published as separately ACKed final effects
+are withheld from upserts, then published as separately ACKed direct commands
 after all body, metrics and staged FTS work. `certifyFullRead` compares the
 folder token and materialized row witness. `sealFullIndex` compares the token
 and captured canonical configuration (sorted remaps, deduplicated/sorted
@@ -672,12 +679,15 @@ disabled harness IDs, resolved source roots). A full scan records the content
 version; a partial operation restores only an existing full baseline.
 
 Begin/effect failure leaves conservative state. Begin failure still submits
-the existing write. A seal with unknown outcome is logged, never retried or
+the existing write. Certificate rejection or failure skips that folder's seal;
+transport failure is logged as an unknown outcome and never rejects an already
+committed body. A seal with unknown outcome is logged, never retried or
 compensated: it either leaves pending state or committed a valid seal over
 fully ACKed effects. A newer folder token supersedes older work. Certification
 does not use global writer revision as its freshness fence. Projects replies
 retain their independent revision-continuity check and return the final owned
-ACK rather than silently accepting a revision changed by another producer.
+ACK only for a continuous sequence; otherwise they retain the body ACK so the
+reader can detect intervening work. This check does not reject certification.
 
 The commands bracket producer operations at the facade. They do not alter
 the generic chunk scheduler, producer-unit packing, transaction budgets,

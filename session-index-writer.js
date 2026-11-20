@@ -105,17 +105,10 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       await ready;
       const scanFolder = ['writeScannedFolder', 'writeScannedFolderPartial'].includes(name) ? args[0]?.folder
         : name === 'refreshFolder' ? args[0] : name === 'releaseLiveSession' ? cache.getRetainedFolder?.(args[0]) : undefined;
-      const token = scanFolder && projectsDir ? randomUUID() : null;
       const currentConfig = () => fullIndexConfig({ ...(backend.getSetting('global') || {}), remappedProjects: backend.getSetting('projectRemaps') || {} },
         args[0]?.fullIndexConfig ? JSON.parse(args[0].fullIndexConfig).roots[0] : projectsDir);
-      const config = token ? args[0]?.fullIndexConfig || currentConfig() : null;
       const scanResult = ['writeScannedFolder', 'writeScannedFolderPartial'].includes(name) ? args[0] : null;
-      if (token && scanResult) scanResult.fullIndexOutcome = false;
-      let began = false, previousIndex;
-      if (token) {
-        try { previousIndex = await send('beginFullIndex', scanFolder, token, { projects: [...new Set(scanResult?.sessions?.map(row => row.projectPath).filter(Boolean) || [])] }); began = true; }
-        catch (error) { (options.log || console).warn('[session-index-writer] full index begin outcome unknown: ' + error.message); }
-      }
+      if (scanResult) scanResult.fullIndexOutcome = false;
       const folder = name === 'refreshFolder' ? args[0] : name === 'releaseLiveSession' ? cache.getRetainedFolder?.(args[0]) : undefined;
       let continuationRetry = false, combinedResult;
       for (let attempt = 0; ; attempt++) {
@@ -139,12 +132,14 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         }
         const certificates = [];
         const fullIds = new Set(effects.filter(effect => effect.name === 'replaceSessionMetrics').map(effect => effect.args[0]));
-        const publications = new Map(token ? [[scanFolder, { token, config, began, previousIndex }]] : []);
+        const publications = new Map();
         const forwarded = name === 'applyProjectsWorkerEffects';
-        if (forwarded && projectsDir) {
+        if (projectsDir) {
           const candidates = effects.filter(effect => effect.name === 'upsertCachedSessions').flatMap(effect => effect.args[0]).filter(row => fullIds.has(row.sessionId));
-          for (const key of new Set(candidates.map(row => row.folder))) {
-            const publication = { token: randomUUID(), config: currentConfig(), began: false };
+          const folders = new Set(candidates.map(row => row.folder));
+          if (scanFolder && name === 'writeScannedFolder') folders.add(scanFolder);
+          for (const key of folders) {
+            const publication = { token: randomUUID(), config: scanResult?.fullIndexConfig || currentConfig(), began: false };
             publications.set(key, publication);
             try {
               const receipt = await send('beginFullIndex', key, publication.token, { expectedRevision: revision, receipt: true,
@@ -155,14 +150,16 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
             } catch (error) { (options.log || console).warn('[session-index-writer] full index begin outcome unknown: ' + error.message); }
           }
         }
+        if (scanResult) {
+          const upsertIds = new Set(effects.filter(effect => effect.name === 'upsertCachedSessions').flatMap(effect => effect.args[0].map(row => row.sessionId)));
+          const deletedIds = new Set(effects.flatMap(effect => effect.name === 'deleteCachedSession' ? [effect.args[0]]
+            : effect.name === 'deleteCachedFolder' ? backend.getCachedByFolder(effect.args[0]).map(row => row.sessionId) : []));
+          scanResult.counters = { ...scanResult.counters, filesDeleted: [...deletedIds].filter(id => !upsertIds.has(id)).length };
+        }
         if (publications.size) {
           effects.unshift(...[...publications.keys()].map(key => ({ name: 'invalidateFullIndex', args: [key] })));
           const affectedIds = new Set([...fullIds, ...effects.filter(effect => effect.name === 'deleteCachedSession').map(effect => effect.args[0])]);
           effects.splice(1, 0, ...[...affectedIds].map(id => ({ name: 'invalidateFullRead', args: [id] })));
-          if (scanResult) {
-            const upsertIds = new Set(effects.filter(effect => effect.name === 'upsertCachedSessions').flatMap(effect => effect.args[0].map(row => row.sessionId)));
-            scanResult.counters = { ...scanResult.counters, filesDeleted: effects.filter(effect => effect.name === 'deleteCachedSession' && !upsertIds.has(effect.args[0])).length };
-          }
           for (const effect of effects) if (effect.name === 'upsertCachedSessions') {
             for (const row of effect.args[0]) {
               if (!fullIds.has(row.sessionId)) continue;
@@ -190,14 +187,23 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         }
         const bodyAcknowledgment = acknowledgment;
         let continuous = true;
-        const certificateEffects = certificates.filter(row => publications.get(row.folder)?.began).map(row => ({ name: 'certifyFullRead',
-          args: [row.folder, publications.get(row.folder).token, row.sessionId, row.stamp, row.witness] }));
-        if (certificateEffects.length) {
-          const certificateAck = await send('effects', certificateEffects, forwarded && acknowledgment?.committedRevision !== undefined
-            ? acknowledgment.committedRevision : backend.getSetting('_writer_revision') || 0);
-          if (forwarded && certificateAck?.committedRevision !== undefined) acknowledgment = certificateAck;
+        for (const row of certificates) {
+          const publication = publications.get(row.folder);
+          if (!publication?.began || publication.failed) continue;
+          try {
+            const certificateAck = await send('certifyFullRead', row.folder, publication.token, row.sessionId, row.stamp, row.witness, { receipt: forwarded });
+            if ((forwarded ? certificateAck.certified : certificateAck) === false) publication.failed = true;
+            if (forwarded && certificateAck?.committedRevision !== undefined) {
+              if (acknowledgment?.committedRevision !== undefined && certificateAck.beforeRevision !== acknowledgment.committedRevision) continuous = false;
+              acknowledgment = certificateAck;
+            }
+          } catch (error) {
+            publication.failed = true;
+            continuous = false;
+            (options.log || console).warn('[session-index-writer] full index certificate outcome unknown: ' + error.message);
+          }
         }
-        for (const [key, publication] of publications) if (publication.began) {
+        for (const [key, publication] of publications) if (publication.began && !publication.failed) {
           try {
             if (publication.config === currentConfig() && !scanResult?.counters?.filesFailed) {
               const full = name === 'writeScannedFolder';

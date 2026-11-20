@@ -417,6 +417,11 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_search_map_type_id ON search_map(type, i
 
 let cacheUpsertStatement = null;
 const stmts = {
+  fullIndexBegin: db.prepare('UPDATE cache_meta SET fullIndexPending = ?, fullIndexVersion = NULL, fullIndexConfig = NULL WHERE folder = ?'),
+  fullIndexInvalidate: db.prepare('UPDATE cache_meta SET fullIndexVersion = NULL, fullIndexConfig = NULL WHERE folder = ?'),
+  fullIndexSeal: db.prepare('UPDATE cache_meta SET fullIndexVersion = ?, fullIndexConfig = ?, fullIndexPending = NULL WHERE folder = ? AND fullIndexPending = ?'),
+  fullReadCertify: db.prepare('UPDATE session_cache SET fullReadStamp = ? WHERE sessionId = ? AND folder = ?'),
+  fullReadInvalidate: db.prepare('UPDATE session_cache SET fullReadStamp = NULL WHERE sessionId = ?'),
   get: db.prepare('SELECT * FROM session_meta WHERE sessionId = ?'),
   getAll: db.prepare('SELECT * FROM session_meta'),
   upsertName: db.prepare(`
@@ -693,11 +698,12 @@ function deleteCachedSession(sessionId) {
   stmts.cacheDeleteSession.run(sessionId);
 }
 
-function deleteCachedFolder(folder) {
+function deleteCachedFolder(folder, opts) {
 
   stmts.metricsDeleteByFolder.run(folder);
   stmts.cacheDeleteFolder.run(folder);
-  stmts.metaDelete.run(folder);
+  if (opts?.preserveFullIndex && getFolderMeta(folder)?.fullIndexPending) setFolderMeta(folder, null, 0);
+  else stmts.metaDelete.run(folder);
 }
 
 function getFolderMeta(folder) {
@@ -718,12 +724,12 @@ function setFolderMeta(folder, projectPath, indexMtimeMs) {
 function beginFullIndex(folder, token) {
   const previous = getFolderMeta(folder);
   if (!previous) setFolderMeta(folder, null, 0);
-  db.prepare('UPDATE cache_meta SET fullIndexPending = ?, fullIndexVersion = NULL, fullIndexConfig = NULL WHERE folder = ?').run(token, folder);
+  stmts.fullIndexBegin.run(token, folder);
   return previous;
 }
 
 function invalidateFullIndex(folder) {
-  db.prepare('UPDATE cache_meta SET fullIndexVersion = NULL, fullIndexConfig = NULL WHERE folder = ?').run(folder);
+  stmts.fullIndexInvalidate.run(folder);
 }
 
 function sealFullIndex(folder, token, version, config, capturedConfig) {
@@ -732,7 +738,7 @@ function sealFullIndex(folder, token, version, config, capturedConfig) {
     const current = require('./src/main/session-index/full-read-state').fullIndexConfig({ ...(getSetting('global') || {}), remappedProjects: getSetting('projectRemaps') || {} }, root);
     if (current !== capturedConfig) return false;
   }
-  return db.prepare('UPDATE cache_meta SET fullIndexVersion = ?, fullIndexConfig = ?, fullIndexPending = NULL WHERE folder = ? AND fullIndexPending = ?')
+  return stmts.fullIndexSeal
     .run(version, config, folder, token).changes === 1;
 }
 
@@ -740,7 +746,7 @@ function certifyFullRead(folder, token, sessionId, stamp, witness) {
   if (getFolderMeta(folder)?.fullIndexPending !== token) return false;
   const row = getCachedSession(sessionId);
   if (!row || require('./src/main/session-index/full-read-state').rowWitness(row) !== witness) return false;
-  return db.prepare('UPDATE session_cache SET fullReadStamp = ? WHERE sessionId = ? AND folder = ?').run(stamp, sessionId, folder).changes === 1;
+  return stmts.fullReadCertify.run(stamp, sessionId, folder).changes === 1;
 }
 
 const upsertSearchEntriesBatch = db.transaction((entries) => {
@@ -1175,7 +1181,7 @@ return {
   replaceSessionMetrics,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   beginFullIndex, invalidateFullIndex, sealFullIndex, certifyFullRead,
-  invalidateFullRead: sessionId => db.prepare('UPDATE session_cache SET fullReadStamp = NULL WHERE sessionId = ?').run(sessionId),
+  invalidateFullRead: sessionId => stmts.fullReadInvalidate.run(sessionId),
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   getSearchFileIds, applySearchFileBatch,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,

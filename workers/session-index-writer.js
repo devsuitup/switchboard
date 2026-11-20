@@ -96,7 +96,7 @@ function* targetUnits(name, args) {
     for (const entry of entries) yield* units('upsertSearchEntries', [[entry]]);
   } else if (name === 'deleteCachedFolder') {
     for (const row of db.getCachedByFolder(args[0])) yield* units('deleteCachedSession', [row.sessionId]);
-    yield () => db.deleteCachedFolder(args[0]);
+    yield () => db.deleteCachedFolder(...args);
   } else if (name === 'deleteSearchFolder' || name === 'deleteSearchType') {
     const rows = name === 'deleteSearchFolder'
       ? db.connection.prepare('SELECT id, type FROM search_map WHERE folder = ?').all(args[0])

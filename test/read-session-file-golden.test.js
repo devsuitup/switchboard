@@ -23,6 +23,12 @@ const { readSessionFile, readSessionDisplayHeader } = require('../read-session-f
 
 const FIXTURE_PATH = path.join(__dirname, 'fixtures', 'golden-session.jsonl');
 
+test('published content digest entries are append-only', () => {
+  const { CONTENT_GOLDEN_DIGESTS } = require('../src/main/session-index/full-read-state');
+  assert.deepEqual(Object.fromEntries(Object.entries(CONTENT_GOLDEN_DIGESTS).filter(([version]) => Number(version) <= 1)),
+    { 1: '068456510a189d17ee5b332c541ba439d26fbf4c1f2d30fbd90d3348b00e0fe3' });
+});
+
 test('parser output requires a content version bump for Claude, bridge and Codex derivation', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'golden-index-1144-'));
   const previous = process.env.CODEX_HOME;

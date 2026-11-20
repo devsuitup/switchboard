@@ -159,6 +159,11 @@ function createWriterCommands(db) {
       const sealed = db.sealFullIndex(...args);
       return args[5]?.receipt ? { sealed, beforeRevision, committedRevision: beforeRevision + (sealed ? 1 : 0) } : sealed;
     },
+    certifyFullRead(...args) {
+      const beforeRevision = db.getSetting('_writer_revision') || 0;
+      const certified = db.certifyFullRead(...args);
+      return args[5]?.receipt ? { certified, beforeRevision, committedRevision: beforeRevision + (certified ? 1 : 0) } : certified;
+    },
     readProjectArchiveEpochs: epochs,
     patchGlobal: patch,
     cleanupWorktree(projectPath) {

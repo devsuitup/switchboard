@@ -317,10 +317,7 @@ function dropFolderRows(folder, { search = false, preserveFullIndex = false } = 
   const dropped = rows.filter(r => !keepIfRunning(r.sessionId, folder));
   if (dropped.length === rows.length) {
     const hadProject = !!getFolderMeta?.(folder)?.projectPath;
-    if (preserveFullIndex && getFolderMeta?.(folder)?.fullIndexPending) {
-      for (const row of rows) deleteCachedSession(row.sessionId);
-      setFolderMeta(folder, null, 0);
-    } else deleteCachedFolder(folder);
+    deleteCachedFolder(folder, { preserveFullIndex });
     if (search) deleteSearchFolder(folder);
     return dropped.length > 0 || hadProject;
   }
@@ -666,6 +663,7 @@ function refreshFolder(folder, opts = {}) {
         const merged = {
           ...cachedEntry,
           ...count,
+          fullReadStamp: null,
           continuationIndex,
           folder, projectPath,
           summary: h.summary || cachedEntry.summary,

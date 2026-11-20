@@ -117,13 +117,13 @@ test('header refresh cannot certify body freshness and recount modified override
     fs.appendFileSync(file, line('appended body', 'b'));
     fs.utimesSync(file, new Date('2030-01-01'), new Date('2030-01-01'));
     await writer.refreshFolder(folder);
-    assert.equal(db.getCachedSession('ordinary').fullReadStamp, original, 'header and message-count reads retain the old observation');
+    assert.equal(db.getCachedSession('ordinary').fullReadStamp, null, 'header and message-count reads clear the old certificate');
     assert.notEqual(original, readSessionFile(file, folder, root).fullReadStamp);
     db.touchCachedModified('ordinary', '2030-01-01T00:00:00.000Z');
     db.setCachedFileSize('ordinary', fs.statSync(file).size);
     db.setCachedEntrypoints([{ sessionId: 'ordinary', entrypoint: 'cli' }]);
     db.setCachedCustomTitles([{ sessionId: 'ordinary', customTitle: '', fileMtime: '2030-01-01T00:00:00.000Z' }]);
-    assert.equal(db.getCachedSession('ordinary').fullReadStamp, original);
+    assert.equal(db.getCachedSession('ordinary').fullReadStamp, null);
     const bridge = JSON.stringify({ type: 'bridge-session', bridgeSessionId: 'cse_fixture' }) + '\n';
     fs.writeFileSync(path.join(dir, 'parent.jsonl'), line('shared', 'shared') + bridge);
     fs.writeFileSync(path.join(dir, 'member.jsonl'), line('shared', 'shared') + line('own', 'own') + bridge);
