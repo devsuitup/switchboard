@@ -182,6 +182,73 @@ test('Windows cwd matching handles separators, case, descendants and duplicate l
   assert.deepEqual(result, [{ sessionId: 'live', cwd: 'c:/repo/.worktrees/task/sub' }]);
 });
 
+const settle = async () => { for (let i = 0; i < 3; i++) await new Promise(resolve => setImmediate(resolve)); };
+
+test('running sessions resolve the worktree, then every same-drive cwd in parallel, and never a cwd on another drive', { skip: process.platform !== 'win32' && 'drive roots are a Windows notion' }, async () => {
+  const root = 'C:\\repo\\.worktrees\\task';
+  const pending = new Map();
+  const realpath = value => new Promise(resolve => pending.set(value, resolve));
+  const result = deletion.runningSessions(root,
+    new Map([['a', { cwd: root + '\\a' }], ['b', { cwd: 'c:/repo/.worktrees/task/b' }], ['gone', { exited: true, cwd: root }]]),
+    [{ sessionId: 'far', cwd: 'D:\\elsewhere\\task' }, { sessionId: 'unc', cwd: '\\\\server\\share\\repo\\.worktrees\\task' }],
+    { realpath, timeoutMs: 5000 });
+  await settle();
+  assert.deepEqual([...pending.keys()], [root], 'the worktree resolves first');
+  pending.get(root)(root);
+  pending.delete(root);
+  await settle();
+  assert.deepEqual([...pending.keys()].sort(), [root + '\\a', 'c:/repo/.worktrees/task/b'], 'both candidate cwds are in flight before either resolves');
+  for (const [value, resolve] of pending) resolve(value);
+  assert.deepEqual((await result).map(session => session.sessionId).sort(), ['a', 'b']);
+});
+
+test('an unresolvable cwd is bounded by the timeout and falls back to the string comparison', async () => {
+  const root = process.platform === 'win32' ? 'C:\\repo\\.worktrees\\task' : '/repo/.worktrees/task';
+  const inside = path.join(root, 'hang'), outside = path.join(path.dirname(path.dirname(root)), 'other', 'hang');
+  const asked = [];
+  const realpath = value => { asked.push(value); return value.endsWith('hang') ? new Promise(() => {}) : Promise.resolve(value); };
+  const started = Date.now();
+  const result = await deletion.runningSessions(root, new Map([['pty', { cwd: inside }]]),
+    [{ sessionId: 'far', cwd: outside }], { realpath, timeoutMs: 50 });
+  assert.ok(Date.now() - started < 2000, 'both hanging resolutions are cut by one 50 ms bound');
+  assert.deepEqual(asked.sort(), [root, inside, outside].sort(), 'each same-drive cwd was offered to the resolver');
+  assert.deepEqual(result, [{ sessionId: 'pty', cwd: inside }]);
+});
+
+test('timed-out cwds still match both spellings of an aliased worktree', async () => {
+  for (const requested of ['C:/repo/.worktrees/WORKTR~1', 'C:/REPO~1/.worktrees/task']) {
+    const canonical = 'C:/repository/.worktrees/worktree-long-name';
+    const active = new Map([
+      ['literal-root', { cwd: requested }],
+      ['literal-child', { cwd: requested + '/nested' }],
+      ['canonical-root', { cwd: canonical }],
+      ['canonical-child', { cwd: canonical + '/nested' }],
+      ['sibling', { cwd: requested + '-sibling' }],
+      ['canonical-sibling', { cwd: canonical + '-sibling' }],
+      ['exited', { cwd: requested, exited: true }],
+      ['remote', { cwd: requested, host: 'server' }],
+    ]);
+    const descriptors = [{ sessionId: 'descriptor', cwd: requested + '/descriptor' }];
+    let calls = 0;
+    const result = await deletion.runningSessions(requested, active, descriptors, {
+      realpath: () => ++calls === 1 ? Promise.resolve(canonical) : new Promise(() => {}),
+      timeoutMs: 10,
+    });
+    assert.deepEqual(result, [...active].slice(0, 4).map(([sessionId, { cwd }]) => ({ sessionId, cwd })).concat(descriptors),
+      'timed-out cwds must retain sessions under both literal and resolved worktree roots');
+  }
+});
+
+test('a timed-out worktree lookup retains literal membership when the cwd resolves to an alias', async () => {
+  const requested = 'C:/repo/.worktrees/WORKTR~1';
+  const cwd = requested + '/nested';
+  const result = await deletion.runningSessions(requested, new Map([['live', { cwd }]]), [], {
+    realpath: value => value === requested ? new Promise(() => {}) : Promise.resolve('C:/repo/.worktrees/long-name/nested'),
+    timeoutMs: 10,
+  });
+  assert.deepEqual(result, [{ sessionId: 'live', cwd }]);
+});
+
 test('running sessions match an alias ancestor in either the requested path or recorded cwd', async t => {
   const fs = require('node:fs');
   const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'sb-delete-sessions-'));
