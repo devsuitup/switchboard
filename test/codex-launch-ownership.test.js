@@ -70,18 +70,17 @@ for (const lifecycle of ['exited', 'removed', 'adopted then removed']) {
   });
 }
 
-test('unissued inherited tags remain eligible and issued tags expire after 24 hours', t => {
+test('a fork is graded by its own tag only: the parent\'s tag, a sibling\'s tag or no tag never matches it', () => {
   const at = Date.parse('2026-11-19T12:00:00Z');
-  let now = at;
-  t.mock.method(Date, 'now', () => now);
-  const pending = { tag: codex.originatorTag('expiry-a'), forkFrom: 'parent', projectPath: '/p', spawnedAt: at };
-  const signals = { sessionId: REAL_ID, originator: 'switchboard_unissuedparent', forkedFrom: 'parent', startedAt: new Date(at).toISOString() };
-  assert.equal(codex.matchesLaunch(signals, pending), 'fork');
-  signals.originator = codex.launchEnv('expiry-b').CODEX_INTERNAL_ORIGINATOR_OVERRIDE;
-  now = at + 24 * 60 * 60 * 1000 - 1;
-  assert.equal(codex.matchesLaunch(signals, pending), false, 'issued tags are reserved for the full retention period');
-  now++;
-  assert.equal(codex.matchesLaunch(signals, pending), 'fork', 'expired tags no longer occupy the launch registry');
+  const pending = { tag: codex.originatorTag('tag-only-a'), forkFrom: 'parent', projectPath: '/p', spawnedAt: at };
+  const signals = { sessionId: REAL_ID, originator: 'switchboard_parentslaunch', forkedFrom: 'parent', cwd: '/p', startedAt: new Date(at).toISOString() };
+  assert.equal(codex.matchesLaunch(signals, pending), false, 'an inherited parent tag is not this fork\'s evidence');
+  signals.originator = codex.launchEnv('tag-only-b').CODEX_INTERNAL_ORIGINATOR_OVERRIDE;
+  assert.equal(codex.matchesLaunch(signals, pending), false, 'a sibling\'s tag is not this fork\'s evidence');
+  signals.originator = 'codex_cli_rs';
+  assert.equal(codex.matchesLaunch(signals, pending), false, 'forked_from_id plus start time is a guess, not evidence');
+  signals.originator = pending.tag;
+  assert.equal(codex.matchesLaunch(signals, pending), 'tag');
 });
 
 const PARENT_REAL = '22222222-2222-4222-8222-222222222222';
@@ -117,41 +116,59 @@ function transitionsFixture(t) {
 }
 
 for (const lifecycle of ['exited', 'removed']) {
-  test(`an untagged fork rollout once ambiguous between two forks is never adopted after one sibling is ${lifecycle}`, t => {
+  test(`an untagged fork rollout stays pending after one of two forks is ${lifecycle}, even when it is the only rollout left`, t => {
     const f = transitionsFixture(t);
     const a = f.pend(`amb-a-${lifecycle}`, PARENT_REAL), b = f.pend(`amb-b-${lifecycle}`, PARENT_REAL);
     const file = f.rollout(FORK_REAL, { originator: 'codex_cli_rs', forked_from_id: PARENT_REAL });
     assert.equal(transitions.resolvePendingLaunches(codex, [file]), 0, 'positive control: two open forks stay pending');
     if (lifecycle === 'removed') f.activeSessions.delete(`amb-b-${lifecycle}`); else b.session.exited = true;
     assert.equal(transitions.resolvePendingLaunches(codex, [file]), 0,
-      'the rollout may belong to the gone sibling: an ambiguous fork stays under its temporary id');
+      'the rollout may belong to the gone sibling: an untagged fork stays under its temporary id');
     assert.equal(f.activeSessions.get(`amb-a-${lifecycle}`), a.session);
     assert.ok(a.session.pendingLaunch);
     assert.deepEqual(f.events, []);
-    const own = f.rollout(OTHER_REAL, { originator: 'codex_cli_rs', forked_from_id: PARENT_REAL });
-    assert.equal(transitions.resolvePendingLaunches(codex, [file, own]), 1, 'a rollout that only ever matched the remaining fork is adopted');
-    assert.equal(f.activeSessions.get(OTHER_REAL), a.session);
+    const second = f.rollout(OTHER_REAL, { originator: 'codex_cli_rs', forked_from_id: PARENT_REAL });
+    assert.equal(transitions.resolvePendingLaunches(codex, [file, second]), 0, 'a second untagged same-parent rollout is not evidence either');
+    assert.ok(a.session.pendingLaunch);
+    assert.equal(f.activeSessions.has(OTHER_REAL), false);
     assert.equal(f.activeSessions.has(FORK_REAL), false);
+    const own = f.rollout('66666666-6666-4666-8666-666666666666', { originator: a.tag, forked_from_id: PARENT_REAL });
+    assert.equal(transitions.resolvePendingLaunches(codex, [file, second, own]), 1, 'only the rollout carrying this fork\'s own tag is adopted');
+    assert.equal(f.activeSessions.get('66666666-6666-4666-8666-666666666666'), a.session);
+    assert.equal(a.session.pendingLaunch, null);
   });
 }
 
-test('a lone fork whose rollout inherited the tag of a parent adopted in this app run is adopted', t => {
+test('an untagged fork rollout whose sibling exited before the first detection is not donated to the remaining fork', t => {
+  const f = transitionsFixture(t);
+  const a = f.pend('early-a', PARENT_REAL), b = f.pend('early-b', PARENT_REAL);
+  const file = f.rollout(FORK_REAL, { originator: 'codex_cli_rs', forked_from_id: PARENT_REAL });
+  b.session.exited = true;
+  assert.equal(transitions.resolvePendingLaunches(codex, [file]), 0,
+    'a sibling exit before the 500 ms debounce or the 3 s sweep is not ownership evidence');
+  assert.equal(f.activeSessions.get('early-a'), a.session);
+  assert.ok(a.session.pendingLaunch, 'the fork stays under its temporary id');
+  assert.equal(f.activeSessions.has(FORK_REAL), false);
+  assert.deepEqual(f.events, []);
+});
+
+test('a lone fork whose rollout carries the parent\'s inherited tag stays pending; its own tag adopts it', t => {
   const f = transitionsFixture(t);
   const parent = f.pend('parent-launch', null);
   const parentFile = f.rollout(PARENT_REAL, { originator: parent.tag });
   assert.equal(transitions.resolvePendingLaunches(codex, [parentFile]), 1, 'positive control: the parent adopts its tagged rollout');
   assert.equal(f.activeSessions.get(PARENT_REAL), parent.session);
   f.activeSessions.delete(PARENT_REAL);
-  const stranger = f.pend('stranger-fork', OTHER_REAL);
-  const strangerFile = f.rollout('55555555-5555-4555-8555-555555555555', { originator: parent.tag, forked_from_id: OTHER_REAL });
-  assert.equal(transitions.resolvePendingLaunches(codex, [strangerFile]), 0,
-    'a tag issued to a launch that is not this fork\'s parent is still foreign');
-  assert.ok(stranger.session.pendingLaunch);
-  f.activeSessions.delete('stranger-fork');
+  f.events.length = 0;
   const fork = f.pend('inherited-fork', PARENT_REAL);
-  const forkFile = f.rollout(FORK_REAL, { originator: parent.tag, forked_from_id: PARENT_REAL });
-  assert.equal(transitions.resolvePendingLaunches(codex, [forkFile]), 1,
-    'the parent\'s own issued tag is inherited, not foreign: the lone fork adopts its lone rollout');
-  assert.equal(f.activeSessions.get(FORK_REAL), fork.session);
+  const inheritedFile = f.rollout(FORK_REAL, { originator: parent.tag, forked_from_id: PARENT_REAL });
+  assert.equal(transitions.resolvePendingLaunches(codex, [inheritedFile]), 0,
+    'the parent\'s tag on a lone same-parent rollout is still a guess: the fork stays under its temporary id');
+  assert.ok(fork.session.pendingLaunch);
+  assert.deepEqual(f.events, []);
+  const ownFile = f.rollout(OTHER_REAL, { originator: fork.tag, forked_from_id: PARENT_REAL });
+  assert.equal(transitions.resolvePendingLaunches(codex, [inheritedFile, ownFile]), 1, 'the fork\'s own tag is exact evidence');
+  assert.equal(f.activeSessions.get(OTHER_REAL), fork.session);
   assert.equal(fork.session.pendingLaunch, null);
+  assert.deepEqual(f.events, [['session-forked', 'inherited-fork', OTHER_REAL, 'fork']]);
 });

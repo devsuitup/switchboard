@@ -84,7 +84,7 @@ test('the originator tag is header-safe and the launch env carries it', () => {
   assert.equal(codex.needsIdDetection({ isNew: false }), false);
 });
 
-test('matchesLaunch grades a match: the exact tag, then a fork by forked_from_id, then cwd+time; a foreign tag is refused', () => {
+test('matchesLaunch grades a match: the exact tag, or cwd+time for a fresh launch; a fork takes its own tag only; a foreign tag is refused', () => {
   const base = { tag: TAG(), projectPath: '/Users/me/proj', spawnedAt: AT };
   assert.equal(codex.matchesLaunch(signals(), { tag: TAG(), projectPath: '/elsewhere', spawnedAt: AT + 60000 }), 'tag');
   assert.equal(codex.matchesLaunch(signals({ originator: 'switchboard_someoneelse' }), base), false);
@@ -97,7 +97,8 @@ test('matchesLaunch grades a match: the exact tag, then a fork by forked_from_id
   assert.equal(codex.matchesLaunch(signals({ sessionId: null }), base), false);
   assert.equal(codex.matchesLaunch(signals({ originator: 'x', startedAt: null }), base), false);
   const fork = { ...base, forkFrom: 'parent-id' };
-  assert.equal(codex.matchesLaunch(signals({ forkedFrom: 'parent-id', originator: 'switchboard_parentslaunch' }), fork), 'fork');
+  assert.equal(codex.matchesLaunch(signals({ forkedFrom: 'parent-id', originator: 'switchboard_parentslaunch' }), fork), false, 'forked_from_id plus start time is never fork evidence');
+  assert.equal(codex.matchesLaunch(signals({ forkedFrom: 'parent-id', originator: 'codex_cli_rs' }), fork), false);
   assert.equal(codex.matchesLaunch(signals({ forkedFrom: 'parent-id', originator: TAG() }), fork), 'tag');
   assert.equal(codex.matchesLaunch(signals({ forkedFrom: 'other', originator: TAG() }), fork), 'tag', 'the launch\'s own tag is authoritative');
   assert.equal(codex.matchesLaunch(signals({ forkedFrom: 'other', originator: 'switchboard_parentslaunch' }), fork), false);
@@ -238,8 +239,12 @@ test('two pending forks of one parent: a rollout tagged for one fork is adopted 
   assert.ok(a.pendingLaunch);
   assert.deepEqual(f.events, [['session-forked', TEMP_B, forB.id, 'fork']]);
   const inherited = f.rollout('2', { originator: 'switchboard_parentslaunch' });
-  assert.equal(f.transitions.resolvePendingLaunches(codex, [forB.file, inherited.file]), 1, 'the lone remaining fork takes the lone remaining same-parent rollout');
-  assert.equal(f.activeSessions.get(inherited.id), a);
+  assert.equal(f.transitions.resolvePendingLaunches(codex, [forB.file, inherited.file]), 0, 'the lone remaining fork does not take the lone remaining same-parent rollout: untagged, it stays pending');
+  assert.equal(f.activeSessions.get(TEMP_A), a);
+  assert.equal(f.transitions.hasPendingLaunches(), true);
+  const forA = f.rollout('3', { originator: codex.originatorTag(TEMP_A) });
+  assert.equal(f.transitions.resolvePendingLaunches(codex, [forB.file, inherited.file, forA.file]), 1);
+  assert.equal(f.activeSessions.get(forA.id), a);
   assert.equal(f.transitions.hasPendingLaunches(), false);
 });
 

@@ -985,7 +985,6 @@ function resolvePendingLaunches(harness, candidatePaths) {
   const adopt = (tempId, session, signals) => {
     log.info(`[launch-detect] ${tempId} → ${signals.sessionId} (${harness.id}, originator=${signals.originator || 'none'})`);
     const kind = session.pendingLaunch.forkFrom ? 'fork' : 'new';
-    harness.recordLaunchAdoption?.(session.pendingLaunch.tag, signals.sessionId);
     session.pendingLaunch = null;
     settled.add(tempId);
     settled.add(signals);

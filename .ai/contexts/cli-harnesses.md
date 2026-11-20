@@ -200,35 +200,31 @@ rollout appears. `session-transitions.js` owns the adoption:
   once (`readLaunchSignals`), skips a transcript already live in another tab,
   and grades every (pending session, candidate) pair with
   `matchesLaunch(signals, pendingLaunch)`, which returns `'tag'` when the
-  originator is the launch's own tag, `'fork'` when `forked_from_id` names the
-  parent and the rollout started after the spawn, `'cwd'` for the cwd plus
-  start-time fallback of a fresh launch, `false` otherwise. The fallback
-  refuses a rollout tagged for another Switchboard launch. `launchEnv` records
-  issued tags in the Codex adapter for 24 hours, including exited, stopped and
-  already-adopted launches; `recordLaunchAdoption(tag, realId)`, called by the
-  adopt step, notes which real id an issued tag ended up as. Matching rejects
-  another issued tag before fork fallback, with one exception: a tag whose
-  recorded real id is this launch's own `forkFrom` is the parent's inherited
-  tag, not a foreign one, so a lone fork of a parent started in this app run
-  still adopts its lone rollout. A tag issued to any other launch, exited or
-  not, stays foreign. Issuing or matching prunes expired entries. This registry
-  is local to the app process and does not survive restart. An inherited parent
-  tag absent from the registry remains eligible for fork fallback (whether Codex
-  honours `CODEX_INTERNAL_ORIGINATOR_OVERRIDE` on `codex fork` is not measured).
+  originator is the launch's own tag, `'cwd'` for the cwd plus start-time
+  fallback of a fresh launch, `false` otherwise. A fork launch (`forkFrom`
+  set) is graded by its own tag only: `forked_from_id`, the start time, the
+  parent's inherited tag or a sibling's tag are never fork evidence (decision
+  of 2026-11-20: no guessing for a fork; a guess once donated a rollout to the
+  sibling of a fork that exited before the first detection). Whether `codex
+  fork` honours `CODEX_INTERNAL_ORIGINATOR_OVERRIDE` is not measured; if it
+  copies the parent's originator instead, a fork stays under its temporary id
+  for the tab's lifetime, which is the accepted outcome. The cwd fallback
+  refuses a rollout whose originator is any `switchboard_` tag.
 - Adoption is exact first: a candidate graded `'tag'` by a pending session goes
   to that session, and nothing else may take it. `session-transitions.js` keeps,
   per candidate id, every pending launch the candidate ever matched
-  (`launchMatches`, reset by `init`). A remaining candidate is adopted by
-  fallback only when it has only ever matched one launch, that launch is open,
-  and that launch matches exactly one such candidate. A rollout that was once
-  ambiguous between two launches is latched for its lifetime: a sibling exiting,
-  its tab being closed, or the other rollout vanishing never makes it adoptable,
-  because uniqueness among the sessions still open is not ownership evidence.
-  Two forks of the same parent started together, both with inherited or absent
-  tags, therefore stay under their temporary ids for the tabs' lifetime (the 3 s
-  sweep keeps running while they are open); a lone fork still adopts its lone
-  rollout, a rollout that only ever matched one fork is adopted even after a
-  latched sibling rollout, and a tagged rollout settles its own side.
+  (`launchMatches`, reset by `init`). A remaining candidate is adopted by the
+  cwd fallback only when it has only ever matched one launch, that launch is
+  open, and that launch matches exactly one such candidate. A rollout that was
+  once ambiguous between two fresh launches is latched for its lifetime: a
+  sibling exiting, its tab being closed, or the other rollout vanishing never
+  makes it adoptable, because uniqueness among the sessions still open is not
+  ownership evidence. The latch starts at the first observation: a fresh launch
+  in the same cwd that exits before the first detector run is not in it, so the
+  cwd fallback can still hand its rollout to the sibling (known, not closed;
+  the fork case is closed by the tag-only rule above). Untagged forks stay
+  under their temporary ids for the tabs' lifetime (the 3 s sweep keeps
+  running while they are open); a tagged rollout settles its own side.
 - A match goes through `rekeySession(tempId, realId, session, [], kind)` with
   `kind` `'new'` or `'fork'` — the same path as a Claude fork. Main's metadata
   callback calls the writer only for `kind === 'background'`; these Codex
@@ -258,7 +254,10 @@ badge shows at once. The picker that starts a fresh Codex session is #824; the
 Tests: `harness-codex-launch.test.js` (argv goldens, tag and env, matching
 grades, head reading, the shell binary, the extracted launch block against a
 Codex row with and without its rollout, the re-key through
-`session-transitions`, two forks of one parent with and without tags).
+`session-transitions`, two forks of one parent with and without tags);
+`codex-launch-ownership.test.js` (a tagged rollout stays with its exited,
+removed or already adopted owner; an untagged fork rollout stays pending
+before and after the first observation, with one or two forks open).
 
 ## Busy and attention per harness (#823)
 
