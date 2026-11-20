@@ -845,12 +845,31 @@ app session for this early-close case and remains available for later tabs.
 This warning also covers a close before node-pty has submitted the root PID.
 Release before readiness cancels the assignment silently.
 
-Jobs **never** set JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE. They retain only
-JOB_OBJECT_LIMIT_BREAKAWAY_OK (0x800): applications that explicitly request
-CREATE_BREAKAWAY_FROM_JOB keep that ability. Node detached spawn does not request
-that flag, so ordinary detached children are still members. SILENT_BREAKAWAY_OK
-is absent because it would exempt ordinary descendants. Closing job handles,
-helper death, transport/protocol failure or timeout therefore kills no members.
+Jobs set no limit flags (#1015): JOB_OBJECT_LIMIT_BREAKAWAY_OK (0x800),
+SILENT_BREAKAWAY_OK and JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE are all absent.
+With breakaway allowed, Git for Windows bash can launch Node outside the tab's
+job; Node's detached children then also escape. A gated native measurement with
+Git bash and Node 22 observed both launcher and detached child surviving explicit
+termination with 0x800, and both ending with zero flags. Bash still launched
+Node and its detached child successfully with zero flags. An explicit native
+CREATE_BREAKAWAY_FROM_JOB request instead fails with ERROR_ACCESS_DENIED (5),
+as measured separately; callers that require that flag cannot launch through
+this job. The live comparison on 19–20 November 2026 confirmed this error from
+inside a Git bash tab. Detached Node children and `cmd /c start` PowerShell
+processes survived tab close with 0x800 and ended with zero flags. Console-attached
+children, Claude and classic Win32 charmap already ended on close with 0x800;
+Store Notepad stayed outside the tab job and survived in both variants.
+An already-running Claude daemon spawned background workers outside the tab job
+in both variants. Starting that daemon from a tab was not measured; members of
+the tab job still rely on the protected-member policy below.
+Claude's srt-win sandboxed Bash tool under zero flags has NOT been measured.
+Codex's Windows sandbox ran under zero flags, but that does not establish srt-win
+compatibility. JB accepted shipping zero flags in the next beta on 20 November.
+The Windows-only windows-job-bash regression exercises the shipped helper
+through its spawn port and a real Git bash; it skips when Git for Windows is
+unavailable. It does not exercise Electron or cover every MSYS tool.
+Closing job handles, helper death, transport/protocol failure or timeout
+therefore kills no members.
 The failed singleton logs once, settles requests false and never restarts in the
 same app session; subsequent tabs degrade to plain ConPTY close. EOF/finally
 only closes handles, with no membership scan or termination. Release also just
@@ -927,6 +946,16 @@ it does not disable the shared helper or other PTYs. An in-flight request keeps
 its own request timeout; only a genuine request timeout or protocol/process
 failure disables the helper. Late replies remain serialized before release.
 There is no new kill fallback. Legacy `terminate` still releases immediately.
+In the 19–20 November live run under zero flags, an unreadable codex.exe command
+line spared that member and its validated descendants. Fully detached children
+of such a spared member can therefore survive tab close. The helper logged
+`terminate failed: 5` for the whole stop although the other members had ended;
+this warning does not mean every member survived. The observed Codex subtree
+ended through console shutdown within five seconds, not helper termination.
+This caveat matches strict retained termination's unreadable-member policy;
+legacy `terminate` does not automatically spare a member solely because its
+command line is unreadable. Do not infer that every process ends from the zero
+limit flags alone.
 Per-id protocol serialization is retained. Script encoding strips leading
 indentation to stay below the Windows command-line length limit.
 
