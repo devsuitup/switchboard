@@ -35,6 +35,12 @@ const SETTING_DEFAULTS = {
   remoteTriggers: false,
   schedulesTab: false,
   lastSeenVersion: null, // see docs/changelog.md
+  // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
+  disabledHarnesses: [],
+  codexSandbox: '',
+  codexApproval: '',
+  codexModel: '',
+  codexEffort: '',
 };
 
 const PROJECT_DELETE_PREVIEW_TIMEOUT_MS = 20000;

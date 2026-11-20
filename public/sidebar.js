@@ -2375,7 +2375,8 @@ function rebindSidebarEvents(projects) {
     item.onclick = () => {
       if (item.dataset.subagent && session.parentSessionId) {
         showSubagentTranscript(session);
-      } else if (session.remoteAlias && !session.remoteAttachable) {
+      } else if ((session.remoteAlias && !session.remoteAttachable) || session.canLaunch === false) {
+        // see .ai/contexts/cli-harnesses.md ("The sidebar badge")
         showJsonlViewer(rowHeadSession(session));
       } else {
         const head = session.remoteAlias ? (session.remoteAttachSessionId || rowHeadId(session)) : rowHeadId(session);
@@ -2909,6 +2910,15 @@ function buildSessionItem(session) {
     badge.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>';
     summaryEl.prepend(badge);
   }
+  // see .ai/contexts/cli-harnesses.md ("The sidebar badge")
+  if (session.runtimeLabel) {
+    const badge = document.createElement('span');
+    badge.className = 'runtime-badge';
+    badge.dataset.runtime = session.runtime;
+    badge.textContent = session.runtimeLabel;
+    badge.title = 'Session of the ' + session.runtimeLabel + ' CLI';
+    summaryEl.prepend(badge);
+  }
   info.appendChild(summaryEl);
   info.appendChild(metaEl);
 
@@ -2979,14 +2989,15 @@ function buildSessionItem(session) {
   actions.appendChild(detachBtn);
   if (session.remoteAlias) actions.appendChild(sendBtn);
   if (session.type !== 'terminal') {
-    actions.appendChild(forkBtn);
+    const launchable = session.canLaunch !== false;
+    if (launchable) actions.appendChild(forkBtn);
     // see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
     if (!session.placeholder) actions.appendChild(jsonlBtn);
     actions.appendChild(unreadBtn);
     if (bridgeSessionUrl(session.bridgeSessionId)) actions.appendChild(bridgeBtn);
     actions.appendChild(archiveBtn);
-    actions.appendChild(launchConfigBtn);
-    if (!session.remoteAlias) actions.appendChild(deleteBtn);
+    if (launchable) actions.appendChild(launchConfigBtn);
+    if (!session.remoteAlias && launchable) actions.appendChild(deleteBtn);
   }
 
   row.appendChild(pin);

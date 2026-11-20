@@ -16,7 +16,7 @@ function rig(beforeWire = () => {}) {
   const session = { pty, kind: 'local-pty' }, sessions = new Map([[id, session]]);
   class Clock extends Date { static now() { return clock; } }
   const context = vm.createContext({ Date: Clock, ptyGenerationCounter: 0, TRACE: {}, LOG_DEBUG_ON: false,
-    classifyTitleActivity: text => ({ idle: text === 'idle', busy: text === 'busy' }), appQuitting: false,
+    getHarness: () => ({ classifyTitleActivity: text => ({ idle: text === 'idle', busy: text === 'busy' }), classifyNotification: () => null }), appQuitting: false,
     mainWindow: { isDestroyed: () => false, webContents: { send: (...args) => events.push(args) } },
     appendToOutputBuffer() {}, MAX_BUFFER_SIZE: 1024, log: { info() {}, warn() {} },
     ptyExitSignalName: () => null, shutdownMcpServer() {}, activeSessions: sessions,
@@ -201,7 +201,7 @@ test('m4: ordinary spawns retain the v1 capture condition and have a separate st
       cliSessionState: { deliveryPtyStart: () => 'start' }, launchMode: null, resumeSourceId: null, launchStartedAt: 1,
       projectPath: '', spawnCwd: '', projectFolder: '', knownJsonlFiles: new Set(), continuationSnapshot: null,
       isPlainTerminal: false, panelOwnerId: null, sessionOptions: {}, isAttach: false, attachJobId: null,
-      mcpServer: null, mcpError: null, createComposerState: () => ({}) });
+      mcpServer: null, mcpError: null, createComposerState: () => ({}), launchHarness: require('../harnesses').getHarness() });
     vm.runInContext(declaration, context, { filename });
     const session = vm.runInContext('session', context, { filename });
     assert.equal(Object.hasOwn(session, 'hostPtyStart'), !!triggerPermit, 'v1 pin capture remains trigger-only');

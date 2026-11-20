@@ -488,6 +488,8 @@ uninitialised submodule refuses preview/deletion before force can hide its files
 | `get-setting` / `set-setting` / `delete-setting` | Generic key/value over `settings` table |
 | `get-settings-by-prefix` | `(prefix)` accepts only the non-empty string `continuationChoice:` and returns an object of matching keys and values; other prefixes throw before reading settings. Bridge: `getSettingsByPrefix`. Used to load continuation choices before restore and reload. |
 | `get-effective-settings` | `(projectPath)` — resolves global + project overrides |
+| `get-harnesses` | `()` → `[{ id, label, available, enabled, isDefault }]` for every registered CLI adapter; `enabled` reflects `global.disabledHarnesses`. Bridge: `getHarnesses`. See cli-harnesses.md ("Picker, toggles and settings"). |
+| `get-harness-models` | `(runtime)` → the adapter's model catalog (`[{ slug, label, efforts, defaultEffort, visible }]`, Codex reads `$CODEX_HOME/models_cache.json`), `[]` when it has none. Bridge: `getHarnessModels`. |
 | `get-shell-profiles` | Configured shell list |
 | `get-schedule-creator-command` / `create-schedule-session` / `run-schedule-now` | Schedule integration |
 
@@ -626,7 +628,7 @@ An unknown remote target never falls back to local disk IO.
 
 ### Events (main → renderer)
 
-`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`
+`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification` (`sessionId, message, kind` — `kind` is the session harness's `classifyNotification` verdict, see cli-harnesses.md), `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`
 
 `onProjectsChanged(callback)` forwards the main-side `{ cause: string[] }`
 payload. Schedules filters these causes before queuing a bounded debounce;
@@ -843,12 +845,37 @@ app session for this early-close case and remains available for later tabs.
 This warning also covers a close before node-pty has submitted the root PID.
 Release before readiness cancels the assignment silently.
 
-Jobs **never** set JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE. They retain only
-JOB_OBJECT_LIMIT_BREAKAWAY_OK (0x800): applications that explicitly request
-CREATE_BREAKAWAY_FROM_JOB keep that ability. Node detached spawn does not request
-that flag, so ordinary detached children are still members. SILENT_BREAKAWAY_OK
-is absent because it would exempt ordinary descendants. Closing job handles,
-helper death, transport/protocol failure or timeout therefore kills no members.
+Jobs set no limit flags (#1015): JOB_OBJECT_LIMIT_BREAKAWAY_OK (0x800),
+JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK (0x1000) and JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+are all absent. Closing job handles, helper death, transport/protocol failure or
+timeout therefore kills no members.
+The job is set on every local Windows PTY (main.js, trackWindowsPty, assign): Git
+bash, PowerShell, Claude and plain tabs alike, so everything below applies to
+every Windows tab, not only Git bash.
+With breakaway allowed, Git for Windows bash can launch Node outside the tab's
+job; Node's detached children then also escape. A gated native measurement with
+Git bash and Node 22 observed both launcher and detached child surviving explicit
+termination with 0x800, and both ending with zero flags. Bash still launched
+Node and its detached child successfully with zero flags. An explicit native
+CREATE_BREAKAWAY_FROM_JOB request instead fails with ERROR_ACCESS_DENIED (5),
+as measured separately; callers that require that flag cannot launch through
+this job. The live comparison on 19–20 November 2026 confirmed this error from
+inside a Git bash tab; since the job covers every local Windows PTY, the error-5
+cost of an explicit CREATE_BREAKAWAY_FROM_JOB concerns every Windows tab. Detached Node children and `cmd /c start` PowerShell
+processes survived tab close with 0x800 and ended with zero flags. Console-attached
+children, Claude and classic Win32 charmap already ended on close with 0x800;
+Store Notepad stayed outside the tab job and survived in both variants.
+An already-running Claude daemon spawned background workers outside the tab job
+in both variants. Starting that daemon from a tab was not measured; members of
+the tab job still rely on the protected-member policy below.
+Claude's srt-win sandboxed Bash tool under zero flags has NOT been measured.
+Because the job is set on every Windows tab, that unmeasured risk concerns every
+tab where Claude runs its sandboxed Bash tool, not only Git bash tabs. Codex's
+Windows sandbox ran under zero flags, but that does not establish srt-win
+compatibility. JB accepted shipping zero flags in the next beta on 20 November.
+The Windows-only windows-job-bash regression exercises the shipped helper
+through its spawn port and a real Git bash; it skips when Git for Windows is
+unavailable. It does not exercise Electron or cover every MSYS tool.
 The failed singleton logs once, settles requests false and never restarts in the
 same app session; subsequent tabs degrade to plain ConPTY close. EOF/finally
 only closes handles, with no membership scan or termination. Release also just
@@ -925,6 +952,17 @@ it does not disable the shared helper or other PTYs. An in-flight request keeps
 its own request timeout; only a genuine request timeout or protocol/process
 failure disables the helper. Late replies remain serialized before release.
 There is no new kill fallback. Legacy `terminate` still releases immediately.
+In the 19–20 November live run under zero flags, the stop went through the legacy
+path (`stop-session`, `killPty`, `record.jobs.terminate`, then
+`TerminateMembers(..., strict=false)`). codex.exe could not be opened or
+terminated (error 5), and the helper logged `terminate failed: 5` for the whole
+stop although the other members had ended; this warning does not mean every
+member survived. Legacy terminate only warns on an unreadable command line: it
+neither skips the member nor protects its descendants, so `ProtectDescendants`
+has no seed for it. Which mechanism ended the Codex subtree was not established.
+This differs from strict retained termination, which skips unreadable members and
+requires validated roster evidence. Do not infer that every process ends from the
+zero limit flags alone.
 Per-id protocol serialization is retained. Script encoding strips leading
 indentation to stay below the Windows command-line length limit.
 
@@ -976,8 +1014,10 @@ TerminateJobObject is used.
 
 A background agent whose launcher has already exited can lose its ancestry link
 to the daemon. If it has no own marker or roster identity, closing the originating
-tab ends it. This accepted rare case requires the daemon to have been cold-started
-from that tab; surviving ancestry cannot be reconstructed from an absent parent.
+tab ends it. This requires the daemon to have been cold-started from that tab;
+surviving ancestry cannot be reconstructed from an absent parent. Under flags 0
+this is no longer rare when a Git bash Claude tab cold-starts the daemon; how
+often it happens is unmeasured.
 
 Attach, detaching, backgrounding, backgrounded, hosted and non-local sessions use
 plain close. Detach releases before Ctrl-Z/write or fallback kill. Confirmed

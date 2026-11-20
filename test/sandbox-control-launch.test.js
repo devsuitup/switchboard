@@ -61,7 +61,7 @@ for (const mode of ['new', 'resume', 'fork', 'schedule']) {
       require: createRequire(filename), fs, path, os, process: { platform: 'linux' },
       ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
       mainWindow: {}, unsavedGuard: { launchAllowed: () => true }, activeSessions: new Map(),
-      getCachedFolder: () => null, isRemoteFolder: () => false,
+      getCachedFolder: () => null, getCachedSession: () => null, isRemoteFolder: () => false,
       remoteIndexer: { findSessionAlias: () => null }, resolveSessionRealCwd: () => cwd,
       PROJECTS_DIR: path.join(base, 'transcripts'),
       normalizePtySize: require('../src/main/terminals/pty-size').normalizePtySize,

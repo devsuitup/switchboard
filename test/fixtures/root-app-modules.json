@@ -16,6 +16,7 @@
     "file-lists-worker-client.js",
     "folder-index-state.js",
     "fts-match.js",
+    "jsonl-scan.js",
     "local-transcript-activity.js",
     "main.js",
     "preload.js",

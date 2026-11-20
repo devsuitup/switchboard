@@ -21,6 +21,7 @@ function setup() {
     bgAgents: { liveJobCheck: () => ({ known: true, job: null }) },
     cliSessionState: { getSidebarDescriptors: () => [], liveElsewhereChecked: async () => ({ known: true, live: null }) },
     sessionHasPty: () => false, ptyPids: () => [],
+    getCachedSession: id => rows.find(row => row.sessionId === id) || null, getHarness: require('../harnesses').getHarness,
   });
   const guard = vm.runInContext(source.slice(start, end) + '\ndeleteSessionGuard;', context, { filename: 'main.js' });
   return { activeSessions, guard };

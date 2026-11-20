@@ -4847,6 +4847,14 @@ body { display: flex; flex-direction: column; }
   font-size: 10px; line-height: 15px; vertical-align: middle;
 }
 
+/* The CLI that wrote a session, when it is not the default one — see .ai/contexts/cli-harnesses.md */
+.runtime-badge {
+  display: inline-block; margin-right: 5px; padding: 0 5px;
+  border: 1px solid #3f6b5a; border-radius: 3px; color: #7fd1b0;
+  font-size: 10px; line-height: 15px; vertical-align: middle; white-space: nowrap;
+}
+.grid-card-header .runtime-badge { margin: 0 6px 0 0; }
+
 /* Issue #212/#245 — see .ai/contexts/session-cache.md ("Remote hosts —
    freshness contract") and .ai/contexts/cli-session-state.md; shared by
    remote and local sessions, which carry the same status/statusUpdatedAt pair */

@@ -27,7 +27,7 @@ const mainSrc = fs.readFileSync(MAIN_PATH, 'utf8');
 // vanish as long as another appeared.
 const EXPECTED_PROBES = [
   'app.quit', 'busy.emit', 'busy.emit', 'busy.emit', 'ipc.get-memories', 'ipc.get-projects',
-  'osc.notify', 'osc.progress', 'osc.title', 'poll.snapshot', 'pty.exit', 'pty.input', 'pty.resize', 'session-index-writer.busy',
+  'osc.notify', 'osc.notify', 'osc.progress', 'osc.title', 'poll.snapshot', 'pty.exit', 'pty.input', 'pty.resize', 'session-index-writer.busy',
 ];
 
 // Everything whose evaluation costs something: the writer and the four payload
@@ -137,7 +137,7 @@ test('every trace() call in main.js is guarded, except the IPC forwarder', () =>
 // test/osc-debug-log-guards.test.js pins. Its exact text is pinned here so
 // that it stays the *only* exception: anything new fails the assertion below.
 const KNOWN_UNGUARDED_HELPERS = [
-  'if (LOG_DEBUG_ON) log.debug(`[OSC 0] session=${currentId} cp=${codePoints(payload, 1)} rule=${via} busy=${isBusy} idle=${isIdle} wasBusy=${!!session._cliBusy}`);',
+  'if (LOG_DEBUG_ON) log.debug(`[OSC 0] session=${currentId} cp=${codePoints(payload, 1)} rule=${via} busy=${isBusy} idle=${isIdle} attention=${isAttention} wasBusy=${!!session._cliBusy}`);',
 ];
 
 test('no trace payload helper is called outside a guard', () => {

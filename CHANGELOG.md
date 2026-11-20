@@ -5,6 +5,10 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
+- Codex CLI sessions found under `~/.codex/sessions` (or `$CODEX_HOME`) now appear in the sidebar under their project, with a "Codex" badge, and can be searched and read in the message viewer; they count in the heatmap and stats. Codex thread names are shown as titles. Deleting a Codex session from Switchboard is refused; new rollouts are picked up as Codex writes them, and sessions whose transcripts are gone leave the sidebar, even when the whole Codex sessions folder was removed. (#821)
+- A Codex session can be resumed and forked from its sidebar row: the tab runs `codex resume` or `codex fork` and adopts the real session id as soon as Codex writes its transcript. A forked tab adopts only a transcript Codex marked as its own: when that mark is missing, the tab keeps running without being linked to a sidebar row, rather than being guessed from the parent and the start time. A Codex row whose transcript is gone starts a fresh Codex session instead of failing. (#822)
+- A Codex tab shows the same states as a Claude one: working while a turn runs, needs-you when Codex asks for an approval or an action, response-ready when its turn ends. (#823)
+- The project "+" menu offers a new Codex session next to Claude. Settings gains a "CLI Agents" section to switch each CLI on or off (a switched-off CLI is not scanned or offered and its sessions are hidden until it is switched back on, while its open tabs keep working; at least one stays on) and the Codex sandbox, approval, model and reasoning effort used for new Codex sessions. (#824)
 - The Changes list can be viewed as a tree: a toolbar button switches between the flat list (the default) and files grouped under collapsible folders. The choice is remembered. (#828)
 
 ### Changed
@@ -15,6 +19,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - Clicking a background session in the sidebar attaches it directly, as the Agents view does, instead of going through the saved-entry checks that could refuse and send you to the Agents view. The `bg` badge now names the job (`bg · name`) when the row is titled after its original conversation. (#546)
+- Processes started fully detached from a Windows tab (for example with `start`) now end when the tab closes. (#1015)
 - While the index is being built at startup, the sidebar no longer fails reload after reload with "Projects changed while loading" as sessions start and stop: it shows the latest snapshot and refreshes at the next change. The first load after indexing no longer runs a full sweep that could time out, and a sweep that outlives its wait now refreshes the sidebar when it finishes. (#1125)
 - The Delete worktree dialog accepts Windows short (8.3) folder names, and no longer waits on unreachable drives or shares to list running sessions. Paths containing a `.` or `..` segment, including Windows backslash separators, are refused before the dialog. (#855)
 - A trigger dropped while Switchboard indexes transcripts is delivered without waiting for a whole indexing batch to finish; waits of 200 ms or more on the index writer are logged. (#1073)

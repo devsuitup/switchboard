@@ -257,7 +257,7 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
         projectPath: entry.session.projectPath,
         active: sessionId === activeSessionId,
         ...(entry.attach ? { bg: true, ...(typeof entry.attachJobId === 'string' && entry.attachJobId ? { attachJobId: entry.attachJobId } : {}) } : {}),
-        ...(fresh ? { fresh: true } : {}),
+        ...(fresh ? { fresh: true, ...(entry.session.runtime ? { runtime: entry.session.runtime } : {}) } : {}),
       });
     }
     const liveAttach = (id) => { const open = openSessions.get(id); return !!open && !open.closed && !!open.attach; };
@@ -277,7 +277,7 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
     for (const { item, index, keepAttached } of held) {
       const active = heldActive ? heldActive.item === item : !!keepAttached && item.sessionId === activeSessionId;
       const attachJobId = openSessions.get(item.sessionId)?.attachJobId || item.attachJobId;
-      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true } : {}), ...(item.bg || (keepAttached && liveAttach(item.sessionId)) ? { bg: true, ...(typeof attachJobId === 'string' && attachJobId ? { attachJobId } : {}) } : {}) });
+      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true, ...(item.runtime ? { runtime: item.runtime } : {}) } : {}), ...(item.bg || (keepAttached && liveAttach(item.sessionId)) ? { bg: true, ...(typeof attachJobId === 'string' && attachJobId ? { attachJobId } : {}) } : {}) });
     }
     if (!set.some(e => e.active)) {
       const opening = set.find(e => pendingSessions.get(e.sessionId)?.openingActive);
@@ -450,6 +450,14 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       ? (backgroundSlots++, Promise.resolve())
       : new Promise(resolve => backgroundWaiters.push(resolve)).then(() => { backgroundSlots++; });
     const releaseBackgroundSlot = () => { backgroundSlots--; backgroundWaiters.shift()?.(); };
+    let harnessLabels = null;
+    const harnessLabel = async runtime => {
+      if (!harnessLabels) {
+        harnessLabels = new Map();
+        try { for (const h of (await window.api.getHarnesses?.()) || []) if (h?.id) harnessLabels.set(h.id, h.label); } catch {}
+      }
+      return harnessLabels.get(runtime) || null;
+    };
     try {
       const liveById = await liveElsewhereMany(pending.filter(item => !startsFresh(item)).map(item => item.sessionId), { api: window.api });
       const ordered = activeItem ? [activeItem, ...list.filter(item => item !== activeItem)] : [...list];
@@ -465,6 +473,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
             if (window.isDeletedProjectRestoreTarget?.(item)) continue;
             delete options.worktree;
             delete options.worktreeName;
+            if (item.runtime) { options.runtime = item.runtime; options.runtimeLabel = await harnessLabel(item.runtime); }
             const newId = await launchNewSession(project, options, item.sessionId, showWhenOpened(item));
             if (newId) startedAs.set(item.sessionId, newId);
           } finally {
@@ -1199,18 +1208,21 @@ window.api.onRemoteResizeAllowed((sessionId) => {
 });
 
 // --- Terminal notifications (iTerm2 OSC 9 — "needs attention") ---
-window.api.onTerminalNotification((sessionId, message) => {
-  if (window.ATRACE) window.atrace('recv.terminal-notification', sessionId, { message: String(message).slice(0, 120), active: sessionId === activeSessionId });
-  // Only mark as needing attention for "attention" messages, not "waiting for input"
-  // Matches all four CLI notification types:
-  // 1. "Claude Code needs your attention"         → attention
-  // 2. "Claude Code needs your approval for the plan" → approval, needs your
-  // 3. "Claude needs your permission to use {tool}"   → permission, needs your
-  // 4. "Claude Code wants to enter plan mode"         → wants to enter
-  if (/attention|approval|permission|needs your|wants to enter/i.test(message) && sessionId !== activeSessionId) {
+// see .ai/contexts/cli-harnesses.md ("Busy and attention per harness")
+function terminalNotificationState(message, kind) {
+  if (kind === 'attention' || kind === 'idle') return kind;
+  if (/attention|approval|permission|needs your|wants to enter/i.test(message)) return 'attention';
+  if (/waiting for your input/i.test(message)) return 'idle';
+  return null;
+}
+
+window.api.onTerminalNotification((sessionId, message, kind) => {
+  if (window.ATRACE) window.atrace('recv.terminal-notification', sessionId, { message: String(message).slice(0, 120), kind: kind || null, active: sessionId === activeSessionId });
+  const state = terminalNotificationState(message, kind);
+  if (state === 'attention' && sessionId !== activeSessionId) {
     setAttention(sessionId, true, 'onTerminalNotification');
-  } else if (/waiting for your input/i.test(message)) {
-    // "Claude is waiting for your input" — delayed idle notification, mark response-ready
+  } else if (state === 'idle') {
+    // see .ai/contexts/cli-harnesses.md ("Busy and attention per harness")
     setActivity(sessionId, false, 'onTerminalNotification');
   }
 
@@ -2453,6 +2465,7 @@ async function launchNewSession(project, sessionOptions, restoreSessionId, flags
     messageCount: 0,
     modified: new Date().toISOString(),
     created: new Date().toISOString(),
+    ...(sessionOptions?.runtime ? { runtime: sessionOptions.runtime, runtimeLabel: sessionOptions.runtimeLabel || null, canLaunch: true } : {}),
   };
 
   // Track as pending (no .jsonl yet)

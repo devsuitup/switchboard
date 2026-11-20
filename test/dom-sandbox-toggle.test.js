@@ -343,7 +343,7 @@ test('sandbox badge: main.js reports the sandbox state on both open-terminal ret
 
   // A reattach has no sessionOptions to consult, so the flag must be recorded
   // on the session record when it is created.
-  assert.match(src, /sandbox: !!sessionOptions\?\.sandbox,/, 'session record must persist the sandbox flag');
+  assert.match(src, /sandbox: !isAttach && !!sessionOptions\?\.sandbox && launchHarness\.capabilities\.sandbox,/, 'session record must persist the sandbox flag');
 });
 
 test('sandbox badge: the renderer renders it from the reported state', () => {
