@@ -885,7 +885,5 @@ module.exports = [
       globals: { ...globals.node },
     },
   },
-  { files: ['public/archived-manager.js'], languageOptions: { globals: { module: 'writable', renderArchivedProjects: 'off',
-    PROJECT_DELETE_DIALOG_TIMEOUT_MS: 'readonly', projectDeletionPreviewWait: 'readonly',
-    projectDeletionCall: 'readonly', projectDeletionPlanReason: 'readonly' } } },
+  { files: ['public/archived-manager.js'], languageOptions: { globals: { module: 'writable', renderArchivedProjects: 'off' } } },
 ];
