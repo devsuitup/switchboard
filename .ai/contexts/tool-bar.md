@@ -113,3 +113,11 @@ the shell sizing and tool state regressions.
 `e2e/tool-bar.spec.js`: E1-E8, including the 32-case overflow matrix and
 width restoration. These Electron journeys run only in CI; local jsdom tests
 do not prove rendered geometry or native Tab traversal.
+
+E4 reapplies each short/long title pair and reads all header rectangles in one
+synchronous renderer evaluation. Separate bounding-box calls can straddle a
+PTY title update and combine the id's old position with Refresh's new one
+(#1163). A bounded `toPass` retries the complete geometry assertions while
+layout settles, retaining the nonnegative gap strictly below 24 CSS px and
+the id/control containment checks. Each retry measures the requested titles,
+even if shell output updated the PTY title since the preceding attempt.

@@ -114,25 +114,31 @@ test('E4: Refresh stays beside the id with short and long session and PTY titles
     await viewport(app, page, width);
     for (const name of ['Session', 'Session '.repeat(30)]) {
       for (const title of ['Shell', 'Program title '.repeat(30)]) {
-        await page.evaluate(({ name, title }) => {
-          document.getElementById('terminal-header-name').textContent = name;
-          const el = document.getElementById('terminal-header-pty-title');
-          el.textContent = title;
-          el.style.display = '';
-        }, { name, title });
-        const id = await box(page.locator('#terminal-header-id'));
-        const info = await box(page.locator('#terminal-header-info'));
-        const refresh = await box(page.locator('#terminal-refresh-btn'));
-        const stop = await box(page.locator('#terminal-stop-btn'));
-        const header = await box(page.locator('#terminal-header'));
-        expect(id.x).toBeGreaterThanOrEqual(info.x);
-        expect(id.x + id.width).toBeLessThanOrEqual(info.x + info.width + 1);
-        expect(refresh.x - id.x - id.width).toBeGreaterThanOrEqual(0);
-        expect(refresh.x - id.x - id.width).toBeLessThan(24);
-        for (const control of [refresh, stop]) {
-          expect(control.x).toBeGreaterThanOrEqual(header.x);
-          expect(control.x + control.width).toBeLessThanOrEqual(header.x + header.width);
-        }
+        await expect(async () => {
+          const [id, info, refresh, stop, header] = await page.evaluate(({ name, title }) => {
+            document.getElementById('terminal-header-name').textContent = name;
+            const el = document.getElementById('terminal-header-pty-title');
+            el.textContent = title;
+            el.style.display = '';
+            return ['terminal-header-id', 'terminal-header-info', 'terminal-refresh-btn', 'terminal-stop-btn', 'terminal-header']
+              .map(id => {
+                const { x, width, height } = document.getElementById(id).getBoundingClientRect();
+                return { x, width, height };
+              });
+          }, { name, title });
+          for (const rect of [id, info, refresh, stop, header]) {
+            expect(rect.width).toBeGreaterThan(0);
+            expect(rect.height).toBeGreaterThan(0);
+          }
+          expect(id.x).toBeGreaterThanOrEqual(info.x);
+          expect(id.x + id.width).toBeLessThanOrEqual(info.x + info.width + 1);
+          expect(refresh.x - id.x - id.width).toBeGreaterThanOrEqual(0);
+          expect(refresh.x - id.x - id.width).toBeLessThan(24);
+          for (const control of [refresh, stop]) {
+            expect(control.x).toBeGreaterThanOrEqual(header.x);
+            expect(control.x + control.width).toBeLessThanOrEqual(header.x + header.width);
+          }
+        }).toPass({ timeout: 5000 });
         await expect(page.locator('#terminal-header [data-header-kind="toggle"]')).toHaveCount(0);
       }
     }
