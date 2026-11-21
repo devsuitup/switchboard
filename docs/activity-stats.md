@@ -10,6 +10,10 @@ transcript. It is computed when the tab is opened.
   Anthropic's usage endpoint with the CLI's OAuth credentials (the macOS
   Keychain, or `~/.claude/.credentials.json`). **Refresh usage** fetches it
   again. The same figures are the gauges in the [status bar](notifications.md#status-bar).
+- **Codex Rate Limits**: enable **Show Codex usage** in
+  [Settings → Sessions → CLI Agents](settings.md#cli-agents-and-codex) to show
+  Codex limits here and in the status bar. This is off by default and has its
+  own refresh button; failures hide the Codex section without affecting Claude.
 - **Cards**: Total Sessions, Total Messages, Total Tokens, Tool Calls, Current
   Streak and Longest Streak (in days), and one token count per model.
 - **Last 30 days**: a bar per day; hovering one shows its tokens, messages and

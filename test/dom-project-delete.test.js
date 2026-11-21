@@ -9,6 +9,27 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+for (const caller of ['sidebar', 'settings']) {
+  for (const headerPresent of [false, true]) test(`${caller} refused Delete keeps its existing fallback, header=${headerPresent}`, async t => {
+    const h = setup(t);
+    const button = caller === 'settings' ? await settings(h) : h.document.querySelector('.project-delete-btn');
+    const header = h.document.getElementById('ph-' + h.w.folderId(h.p.projectPath, h.p.remoteAlias));
+    const expected = headerPresent ? header : h.document.getElementById('sidebar-content');
+    let pending;
+    const confirm = h.w.confirmAndDeleteProjectFolder;
+    h.w.confirmAndDeleteProjectFolder = (...args) => { pending = confirm(...args); return pending; };
+    h.w.api.previewProjectDelete = async () => {
+      button.remove();
+      if (!headerPresent) header.remove();
+      return { ok: false, code: 'UNAUTHORIZED', error: 'Sender unavailable.' };
+    };
+    button.click();
+    assert.ok(pending, 'the real caller uses the shared deletion controller');
+    await pending;
+    assert.equal(h.document.activeElement, expected, 'existing callers retain their header/sidebar fallback');
+  });
+}
+
 test('E unavailable worktree inventory has a visible reason outside JSON details', async t => {
   const h = setup(t, { warnings: [{ code: 'WORKTREE_UNAVAILABLE', error: 'Git inventory unavailable' }] });
   const pending = h.start(); await flush();

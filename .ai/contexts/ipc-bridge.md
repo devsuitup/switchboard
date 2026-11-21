@@ -24,17 +24,35 @@ Failed entries remain, with `appAlert`; partial
 bulk successes still have Undo. Row actions are locked during a request.
 
 Delete builds `{projectPath, remoteAlias, folder, sessions}` from the exact entry;
-`folder` is the host-qualified encoded path. Local worktree entries disable Delete
-project with a visible reason: delete the worktree from the sidebar or delete its
-repository. The real
-planner maps a worktree folder to the repository and refuses the conflicting
-worktree path hint. Parsing uses the shared `parseFolderKey` and `isValidAlias` in
+`folder` is the host-qualified encoded path. Opening a row's overflow does no
+deletion discovery and consumes no preview token. Clicking Delete calls the shared
+confirmation flow, which flushes writes and uses the shared deadline and recovery
+handling. Archived opts into preview reuse: the first request uses remembered
+session/settings choices, and the dialog consumes that result once if its actual
+answers still match. Changed answers require a fresh preview. Other callers keep
+their existing flow. If a remembered choice is unavailable (shared settings), the
+dialog unchecks it and obtains the matching plan; the refused initial plan has no
+token. A refusal disables Delete and writes its reason into the row;
+`aria-describedby` uses an entry-derived stable ID on both Delete and the row's
+summary. Every refusal except the grouped-worktree hint, including thrown IPC
+errors, explains how to reopen the menu and click Delete again; reopening only
+re-enables that explicit action, with no preview. Detached rows ignore refusal
+updates. The shared flow's `onDialogOpen` callback clears the row's checking
+message when the dialog opens.
+The real inventory groups a local worktree only when its repository exists, so
+orphaned entries can be deleted. Only the local worktree hints-conflict refusal
+explains in user wording that the entry is grouped under its repository and
+suggests deleting that repository. Ambiguous mappings do not get that advice.
+Parsing uses the shared `parseFolderKey` and `isValidAlias` in
 `public/utils.js`, re-exported by main's `remote-hosts.js`. An empty remote path
-means `/`, matching the writer. For other entries it calls the existing
+means `/`, matching the writer. Accepted entries call the existing
 `confirmAndDeleteProjectFolder`, retaining preview tokens, options,
 refusal handling and committed-result semantics. After cancellation or refusal,
-the manager unlocks the controls before returning focus to the Delete button;
-unlocking keeps unavailable worktree actions disabled. It never calls
+the manager unlocks the controls before returning focus to an enabled Delete button
+or, after refusal, the row's summary with its reason. Passing `onUnavailable`
+leaves fallback focus to that caller; sidebar and project-settings callers retain
+their existing project-header/sidebar fallback. Unlocking keeps refused actions
+disabled until the menu reopens. It never calls
 Unarchive before Delete. The overflow also copies the full path through
 `writeClipboard`. No new IPC or launch code is introduced.
 
@@ -516,6 +534,56 @@ uninitialised submodule refuses preview/deletion before force can hide its files
 | `get-stats-from-db` | `buildStatsFromDb()`: `{dailyActivity, dailyModelTokens, modelUsage, totalMessages, totalSessions, totalToolCalls, totalTokens, firstSessionDate, lastComputedDate}` from `session_metrics` — heatmap source since PR #7 |
 | `refresh-stats` | `{stats, usage}` — combined; calls `buildStatsFromDb` (using `getDailyMetrics`) + `fetchAndTransformUsage` |
 | `get-usage` | rate-limits payload from Claude `/usage` |
+| `get-codex-usage` | `{limits: [...]}` containing renderable Codex rows only, or `{}` when disabled or unavailable |
+
+#### Opt-in Codex usage (#1139)
+
+Settings → Sessions → CLI Agents has **Show Codex usage**, defaulting to false
+in `SETTING_DEFAULTS`. Saving applies it immediately. Only the global setting
+with the boolean value `true` authorizes a read or request; project settings and
+renderer IPC arguments cannot enable it.
+
+`src/main/usage/codex-usage.js` reads `CODEX_HOME/auth.json`, falling back to
+`~/.codex/auth.json`, only after that check. It sends the OAuth access token and
+optional account id only to `https://chatgpt.com/backend-api/wham/usage`.
+Redirects are refused. No credentials, raw response, account metadata or error
+messages cross IPC; failures return `{}` and are never logged. This endpoint is
+undocumented and can change; unavailable usage simply disappears.
+
+A shared in-flight request covers status bar and Stats callers. An AbortController
+bounds the request and body read to ten seconds. Missing credentials, malformed
+responses, HTTP failures and timeouts back off for 30, 60, 120, 240 then 300
+seconds; HTTP 429 also honors Retry-After (seconds or HTTP date), capped at one
+hour. Success resets backoff. A saved setting change cancels the request and
+invalidates its generation; changing the toggle does not bypass backoff.
+The Settings panel applies usage only when the toggle changes, including saves
+deferred by project deletion. Disabling removes Codex rows without fetching
+either provider; enabling refreshes only Codex. The status bar tracks Claude
+and Codex requests separately so neither provider replaces the other's rows.
+Disabling invalidates pending Codex renders and keeps status-bar polling from
+fetching Codex while the saved main-process setting may still be on. Opening
+Stats also honors that renderer state. A missing Codex toggle does not apply
+an undefined value to the renderer. After a deferred enabling write succeeds,
+`flushDeferredProjectDeletionWrites` calls `refreshCodexUsage` for both surfaces
+using the current renderer state, so a newer turn-off cannot be undone. Another
+deferral or a failed write does not trigger that refresh.
+`replaceQuotaRows` removes non-row children from the shipped gauge markup before
+updating either provider; placeholders cannot keep an otherwise empty gauge visible.
+Status bar polling remains every five minutes; Stats has its own refresh button.
+
+Codex rows reuse `buildQuotaBar` and `buildUsageSection`; Claude keeps its own
+rows and error handling. Reset text shares `formatResetTime` from `claude-auth.js`.
+Model-specific status-bar labels include the limit name. Over-limit percentages
+remain visible; bar widths clamp to 100%.
+The adapted endpoint contract, duration labels and per-model filtering credit
+**Ali Basiri**, `doctly/switchboard`, commits `ee656523` and `3ca3d19d`.
+The fork adds explicit consent, quiet failure, timeout, backoff, redirect refusal
+and stale-result protection instead of porting upstream's raw error payloads.
+
+Tests use disposable auth files and stubbed fetch; they never contact the
+endpoint. The IPC test evaluates only the relevant extracted registration and
+save handler, without importing Electron. Live endpoint compatibility and the
+Electron bridge remain integration/CI verification boundaries.
 
 ### Search
 
@@ -974,22 +1042,43 @@ through its spawn port and a real Git bash; it skips when Git for Windows is
 unavailable. It does not exercise Electron or cover every MSYS tool.
 Before its first `ready`, a failed singleton settles requests false and permits
 up to three startup attempts per app session (#1140), each with the same 15 s
-deadline. A later assignment (or explicit `start`) retries only after a backoff
-of 1 s after the first failure and 2 s after the second; there is no background
-retry timer. Concurrent tabs share one attempt and its readiness promise.
-Close, release and observation cannot restart a failed helper. The fallback
+deadline. A later assignment (or explicit `start`) retries only after a monotonic
+backoff of 1 s after the first failure and 2 s after the second. An unreferenced
+timer also retries when that window expires while tracked live tabs are waiting
+(#1156). Concurrent tabs share one attempt and its readiness promise.
+Close, release and observation cannot restart a failed helper, even after the
+backoff expires with no tracked tabs waiting. The fallback
 warning is emitted once per app session, while retry attempts, their failures
 and budget exhaustion are logged separately. Events from failed attempts are
 ignored, including delayed ready, exit and stream errors.
 
-Failed assignments are not replayed: tabs created during failure/backoff keep
-plain ConPTY close, and new tabs can acquire jobs after recovery. Retrofitting
-old tabs would not capture children that already escaped and would complicate
-PID/lifecycle ownership. Once a helper has been ready, its failure remains
+Tracked tabs whose initial assignment fails during startup/backoff retain their
+original PID and spawn timestamp. Registration and retry retention check the
+same live, unchanged, unreleased PTY even while an evidence stop is waiting for
+its initial assignment. If that stop returns `IDENTITY` without killing the PTY,
+the tab remains eligible for recovery and a later evidence stop can use its job.
+The temporary `closing` guard is checked when readiness dispatches the late
+assignment, not when registering or retaining the waiting tab.
+On readiness, each receives at most one late
+assignment, only while its PTY is still live, unchanged, open and unreleased.
+The helper removes the pending recovery before sending it; a failed late
+assignment is never retried. Closing or releasing cancels pending recovery.
+The late assignment promise updates the same PTY record as the initial one,
+including evidence close and natural-exit observation. Plain ConPTY close stays
+available while recovery is pending or has failed.
+Children spawned before late assignment are not captured; only children spawned
+after the root joins the job inherit membership and are ended on tab close.
+Once a helper has been ready, its failure remains
 terminal for this session: a new process cannot inherit its existing job
 handles. This change only recovers startup failures, not lost jobs. Tests stub
 the spawn port and clock, including timeout-then-success through trackWindowsPty,
 permanent timeout/spawn failure, the retry cap and stale-attempt events.
+`windows-job-recovery` combines the real PTY tracking and helper state machines
+with a stubbed child process, independent monotonic/wall clocks and controlled
+timers. It covers automatic and explicit recovery, lifetime guards, one late
+attempt, job close, evidence close racing a startup failure, and backwards
+wall-clock steps. The helper tests also check cleanup after backoff expiry with
+no waiting tabs; removing the non-assignment failure guard fails those checks.
 EOF/finally
 only closes handles, with no membership scan or termination. Release also just
 closes the handle; there is no limit flag to clear and no release-time flag API
@@ -1160,7 +1249,7 @@ the assigned processes alive because no job is armed. Pure-Node native parent-ex
 tests exercise this property; they are not an Electron exit measurement.
 
 Resident PowerShell with P/Invoke may be flagged by EDR/AV or ended by the user.
-There is no restart policy. No EDR product was tested.
+After readiness there is no restart policy. No EDR product was tested.
 
 Tests load shipped production code: pty-ops-jobs covers close ordering, grace
 deadline, exclusions, detach and deferred assignment; windows-job-helper covers

@@ -22,8 +22,15 @@ function trackWindowsPty(pty, { platform = process.platform, spawnTime = Date.no
     } else if (!record.closing) void releaseWindowsPty(pty);
   });
   const current = () => !record.exited && !record.released && pty._agent?.exitCode === undefined;
-  const assign = at => record.assignment = jobs.assign(record.id, pty.pid, at, current)
+  const rememberAssignment = assignment => record.assignment = assignment
     .then(assigned => { record.assigned = assigned; return assigned; });
+  const assign = at => {
+    const pid = pty.pid;
+    const samePty = () => current() && pty.pid === pid;
+    return rememberAssignment(jobs.assign(record.id, pid, at, samePty, {
+      current: () => samePty() && !record.closing, onLateAssignment: rememberAssignment,
+    }));
+  };
   if (pty.pid > 0) return assign(spawnTime);
   return new Promise(resolve => {
     const socket = pty._agent?.outSocket;

@@ -2,6 +2,17 @@
 // Depends on globals: escapeHtml (utils.js), statsViewerBody (app.js)
 
 let cachedUsage = null;
+let codexStatsRequest = 0;
+
+async function refreshCodexStatsUsage(enabled = true) {
+  const request = ++codexStatsRequest;
+  statsViewerBody.querySelector('.usage-container-codex')?.remove();
+  if (!enabled) return;
+  try {
+    const usage = await window.api.getCodexUsage?.();
+    if (request === codexStatsRequest && usage?.limits?.length) buildUsageSection(usage, 'codex');
+  } catch {}
+}
 
 async function loadStats() {
   statsViewerBody.innerHTML = '';
@@ -28,11 +39,6 @@ async function loadStats() {
 
   statsViewerBody.innerHTML = '';
 
-  if (!stats && !Object.keys(usage).length) {
-    statsViewerBody.innerHTML = '<div class="plans-empty">No stats data found. Run some Claude sessions first.</div>';
-    return;
-  }
-
   if (stats) {
     // dailyActivity is an array of {date, messageCount, sessionCount}
     const rawDaily = stats.dailyActivity || [];
@@ -56,6 +62,12 @@ async function loadStats() {
     buildUsageSection(usage);
   }
 
+  await refreshCodexStatsUsage(codexQuotaEnabled);
+  if (!stats && !Object.keys(usage).length && !statsViewerBody.querySelector('.usage-container-codex')) {
+    statsViewerBody.innerHTML = '<div class="plans-empty">No stats data found. Run some sessions first.</div>';
+    return;
+  }
+
   if (stats) {
     const notice = document.createElement('div');
     notice.className = 'stats-notice';
@@ -65,19 +77,19 @@ async function loadStats() {
   }
 }
 
-function buildUsageSection(usage) {
+function buildUsageSection(usage, runtime = 'claude') {
   // Remove existing usage container if present (for refresh)
-  const existing = statsViewerBody.querySelector('.usage-container');
+  const existing = statsViewerBody.querySelector('.usage-container-' + runtime);
   if (existing) existing.remove();
 
   const container = document.createElement('div');
-  container.className = 'usage-container';
+  container.className = 'usage-container usage-container-' + runtime;
 
   const titleRow = document.createElement('div');
   titleRow.className = 'usage-title-row';
   const title = document.createElement('div');
   title.className = 'daily-chart-title';
-  title.textContent = 'Rate Limits';
+  title.textContent = runtime === 'codex' ? 'Codex Rate Limits' : 'Rate Limits';
   titleRow.appendChild(title);
 
   const refreshBtn = document.createElement('button');
@@ -88,6 +100,10 @@ function buildUsageSection(usage) {
     refreshBtn.classList.add('usage-refresh-spinning');
     refreshBtn.disabled = true;
     try {
+      if (runtime === 'codex') {
+        await refreshCodexStatsUsage();
+        return;
+      }
       const freshUsage = await window.api.getUsage();
       if (freshUsage && Object.keys(freshUsage).length) {
         cachedUsage = freshUsage;

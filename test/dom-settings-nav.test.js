@@ -13,6 +13,29 @@ const root = path.join(__dirname, '..');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const globalPages = ['general', 'sessions', 'keyboard', 'automation', 'remote', 'integrations', 'archived', 'advanced'];
 
+test('Codex usage is opt-in under CLI Agents and saving applies it without restart', async t => {
+  const h = setup(t);
+  const applied = [];
+  h.w._applyCodexUsage = value => applied.push(value);
+  await h.open();
+  const toggle = h.q('#sv-show-codex-usage');
+  assert.ok(toggle, 'Show Codex usage toggle exists');
+  assert.equal(toggle.checked, false);
+  assert.equal(toggle.closest('.settings-page').dataset.section, 'sessions');
+  assert.equal(toggle.closest('.settings-section').querySelector('.settings-section-title').textContent, 'CLI Agents');
+  assert.match(toggle.closest('.settings-field').textContent, /chatgpt.com/);
+  for (const enabled of [true, false]) {
+    toggle.checked = enabled;
+    toggle.dispatchEvent(new h.w.Event('change', { bubbles: true }));
+    h.q('#sv-save-btn').click();
+    await settle();
+    assert.equal(h.saved.global.showCodexUsage, enabled);
+    assert.equal(applied.at(-1), enabled);
+  }
+  await h.open('project');
+  assert.equal(h.q('#sv-show-codex-usage'), null);
+});
+
 function setup(t) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'public/index.html'), 'utf8'), { url: 'http://localhost', runScripts: 'outside-only' });
   t.after(() => dom.window.close());
@@ -57,6 +80,91 @@ function setup(t) {
   const active = () => [...w.document.querySelectorAll('.settings-page')].filter(p => !p.hidden).map(p => p.dataset.section);
   return { w, q, nav, open, click, active, saved, timers, observers, ctx };
 }
+
+test('unrelated global saves and repeated saves do not reapply Codex usage', async t => {
+  const h = setup(t);
+  const applied = [];
+  h.w._applyCodexUsage = value => applied.push(value);
+  await h.open();
+  h.q('#sv-visible-count').value = '42';
+  h.q('#sv-save-btn').click();
+  await settle();
+  assert.deepEqual(applied, [], 'unrelated Save must not refresh usage');
+  for (const enabled of [true, false]) {
+    h.q('#sv-show-codex-usage').checked = enabled;
+    h.q('#sv-save-btn').click();
+    await settle();
+    assert.equal(applied.at(-1), enabled);
+    const count = applied.length;
+    h.q('#sv-save-btn').click();
+    await settle();
+    assert.equal(applied.length, count, 'unchanged repeated Save must not refresh usage');
+  }
+  assert.deepEqual(applied, [true, false]);
+});
+
+test('saving without a registered Codex harness preserves its enabled usage state', async t => {
+  const h = setup(t);
+  h.saved.global = { showCodexUsage: true };
+  h.w.api.getHarnesses = async () => [{ id: 'claude', label: 'Claude', enabled: true }];
+  const applied = [];
+  h.w._applyCodexUsage = value => applied.push(value);
+  await h.open();
+  assert.equal(h.q('#sv-show-codex-usage'), null);
+  h.q('#sv-visible-count').value = '42';
+  h.q('#sv-save-btn').click();
+  await settle();
+  assert.equal(h.saved.global.showCodexUsage, true);
+  assert.deepEqual(applied, [], 'missing toggle must not disable renderer usage');
+});
+
+test('flushing a deferred enable refreshes Codex rows after persistence', async t => {
+  const h = setup(t);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-deferred-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'global.json');
+  fs.writeFileSync(file, JSON.stringify({ showCodexUsage: false }));
+  const read = () => JSON.parse(fs.readFileSync(file, 'utf8'));
+  h.w.api.getSetting = async () => read();
+  h.w.api.setSetting = async (_key, value) => fs.writeFileSync(file, JSON.stringify(value));
+  h.w.statsViewerBody = h.q('#stats-viewer-body');
+  const statsFile = path.join(root, 'public/stats-view.js');
+  vm.runInContext(fs.readFileSync(statsFile, 'utf8'), h.ctx, { filename: statsFile });
+  loadAppFunctions(h.ctx, {
+    functions: ['shortQuotaLabel', 'buildQuotaBar', 'replaceQuotaRows', 'refreshCodexQuotaGauge', 'applyCodexUsage', 'refreshCodexUsage'],
+    declarations: ['quotaGaugeEl', 'codexQuotaRequest', 'codexQuotaEnabled'],
+  });
+  h.w._applyCodexUsage = h.w.applyCodexUsage;
+  await h.w.applyCodexUsage(false);
+  const sidebarFile = path.join(root, 'public/sidebar.js');
+  const flush = fs.readFileSync(sidebarFile, 'utf8').match(/^window\.flushDeferredProjectDeletionWrites = \(\) => \{[\s\S]*?^\};/m);
+  assert.ok(flush);
+  vm.runInContext(flush[0], h.ctx, { filename: sidebarFile });
+  let callsAfterSave = 0;
+  h.w.api.getCodexUsage = async () => {
+    if (!read().showCodexUsage) return {};
+    callsAfterSave++;
+    return { limits: [{ kind: 'codex', short: '5h', label: 'Codex 5h', percent: 42 }] };
+  };
+  await h.open();
+  h.w.api.getSetting = async () => {
+    h.w.projectDeletionWritesBlocked = true;
+    return read();
+  };
+  h.q('#sv-show-codex-usage').checked = true;
+  h.q('#sv-save-btn').click();
+  await settle();
+  assert.equal(read().showCodexUsage, false);
+  assert.equal(h.q('[data-runtime="codex"]'), null);
+  h.w.api.getSetting = async () => read();
+  h.w.projectDeletionWritesBlocked = false;
+  h.w.flushDeferredProjectDeletionWrites();
+  await settle();
+  assert.equal(read().showCodexUsage, true);
+  assert.ok(callsAfterSave > 0, 'successful flush must refresh Codex immediately');
+  assert.equal(h.q('[data-runtime="codex"] .quota-pct')?.textContent, '42%');
+  assert.ok(h.q('.usage-container-codex'));
+});
 
 test('global and project navigation expose the ordered pages and named regions', async t => {
   const h = setup(t);

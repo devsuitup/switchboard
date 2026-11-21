@@ -4,14 +4,17 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- Settings → Sessions → CLI Agents offers **Show Codex usage**, off by default. Turn it on to show your Codex limits in the status bar and Stats; usage hides quietly when unavailable. (#1139)
+
 ### Changed
 - After a restart, Switchboard re-reads only Claude Code transcripts changed since the previous run. Codex history is still re-read in full. (#1144)
-- Settings → Archived groups projects by host, shows their paths and archive dates, and filters by name, path or host. Restore one or several projects with Undo, or delete an archived project through the existing preview without restoring it first. For local worktree entries, Delete project explains how to delete the worktree or its repository. (#863)
+- Settings → Archived groups projects by host, shows their paths and archive dates, and filters by name, path or host. Restore one or several projects with Undo, or delete an archived project through the existing preview without restoring it first. Worktree entries whose repository is gone can be deleted; entries still grouped under a repository explain that you can delete their repository instead. (#863)
 - Codex sessions run non-interactively by a program (`codex exec`: scripted reviews and fixes) are now left out of the sidebar and grid like Claude Agent SDK sessions, under the same **Hide SDK-launched Sessions** setting. They still count in the heatmap and are found by search; the ones you have open stay listed. Codex sessions already indexed are re-checked once at the next start. (#1145)
 
 ### Fixed
 - After restarting the app or Windows, the sidebar shows the projects as they were at exit, even if the last project load finished just before you closed the app or signed out. (#1136)
-- On Windows, a slow start no longer disables detached-process cleanup for every later tab: Switchboard retries up to twice for newly opened tabs. Tabs opened while cleanup is unavailable keep the existing close behavior. (#1140)
+- On Windows, a slow start no longer leaves tabs without process cleanup: tabs already open, restored ones included, are covered once cleanup starts, and programs they launch afterwards end when the tab closes. Programs launched before that can keep running. (#1140, #1156)
 - Claude and Codex sessions in `.work-files/worktrees/<name>`, and Codex sessions in `.worktrees`, `.claude-worktrees` and `.claude/worktrees`, appear under their existing repository, including nested worktrees and sessions already indexed. Repository settings, archive and hidden state follow the group, and project deletion removes the session metadata it previews for both runtimes. Archiving a repository covers its worktrees' sessions; a new session in a worktree reopens the repository. Resume and fork use the recorded worktree directory and refuse to launch if it no longer exists; Claude sessions in a deleted `.claude/worktrees` directory are refused instead of starting in the repository. (#1137)
 - A conversation running as a background job (`claude --bg`) no longer slips into a project's collapsed "Older" rows: while its job is alive it stays visible and sorts with the running sessions, and the Running filter lists it, whatever the date of its last indexed message. (#1146)
 
