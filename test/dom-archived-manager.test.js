@@ -56,9 +56,11 @@ async function setup(t, empty = false) {
   }
   const settings = { hiddenProjects: empty ? [] : [...entries], hiddenProjectKinds: { [entries[0]]: 'archive', '/gone': 'delete' },
     hiddenProjectArchivedAt: { [entries[0]]: 1795089600000 }, remoteHosts: [{ alias: 'vps', label: 'Planificator' }] };
-  const calls = { restore: [], archive: [], preview: [], execute: [], reload: 0 };
+  const folders = {};
+  const calls = { restore: [], folderRestore: [], archive: [], preview: [], execute: [], reload: 0 };
   w.cachedAllProjects = [{ projectPath: entries[0], sessions: [{ sessionId: 'one' }] }];
-  w.api.getSetting = async () => settings;
+  w.api.getSetting = async key => key === 'archivedProjects' ? folders : settings;
+  w.api.unarchiveFolder = async entry => { calls.folderRestore.push(entry); delete folders[entry]; return { ok: true }; };
   w.api.getHarnesses = w.api.getShellProfiles = async () => [];
   w.api.getAppVersion = async () => 'test';
   w.api.unarchiveProject = async entry => { calls.restore.push(entry); settings.hiddenProjects = settings.hiddenProjects.filter(e => e !== entry); return { ok: true }; };
@@ -80,7 +82,7 @@ async function setup(t, empty = false) {
   await w.openSettingsViewer('global', null, null, { section: 'archived' });
   const q = selector => h.document.querySelector(selector);
   const rows = () => [...h.document.querySelectorAll('.archived-row')];
-  return { ...h, w, settings, calls, q, rows, observers };
+  return { ...h, w, settings, folders, calls, q, rows, observers };
 }
 
 test('host groups preserve separate worktree entries, names, safe paths, badges, dates and counts', async t => {
@@ -111,10 +113,11 @@ test('filter matches name, path, host label and alias, clears by Escape and expo
   assert.equal(filter.value, ''); assert.equal(h.rows().length, 4);
 });
 
-test('empty projects state does not promise folder or session archives', async t => {
+test('empty projects state explains both project and folder archives', async t => {
   const h = await setup(t, true);
   assert.match(h.q('#sv-archived-projects').textContent, /No archived project\./);
   assert.match(h.q('#sv-archived-projects').textContent, /Archive Project/);
+  assert.match(h.q('#sv-archived-projects').textContent, /Archive folder/);
 });
 
 test('Unarchive uses the exact entry, reloads and Undo restores its remote identity and date', async t => {
@@ -494,7 +497,7 @@ test('older in-flight reload cannot invalidate a newer restore Undo', async t =>
   const staleSettings = JSON.parse(JSON.stringify(h.settings));
   let release;
   h.w.api.getProjects = async () => ({ defaultProjects: [], allProjects: [] });
-  h.w.api.getSetting = async () => staleSettings;
+  h.w.api.getSetting = async key => key === 'archivedProjects' ? h.folders : staleSettings;
   h.w.api.getActiveTerminals = () => new Promise(resolve => { release = resolve; });
   h.w.loadingStatus = h.document.createElement('div');
   h.w.reportActivityFocus = h.w.reportActivityTitles = h.w.refreshSidebar = h.w.renderDefaultStatus = () => {};
@@ -502,11 +505,136 @@ test('older in-flight reload cannot invalidate a newer restore Undo', async t =>
   const pending = realLoad();
   await waitFor(() => release);
   h.w.loadProjects = Object.assign(async () => {}, { state: realLoad.state });
-  h.w.api.getSetting = async () => h.settings;
+  h.w.api.getSetting = async key => key === 'archivedProjects' ? h.folders : h.settings;
   h.q('.archived-unarchive').click(); await settle();
   const undo = h.q('.app-notice-action');
   assert.ok(undo, 'restore creates Undo while older reload is pending');
   h.w.loadProjects = realLoad;
   release([]); await pending;
   assert.equal(undo.isConnected, true, 'older reload must preserve newer restore Undo');
+});
+
+test('folder-only archives show Folder, archive date and disabled schedule count', async t => {
+  const h = await setup(t, true);
+  h.folders['vps::/srv/folder'] = { archivedAt: '2026-11-19T10:00:00Z', disabledSchedules: ['one', 'two'] };
+  await h.w.openSettingsViewer('global', null, null, { section: 'archived' });
+  assert.equal(h.rows().length, 1, 'folder archive must be listed');
+  const row = h.rows()[0];
+  assert.deepEqual([...row.querySelectorAll('.archived-badge')].map(n => n.textContent), ['Folder', 'vps']);
+  assert.equal(row.querySelector('time').getAttribute('datetime'), '2026-11-19T10:00:00.000Z');
+  assert.match(row.textContent, /2 schedules off/);
+  assert.match(h.q('[data-section="archived"]').textContent, /1/);
+  row.querySelector('.archived-unarchive').click();
+  await waitFor(() => h.rows().length === 0);
+  assert.deepEqual(h.calls.folderRestore, ['vps::/srv/folder']);
+  assert.deepEqual(h.calls.restore, []);
+  assert.equal(h.calls.reload, 1);
+  assert.equal(h.q('.app-notice-action'), null, 'folder restore has no misleading Undo');
+  assert.match(h.q('.app-notice').textContent, /Archive folder/);
+});
+
+test('combined archive is one row with two badges and restores project before folder', async t => {
+  const h = await setup(t, true);
+  const entry = 'vps::/srv/combined';
+  h.settings.hiddenProjects = [entry];
+  h.settings.hiddenProjectKinds[entry] = 'archive';
+  h.folders[entry] = { archivedAt: '2026-11-19T10:00:00Z', disabledSchedules: ['one', 'two'] };
+  await h.w.openSettingsViewer('global', null, null, { section: 'archived' });
+  assert.equal(h.rows().length, 1);
+  assert.deepEqual([...h.rows()[0].querySelectorAll('.archived-badge')].map(n => n.textContent), ['Project', 'Folder', 'vps']);
+  const order = [];
+  const project = h.w.api.unarchiveProject, folder = h.w.api.unarchiveFolder;
+  h.w.api.unarchiveProject = async e => { order.push('project:' + e); return project(e); };
+  h.w.api.unarchiveFolder = async e => { order.push('folder:' + e); return folder(e); };
+  h.q('.archived-unarchive').click();
+  await waitFor(() => h.rows().length === 0);
+  assert.deepEqual(order, ['project:' + entry, 'folder:' + entry]);
+  assert.match(h.q('.app-notice').textContent, /Archive folder/);
+  h.q('.app-notice-action').click();
+  await waitFor(() => h.rows().length === 1);
+  assert.deepEqual(h.calls.archive, [['/srv/combined', 'vps::-srv-combined']]);
+  assert.doesNotMatch(h.rows()[0].querySelector('.archived-name').textContent, /Folder/);
+});
+
+test('combined restore accepts the folder already cleared by the real project writer', async t => {
+  const h = await setup(t, true), entry = 'vps::/srv/combined';
+  h.settings.hiddenProjects = [entry];
+  h.settings.hiddenProjectKinds[entry] = 'archive';
+  h.folders[entry] = { archivedAt: '2026-11-19T10:00:00Z', disabledSchedules: ['one'] };
+  const state = { global: h.settings, archivedProjects: h.folders };
+  const writer = require('./fixtures/writer-memory.cjs').memoryWriter({
+    getSetting: key => state[key], setSetting: (key, value) => { state[key] = value; },
+  }, {});
+  h.w.api.unarchiveProject = async e => { await writer.unhideProject(e, 'vps', '/srv/combined'); return { ok: true }; };
+  h.w.api.unarchiveFolder = async e => {
+    h.calls.folderRestore.push(e);
+    return await writer.clearArchivedEntry('vps', '/srv/combined') ? { ok: true } : { error: 'Folder is not archived', code: 'NOT_ARCHIVED' };
+  };
+  await h.w.openSettingsViewer('global', null, null, { section: 'archived' });
+  assert.match(h.rows()[0].textContent, /Folder/);
+  h.q('.archived-unarchive').click();
+  await waitFor(() => h.rows().length === 0);
+  assert.deepEqual(h.calls.folderRestore, [entry]);
+  assert.equal(h.q('.choice-dialog'), null);
+  assert.equal(state.archivedProjects[entry], undefined);
+  assert.deepEqual(state.scheduleReenableOffers[entry].disabledSchedules, ['one']);
+});
+
+for (const failure of ['project', 'folder']) test(`combined ${failure} refusal leaves an accurate retryable row`, async t => {
+  const h = await setup(t, true), entry = entries[0];
+  h.settings.hiddenProjects = [entry];
+  h.settings.hiddenProjectKinds[entry] = 'archive';
+  h.folders[entry] = { disabledSchedules: [] };
+  await h.w.openSettingsViewer('global', null, null, { section: 'archived' });
+  assert.match(h.rows()[0].textContent, /Folder/);
+  const original = failure === 'project' ? h.w.api.unarchiveProject : h.w.api.unarchiveFolder;
+  h.w.api[failure === 'project' ? 'unarchiveProject' : 'unarchiveFolder'] = async () => ({ error: 'refused' });
+  h.q('.archived-unarchive').click();
+  await waitFor(() => h.q('.choice-dialog'));
+  assert.equal(h.rows().length, 1);
+  assert.equal(/Project/.test(h.rows()[0].querySelector('.archived-name').textContent), failure === 'project');
+  assert.equal(h.calls.folderRestore.length, 0);
+  h.q('.choice-dialog-confirm').click();
+  await waitFor(() => !h.q('.choice-dialog'));
+  assert.equal(h.q('.archived-unarchive').disabled, false);
+  h.w.api[failure === 'project' ? 'unarchiveProject' : 'unarchiveFolder'] = original;
+  h.q('.archived-unarchive').click();
+  await waitFor(() => h.rows().length === 0);
+  assert.equal(h.calls.restore.length, 1, 'retry must not repeat a successful project restore');
+});
+
+test('unknown standalone folder keeps its row and reports NOT_ARCHIVED', async t => {
+  const h = await setup(t, true);
+  h.folders['/folder'] = {};
+  await h.w.openSettingsViewer('global', null, null, { section: 'archived' });
+  assert.equal(h.rows().length, 1, 'folder archive must be listed');
+  h.w.api.unarchiveFolder = async () => ({ error: 'Folder is not archived', code: 'NOT_ARCHIVED' });
+  h.q('.archived-unarchive').click();
+  await waitFor(() => h.q('.choice-dialog'));
+  assert.match(h.q('.choice-dialog').textContent, /Folder is not archived/);
+  assert.equal(h.rows().length, 1);
+  assert.equal(h.q('.archived-unarchive').disabled, false);
+});
+
+test('mixed bulk restore stays sequential and Undo only rearchives project entries', async t => {
+  const h = await setup(t, true);
+  h.settings.hiddenProjects = [entries[0]];
+  h.settings.hiddenProjectKinds[entries[0]] = 'archive';
+  h.folders['/folder'] = { archivedAt: 'invalid', disabledSchedules: [] };
+  h.folders['/gone'] = { disabledSchedules: [] };
+  await h.w.openSettingsViewer('global', null, null, { section: 'archived' });
+  assert.equal(h.rows().length, 2, 'deleted entries stay excluded from the merged list');
+  assert.equal(h.rows()[1].querySelector('time'), null, 'invalid dates are omitted');
+  const order = [];
+  const project = h.w.api.unarchiveProject, folder = h.w.api.unarchiveFolder;
+  h.w.api.unarchiveProject = async e => { order.push('project'); await settle(); return project(e); };
+  h.w.api.unarchiveFolder = async e => { assert.deepEqual(order, ['project']); order.push('folder'); return folder(e); };
+  h.q('.archived-select-all').click(); h.q('.archived-bulk').click();
+  await waitFor(() => h.rows().length === 0);
+  assert.deepEqual(order, ['project', 'folder']);
+  assert.equal(h.document.querySelectorAll('.app-notice').length, 1);
+  assert.match(h.q('.app-notice').textContent, /2.*restored.*Undo.*project.*Archive folder/s);
+  h.q('.app-notice-action').click();
+  await waitFor(() => h.rows().length === 1);
+  assert.deepEqual(h.calls.archive, [[entries[0], h.w.encodeProjectPath(entries[0])]]);
 });

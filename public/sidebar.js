@@ -1946,7 +1946,9 @@ function showFolderArchiveUndo(project, groups, archivedAt, rows, didStop, child
         if (result.failed?.length) throw new Error(result.failed.map(failure => `${failure.name}: ${failure.error}`).join('; '));
         await loadProjects();
       } catch (error) {
-        showSessionActionFailure('Undo Archive folder', project, error, 'Check the folder and schedules in Settings before retrying.');
+        showAppNotice({ id: sessionActionNoticeId('Undo Archive folder', project), kind: 'error',
+          message: `Undo Archive folder failed for ${sessionActionDescription(project)}: ${error.message}. Review the folder and schedules before retrying.`,
+          actionLabel: 'Open Archived', onAction: () => openSettingsViewer('global', null, null, { section: 'archived' }) });
       }
     },
   });
@@ -2091,10 +2093,10 @@ async function archiveProjectFolder(project, button) {
         ? 'Check the schedules in the Schedules tab, then retry Archive folder.'
         : 'Check schedule-*.md in the Agent Files tab, then retry Archive folder.');
     } else if (res.failed?.length) {
-      showSessionActionFailure('Archive folder', project, 'The folder is archived, but these schedules could not be disabled: ' + res.failed.map(f => f.name + ': ' + f.error).join('; '),
-        window.schedulesTabEnabled
-          ? 'Review the schedules in the Schedules tab. Restore the folder from Settings → Archived projects if you need to retry Archive folder.'
-          : 'Review schedule-*.md in the Agent Files tab. Restore the folder from Settings → Archived projects if you need to retry Archive folder.', undefined, { headline: 'Archive folder partly done' });
+      showAppNotice({ id: sessionActionNoticeId('Archive folder', project), kind: 'error',
+        message: `Archive folder partly done for ${sessionActionDescription(project)}: The folder is archived, but these schedules could not be disabled: ${res.failed.map(f => f.name + ': ' + f.error).join('; ')}. `
+          + (window.schedulesTabEnabled ? 'Review the schedules in the Schedules tab.' : 'Review schedule-*.md in the Agent Files tab.'),
+        actionLabel: 'Open Archived', onAction: () => openSettingsViewer('global', null, null, { section: 'archived' }) });
     } else {
       clearAppNotice(sessionActionNoticeId('Archive folder', project));
     }

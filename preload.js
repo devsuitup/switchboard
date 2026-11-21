@@ -125,6 +125,7 @@ contextBridge.exposeInMainWorld('api', {
   onProjectDeleteRecovery: callback => ipcRenderer.on('project-delete-recovery', (_event, payload) => callback(payload)),
   archiveProjectSettings: (projectPath, folderKey) => ipcRenderer.invoke('archive-project-settings', projectPath, folderKey),
   unarchiveProject: (entry) => ipcRenderer.invoke('unarchive-project', entry),
+  unarchiveFolder: (entry) => ipcRenderer.invoke('unarchive-folder', entry),
   remapProject: (oldPath, newPath) => ipcRenderer.invoke('remap-project', oldPath, newPath),
   checkRemapProject: (oldPath) => ipcRenderer.invoke('check-remap-project', oldPath),
   deleteWorktree: (worktreePath, shown) => ipcRenderer.invoke('delete-worktree', worktreePath, shown),

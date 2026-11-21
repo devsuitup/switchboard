@@ -22,7 +22,7 @@ async function setup(t, hosts = [{ alias, label: 'VPS', enabled: true }]) {
   window.reportActivityFocus = () => {};
   window.reportActivityTitles = () => {};
   window.renderDefaultStatus = () => {};
-  window.api.getSetting = async () => settings;
+  window.api.getSetting = async key => key === 'archivedProjects' ? {} : settings;
   window.api.getProjects = async () => ({ defaultProjects: [project], allProjects: [project] });
   window.api.getActiveTerminals = async () => [];
   window.refreshSidebar = () => ctx.sidebar.renderProjects(window.cachedProjects, true);

@@ -1,8 +1,10 @@
 // see .ai/contexts/ipc-bridge.md (Archived projects manager)
 let activeArchivedProjectsManager = null;
 
-function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, hosts = [], projects = [], onCount }) {
-  let archived = [...new Set(entries)].filter(entry => kinds[entry] !== 'delete');
+function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, folders = {}, hosts = [], projects = [], onCount }) {
+  let projectEntries = new Set(entries.filter(entry => kinds[entry] !== 'delete'));
+  folders = { ...folders };
+  let archived = [...new Set([...projectEntries, ...Object.keys(folders)])].filter(entry => kinds[entry] !== 'delete');
   const selected = new Set(), folded = new Set();
   let busy = false;
   container.innerHTML = `<div class="archived-toolbar">
@@ -55,6 +57,7 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, ho
         const result = await window.api.archiveProjectSettings(project.projectPath, project.folder);
         if (!result?.ok) throw new Error(result?.error || 'No archive result');
         if (!archived.includes(entry)) archived.push(entry);
+        projectEntries.add(entry);
         kinds[entry] = 'archive';
         const latest = await window.api.getSetting('global');
         dates = latest?.hiddenProjectArchivedAt || dates;
@@ -66,26 +69,43 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, ho
   async function restore(targets, button) {
     if (busy) return;
     lock(true);
-    const restored = [], errors = [];
+    const restored = [], restoredProjects = [], restoredFolders = [], errors = [];
     for (const entry of targets) {
       try {
-        const result = await window.api.unarchiveProject(entry);
-        if (!result?.ok) throw new Error(result?.error || 'No unarchive result');
+        if (projectEntries.has(entry)) {
+          const result = await window.api.unarchiveProject(entry);
+          if (!result?.ok) throw new Error(result?.error || 'No unarchive result');
+          projectEntries.delete(entry);
+          restoredProjects.push(entry);
+        }
+        if (Object.hasOwn(folders, entry)) {
+          const result = await window.api.unarchiveFolder(entry);
+          if (!result?.ok && !(restoredProjects.includes(entry) && result?.code === 'NOT_ARCHIVED')) {
+            throw new Error(result?.error || 'No unarchive result');
+          }
+          delete folders[entry];
+          restoredFolders.push(entry);
+        }
         archived = archived.filter(item => item !== entry); selected.delete(entry); restored.push(entry);
       } catch (error) { errors.push(`${identity(entry).name}: ${error.message}`); }
     }
     lock(false);
-    if (restored.length) {
+    if (restored.length || restoredProjects.length) {
       render(); filter.focus(); await reload();
-      const noticeId = 'archived-restored:' + restored.join('|');
-      const notice = showAppNotice({ id: noticeId, kind: 'undo', dismissOnAction: false,
-        message: restored.length === 1 ? `Project "${identity(restored[0]).name}" restored.` : `${restored.length} projects restored.`,
-        actionLabel: 'Undo', onAction: () => {
+      const completed = [...new Set([...restored, ...restoredProjects])];
+      const noticeId = 'archived-restored:' + completed.join('|');
+      const message = completed.length === 1
+        ? `${restoredProjects.length ? 'Project' : 'Folder'} "${identity(completed[0]).name}" restored.`
+        : `${completed.length} ${restoredFolders.length ? 'projects and folders' : 'projects'} restored.`;
+      const notice = showAppNotice({ id: noticeId, kind: restoredProjects.length ? 'undo' : 'info', dismissOnAction: false,
+        message: message + (restoredFolders.length
+          ? `${restoredProjects.length ? ' Undo re-archives projects only.' : ''} To archive folders again, use Archive folder.` : ''),
+        ...(restoredProjects.length ? { actionLabel: 'Undo', onAction: () => {
           if (busy) return;
           clearAppNotice(noticeId);
-          return undo(restored);
-        } });
-      notice.dataset.restoredEntries = JSON.stringify(restored);
+          return undo(restoredProjects);
+        } } : {}) });
+      notice.dataset.restoredEntries = JSON.stringify(restoredProjects);
       notice.dataset.loadGeneration = loadProjects.state?.started || 0;
     }
     if (errors.length) await fail('Could not unarchive project', errors, button.isConnected ? button : filter);
@@ -108,6 +128,7 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, ho
             + (retryable ? ' Reopen the menu and click Delete project to try again.' : '');
         button.dataset.unavailable = 'true'; button.dataset.retryable = String(retryable); button.disabled = true;
       } })) {
+        projectEntries.delete(entry); delete folders[entry];
         archived = archived.filter(item => item !== entry); selected.delete(entry); render(); filter.focus();
       }
     } catch (error) { await fail('Could not delete project', [error.message], button); }
@@ -126,7 +147,7 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, ho
     });
     for (const entry of selected) if (!matches.includes(entry)) selected.delete(entry);
     if (!matches.length) {
-      list.innerHTML = `<div class="archived-empty" role="status">${query ? `No archived item matches "${escapeHtml(filter.value.trim())}". <button type="button" class="settings-action-btn archived-clear">Clear filter</button>` : 'No archived project. Archive Project in a project’s settings lists it here.'}</div>`;
+      list.innerHTML = `<div class="archived-empty" role="status">${query ? `No archived item matches "${escapeHtml(filter.value.trim())}". <button type="button" class="settings-action-btn archived-clear">Clear filter</button>` : 'No archived project. Archive Project (a project’s settings) or Archive folder (a project header) lists it here.'}</div>`;
       list.querySelector('.archived-clear')?.addEventListener('click', clearFilter);
       selection(); return;
     }
@@ -140,12 +161,14 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, ho
         <label><input type="checkbox" class="archived-select-all" aria-label="Select all in ${escapeHtml(label)}" ${busy ? 'disabled' : ''}> Select all</label></div>
         <div class="archived-group-rows" ${folded.has(alias) ? 'hidden' : ''}>${group.map(entry => {
           const p = identity(entry), reasonId = 'archived-delete-reason-' + encodeURIComponent(entry);
-          const date = typeof dates[entry] === 'number' && Number.isFinite(dates[entry]) ? new Date(dates[entry]) : null;
+          const folder = folders[entry], hasFolder = Object.hasOwn(folders, entry), hasProject = projectEntries.has(entry);
+          const archivedAt = folder?.archivedAt ?? dates[entry];
+          const date = typeof archivedAt === 'number' || typeof archivedAt === 'string' ? new Date(archivedAt) : null;
           return `<div class="archived-row" data-entry="${escapeHtml(entry)}">
             <input type="checkbox" class="archived-select" data-entry="${escapeHtml(entry)}" aria-label="Select ${escapeHtml(p.name)}" ${busy ? 'disabled' : ''}>
-            <div class="archived-main"><div class="archived-name"><strong>${escapeHtml(p.name)}</strong> <span class="archived-badge">Project</span>${kinds[entry] === undefined ? ' <span class="archived-badge">legacy</span>' : ''}${alias ? ` <span class="archived-badge" title="${escapeHtml(label)}">${escapeHtml(alias)}</span>` : ''}</div>
+            <div class="archived-main"><div class="archived-name"><strong>${escapeHtml(p.name)}</strong> ${hasProject ? '<span class="archived-badge">Project</span>' : ''}${hasFolder ? ' <span class="archived-badge">Folder</span>' : ''}${hasProject && kinds[entry] === undefined ? ' <span class="archived-badge">legacy</span>' : ''}${alias ? ` <span class="archived-badge" title="${escapeHtml(label)}">${escapeHtml(alias)}</span>` : ''}</div>
             <div class="archived-path" title="${escapeHtml(p.projectPath)}">${escapeHtml(p.projectPath)}</div>
-            <div class="archived-meta">${date && Number.isFinite(date.getTime()) ? `<time datetime="${date.toISOString()}">archived ${escapeHtml(date.toLocaleDateString())}</time>` : ''}${p.cached ? ` <span>${p.sessions.length} session${p.sessions.length === 1 ? '' : 's'}</span>` : ''}</div></div>
+            <div class="archived-meta">${date && Number.isFinite(date.getTime()) ? `<time datetime="${date.toISOString()}">archived ${escapeHtml(date.toLocaleDateString())}</time>` : ''}${p.cached ? ` <span>${p.sessions.length} session${p.sessions.length === 1 ? '' : 's'}</span>` : ''}${Array.isArray(folder?.disabledSchedules) ? ` <span>${folder.disabledSchedules.length} schedules off</span>` : ''}</div></div>
             <div class="archived-actions"><button type="button" class="settings-action-btn archived-unarchive" ${busy ? 'disabled' : ''}>Unarchive</button>
             <details class="archived-overflow"><summary aria-label="More actions for ${escapeHtml(p.name)}" aria-describedby="${escapeHtml(reasonId)}">⋯</summary><div class="archived-menu"><button type="button" class="settings-action-btn archived-copy">Copy path</button><button type="button" class="settings-action-btn archived-delete" ${busy ? 'disabled' : ''} aria-describedby="${escapeHtml(reasonId)}">Delete project…</button><span class="archived-delete-reason" id="${escapeHtml(reasonId)}"></span></div></details></div>
           </div>`;
@@ -207,10 +230,12 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, ho
     container,
     setHosts(next) { hosts = next; render(); },
     async refresh() {
-      const latest = await window.api.getSetting('global');
+      const [latest, folderArchives] = await Promise.all([window.api.getSetting('global'), window.api.getSetting('archivedProjects')]);
       kinds = { ...latest?.hiddenProjectKinds };
       dates = latest?.hiddenProjectArchivedAt || {};
-      archived = (latest?.hiddenProjects || []).filter(entry => kinds[entry] !== 'delete');
+      folders = { ...folderArchives };
+      projectEntries = new Set((latest?.hiddenProjects || []).filter(entry => kinds[entry] !== 'delete'));
+      archived = [...new Set([...projectEntries, ...Object.keys(folders)])].filter(entry => kinds[entry] !== 'delete');
       render();
     },
   };
