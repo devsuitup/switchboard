@@ -606,8 +606,15 @@ pages are `general`, `sessions`, `keyboard`, `automation`, `remote`, `integratio
 
 The panel reparents existing rows into named regions before wiring their handlers.
 Hidden pages remain in the DOM, preserving every field id and the one Save path.
-The Archived projects manager is documented above; project footer actions retain
-their existing behavior until their later #863 slice. The new shell adds no trigger controls or archive APIs.
+The Archived projects manager is documented above. This project shows the identity
+from the same path-and-folder-key project lookup used by deletion: name, full path,
+host label, folder key and cached session row counts (including archived rows).
+Without a cached project, supplied path/folder identity remains visible and counts
+read Unavailable. Values use textContent. Archive Project and Delete Project move
+into its Danger zone before wiring, retaining their ids, deletion busy keys and
+handlers. The footer contains only Cancel and Save Settings. Identity wraps in
+the existing ResizeObserver-driven narrow layout; no layout mode is added.
+The new shell adds no trigger controls or archive APIs.
 The host-list and refresh defaults now live in `SETTING_DEFAULTS`.
 
 Each page scrolls independently; navigation and the footer stay outside that
