@@ -157,13 +157,9 @@ test('open-terminal resumes a cached Codex row with codex argv and starts fresh 
 
 test('a pending Codex launch is re-keyed onto its rollout through the fork re-key path', async t => {
   const transitions = require('../session-transitions');
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-rekey-'));
-  const previous = process.env.CODEX_HOME;
-  process.env.CODEX_HOME = home;
+  const { home } = require('./fixtures/isolated-codex-home.cjs')(t);
   t.after(() => {
-    if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous;
     transitions.init({ activeSessions: new Map() });
-    fs.rmSync(home, { recursive: true, force: true });
   });
   const day = path.join(home, 'sessions', '2026', '08', '26');
   fs.mkdirSync(day, { recursive: true });
@@ -196,13 +192,9 @@ test('a pending Codex launch is re-keyed onto its rollout through the fork re-ke
 
 function pendingForkFixture(t) {
   const transitions = require('../session-transitions');
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-forks-'));
-  const previous = process.env.CODEX_HOME;
-  process.env.CODEX_HOME = home;
+  const { home } = require('./fixtures/isolated-codex-home.cjs')(t);
   t.after(() => {
-    if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous;
     transitions.init({ activeSessions: new Map() });
-    fs.rmSync(home, { recursive: true, force: true });
   });
   const day = path.join(home, 'sessions', '2026', '08', '26');
   fs.mkdirSync(day, { recursive: true });

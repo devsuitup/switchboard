@@ -1,4 +1,5 @@
 const test = require('node:test');
+require('./fixtures/isolated-codex-home.cjs')(test);
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -163,8 +164,8 @@ test('moved transcripts recognize uppercase worktree layouts only on win32', t =
 for (const deleted of [false, true]) {
   test(`Claude and Codex rows group under one repository and retain launch identity (deleted=${deleted})`, storeOptions, async t => {
     const h = fixture(t);
-    const previous = { CODEX_HOME: process.env.CODEX_HOME, SWITCHBOARD_DATA_DIR: process.env.SWITCHBOARD_DATA_DIR };
-    process.env.CODEX_HOME = path.join(h.root, 'codex');
+    const previous = { SWITCHBOARD_DATA_DIR: process.env.SWITCHBOARD_DATA_DIR };
+    require('./fixtures/isolated-codex-home.cjs')(t);
     process.env.SWITCHBOARD_DATA_DIR = path.join(h.root, 'data');
     const db = openStore();
     h.cleanup.before = () => {

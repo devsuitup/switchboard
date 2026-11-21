@@ -1,6 +1,7 @@
 'use strict';
 
 const test = require('node:test');
+require('./fixtures/isolated-codex-home.cjs')(test);
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -40,12 +41,9 @@ function withFixture(files, fn) {
 }
 
 function withCodexHome(fn) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-home-'));
-  const previous = process.env.CODEX_HOME;
-  process.env.CODEX_HOME = home;
+  const { home, restore } = require('./fixtures/isolated-codex-home.cjs')();
   try { return fn(home); } finally {
-    if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous;
-    fs.rmSync(home, { recursive: true, force: true });
+    restore();
   }
 }
 

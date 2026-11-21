@@ -3261,6 +3261,26 @@ refresh and reconcile.
 
 ## Harness folders (#821)
 
+Scan tests isolate Codex history with `test/fixtures/isolated-codex-home.cjs`
+(#1150). Call it with the `node:test` module for file scope, or a test context
+for fixture scope, before starting a scan. It creates an empty temporary
+`CODEX_HOME`, restores the exact prior environment value (including absence),
+and removes its directory in the registered teardown. Codex-specific fixtures
+can populate the returned `home`; synchronous callback fixtures can call the
+returned `restore` in `finally` instead of registering a test hook. Keep one
+fixture per test context; nested lifetimes must restore in reverse order.
+The `warm-start-1144` and `continuation-718` fixtures install it for callers.
+The existing `isolated-home` fixture is schedule-specific and inspects Claude
+projects in the original home, so scan tests do not reuse it.
+
+`test/isolated-codex-home.test.js` guards direct scan entry points and shared
+fixture imports. Its explicit exemptions are mocks, source checks, and pure
+viewer or activity transformations that do not read the Codex store.
+When adding a scan caller, use the helper or a shared fixture that installs it;
+do not add a guard exemption for a real scan. The regression witness uses a
+disposable HOME/USERPROFILE with synthetic `.codex/sessions` rollouts and an
+unset CODEX_HOME, never the developer's history. No production default changes.
+
 A folder key with a harness prefix (`codex/2026/08/26`) belongs to a CLI whose
 store is not `~/.claude/projects`; `harnessForFolder` (`harnesses/index.js`)
 picks the adapter. `refreshFolder` dispatches such a key to
