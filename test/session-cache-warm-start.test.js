@@ -8,13 +8,7 @@ const { readSessionFile } = require('../read-session-file');
 const openStore = require('./fixtures/conversation-store.cjs');
 const { memoryWriter } = require('./fixtures/writer-memory.cjs');
 const { encodeProjectPath } = require('../encode-project-path');
-let isolatedCodex, previousCodex;
-test.before(() => {
-  previousCodex = process.env.CODEX_HOME;
-  isolatedCodex = fs.mkdtempSync(path.join(os.tmpdir(), 'warm-codex-1144-'));
-  process.env.CODEX_HOME = isolatedCodex;
-});
-test.after(() => { process.env.CODEX_HOME = previousCodex; fs.rmSync(isolatedCodex, { recursive: true, force: true }); });
+require('./fixtures/isolated-codex-home.cjs')(test);
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'full-read-1144-'));
@@ -394,9 +388,6 @@ test('A2 incremental restart equals a full rebuild of the same final transcript 
   { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
     const { fixture: startupFixture, logicalIndex } = require('./fixtures/warm-start-1144.cjs');
     const f = await startupFixture(t);
-    const previousCodex = process.env.CODEX_HOME;
-    process.env.CODEX_HOME = path.join(f.root, 'codex');
-    t.after(() => { process.env.CODEX_HOME = previousCodex; });
     const day = path.join(process.env.CODEX_HOME, 'sessions', '2026', '08', '26');
     fs.mkdirSync(day, { recursive: true });
     const codexId = '01a03f6c-fdf9-7c83-86e3-c388f81d765c';

@@ -31,9 +31,8 @@ test('published content digest entries are append-only', () => {
 
 test('parser output requires a content version bump for Claude, bridge and Codex derivation', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'golden-index-1144-'));
-  const previous = process.env.CODEX_HOME;
-  process.env.CODEX_HOME = path.join(root, 'codex');
-  t.after(() => { process.env.CODEX_HOME = previous; fs.rmSync(root, { recursive: true, force: true }); });
+  require('./fixtures/isolated-codex-home.cjs')(t);
+  t.after(() => { fs.rmSync(root, { recursive: true, force: true }); });
   const user = (uuid, day, text) => ({ type: 'user', uuid, timestamp: `2024-01-${day}T00:00:00.000Z`, message: { content: text } });
   const bridge = { type: 'bridge-session', bridgeSessionId: 'cse_golden' };
   const write = (name, entries) => {

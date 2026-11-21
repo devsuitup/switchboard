@@ -23,13 +23,7 @@ const { Worker } = require('worker_threads');
 const { encodeProjectPath } = require('../encode-project-path');
 const { readSessionFile } = require('../read-session-file');
 const { fullIndexConfig } = require('../src/main/session-index/full-read-state');
-let originalCodexHome, isolatedCodexHome;
-test.before(() => {
-  originalCodexHome = process.env.CODEX_HOME;
-  isolatedCodexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-a2-codex-'));
-  process.env.CODEX_HOME = isolatedCodexHome;
-});
-test.after(() => { process.env.CODEX_HOME = originalCodexHome; fs.rmSync(isolatedCodexHome, { recursive: true, force: true }); });
+require('./fixtures/isolated-codex-home.cjs')(test);
 
 function startupScan(t, mutate, fault, derive) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-a2-'));
@@ -254,9 +248,7 @@ function runWorker(projectsDir, data = {}) {
 test('A2 explicit Claude scopes do not widen the coordinated Codex full phase', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-phase-a2-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const previous = process.env.CODEX_HOME;
-  process.env.CODEX_HOME = path.join(root, 'codex');
-  t.after(() => { process.env.CODEX_HOME = previous; });
+  require('./fixtures/isolated-codex-home.cjs')(t);
   const day = path.join(process.env.CODEX_HOME, 'sessions', '2026', '08', '26');
   fs.mkdirSync(day, { recursive: true });
   const id = '01a03f6c-fdf9-7c83-86e3-c388f81d765c';

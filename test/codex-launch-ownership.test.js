@@ -1,6 +1,7 @@
 'use strict';
 
 const test = require('node:test');
+require('./fixtures/isolated-codex-home.cjs')(test);
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -15,8 +16,8 @@ const REAL_ID = '11111111-1111-4111-8111-111111111111';
 for (const lifecycle of ['exited', 'removed', 'adopted then removed']) {
   test(`a ${lifecycle} sibling keeps ownership of its issued launch tag`, { skip: !openStore.supported }, t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-ownership-'));
-    const previous = { CODEX_HOME: process.env.CODEX_HOME, SWITCHBOARD_DATA_DIR: process.env.SWITCHBOARD_DATA_DIR };
-    process.env.CODEX_HOME = path.join(root, 'codex');
+    const previous = { SWITCHBOARD_DATA_DIR: process.env.SWITCHBOARD_DATA_DIR };
+    require('./fixtures/isolated-codex-home.cjs')(t);
     process.env.SWITCHBOARD_DATA_DIR = path.join(root, 'data');
     const day = path.join(process.env.CODEX_HOME, 'sessions', '2026', '11', '19');
     fs.mkdirSync(day, { recursive: true });

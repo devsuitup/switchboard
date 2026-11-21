@@ -1,6 +1,7 @@
 'use strict';
 
 const test = require('node:test');
+require('./fixtures/isolated-codex-home.cjs')(test);
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -40,7 +41,6 @@ function scan(f, disabledHarnesses, extra = {}) {
     const messages = [];
     const worker = new Worker(path.join(__dirname, '../workers/scan-projects.js'), {
       workerData: { projectsDir: f.projectsDir, disabledHarnesses, ...extra },
-      env: { ...process.env, CODEX_HOME: path.join(f.root, 'codex') },
     });
     worker.on('message', message => messages.push(message));
     worker.on('error', reject);
