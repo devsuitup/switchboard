@@ -24,17 +24,30 @@ Failed entries remain, with `appAlert`; partial
 bulk successes still have Undo. Row actions are locked during a request.
 
 Delete builds `{projectPath, remoteAlias, folder, sessions}` from the exact entry;
-`folder` is the host-qualified encoded path. Local worktree entries disable Delete
-project with a visible reason: delete the worktree from the sidebar or delete its
-repository. The real
-planner maps a worktree folder to the repository and refuses the conflicting
-worktree path hint. Parsing uses the shared `parseFolderKey` and `isValidAlias` in
+`folder` is the host-qualified encoded path. Opening a row's overflow does no
+deletion discovery and consumes no preview token. Clicking Delete calls the shared
+confirmation flow, which flushes writes and uses the shared deadline and recovery
+handling. Archived opts into preview reuse: the first request uses remembered
+session/settings choices, and the dialog consumes that result once if its actual
+answers still match. Changed answers require a fresh preview. Other callers keep
+their existing flow. If a remembered choice is unavailable (shared settings), the
+dialog unchecks it and obtains the matching plan; the refused initial plan has no
+token. A refusal disables Delete and writes its reason into the row;
+`aria-describedby` uses an entry-derived stable ID. Transient refusals (timeout,
+NOT_READY or unavailable discovery) explain how to reopen the menu and click
+Delete again; reopening only re-enables that explicit action. Detached rows ignore
+refusal updates.
+The real inventory groups a local worktree only when its repository exists, so
+orphaned entries can be deleted. Only the local worktree hints-conflict refusal
+explains in user wording that the entry is grouped under its repository and
+suggests deleting that repository. Ambiguous mappings do not get that advice.
+Parsing uses the shared `parseFolderKey` and `isValidAlias` in
 `public/utils.js`, re-exported by main's `remote-hosts.js`. An empty remote path
-means `/`, matching the writer. For other entries it calls the existing
+means `/`, matching the writer. Accepted entries call the existing
 `confirmAndDeleteProjectFolder`, retaining preview tokens, options,
 refusal handling and committed-result semantics. After cancellation or refusal,
-the manager unlocks the controls before returning focus to the Delete button;
-unlocking keeps unavailable worktree actions disabled. It never calls
+the manager unlocks the controls before returning focus to an enabled Delete button;
+unlocking keeps refused actions disabled. It never calls
 Unarchive before Delete. The overflow also copies the full path through
 `writeClipboard`. No new IPC or launch code is introduced.
 

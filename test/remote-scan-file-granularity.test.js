@@ -16,6 +16,30 @@ const path = require('path');
 
 const sessionCache = require('../session-cache');
 const { encodeProjectPath } = require('../encode-project-path');
+const { fixture: localStartupFixture, logicalIndex, supported } = require('./fixtures/warm-start-1144.cjs');
+
+for (const change of ['winner-delete', 'bridge-remove', 'bridge-migrate', 'divergent-uuid', 'legacy-same-time']) {
+  test('A2 local bridge startup equals full rebuild: ' + change, { skip: !supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const f = await localStartupFixture(t);
+    const bridge = { type: 'bridge-session', bridgeSessionId: 'cse_local' };
+    const message = (uuid, content, day) => ({ type: 'user', cwd: f.root,
+      ...(change === 'legacy-same-time' ? {} : { uuid }), timestamp: `2024-01-${day}T00:00:00.000Z`, message: { content } });
+    const first = path.join(f.dir, 'a.jsonl'), second = path.join(f.dir, 'b.jsonl');
+    writeJsonl(first, [message('shared', 'shared message', '01'), message('a-own', 'a own message', '02'), bridge]);
+    writeJsonl(second, [message('shared', 'shared message', '01'), message('b-own', 'b own message', '03'), bridge]);
+    f.write('neighbor');
+    await f.cache.populateCacheViaWorker();
+    if (change === 'winner-delete') fs.unlinkSync(first);
+    if (change === 'bridge-remove') writeJsonl(second, [message('shared', 'shared message', '01'), message('b-new', 'separate history', '04')]);
+    if (change === 'bridge-migrate') writeJsonl(second, [message('shared', 'shared message', '01'), message('b-new', 'migrated history', '04'), { ...bridge, bridgeSessionId: 'cse_other' }]);
+    if (change === 'divergent-uuid' || change === 'legacy-same-time') fs.appendFileSync(second, JSON.stringify(message('divergent', 'same-time divergent message', '02')) + '\n');
+    assert.equal((await f.restart()).ok, true);
+    const incremental = logicalIndex(f.db);
+    assert.equal(f.scans()[0].filesSkipped, change === 'legacy-same-time' ? 2 : 1, 'bridge dependencies do not widen to the ordinary neighbor');
+    assert.equal((await f.restart({ force: true })).ok, true);
+    assert.deepEqual(logicalIndex(f.db), incremental, 'bridge rows, metrics, FTS and metadata match full derivation');
+  });
+}
 
 function tmp(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-' + name + '-'));

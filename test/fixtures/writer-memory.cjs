@@ -61,6 +61,14 @@ function memoryWriter(backend, cache) {
     requestForWorkflow(_workflowId, name, ...args) { return this.request(name, ...args); },
     async fenceWorkflow() {},
     async request(name, ...args) {
+      if (name === 'deriveCachedNames') {
+        let derived = true;
+        for (const row of args[0]) {
+          const result = backend.deriveCachedName(row.sessionId, row.stamp, row.witness, row.collision);
+          derived = !!result && backend.certifyNameDerivation(row.sessionId, row.stamp, result.witness, result.collision) && derived;
+        }
+        return derived;
+      }
       if (name === 'effects') {
         for (const effect of args[0]) await this.request(effect.name, ...effect.args);
         return;
