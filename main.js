@@ -1556,6 +1556,11 @@ ipcMain.handle('refresh-stats', async () => {
 });
 
 // --- IPC: get-usage (lightweight, API-only, no PTY) ---
+const codexUsage = require('./src/main/usage/codex-usage').createCodexUsage({
+  isEnabled: () => (getSetting('global')?.showCodexUsage ?? SETTING_DEFAULTS.showCodexUsage) === true,
+});
+ipcMain.handle('get-codex-usage', () => codexUsage.getUsage());
+
 ipcMain.handle('get-usage', async () => {
   try {
     return await fetchAndTransformUsage() || {};
@@ -1792,8 +1797,10 @@ ipcMain.handle('get-settings-by-prefix', (_event, prefix) => {
 
 ipcMain.handle('set-setting', async (_event, key, value) => {
   const disabledBefore = key === 'global' ? JSON.stringify(getSetting('global')?.disabledHarnesses || []) : null;
+  const usageBefore = key === 'global' ? getSetting('global')?.showCodexUsage : undefined;
   await setSetting(key, value);
   if (key === 'global') {
+    if (value?.showCodexUsage !== usageBefore) codexUsage.settingsChanged();
     applyUpdateChannel();
     // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
     if (JSON.stringify(value?.disabledHarnesses || []) !== disabledBefore) {

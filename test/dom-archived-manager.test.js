@@ -384,6 +384,7 @@ for (const remembered of [false, true]) test(`one Delete click uses one preview 
   await openDelete(h.rows()[0]);
   h.q('.archived-delete').click();
   await waitFor(() => h.q('.choice-dialog-confirm') && !h.q('.choice-dialog-confirm').disabled);
+  assert.equal(h.q('.archived-delete-reason').textContent, '', 'opening the dialog clears the row checking message');
   assert.equal(h.calls.preview.length, 1, 'one Delete click must mint at most one preview token');
   assert.equal(h.calls.preview[0].options.sessions, remembered);
   assert.equal(h.calls.preview[0].options.settings, !remembered);
@@ -424,22 +425,30 @@ test('unavailable remembered settings can be kept without blocking Archived dele
 });
 
 for (const refusal of [
-  { code: 'IDENTITY_UNAVAILABLE', error: 'No unambiguous known project mapping; reload projects.', retry: false },
-  { code: 'INVALID_REQUEST', error: 'Invalid project selection.', retry: false },
+  { code: 'IDENTITY_UNAVAILABLE', error: 'No unambiguous known project mapping; reload projects.', retry: true },
+  { code: 'INVALID_REQUEST', error: 'Invalid project selection.', retry: true },
+  { code: 'SNAPSHOT_STALE', error: 'Snapshot changed.', refresh: true, retry: true },
+  { code: 'TOKEN_LIMIT', error: 'Too many previews.', retry: true },
+  { code: 'UNAUTHORIZED', error: 'Sender unavailable.', retry: true },
+  { error: 'IPC rejected', thrown: true, retry: true },
   { code: 'NOT_READY', error: 'Recovery pending', retry: true },
   { code: 'DISCOVERY_TIMEOUT', port: 'readJobs', retry: true },
   { code: 'DISCOVERY_UNAVAILABLE', error: 'Index unavailable', retry: true },
   { error: 'Index unavailable', retry: true },
 ]) test(`click-time refusal stays accessible with appropriate advice: ${refusal.code || refusal.error}`, async t => {
   const h = await setup(t), row = h.rows()[1], button = row.querySelector('.archived-delete');
-  h.w.api.previewProjectDelete = async input => { h.calls.preview.push(input); return { ok: false, ...refusal }; };
+  h.w.api.previewProjectDelete = async input => {
+    h.calls.preview.push(input);
+    if (refusal.thrown) throw new Error(refusal.error);
+    return { ok: false, ...refusal };
+  };
   await openDelete(row);
   button.click();
   await waitFor(() => button.disabled && row.querySelector('.archived-delete-reason').textContent !== 'Checking deletion availability…');
   const reason = h.document.getElementById(button.getAttribute('aria-describedby'));
   assert.ok(reason && reason.textContent, 'refused Delete keeps its accessible reason');
   assert.doesNotMatch(reason.textContent, /delete its repository|Folder and path hints conflict/i);
-  assert.equal(/try again/i.test(reason.textContent), refusal.retry, 'only transient refusals offer another Delete attempt');
+  assert.equal(/try again/i.test(reason.textContent), refusal.retry, 'every non-grouped refusal offers another Delete attempt');
   assert.doesNotMatch(reason.textContent, /Close and reopen this menu to retry|Retry preview, or cancel/i);
   assert.equal(h.calls.execute.length, 0);
   if (refusal.retry) {
@@ -448,6 +457,25 @@ for (const refusal of [
     assert.equal(button.disabled, false, 'reopening permits an explicit retry click');
     assert.equal(h.calls.preview.length, 1, 'reopening itself must not retry discovery');
   }
+});
+
+for (const grouped of [false, true]) test(`refused Archived Delete returns focus to its described summary, grouped=${grouped}`, async t => {
+  const h = await setup(t), row = h.rows()[1], button = row.querySelector('.archived-delete');
+  const focused = [];
+  h.document.addEventListener('focusin', event => focused.push(event.target));
+  h.w.api.previewProjectDelete = async () => ({ ok: false, code: 'IDENTITY_UNAVAILABLE',
+    error: grouped ? 'Folder and path hints conflict.' : 'Project mapping unavailable.' });
+  await openDelete(row);
+  button.focus(); button.click();
+  await waitFor(() => row.querySelector('.archived-delete-reason').textContent !== 'Checking deletion availability…');
+  await settle();
+  const summary = row.querySelector('summary');
+  assert.equal(h.document.activeElement, summary, 'refusal returns focus to the Archived row summary');
+  assert.equal(focused.includes(h.q('#sidebar-content')), false, 'refusal must never focus the sidebar');
+  assert.equal(summary.getAttribute('aria-describedby'), button.getAttribute('aria-describedby'), 'summary exposes the refusal reason');
+  row.querySelector('details').open = false; await settle();
+  await openDelete(row);
+  assert.equal(button.disabled, grouped, 'only the grouped worktree remains disabled after reopening');
 });
 
 test('reason IDs remain unique and stable when filtering changes row positions', async t => {

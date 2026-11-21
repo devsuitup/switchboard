@@ -33,10 +33,12 @@ answers still match. Changed answers require a fresh preview. Other callers keep
 their existing flow. If a remembered choice is unavailable (shared settings), the
 dialog unchecks it and obtains the matching plan; the refused initial plan has no
 token. A refusal disables Delete and writes its reason into the row;
-`aria-describedby` uses an entry-derived stable ID. Transient refusals (timeout,
-NOT_READY or unavailable discovery) explain how to reopen the menu and click
-Delete again; reopening only re-enables that explicit action. Detached rows ignore
-refusal updates.
+`aria-describedby` uses an entry-derived stable ID on both Delete and the row's
+summary. Every refusal except the grouped-worktree hint, including thrown IPC
+errors, explains how to reopen the menu and click Delete again; reopening only
+re-enables that explicit action, with no preview. Detached rows ignore refusal
+updates. The shared flow's `onDialogOpen` callback clears the row's checking
+message when the dialog opens.
 The real inventory groups a local worktree only when its repository exists, so
 orphaned entries can be deleted. Only the local worktree hints-conflict refusal
 explains in user wording that the entry is grouped under its repository and
@@ -46,8 +48,11 @@ Parsing uses the shared `parseFolderKey` and `isValidAlias` in
 means `/`, matching the writer. Accepted entries call the existing
 `confirmAndDeleteProjectFolder`, retaining preview tokens, options,
 refusal handling and committed-result semantics. After cancellation or refusal,
-the manager unlocks the controls before returning focus to an enabled Delete button;
-unlocking keeps refused actions disabled. It never calls
+the manager unlocks the controls before returning focus to an enabled Delete button
+or, after refusal, the row's summary with its reason. Passing `onUnavailable`
+leaves fallback focus to that caller; sidebar and project-settings callers retain
+their existing project-header/sidebar fallback. Unlocking keeps refused actions
+disabled until the menu reopens. It never calls
 Unarchive before Delete. The overflow also copies the full path through
 `writeClipboard`. No new IPC or launch code is introduced.
 
@@ -529,6 +534,56 @@ uninitialised submodule refuses preview/deletion before force can hide its files
 | `get-stats-from-db` | `buildStatsFromDb()`: `{dailyActivity, dailyModelTokens, modelUsage, totalMessages, totalSessions, totalToolCalls, totalTokens, firstSessionDate, lastComputedDate}` from `session_metrics` — heatmap source since PR #7 |
 | `refresh-stats` | `{stats, usage}` — combined; calls `buildStatsFromDb` (using `getDailyMetrics`) + `fetchAndTransformUsage` |
 | `get-usage` | rate-limits payload from Claude `/usage` |
+| `get-codex-usage` | `{limits: [...]}` containing renderable Codex rows only, or `{}` when disabled or unavailable |
+
+#### Opt-in Codex usage (#1139)
+
+Settings → Sessions → CLI Agents has **Show Codex usage**, defaulting to false
+in `SETTING_DEFAULTS`. Saving applies it immediately. Only the global setting
+with the boolean value `true` authorizes a read or request; project settings and
+renderer IPC arguments cannot enable it.
+
+`src/main/usage/codex-usage.js` reads `CODEX_HOME/auth.json`, falling back to
+`~/.codex/auth.json`, only after that check. It sends the OAuth access token and
+optional account id only to `https://chatgpt.com/backend-api/wham/usage`.
+Redirects are refused. No credentials, raw response, account metadata or error
+messages cross IPC; failures return `{}` and are never logged. This endpoint is
+undocumented and can change; unavailable usage simply disappears.
+
+A shared in-flight request covers status bar and Stats callers. An AbortController
+bounds the request and body read to ten seconds. Missing credentials, malformed
+responses, HTTP failures and timeouts back off for 30, 60, 120, 240 then 300
+seconds; HTTP 429 also honors Retry-After (seconds or HTTP date), capped at one
+hour. Success resets backoff. A saved setting change cancels the request and
+invalidates its generation; changing the toggle does not bypass backoff.
+The Settings panel applies usage only when the toggle changes, including saves
+deferred by project deletion. Disabling removes Codex rows without fetching
+either provider; enabling refreshes only Codex. The status bar tracks Claude
+and Codex requests separately so neither provider replaces the other's rows.
+Disabling invalidates pending Codex renders and keeps status-bar polling from
+fetching Codex while the saved main-process setting may still be on. Opening
+Stats also honors that renderer state. A missing Codex toggle does not apply
+an undefined value to the renderer. After a deferred enabling write succeeds,
+`flushDeferredProjectDeletionWrites` calls `refreshCodexUsage` for both surfaces
+using the current renderer state, so a newer turn-off cannot be undone. Another
+deferral or a failed write does not trigger that refresh.
+`replaceQuotaRows` removes non-row children from the shipped gauge markup before
+updating either provider; placeholders cannot keep an otherwise empty gauge visible.
+Status bar polling remains every five minutes; Stats has its own refresh button.
+
+Codex rows reuse `buildQuotaBar` and `buildUsageSection`; Claude keeps its own
+rows and error handling. Reset text shares `formatResetTime` from `claude-auth.js`.
+Model-specific status-bar labels include the limit name. Over-limit percentages
+remain visible; bar widths clamp to 100%.
+The adapted endpoint contract, duration labels and per-model filtering credit
+**Ali Basiri**, `doctly/switchboard`, commits `ee656523` and `3ca3d19d`.
+The fork adds explicit consent, quiet failure, timeout, backoff, redirect refusal
+and stale-result protection instead of porting upstream's raw error payloads.
+
+Tests use disposable auth files and stubbed fetch; they never contact the
+endpoint. The IPC test evaluates only the relevant extracted registration and
+save handler, without importing Electron. Live endpoint compatibility and the
+Electron bridge remain integration/CI verification boundaries.
 
 ### Search
 

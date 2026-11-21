@@ -903,7 +903,9 @@ window.flushDeferredProjectDeletionWrites = () => {
   const patch = window.projectDeletionDeferredSettings, workingSet = window.projectDeletionDeferredWorkingSet;
   window.projectDeletionDeferredSettings = null;
   window.projectDeletionDeferredWorkingSet = null;
-  if (patch) void saveGlobalSettings(patch.patch, { remove: patch.remove }).catch(() => {
+  if (patch) void saveGlobalSettings(patch.patch, { remove: patch.remove }).then(result => {
+    if (result === true && patch.patch.showCodexUsage === true) return window.refreshCodexUsage?.();
+  }).catch(() => {
     showAppNotice({ id: 'settings-delete-busy', kind: 'error',
       message: 'Settings could not be saved after the project deletion. Open Settings to review your values and save again.',
       actionLabel: 'Open Settings', onAction: () => openSettingsViewer('global') });
@@ -1121,7 +1123,7 @@ async function reconcileProjectDeletions({ operations = [] } = {}) {
   }
 }
 
-async function confirmAndDeleteProjectFolder(project, button, { onUnavailable, reuseInitialPreview = false } = {}) {
+async function confirmAndDeleteProjectFolder(project, button, { onUnavailable, onDialogOpen, reuseInitialPreview = false } = {}) {
   if (isProjectDeleting(project) || completedProjectDeletionKeys.has(projectDeletionKey(project))) return false;
   if (archivingGroupIds.has('ph-' + folderId(project.projectPath, project.remoteAlias)) ||
     project.sessions?.some(session => archivingSessionIds.has(session.sessionId))) {
@@ -1152,6 +1154,7 @@ async function confirmAndDeleteProjectFolder(project, button, { onUnavailable, r
     let initialPreview = reuseInitialPreview ? capabilities : null;
     const categories = capabilities.plan.categories;
     worktreeChoices = (capabilities.plan.worktrees || []).map(row => ({ ...row }));
+    onDialogOpen?.();
     const answers = await showChoiceDialog({
       title: 'Delete project from Switchboard?',
       message: [`${project.remoteAlias || 'Local'} — ${capabilities.plan.project.projectPath}`,
@@ -1227,7 +1230,7 @@ async function confirmAndDeleteProjectFolder(project, button, { onUnavailable, r
   } finally {
     if (accepted) setProjectDeletionWritesBlocked(project, false);
     if (!unresolved && !projectDeletionOperations.has(projectDeletionKey(project)) && !completedProjectDeletionKeys.has(projectDeletionKey(project))) setProjectDeletionBusy(project, false);
-    if (!button?.isConnected || button.disabled) {
+    if (!onUnavailable && (!button?.isConnected || button.disabled)) {
       const target = document.getElementById('ph-' + folderId(project.projectPath, project.remoteAlias)) || document.getElementById('sidebar-content');
       if (target) { target.tabIndex = -1; target.focus(); }
     }
