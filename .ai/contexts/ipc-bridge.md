@@ -618,8 +618,15 @@ pages are `general`, `sessions`, `keyboard`, `automation`, `remote`, `integratio
 
 The panel reparents existing rows into named regions before wiring their handlers.
 Hidden pages remain in the DOM, preserving every field id and the one Save path.
-The settings filter (`#sv-filter`) reads each `.settings-field-info.textContent`
-on input, using a trimmed, case-insensitive substring. It hides unmatched rows,
+The settings filter (`#sv-filter`) reads only `.settings-label` and
+`.settings-description` text within each settings row on input, using a trimmed,
+case-insensitive substring. `data-settings-filter-exclude` marks dynamic descriptions
+and values: CLI availability/lock messages, version/update status, ActivityWatch
+destination/URL/status, remote-host entries/status, and trace paths/entries.
+Marked elements and their descendants are skipped; marked content nested in a
+description is removed from a clone, leaving the live DOM untouched. Controls,
+including Use global default, select option labels, shortcut bindings and host
+buttons, contribute no search text. It hides unmatched rows,
 empty groups and disclosure prose, then stacks matching pages in one scrolling
 area. It does not build an index, read ids or control values, re-render controls,
 or enter the dirty snapshot. No-match navigation items are dimmed but remain

@@ -41,6 +41,58 @@ function visibleSettingsRows(h) {
     .filter(row => !row.closest('[hidden]'));
 }
 
+test('project filter ignores the Use global default control label', async t => {
+  const h = setup(t);
+  await h.open('project');
+  assert.ok(h.q('#settings-page-launch .settings-use-global'));
+  filterSettings(h, 'global');
+  assert.deepEqual(visibleSettingsRows(h), [], 'global must not match any Launch row');
+  assert.deepEqual(h.active(), []);
+});
+
+test('filter ignores select option labels and shortcut bindings', async t => {
+  const h = setup(t);
+  await h.open();
+  assert.match(h.q('#sv-codex-sandbox').textContent, /Full access \(danger\)/);
+  const shortcut = h.q('.settings-shortcut-btn').textContent;
+  assert.ok(shortcut.trim());
+  for (const term of ['Full access (danger)', shortcut]) {
+    filterSettings(h, term);
+    assert.deepEqual(visibleSettingsRows(h), [], term + ' is only control text');
+  }
+});
+
+test('filter ignores dynamic values and statuses but keeps descriptive prose searchable', async t => {
+  const h = setup(t);
+  h.w.api.getActivityReportingState = async () => ({ destination: 'uniquedestination', url: 'http://uniqueurl:5600' });
+  h.w.api.getActivityTraceState = async () => ({ dir: '/uniquetracedir' });
+  h.saved.global = { remoteHosts: [{ alias: 'uniquehost', label: 'Unique host', enabled: true }] };
+  await h.open();
+  const texts = [
+    ['#sv-current-version', 'uniqueversion'],
+    ['#sv-update-status', 'uniqueupdatestatus'],
+    ['#sv-activity-reporting-status', 'uniquereportingstatus'],
+    ['#sv-remote-status', 'uniqueremotestatus'],
+    ['.sv-harness-desc', 'uniqueharnessstatus'],
+  ];
+  for (const [selector, text] of texts) h.q(selector).textContent = text;
+  const hosts = h.q('#sv-remote-hosts');
+  assert.ok(hosts.querySelector('.rh-check'));
+  for (const term of [...texts.map(([, text]) => text), 'uniquedestination', 'uniqueurl', 'uniquetracedir', 'Check host', 'Add host']) {
+    await t.test(term, () => {
+      assert.ok(h.q('.settings-form').textContent.includes(term), 'excluded text is present in the DOM');
+      filterSettings(h, term);
+      assert.deepEqual(visibleSettingsRows(h), [], term + ' must not match a setting');
+    });
+  }
+  filterSettings(h, 'local time tracker');
+  assert.deepEqual(visibleSettingsRows(h), [h.q('#sv-activity-reporting').closest('.settings-field')]);
+  filterSettings(h, '~/.ssh/config');
+  assert.deepEqual(visibleSettingsRows(h), [hosts.closest('.settings-field')]);
+  assert.equal(h.q('#sv-remote-hosts'), hosts, 'search leaves the live controls in place');
+  for (const [selector, text] of texts) assert.equal(h.q(selector).textContent, text);
+});
+
 test('filter beta leaves only its row under General and dims every other navigation item', async t => {
   const h = setup(t);
   await h.open();
@@ -159,10 +211,23 @@ test('Archived retains its independent filter and selection when settings filter
   const selection = h.q('.archived-row input[type="checkbox"]');
   assert.ok(selection);
   selection.click();
+  const archived = h.q('#settings-page-archived');
+  const archivedMarkup = archived.innerHTML;
+  const descendants = [...archived.querySelectorAll('*')];
+  const mutations = new h.w.MutationObserver(() => {});
+  mutations.observe(archived, { attributes: true, childList: true, subtree: true });
+  t.after(() => mutations.disconnect());
+  const assertArchivedUntouched = () => {
+    assert.equal(archived.innerHTML, archivedMarkup, 'filter must not add hidden attributes inside Archived');
+    assert.deepEqual([...archived.querySelectorAll('*')], descendants, 'Archived keeps its DOM nodes');
+    assert.equal(mutations.takeRecords().filter(record => record.target !== archived).length, 0, 'only the Archived page itself may change visibility');
+  };
   filterSettings(h, 'beta');
+  assertArchivedUntouched();
   assert.deepEqual(h.active(), ['general'], 'Archived is excluded from settings matches');
   assert.equal(h.q('#sv-unsaved').textContent, '');
   filterSettings(h, '');
+  assertArchivedUntouched();
   assert.deepEqual(h.active(), ['archived']);
   assert.equal(h.q('.archived-filter'), archivedFilter);
   assert.equal(archivedFilter.value, 'beta');

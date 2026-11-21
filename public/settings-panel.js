@@ -131,7 +131,7 @@
         ${harnessList.map(h => `<div class="settings-field">
           <div class="settings-field-info">
             <span class="settings-label">${escapeHtml(h.label)}</span>
-            <div class="settings-description sv-harness-desc" data-harness="${escapeHtml(h.id)}">${h.available ? 'Sessions indexed, watched and offered in the + menu' : 'Not installed here: no sessions found for it'}</div>
+            <div class="settings-description sv-harness-desc" data-settings-filter-exclude data-harness="${escapeHtml(h.id)}">${h.available ? 'Sessions indexed, watched and offered in the + menu' : 'Not installed here: no sessions found for it'}</div>
           </div>
           <div class="settings-field-control">
             <label class="settings-toggle"><input type="checkbox" class="sv-harness-toggle" data-harness="${escapeHtml(h.id)}" ${h.enabled ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
@@ -431,7 +431,7 @@
         <div class="settings-field">
           <div class="settings-field-info">
             <span class="settings-label">Version</span>
-            <div class="settings-description"><span id="sv-current-version"></span> <span id="sv-update-status"></span></div>
+            <div class="settings-description" data-settings-filter-exclude><span id="sv-current-version"></span> <span id="sv-update-status"></span></div>
           </div>
           <div class="settings-field-control">
             <button class="settings-check-updates-btn" id="sv-check-updates-btn">Check for Updates</button>
@@ -445,9 +445,9 @@
           <div class="settings-field-info">
             <span class="settings-label">SSH hosts to observe</span>
             <div class="settings-description">Each host is an alias from your <code>~/.ssh/config</code> — Switchboard never stores or reads a key, a password or a port. Its Claude sessions are mirrored read-only into the local database and appear in the sidebar, the search and the heatmap alongside your own. Opening one shows its transcript; it cannot be resumed from here.</div>
-            <div class="remote-hosts-list" id="sv-remote-hosts"></div>
+            <div class="remote-hosts-list" id="sv-remote-hosts" data-settings-filter-exclude></div>
             <button class="settings-check-updates-btn" id="sv-remote-add">Add host</button>
-            <span id="sv-remote-status" class="settings-description"></span>
+            <span id="sv-remote-status" class="settings-description" data-settings-filter-exclude></span>
           </div>
         </div>
         <div class="settings-field">
@@ -466,8 +466,8 @@
         <div class="settings-field">
           <div class="settings-field-info">
             <span class="settings-label">Send session activity to ActivityWatch</span>
-            <div class="settings-description">Destination: <strong>${escapeHtml(reportingState.destination || 'ActivityWatch')}</strong>, the local time tracker, at <code>${escapeHtml(reportingState.url || '')}</code>. Nothing leaves this machine. Takes effect immediately and is remembered across launches.</div>
-            <div class="settings-description" id="sv-activity-reporting-status"></div>
+            <div class="settings-description">Destination: <strong data-settings-filter-exclude>${escapeHtml(reportingState.destination || 'ActivityWatch')}</strong>, the local time tracker, at <code data-settings-filter-exclude>${escapeHtml(reportingState.url || '')}</code>. Nothing leaves this machine. Takes effect immediately and is remembered across launches.</div>
+            <div class="settings-description" id="sv-activity-reporting-status" data-settings-filter-exclude></div>
           </div>
           <div class="settings-field-control">
             <label class="settings-toggle"><input type="checkbox" id="sv-activity-reporting" ${reportingState.enabled ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
@@ -510,8 +510,8 @@
         <div class="settings-field settings-field-wide">
           <div class="settings-field-info">
             <span class="settings-label">Trace files</span>
-            <div class="settings-description">${escapeHtml(traceState.dir || '')}</div>
-            <div class="activity-trace-list" id="sv-activity-trace-list"></div>
+            <div class="settings-description" data-settings-filter-exclude>${escapeHtml(traceState.dir || '')}</div>
+            <div class="activity-trace-list" id="sv-activity-trace-list" data-settings-filter-exclude></div>
           </div>
         </div>
       </div>` : ''}
@@ -647,7 +647,13 @@
         let matches = false;
         if (id !== 'archived') {
           for (const row of page.querySelectorAll('.settings-field')) {
-            const text = row.querySelector('.settings-field-info')?.textContent.toLowerCase() || '';
+            const text = [...row.querySelectorAll('.settings-label, .settings-description')]
+              .filter(node => !node.closest('[data-settings-filter-exclude]'))
+              .map(node => {
+                const copy = node.cloneNode(true);
+                copy.querySelectorAll('[data-settings-filter-exclude]').forEach(excluded => excluded.remove());
+                return copy.textContent;
+              }).join(' ').toLowerCase();
             row.hidden = Boolean(query) && !text.includes(query);
             if (!row.hidden) matches = true;
           }
