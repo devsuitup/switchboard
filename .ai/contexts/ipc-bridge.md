@@ -618,8 +618,23 @@ pages are `general`, `sessions`, `keyboard`, `automation`, `remote`, `integratio
 
 The panel reparents existing rows into named regions before wiring their handlers.
 Hidden pages remain in the DOM, preserving every field id and the one Save path.
-The Archived projects manager is documented above; project footer actions retain
-their existing behavior until their later #863 slice. The new shell adds no trigger controls or archive APIs.
+The Archived projects manager is documented above. This project shows the identity
+from the same path-and-folder-key project lookup used by deletion, performed after
+shell-profile loading finishes: name, full path, host label, folder key and cached
+top-level non-terminal session counts (including archived sessions). Both counts
+filter flat cache rows with `!s.parentSessionId && s.type !== 'terminal'`.
+There is no shared predicate: the parent exclusion matches `renderDefaultStatus`
+in `public/app.js` and the sidebar count in `public/sidebar.js`; the terminal
+exclusion matches the background projection in `public/app.js`. The sidebar
+additionally excludes archived rows for its active count. Host labels fall back
+to the alias when `remoteHostLabel` is unavailable.
+Without a cached project, supplied path/folder identity remains visible and counts
+read Unavailable. Values use textContent. Archive Project and Delete Project move
+into its Danger zone before wiring, retaining their ids, deletion busy keys and
+handlers. Archive failures use the OK-only `appAlert` adapter from
+`public/app-dialogs.js`. The footer contains only Cancel and Save Settings. Identity wraps in
+the existing ResizeObserver-driven narrow layout; no layout mode is added.
+The new shell adds no trigger controls or archive APIs.
 The host-list and refresh defaults now live in `SETTING_DEFAULTS`.
 
 Each page scrolls independently; navigation and the footer stay outside that
