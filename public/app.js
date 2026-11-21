@@ -3492,6 +3492,7 @@ async function refreshQuotaGauge() {
 }
 
 function replaceQuotaRows(rows, runtime) {
+  [...quotaGaugeEl.children].filter(el => !el.matches('.quota-item')).forEach(el => el.remove());
   quotaGaugeEl.querySelectorAll(`[data-runtime="${runtime}"]`).forEach(el => el.remove());
   const bars = rows.map(buildQuotaBar);
   if (runtime === 'claude') quotaGaugeEl.prepend(...bars);
@@ -3513,6 +3514,10 @@ async function refreshCodexQuotaGauge() {
 
 function applyCodexUsage(enabled) {
   codexQuotaEnabled = enabled === true;
+  return refreshCodexUsage();
+}
+
+function refreshCodexUsage() {
   return Promise.all([
     refreshCodexQuotaGauge(),
     window.refreshCodexStatsUsage?.(codexQuotaEnabled),

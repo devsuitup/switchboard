@@ -62,7 +62,7 @@ async function loadStats() {
     buildUsageSection(usage);
   }
 
-  await refreshCodexStatsUsage();
+  await refreshCodexStatsUsage(codexQuotaEnabled);
   if (!stats && !Object.keys(usage).length && !statsViewerBody.querySelector('.usage-container-codex')) {
     statsViewerBody.innerHTML = '<div class="plans-empty">No stats data found. Run some sessions first.</div>';
     return;

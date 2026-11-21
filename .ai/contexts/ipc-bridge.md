@@ -543,7 +543,14 @@ deferred by project deletion. Disabling removes Codex rows without fetching
 either provider; enabling refreshes only Codex. The status bar tracks Claude
 and Codex requests separately so neither provider replaces the other's rows.
 Disabling invalidates pending Codex renders and keeps status-bar polling from
-fetching Codex while the saved main-process setting may still be on.
+fetching Codex while the saved main-process setting may still be on. Opening
+Stats also honors that renderer state. A missing Codex toggle does not apply
+an undefined value to the renderer. After a deferred enabling write succeeds,
+`flushDeferredProjectDeletionWrites` calls `refreshCodexUsage` for both surfaces
+using the current renderer state, so a newer turn-off cannot be undone. Another
+deferral or a failed write does not trigger that refresh.
+`replaceQuotaRows` removes non-row children from the shipped gauge markup before
+updating either provider; placeholders cannot keep an otherwise empty gauge visible.
 Status bar polling remains every five minutes; Stats has its own refresh button.
 
 Codex rows reuse `buildQuotaBar` and `buildUsageSection`; Claude keeps its own

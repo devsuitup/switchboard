@@ -11,10 +11,10 @@ const { SETTING_DEFAULTS } = require('../public/setting-defaults');
 
 const codex = { limits: [{ kind: 'codex', short: '5h', label: 'Codex 5h', percent: 42, reset: 'tomorrow' }] };
 function setup(t) {
-  const dom = new JSDOM('<div id="status-bar-quota"></div><div id="stats"></div>', { runScripts: 'outside-only' });
+  const dom = new JSDOM(fs.readFileSync(path.join(__dirname, '../public/index.html'), 'utf8'), { runScripts: 'outside-only' });
   t.after(() => dom.window.close());
   const w = dom.window;
-  w.statsViewerBody = w.document.querySelector('#stats');
+  w.statsViewerBody = w.document.querySelector('#stats-viewer-body');
   w.api = { getUsage: async () => ({ session: 5 }), getCodexUsage: async () => codex };
   const ctx = dom.getInternalVMContext();
   for (const file of ['utils.js', 'stats-view.js']) {
@@ -22,13 +22,48 @@ function setup(t) {
     vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx, { filename });
   }
   loadAppFunctions(ctx, {
-    functions: ['shortQuotaLabel', 'buildQuotaBar', 'refreshQuotaGauge', 'replaceQuotaRows', 'refreshCodexQuotaGauge', 'applyCodexUsage'],
+    functions: ['shortQuotaLabel', 'buildQuotaBar', 'refreshQuotaGauge', 'replaceQuotaRows', 'refreshCodexQuotaGauge', 'applyCodexUsage', 'refreshCodexUsage'],
     declarations: ['quotaGaugeEl', 'quotaRequest', 'codexQuotaRequest', 'codexQuotaEnabled'],
   });
   return w;
 }
 
 test('Codex usage defaults off', () => assert.equal(SETTING_DEFAULTS.showCodexUsage, false));
+
+test('shipped status bar contains only labelled quota rows after refresh', async t => {
+  const w = setup(t);
+  await w.refreshQuotaGauge();
+  const gauge = w.document.querySelector('#status-bar-quota');
+  assert.equal(gauge.children.length, 2, 'no unlabelled placeholder track remains');
+  assert.ok([...gauge.children].every(el => el.matches('.quota-item')));
+});
+
+test('shipped gauge hides when Claude is unavailable and Codex is off', async t => {
+  const w = setup(t);
+  w.api.getUsage = async () => { throw new Error('unavailable'); };
+  await w.applyCodexUsage(false);
+  await w.refreshQuotaGauge();
+  const gauge = w.document.querySelector('#status-bar-quota');
+  assert.equal(gauge.style.display, 'none', 'empty gauge must be hidden');
+  assert.equal(gauge.children.length, 0);
+});
+
+test('opening Stats during deferred turn-off does not fetch Codex', async t => {
+  const w = setup(t);
+  w.api.refreshStats = async () => ({ stats: null, usage: { session: 5 } });
+  await w.applyCodexUsage(false);
+  let calls = 0;
+  w.api.getCodexUsage = async () => { calls++; return codex; };
+  await w.loadStats();
+  assert.equal(calls, 0, 'opening Stats must honor the renderer off state');
+  assert.equal(w.document.querySelector('.usage-container-codex'), null);
+  assert.ok(w.document.querySelector('.usage-container-claude'));
+});
+
+test('Codex settings disclosure names the account-id header sent with the token', () => {
+  const docs = fs.readFileSync(path.join(__dirname, '../docs/settings.md'), 'utf8');
+  assert.match(docs, /account id[^\n]*`chatgpt-account-id`/);
+});
 
 test('status bar reuses quota bars and distinguishes Codex; failure removes only Codex', async t => {
   const w = setup(t);
