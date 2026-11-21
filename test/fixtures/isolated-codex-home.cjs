@@ -3,15 +3,23 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const homes = [];
 
 function isolateCodexHome(t) {
   const previous = process.env.CODEX_HOME;
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-codex-home-'));
+  const frame = { previous, home, released: false };
+  homes.push(frame);
   process.env.CODEX_HOME = home;
   function restore() {
-    if (previous === undefined) delete process.env.CODEX_HOME;
-    else process.env.CODEX_HOME = previous;
-    fs.rmSync(home, { recursive: true, force: true });
+    if (frame.released) return;
+    frame.released = true;
+    while (homes.at(-1)?.released) {
+      const current = homes.pop();
+      if (current.previous === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = current.previous;
+      fs.rmSync(current.home, { recursive: true, force: true });
+    }
   }
   t?.after(restore);
   return { home, restore };
