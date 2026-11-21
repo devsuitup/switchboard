@@ -72,6 +72,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
   };
   let backend, recorder, projectsDir, cacheTail = Promise.resolve(), closing, accepting = true, terminated = false;
   const pending = new Set();
+  const scanResumes = new Map();
   const commandScope = new AsyncLocalStorage();
   const owner = {};
   const admitted = () => !terminated && (accepting || commandScope.getStore() === owner);
@@ -119,7 +120,24 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         let startupFence = scanResult?.startup ? { folder: scanFolder, sessionIds, witness: folderReadWitness(backend, scanFolder, sessionIds) } : null;
         if (name === 'applyProjectsWorkerEffects' && backend.getProjectsRevision() !== sourceVersion) throw Object.assign(new Error('Projects effect snapshot changed while queued'), { code: 'WRITER_STALE' });
         const continuationCollector = { deferred: new Set(), accounted: new Set() };
-        let computeArgs = args;
+        let computeArgs = args, computeName = name;
+        const resumed = new Map();
+        const previous = scanResult?.startup && !scanResult.unverified && scanResumes.get(scanFolder);
+        if (previous && previous.config === scanResult.fullIndexConfig && previous.config === currentConfig()
+          && backend.getFolderMeta(scanFolder)?.fullIndexPending === previous.token) {
+          for (const row of scanResult.sessions) {
+            const candidate = previous.rows.get(row.sessionId);
+            const durable = backend.getCachedSession(row.sessionId);
+            if (candidate && row.fullReadStamp === candidate.stamp && rowWitness(row) === candidate.witness
+              && durable?.fullReadStamp === candidate.stamp && rowWitness(durable) === candidate.witness) resumed.set(row.sessionId, candidate);
+          }
+          if (resumed.size) {
+            const present = new Set(scanResult.sessions.map(row => row.sessionId));
+            computeName = 'writeScannedFolderPartial';
+            computeArgs = [{ ...scanResult, sessions: scanResult.sessions.filter(row => !resumed.has(row.sessionId)),
+              toDelete: scanResult.partial ? scanResult.toDelete : scanResult.inventory.rows.filter(row => !present.has(row.sessionId)).map(row => row.sessionId) }];
+          }
+        }
         if (folder !== undefined && cache.prepareContinuationRefresh) {
           const opts = name === 'refreshFolder' ? args[1] : {};
           const preparedContinuations = await cache.prepareContinuationRefresh(folder, opts);
@@ -129,7 +147,8 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         recorder.begin();
         let result, revision, effects;
         try {
-          result = cache[name](...computeArgs);
+          result = cache[computeName](...computeArgs);
+          if (resumed.size) result += resumed.size;
           revision = recorder.revision();
         } finally {
           effects = recorder.finish();
@@ -200,6 +219,8 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         for (const [key, publication] of publications) {
           if (!publication?.began || publication.failed) continue;
           const rows = certificates.filter(row => row.folder === key);
+          if (scanResult?.startup) scanResumes.set(key, { token: publication.token, config: publication.config,
+            rows: new Map([...resumed, ...rows.map(row => [row.sessionId, row])]) });
           if (!rows.length) continue;
           try {
             const certificateAck = await send('certifyFullReads', key, publication.token, rows, { receipt: forwarded });
@@ -229,7 +250,10 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
               if (forwarded) {
                 if (acknowledgment?.committedRevision !== undefined && sealed.beforeRevision !== acknowledgment.committedRevision) continuous = false;
                 acknowledgment = sealed;
-              } else if (scanResult) scanResult.fullIndexOutcome = sealed;
+              } else if (scanResult) {
+                scanResult.fullIndexOutcome = sealed;
+                if (sealed) scanResumes.delete(key);
+              }
             }
           } catch (error) { (options.log || console).warn('[session-index-writer] full index seal outcome unknown: ' + error.message); }
         }

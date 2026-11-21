@@ -1,6 +1,21 @@
 'use strict';
 
+const { Buffer } = require('node:buffer');
+
 // see .ai/contexts/session-index-writer.md
+function commandTimeoutMs(command, args, timeoutMs) {
+  if (!['effects', 'certifyFullReads', 'deriveCachedNames'].includes(command)) return timeoutMs;
+  let rows = 0;
+  const pending = [args];
+  while (pending.length) {
+    const value = pending.pop();
+    if (Array.isArray(value)) rows += value.length;
+    if (value && typeof value === 'object') for (const child of Object.values(value)) pending.push(child);
+  }
+  const batches = Math.max(1, Math.ceil(rows / 32), Math.ceil(Buffer.byteLength(JSON.stringify(args)) / 32768));
+  return Math.min(2147483647, timeoutMs * batches);
+}
+
 function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusyCounts = () => {}, onBootstrap = () => {}, timeoutMs = 30000, maxRestarts = 3,
   now = () => Date.now(), setTimeout = global.setTimeout, clearTimeout = global.clearTimeout, heartbeatMs = 30000, log = console }) {
   let worker, closing, stopped = false, terminated = false, nextId = 0, restartTimer;
@@ -130,7 +145,7 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
       const job = active.get(message.id);
       if (!job) return;
       if (message.started) {
-        job.timer ||= setTimeout(() => settle(job, Object.assign(new Error(`writer command timed out for request ${job.id}; outcome unknown`), { code: 'WRITER_TIMEOUT', requestId: job.id })), timeoutMs);
+        job.timer ||= setTimeout(() => settle(job, Object.assign(new Error(`writer command timed out for request ${job.id}; outcome unknown`), { code: 'WRITER_TIMEOUT', requestId: job.id })), commandTimeoutMs(job.command, job.args, timeoutMs));
         return;
       }
       active.delete(message.id);
