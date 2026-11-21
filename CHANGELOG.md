@@ -14,7 +14,6 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Codex sessions run non-interactively by a program (`codex exec`: scripted reviews and fixes) are now left out of the sidebar and grid like Claude Agent SDK sessions, under the same **Hide SDK-launched Sessions** setting. They still count in the heatmap and are found by search; the ones you have open stay listed. Codex sessions already indexed are re-checked once at the next start. (#1145)
 
 ### Fixed
-- Opening Settings → Archived after archiving a session on another Settings page updates the list and its count. (#1171)
 - Indexing a very large project now finishes on a busy machine. (#1135)
 - After restarting the app or Windows, the sidebar shows the projects as they were at exit, even if the last project load finished just before you closed the app or signed out. (#1136)
 - On Windows, a slow start no longer leaves tabs without process cleanup: tabs already open, restored ones included, are covered once cleanup starts, and programs they launch afterwards end when the tab closes. Programs launched before that can keep running. (#1140, #1156)
