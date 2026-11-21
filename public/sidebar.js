@@ -2095,7 +2095,8 @@ async function archiveProjectFolder(project, button) {
     } else if (res.failed?.length) {
       showAppNotice({ id: sessionActionNoticeId('Archive folder', project), kind: 'error',
         message: `Archive folder partly done for ${sessionActionDescription(project)}: The folder is archived, but these schedules could not be disabled: ${res.failed.map(f => f.name + ': ' + f.error).join('; ')}. `
-          + (window.schedulesTabEnabled ? 'Review the schedules in the Schedules tab.' : 'Review schedule-*.md in the Agent Files tab.'),
+          + (window.schedulesTabEnabled ? 'Review the schedules in the Schedules tab.' : 'Review schedule-*.md in the Agent Files tab.')
+          + ' To retry Archive folder, restore the folder in Archived first.',
         actionLabel: 'Open Archived', onAction: () => openSettingsViewer('global', null, null, { section: 'archived' }) });
     } else {
       clearAppNotice(sessionActionNoticeId('Archive folder', project));

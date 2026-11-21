@@ -81,6 +81,21 @@ test('unknown folder restore refuses without writes or notifications', async t =
   assert.deepEqual(h.notifications, []);
 });
 
+test('folder restore refuses a normalized alias of an exact stored entry without changes', async t => {
+  const h = setup(t, 'vps', '/srv/x');
+  assert.equal(h.entry, 'vps::/srv/x');
+  const archives = h.getSetting('archivedProjects');
+  const offers = h.getSetting('scheduleReenableOffers');
+  const file = fs.readFileSync(h.file);
+  const result = await h.invoke('vps::/srv/x/');
+  assert.equal(result.code, 'NOT_ARCHIVED');
+  assert.deepEqual(h.getSetting('archivedProjects'), archives);
+  assert.deepEqual(h.getSetting('scheduleReenableOffers'), offers);
+  assert.deepEqual(fs.readFileSync(h.file), file);
+  assert.equal(h.row.archived, 1);
+  assert.deepEqual(h.notifications, []);
+});
+
 test('folder restore reports a rejected writer without announcing success', async t => {
   const h = setup(t);
   h.writer.clearArchivedEntry = async () => { throw new Error('writer unavailable'); };

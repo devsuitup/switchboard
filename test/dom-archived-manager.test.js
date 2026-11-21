@@ -85,6 +85,15 @@ async function setup(t, empty = false) {
   return { ...h, w, settings, folders, calls, q, rows, observers };
 }
 
+for (const count of [0, 1]) test(`folder disabled schedule count is accurate for ${count}`, async t => {
+  const h = await setup(t, true);
+  h.folders['vps::/srv/folder'] = { disabledSchedules: Array.from({ length: count }, (_, i) => `schedule-${i}.md`) };
+  await h.w.openSettingsViewer('global', null, null, { section: 'archived' });
+  assert.equal(h.rows().length, 1);
+  const meta = h.rows()[0].querySelector('.archived-meta');
+  assert.equal(meta.textContent.trim(), count === 1 ? '1 schedule off' : '');
+});
+
 test('host groups preserve separate worktree entries, names, safe paths, badges, dates and counts', async t => {
   const h = await setup(t);
   assert.equal(h.rows().length, 4, 'four archived entries including the worktree must have their own rows');
