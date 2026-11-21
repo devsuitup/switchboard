@@ -115,9 +115,12 @@ width restoration. These Electron journeys run only in CI; local jsdom tests
 do not prove rendered geometry or native Tab traversal.
 
 E4 reapplies each short/long title pair and reads all header rectangles in one
-synchronous renderer evaluation. Separate bounding-box calls can straddle a
-PTY title update and combine the id's old position with Refresh's new one
-(#1163). A bounded `toPass` retries the complete geometry assertions while
-layout settles, retaining the nonnegative gap strictly below 24 CSS px and
-the id/control containment checks. Each retry measures the requested titles,
-even if shell output updated the PTY title since the preceding attempt.
+synchronous renderer evaluation. Separate `boundingBox()` calls (CDP
+`DOM.getBoxModel`) do not come from one layout: in #1163, right after the
+800→1400 resize, the id came from a layout without E4's labels and Refresh from
+one with them (~95 px apart), while `getBoundingClientRect` in one synchronous
+pass forces a single coherent layout. A bounded `toPass` retries the complete
+geometry assertions, retaining the nonnegative gap strictly below 24 CSS px
+and the id/control containment checks; each retry reapplies the requested
+titles. Other journeys still read boxes in separate calls after a resize
+(`geometry()` in E1/E5/E5b/E6).
