@@ -140,16 +140,21 @@ The **What is sent** explanation expands when selected.
 
 ### Archived
 
-Projects are grouped by host, with Local first. Each row shows its name, full path
-(also in the tooltip), Project and legacy badges, and an archive date for new
-archives. Worktree entries keep their own rows and paths. Filter by name, path,
+Project and folder archives are grouped by host, with Local first. Each row shows
+its name, full path (also in the tooltip), Project or Folder badges (both when
+archived both ways), any legacy badge, and the available archive date. Folder
+archives also show how many schedules the archive turned off. Worktree entries keep their own rows and paths. Filter by name, path,
 host label or alias; Escape clears the filter. Host headers fold with Enter or
 Space. Select rows or a host group to unarchive several projects together.
 
-**Unarchive** applies immediately and offers a ten-second **Undo**. The row's
+**Unarchive** applies immediately. Project restores offer a ten-second **Undo**;
+folder restores keep sessions archived and schedules off, with **Turn back on**
+offered at the top of the restored group. Re-archive a folder with **Archive folder**;
+in a mixed restore, Undo re-archives projects only. A combined row restores its
+project archive first, then its folder archive. The row's
 **More actions** menu offers **Copy path** and **Delete project…**. Delete opens
 the same preview and confirmation as the sidebar, without unarchiving first.
-Folder and session archive management will be added separately.
+Archived session management will be added separately.
 
 ### Advanced
 

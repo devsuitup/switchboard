@@ -278,6 +278,14 @@ back on exactly the schedules it disabled; stopped processes stay stopped.
 An empty folder archived without a dialog also offers Undo. An options dialog
 with nothing running is configuration and has no Undo notice.
 
+After Undo has expired, open Settings → **Archived**. Folder archives have a
+**Folder** badge, their archive date and the number of schedules turned off.
+**Unarchive** restores the group while keeping its sessions archived and schedules
+off. The offer at the top of the restored group lets you **Turn back on** those
+schedules. This restore has no folder Undo; use **Archive folder** to archive it
+again. A row with both Project and Folder badges restores both archives.
+Recovery notices for partial Archive or failed Undo have an **Open Archived** action.
+
 Accepting the options hides the folder and its nested worktrees from the sidebar, even
 with both boxes unticked. **Show archived sessions** shows it again, and search
 still finds its sessions. The folder comes back, with its settings, when it is

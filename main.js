@@ -1059,6 +1059,22 @@ ipcMain.handle('archive-project', async (_event, groups, opts) => {
   return res;
 });
 
+ipcMain.handle('unarchive-folder', async (_event, entry) => {
+  try {
+    if (typeof entry !== 'string' || !Object.hasOwn(getSetting('archivedProjects') || {}, entry)) {
+      return { error: 'Folder is not archived', code: 'NOT_ARCHIVED' };
+    }
+    const { alias, folder } = parseFolderKey(entry);
+    if (!await writer.clearArchivedEntry(alias, alias && folder === '' ? '/' : folder)) {
+      return { error: 'Folder is not archived', code: 'NOT_ARCHIVED' };
+    }
+    notifyRendererProjectsChanged('archive');
+    return { ok: true };
+  } catch (error) {
+    return { error: error.message };
+  }
+});
+
 ipcMain.handle('undo-archive-project', async (_event, groups, archivedAt) =>
   await writer.undoArchiveProjectFolders(groups, archivedAt, archiveDeps()));
 
