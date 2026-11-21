@@ -36,23 +36,28 @@ function readAuxiliaryFile(file) {
 }
 
 function enumerateReads(files) {
-  if (current) for (const file of files) current.enumeratedFiles.add(file);
+  if (current) for (const file of files) {
+    try { current.enumeratedFiles.set(file, fs.statSync(file).size); } catch {}
+  }
 }
 
 function failedRead(file) { current?.failedFiles.add(file); }
 
 function measureFolder(read) {
   const previous = current;
-  const counters = { readFiles: new Set(), failedFiles: new Set(), enumeratedFiles: new Set(), bodyDepth: 0,
+  const counters = { readFiles: new Set(), failedFiles: new Set(), enumeratedFiles: new Map(), bodyDepth: 0,
     readOperations: 0, bytesRead: 0, auxiliaryBytesRead: 0 };
   current = counters;
   const started = performance.now();
+  let result, failure;
+  try { result = read(); } catch (error) { failure = error; }
   try {
-    const result = read();
+    const skipped = [...counters.enumeratedFiles].filter(([file]) => !counters.readFiles.has(file) && !counters.failedFiles.has(file));
     const stats = { filesEnumerated: counters.enumeratedFiles.size, filesRead: counters.readFiles.size,
-      filesSkipped: 0, filesDeleted: result?.toDelete?.length || 0, filesFailed: counters.failedFiles.size,
-      readOperations: counters.readOperations, bytesRead: counters.bytesRead, bytesSkipped: 0,
+      filesSkipped: skipped.length, filesDeleted: result?.toDelete?.length || 0, filesFailed: Math.max(counters.failedFiles.size, failure ? 1 : 0),
+      readOperations: counters.readOperations, bytesRead: counters.bytesRead, bytesSkipped: skipped.reduce((sum, [, size]) => sum + size, 0),
       auxiliaryBytesRead: counters.auxiliaryBytesRead, scanMs: performance.now() - started };
+    if (failure) { failure.counters = stats; throw failure; }
     return { result, counters: stats };
   } finally { current = previous; }
 }

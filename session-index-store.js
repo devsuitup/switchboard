@@ -366,6 +366,8 @@ if (migrations.length > currentDbVersion) {
   }
   if (!cols.has('fileSize')) db.exec('ALTER TABLE session_cache ADD COLUMN fileSize INTEGER');
   if (!cols.has('fullReadStamp')) db.exec('ALTER TABLE session_cache ADD COLUMN fullReadStamp TEXT');
+  db.exec('CREATE TABLE IF NOT EXISTS session_name_derivation (sessionId TEXT PRIMARY KEY, witness TEXT)');
+  db.exec('CREATE TRIGGER IF NOT EXISTS session_name_derivation_delete AFTER DELETE ON session_cache BEGIN DELETE FROM session_name_derivation WHERE sessionId = OLD.sessionId; END');
   const folderColumns = new Set(db.prepare('PRAGMA table_info(cache_meta)').all().map(row => row.name));
   for (const [name, type] of [['fullIndexVersion', 'INTEGER'], ['fullIndexConfig', 'TEXT'], ['fullIndexPending', 'TEXT']]) {
     if (!folderColumns.has(name)) db.exec(`ALTER TABLE cache_meta ADD COLUMN ${name} ${type}`);
@@ -747,6 +749,37 @@ function certifyFullRead(folder, token, sessionId, stamp, witness) {
   const row = getCachedSession(sessionId);
   if (!row || require('./src/main/session-index/full-read-state').rowWitness(row) !== witness) return false;
   return stmts.fullReadCertify.run(stamp, sessionId, folder).changes === 1;
+}
+
+let nameDerivationGet;
+function getNameDerivation(sessionId) {
+  nameDerivationGet ||= db.prepare('SELECT witness FROM session_name_derivation WHERE sessionId = ?');
+  return nameDerivationGet.get(sessionId)?.witness ?? null;
+}
+
+function deriveCachedName(sessionId, expectedStamp, expectedMeta, collision) {
+  const { nameDerivationWitness } = require('./src/main/session-index/full-read-state');
+  const row = getCachedSession(sessionId);
+  if (!row?.fullReadStamp || row.fullReadStamp !== expectedStamp || nameDerivationWitness(getMeta(sessionId, true), collision) !== expectedMeta) return false;
+  const previous = getMeta(sessionId, true);
+  if (row.customTitle && !collision && !(previous?.name === row.customTitle && previous?.nameSource === 'transcript'
+    && previous?.nameTranscriptTitle === row.customTitle)) setName(sessionId, row.customTitle, 'transcript');
+  const meta = getMeta(sessionId, true);
+  const name = meta?.name || row.customTitle || row.aiTitle || '';
+  const title = (name ? name + ' ' : '') + row.summary;
+  const current = db.prepare("SELECT c.title FROM search_map m JOIN search_content c ON c.rowid = m.rowid WHERE m.id = ? AND m.type = 'session'").get(sessionId);
+  if (current?.title !== title) updateSearchTitle(sessionId, 'session', title);
+  return { witness: nameDerivationWitness(meta, collision), collision };
+}
+
+function certifyNameDerivation(sessionId, expectedStamp, witness, collision) {
+  const { nameDerivationWitness } = require('./src/main/session-index/full-read-state');
+  if (getCachedSession(sessionId)?.fullReadStamp !== expectedStamp || nameDerivationWitness(getMeta(sessionId, true), collision) !== witness) return false;
+  const next = collision ? null : witness;
+  if (getNameDerivation(sessionId) === next) return true;
+  db.prepare('INSERT INTO session_name_derivation (sessionId, witness) VALUES (?, ?) ON CONFLICT(sessionId) DO UPDATE SET witness = excluded.witness')
+    .run(sessionId, next);
+  return true;
 }
 
 const upsertSearchEntriesBatch = db.transaction((entries) => {
@@ -1182,7 +1215,7 @@ return {
   deleteCachedSession, deleteCachedFolder,
   replaceSessionMetrics,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
-  beginFullIndex, invalidateFullIndex, sealFullIndex, certifyFullRead,
+  beginFullIndex, invalidateFullIndex, sealFullIndex, certifyFullRead, getNameDerivation, deriveCachedName, certifyNameDerivation,
   invalidateFullRead: sessionId => stmts.fullReadInvalidate.run(sessionId),
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   getSearchFileIds, applySearchFileBatch,
