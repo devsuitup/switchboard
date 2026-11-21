@@ -41,7 +41,6 @@
     const shortName = isProject
       ? shortProjectPath(projectPath)
       : 'Global';
-    const project = isProject ? cachedAllProjects.find(p => p.projectPath === projectPath && (!folderKey || p.folder === folderKey)) : null;
 
     settingsViewerTitle.textContent = (isProject ? 'Project Settings — ' : 'Global Settings — ') + shortName;
 
@@ -168,6 +167,7 @@
     // Discover available shell profiles
     let shellProfiles = [];
     try { shellProfiles = await window.api.getShellProfiles(); } catch {};
+    const project = isProject ? cachedAllProjects.find(p => p.projectPath === projectPath && (!folderKey || p.folder === folderKey)) : null;
 
     settingsViewerBody.innerHTML = `
     <div class="settings-form">
@@ -571,14 +571,15 @@
       const identity = document.createElement('dl');
       identity.className = 'settings-project-identity';
       const alias = project?.remoteAlias || parseFolderKey(folderKey).alias;
-      const sessions = project?.sessions;
+      const sessions = Array.isArray(project?.sessions)
+        ? project.sessions.filter(s => !s.parentSessionId && s.type !== 'terminal') : null;
       const counts = Array.isArray(sessions)
         ? `${sessions.length} session${sessions.length === 1 ? '' : 's'} · ${sessions.filter(session => session.archived).length} archived`
         : 'Unavailable';
       for (const [id, label, value] of [
         ['name', 'Name', shortName],
         ['path', 'Full path', projectPath],
-        ['host', 'Host', alias ? remoteHostLabel(alias, globalSettings.remoteHosts) : 'Local'],
+        ['host', 'Host', alias ? (typeof remoteHostLabel === 'function' ? remoteHostLabel(alias, globalSettings.remoteHosts) : alias) : 'Local'],
         ['folder', 'Folder key', project?.folder || folderKey || 'Unavailable'],
         ['sessions', 'Sessions', counts],
       ]) {
@@ -1100,7 +1101,7 @@
           document.getElementById('placeholder').style.display = 'flex';
           if (typeof loadProjects === 'function') await Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
         } catch (err) {
-          await showChoiceDialog({ title: `Could not ${action} project`, message: err.message, confirmLabel: 'OK', returnFocus: button });
+          await appAlert({ title: `Could not ${action} project`, message: err.message });
         }
       });
     }
