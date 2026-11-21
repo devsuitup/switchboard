@@ -1121,7 +1121,7 @@ async function reconcileProjectDeletions({ operations = [] } = {}) {
   }
 }
 
-async function confirmAndDeleteProjectFolder(project, button) {
+async function confirmAndDeleteProjectFolder(project, button, { onUnavailable, reuseInitialPreview = false } = {}) {
   if (isProjectDeleting(project) || completedProjectDeletionKeys.has(projectDeletionKey(project))) return false;
   if (archivingGroupIds.has('ph-' + folderId(project.projectPath, project.remoteAlias)) ||
     project.sessions?.some(session => archivingSessionIds.has(session.sessionId))) {
@@ -1136,10 +1136,20 @@ async function confirmAndDeleteProjectFolder(project, button) {
     const request = options => ({ projectPath: project.projectPath, ...(project.folder ? { folderKey: project.folder } : {}),
       worktrees: worktreeChoices.filter((row, i) => options['worktree:' + i]).map(row => row.path),
       options: { sessions: options.sessions, settings: options.settings, schedules: false, transcripts: false, stopBackgroundJobs: false } });
-    const capabilities = await projectDeletionCall('previewProjectDelete', request({ sessions: false, settings: false }), { retryRecovery: true, deadline });
-    if (!capabilities?.plan) {
-      projectDeletionNotice(project, projectDeletionPlanReason(capabilities)); return false;
+    const initialValues = reuseInitialPreview ? {
+      sessions: window.readRememberedChoice('deleteProject.sessions') === '1',
+      settings: window.readRememberedChoice('deleteProject.settings') !== '0',
+    } : { sessions: false, settings: false };
+    const initialRequest = request(initialValues);
+    const capabilities = await projectDeletionCall('previewProjectDelete', initialRequest, { retryRecovery: true, deadline });
+    const initialReason = projectDeletionPlanReason(capabilities);
+    const unavailableChoice = ['sessions', 'settings'].some(id => initialValues[id] && capabilities?.plan?.categories[id]?.available === false);
+    if (!capabilities?.plan || (onUnavailable && initialReason && !unavailableChoice)) {
+      if (onUnavailable) onUnavailable(capabilities, initialReason);
+      else projectDeletionNotice(project, initialReason);
+      return false;
     }
+    let initialPreview = reuseInitialPreview ? capabilities : null;
     const categories = capabilities.plan.categories;
     worktreeChoices = (capabilities.plan.worktrees || []).map(row => ({ ...row }));
     const answers = await showChoiceDialog({
@@ -1168,7 +1178,10 @@ async function confirmAndDeleteProjectFolder(project, button) {
         }),
       ],
       onChange: async values => {
-        const reply = await projectDeletionCall('previewProjectDelete', request(values));
+        const input = request(values), cached = initialPreview;
+        initialPreview = null;
+        const reply = cached && JSON.stringify(input) === JSON.stringify(initialRequest)
+          ? cached : await projectDeletionCall('previewProjectDelete', input);
         if (!reply?.plan) throw new Error(projectDeletionPlanReason(reply));
         for (const id of ['sessions', 'settings']) if (values[id] && reply.plan.categories[id]?.available !== true) {
           throw new Error(reply.plan.categories[id]?.reason || 'This choice is no longer available. Close and reopen Delete.');
@@ -1207,6 +1220,7 @@ async function confirmAndDeleteProjectFolder(project, button) {
     return await settleProjectDeletion(project, result);
   } catch (error) {
     unresolved = accepted;
+    if (!accepted && onUnavailable) { onUnavailable(error, error.message); return false; }
     projectDeletionNotice(project, error.message + (accepted ? ' The outcome is unresolved. Reload to recover its state; do not repeat deletion.' : ' Reopen Delete to retry.'),
       accepted ? { actionLabel: 'Reload window', onAction: () => window.location.reload() } : undefined);
     return false;

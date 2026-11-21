@@ -93,40 +93,29 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, ho
   async function remove(entry, button) {
     if (busy) return;
     lock(true);
+    const row = button.closest('.archived-row'), project = identity(entry);
+    const reason = row.querySelector('.archived-delete-reason');
+    reason.textContent = 'Checking deletion availability…';
     try {
-      if (await confirmAndDeleteProjectFolder(identity(entry), button)) {
+      if (await confirmAndDeleteProjectFolder(project, button, { reuseInitialPreview: true, onUnavailable: (reply, message) => {
+        if (!row.isConnected) return;
+        const grouped = reply?.code === 'IDENTITY_UNAVAILABLE' && reply.error === 'Folder and path hints conflict.'
+          && project.remoteAlias === null && worktreeGroupingPath(project.projectPath) !== project.projectPath;
+        const retryable = reply?.code === 'NOT_READY' || reply?.code === 'DISCOVERY_TIMEOUT' || reply?.code === 'DISCOVERY_UNAVAILABLE'
+          || (!reply?.code && /unavailable|timed out/i.test(message));
+        reason.textContent = grouped ? 'This worktree is grouped under its repository. To remove it from Switchboard, delete its repository instead.'
+          : message.replace(/\s*(?:Close and reopen Delete to retry\.|Retry preview, or cancel\.)/g, '')
+            + (retryable ? ' Reopen the menu and click Delete project to try again.' : '');
+        button.dataset.unavailable = 'true'; button.dataset.retryable = String(retryable); button.disabled = true;
+      } })) {
         archived = archived.filter(item => item !== entry); selected.delete(entry); render(); filter.focus();
       }
     } catch (error) { await fail('Could not delete project', [error.message], button); }
     finally {
+      if (reason.textContent === 'Checking deletion availability…') reason.textContent = '';
       lock(false);
       if (button.isConnected && !button.disabled) button.focus();
     }
-  }
-  async function checkDeletion(row, generation) {
-    const button = row.querySelector('.archived-delete');
-    const reason = row.querySelector('.archived-delete-reason');
-    const project = identity(row.dataset.entry);
-    button.dataset.unavailable = 'true'; button.disabled = true;
-    reason.textContent = 'Checking deletion availability…';
-    let message;
-    try {
-      const deadline = Date.now() + PROJECT_DELETE_DIALOG_TIMEOUT_MS;
-      await projectDeletionPreviewWait('flushProjectDeletionWrites', () => window.flushProjectDeletionWrites?.(), deadline);
-      const reply = await projectDeletionCall('previewProjectDelete', {
-        projectPath: project.projectPath, folderKey: project.folder,
-        options: { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false },
-      }, { retryRecovery: true, deadline });
-      message = projectDeletionPlanReason(reply);
-      if (message && reply?.code === 'IDENTITY_UNAVAILABLE' && project.remoteAlias === null
-        && worktreeGroupingPath(project.projectPath) !== project.projectPath) {
-        message += ' If this worktree belongs to an existing repository, delete its repository instead.';
-      }
-    } catch (error) { message = error.message; }
-    if (!row.isConnected || row.dataset.previewGeneration !== String(generation)) return;
-    reason.textContent = message ? message + ' Close and reopen this menu to retry.' : '';
-    button.dataset.unavailable = String(!!message);
-    button.disabled = busy || !!message;
   }
   function render() {
     if (container.isConnected) onCount?.(archived.length);
@@ -150,7 +139,7 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, ho
         <div class="archived-group-header"><button type="button" class="archived-group-toggle" role="button" aria-expanded="${!folded.has(alias)}" data-alias="${escapeHtml(alias || '')}" title="${escapeHtml(alias || 'Local')}"><span aria-hidden="true">${folded.has(alias) ? '▸' : '▾'}</span> <span class="archived-host-label">${escapeHtml(label)} (${group.length})</span></button>
         <label><input type="checkbox" class="archived-select-all" aria-label="Select all in ${escapeHtml(label)}" ${busy ? 'disabled' : ''}> Select all</label></div>
         <div class="archived-group-rows" ${folded.has(alias) ? 'hidden' : ''}>${group.map(entry => {
-          const p = identity(entry), reasonId = 'archived-delete-reason-' + matches.indexOf(entry);
+          const p = identity(entry), reasonId = 'archived-delete-reason-' + encodeURIComponent(entry);
           const date = typeof dates[entry] === 'number' && Number.isFinite(dates[entry]) ? new Date(dates[entry]) : null;
           return `<div class="archived-row" data-entry="${escapeHtml(entry)}">
             <input type="checkbox" class="archived-select" data-entry="${escapeHtml(entry)}" aria-label="Select ${escapeHtml(p.name)}" ${busy ? 'disabled' : ''}>
@@ -158,7 +147,7 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, ho
             <div class="archived-path" title="${escapeHtml(p.projectPath)}">${escapeHtml(p.projectPath)}</div>
             <div class="archived-meta">${date && Number.isFinite(date.getTime()) ? `<time datetime="${date.toISOString()}">archived ${escapeHtml(date.toLocaleDateString())}</time>` : ''}${p.cached ? ` <span>${p.sessions.length} session${p.sessions.length === 1 ? '' : 's'}</span>` : ''}</div></div>
             <div class="archived-actions"><button type="button" class="settings-action-btn archived-unarchive" ${busy ? 'disabled' : ''}>Unarchive</button>
-            <details class="archived-overflow"><summary aria-label="More actions for ${escapeHtml(p.name)}">⋯</summary><div class="archived-menu"><button type="button" class="settings-action-btn archived-copy">Copy path</button><button type="button" class="settings-action-btn archived-delete" data-unavailable="true" disabled aria-describedby="${reasonId}">Delete project…</button><span class="archived-delete-reason" id="${reasonId}">Checking deletion availability…</span></div></details></div>
+            <details class="archived-overflow"><summary aria-label="More actions for ${escapeHtml(p.name)}">⋯</summary><div class="archived-menu"><button type="button" class="settings-action-btn archived-copy">Copy path</button><button type="button" class="settings-action-btn archived-delete" ${busy ? 'disabled' : ''} aria-describedby="${escapeHtml(reasonId)}">Delete project…</button><span class="archived-delete-reason" id="${escapeHtml(reasonId)}"></span></div></details></div>
           </div>`;
         }).join('')}</div></section>`;
     }).join('');
@@ -183,9 +172,11 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, ho
       row.querySelector('.archived-unarchive').addEventListener('click', event => restore([entry], event.currentTarget));
       row.querySelector('.archived-delete').addEventListener('click', event => remove(entry, event.currentTarget));
       row.querySelector('details').addEventListener('toggle', event => {
-        const generation = Number(row.dataset.previewGeneration || 0) + 1;
-        row.dataset.previewGeneration = generation;
-        if (event.currentTarget.open) void checkDeletion(row, generation);
+        const button = row.querySelector('.archived-delete');
+        if (event.currentTarget.open && !busy && button.dataset.retryable === 'true') {
+          button.dataset.unavailable = 'false'; button.disabled = false;
+          row.querySelector('.archived-delete-reason').textContent = '';
+        }
       });
       row.querySelector('.archived-copy').addEventListener('click', async event => {
         const button = event.currentTarget;
