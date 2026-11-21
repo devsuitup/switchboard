@@ -81,6 +81,28 @@ function setup(t) {
   return { w, q, nav, open, click, active, saved, timers, observers, ctx };
 }
 
+test('Archived shows the latest snapshot and count after refresh was skipped on General', async t => {
+  const h = setup(t);
+  await h.open();
+  assert.deepEqual(h.active(), ['general']);
+  const nav = h.nav().find(button => button.dataset.section === 'archived');
+  assert.equal(nav.textContent, 'Archived (0 · 0)');
+  let reads = 0;
+  h.w.api.getSetting = async key => { reads++; return h.saved[key] || {}; };
+  h.w.cachedAllProjects = [{ projectPath: '/repo', sessions: [
+    { sessionId: 'newly-archived', name: 'New archive', archived: 1 },
+  ] }];
+  await h.w.refreshArchivedManager(h.w.cachedAllProjects, {});
+  assert.equal(reads, 0, 'hidden Archived page does not read settings');
+  assert.equal(h.q('.archived-session-row'), null);
+  h.click('archived'); await settle();
+  assert.equal(h.q('.archived-session-row')?.dataset.entry, 'session:newly-archived', 'opening Archived renders the skipped snapshot');
+  assert.equal(nav.textContent, 'Archived (0 · 1)');
+  assert.equal(reads, 2, 'showing a dirty manager refreshes both settings');
+  h.click('general'); h.click('archived'); await settle();
+  assert.equal(reads, 2, 'a clean manager does not repeat the refresh');
+});
+
 test('unrelated global saves and repeated saves do not reapply Codex usage', async t => {
   const h = setup(t);
   const applied = [];

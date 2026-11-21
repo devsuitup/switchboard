@@ -2,8 +2,11 @@
 let activeArchivedProjectsManager = null;
 
 window.refreshArchivedManager = (projects, settings) => {
-  if (activeArchivedProjectsManager?.container.closest('#settings-viewer')?.style.display === 'none') return;
-  if (activeArchivedProjectsManager?.container.closest('#settings-page-archived')?.hidden) return;
+  if (activeArchivedProjectsManager?.container.closest('#settings-viewer')?.style.display === 'none'
+    || activeArchivedProjectsManager?.container.closest('#settings-page-archived')?.hidden) {
+    activeArchivedProjectsManager.dirty = true;
+    return;
+  }
   if (activeArchivedProjectsManager?.container.isConnected) return activeArchivedProjectsManager.refresh(projects, settings);
 };
 
@@ -315,8 +318,10 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, fo
   render();
   const manager = {
     container,
+    dirty: false,
     setHosts(next) { hosts = next; render(); },
     async refresh(nextProjects, settings) {
+      manager.dirty = false;
       const version = ++refreshVersion;
       const [latest, folderArchives] = await Promise.all([settings || window.api.getSetting('global'), window.api.getSetting('archivedProjects')]);
       if (version !== refreshVersion) return;

@@ -90,7 +90,12 @@ success notice reverses successful projects and sessions only; session Undo uses
 
 The accepted `loadProjects` snapshot calls `window.refreshArchivedManager`, which
 does no manager archive read when the Settings viewer is closed or its Archived
-page is hidden. The sidebar snapshot still reads folder archives for its count.
+page is hidden. A skipped refresh marks the manager dirty; selecting Archived
+refreshes that mounted manager from `cachedAllProjects`, updating its rows and nav
+count. Refresh consumes the dirty flag, so revisiting an unchanged page does not
+read settings again. The sidebar snapshot still reads folder archives for its count.
+`loadProjects` starts the global and folder-archive settings reads together, then
+checks generation obsolescence before continuing to the terminal snapshot.
 Refresh reads folder records and preserves filter, selection, group expansion,
 working host labels and row-control focus. A version counter rejects stale reads;
 refreshes during an action are deferred until the action and any error alert end.

@@ -638,6 +638,11 @@
     function selectPage(id) {
       if (!pages.has(id)) id = pageDefs[0][0];
       for (const [pageId, page] of pages) page.hidden = pageId !== id;
+      if (id === 'archived' && activeArchivedProjectsManager?.dirty
+        && pages.get(id).contains(activeArchivedProjectsManager.container)) {
+        activeArchivedProjectsManager.refresh(cachedAllProjects)
+          .catch(error => console.warn('[switchboard] archived refresh failed', error));
+      }
       for (const button of navButtons) {
         const selected = button.dataset.section === id;
         button.classList.toggle('active', selected);

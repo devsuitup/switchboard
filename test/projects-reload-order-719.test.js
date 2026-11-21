@@ -33,12 +33,33 @@ function fixture(t) {
   for (const name of ['reportActivityFocus', 'reportActivityTitles', 'renderDefaultStatus', 'setRemoteHostLabels']) w[name] = () => {};
   w.refreshSidebar = () => paints.push(w.cachedProjects[0]?.projectPath);
   w.api.getProjects = mode => { assert.equal(mode, 'both'); const d = deferred(); requests.push(d); return d.promise; };
-  w.api.getSetting = () => { const d = deferred(); settings.push(d); return d.promise; };
+  w.api.getSetting = key => {
+    if (key === 'archivedProjects') return Promise.resolve({});
+    assert.equal(key, 'global');
+    const d = deferred(); settings.push(d); return d.promise;
+  };
   w.api.getActiveTerminals = async () => [];
   w.pollActiveSessions = () => { const d = deferred(); polls.push(d); return d.promise; };
   const { loadProjects, reloadProjects } = loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects', 'reloadProjects'], declarations: ['startupProjectsHandedOver'] });
   const reply = (i, name) => requests[i].resolve({ defaultProjects: [{ projectPath: name, sessions: [] }], allProjects: [{ projectPath: name, sessions: [] }] });
   return { ...h, w, requests, settings, polls, paints, loadProjects, reloadProjects, reply };
+}
+
+for (const firstKey of ['global', 'archivedProjects']) {
+  test(`settings reads start together and wait for both, ${firstKey} resolves first`, async t => {
+    const h = fixture(t), reads = [], held = { global: deferred(), archivedProjects: deferred() };
+    h.w.api.getSetting = key => { reads.push(key); return held[key].promise; };
+    const loaded = h.loadProjects();
+    h.reply(0, 'current'); await flush();
+    assert.deepEqual(reads, ['global', 'archivedProjects'], 'both settings reads start before either completes');
+    held[firstKey].resolve({}); await flush();
+    assert.equal(h.polls.length, 0, 'projection waits for the other settings read');
+    assert.equal(h.paints.length, 0);
+    held[firstKey === 'global' ? 'archivedProjects' : 'global'].resolve({}); await flush();
+    assert.equal(h.polls.length, 1);
+    h.polls[0].resolve(); await loaded;
+    assert.deepEqual(h.paints, ['current']);
+  });
 }
 
 for (const boundary of ['projects', 'settings', 'terminals', 'poll']) {
