@@ -14,10 +14,8 @@ const line = value => JSON.stringify(value) + '\n';
 function barrier() { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-718-'));
-  const previousCodexHome = process.env.CODEX_HOME;
-  process.env.CODEX_HOME = path.join(root, 'codex');
+  require('./isolated-codex-home.cjs')(t);
   t.after(() => {
-    if (previousCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previousCodexHome;
     fs.rmSync(root, { recursive: true, force: true });
   });
   const folder = encodeProjectPath(root), dir = path.join(root, folder);

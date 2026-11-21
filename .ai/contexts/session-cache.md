@@ -3265,6 +3265,35 @@ refresh and reconcile.
 
 ## Harness folders (#821)
 
+Scan tests isolate Codex history with `test/fixtures/isolated-codex-home.cjs`
+(#1150). Call it with the `node:test` module for file scope, or a test context
+for fixture scope, before starting a scan. It creates an empty temporary
+`CODEX_HOME`, restores the exact prior environment value (including absence),
+and removes its directory in the registered teardown. Codex-specific fixtures
+can populate the returned `home`; synchronous callback fixtures can call the
+returned `restore` in `finally` instead of registering a test hook. Repeated
+calls per context are supported. A module-level stack defers released outer homes until
+inner homes have been released, so FIFO hooks on one context and nested
+file/test hooks both restore in LIFO order; repeated restore calls are inert.
+The `warm-start-1144` and `continuation-718` fixtures install it for callers.
+The existing `isolated-home` fixture is schedule-specific and inspects Claude
+projects in the original home, so scan tests do not reuse it.
+
+`test/isolated-codex-home.test.js` guards direct scan entry points, synchronous
+and asynchronous reconciliation, and projects-query/worker callers. Its AST
+check requires file-scope isolation or isolation reached from every scan test
+callback, including calls to local setup functions and shared fixture functions.
+Importing a helper or only constants from a shared fixture does not count.
+This is a bounded call-graph check, not control-flow or alias analysis. Explicit
+exemptions carry reasons for mocks, source checks, pure transformations, and
+child adapters whose guarded parents provide the inherited environment.
+Real node:test hooks cover repeated calls and nested file/test lifetimes in
+`isolated-codex-home.test.js` and `isolated-codex-home-hooks.test.js`.
+When adding a scan caller, use the helper or a shared fixture that installs it;
+do not add a guard exemption for a real scan. The regression witness uses a
+disposable HOME/USERPROFILE with synthetic `.codex/sessions` rollouts and an
+unset CODEX_HOME, never the developer's history. No production default changes.
+
 A folder key with a harness prefix (`codex/2026/08/26`) belongs to a CLI whose
 store is not `~/.claude/projects`; `harnessForFolder` (`harnesses/index.js`)
 picks the adapter. `refreshFolder` dispatches such a key to

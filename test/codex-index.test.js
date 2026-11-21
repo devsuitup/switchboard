@@ -47,14 +47,11 @@ function fakeDb() {
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-index-'));
   const projectsDir = path.join(root, 'projects');
-  const codexHome = path.join(root, 'codex-home');
+  const { home: codexHome } = require('./fixtures/isolated-codex-home.cjs')(t);
   const project = path.join(root, 'project');
   const day = path.join(codexHome, 'sessions', '2026', '08', '26');
   fs.mkdirSync(projectsDir); fs.mkdirSync(project); fs.mkdirSync(day, { recursive: true });
-  const previous = process.env.CODEX_HOME;
-  process.env.CODEX_HOME = codexHome;
   t.after(() => {
-    if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous;
     fs.rmSync(root, { recursive: true, force: true });
   });
   const file = id => path.join(day, `rollout-2026-08-26T11-55-02-${id}.jsonl`);
