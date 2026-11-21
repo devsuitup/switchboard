@@ -4198,6 +4198,10 @@ body { display: flex; flex-direction: column; }
 .archived-filter { flex: 1; min-width: 0; }
 .archived-search-toggle { display: none; }
 .archived-list { border: 1px solid var(--control-border); border-radius: 6px; background: var(--surface-sunken); }
+.archived-list > .settings-section-title { padding: 12px; margin: 0; }
+.archived-more { margin: 8px 12px; }
+.sidebar-archived-footer { padding: 12px; border-top: 1px solid var(--hairline); color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.settings-narrow .archived-session-row .archived-actions { flex-wrap: wrap; }
 .archived-group-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; background: var(--surface-chrome); }
 .archived-group-header label { font-size: 11px; color: var(--text-muted); }
 .archived-group-toggle { border: 0; background: transparent; padding: 4px; text-align: left; overflow-wrap: anywhere; }

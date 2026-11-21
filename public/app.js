@@ -1239,6 +1239,27 @@ window.api.onCliBusyState((sessionId, busy) => {
   setActivity(sessionId, busy, 'onCliBusyState');
 });
 
+function showArchivedSessionInSidebar(session) {
+  window.closeSettingsViewer();
+  document.querySelector('.sidebar-tab[data-tab="sessions"]')?.click();
+  showArchived = true;
+  showStarredOnly = showRunningOnly = showTodayOnly = false;
+  document.getElementById('archive-toggle')?.classList.add('active');
+  for (const id of ['star-toggle', 'running-toggle', 'today-toggle']) document.getElementById(id)?.classList.remove('active');
+  clearSearch();
+  if (clearRenderRaf) { cancelAnimationFrame(clearRenderRaf); clearRenderRaf = null; }
+  refreshSidebar({ resort: true, keepFocus: true });
+  const row = sessionItemEl(session.sessionId, sidebarContent);
+  if (!row) return;
+  for (let el = row.parentElement; el && el !== sidebarContent; el = el.parentElement) {
+    if (el.classList.contains('slug-group')) el.classList.remove('collapsed');
+    if (el.classList.contains('sessions-older') && el.style.display === 'none') el.previousElementSibling?.click();
+    if (el.matches('.project-sessions, .worktree-sessions')) el.previousElementSibling?.classList.remove('collapsed');
+  }
+  row.tabIndex = -1; row.focus(); row.scrollIntoView?.({ block: 'nearest' });
+}
+window.showArchivedSessionInSidebar = showArchivedSessionInSidebar;
+
 // --- Single entry point for all sidebar renders ---
 // resort=true: re-sort items by priority+time (use for user-initiated actions)
 // resort=false (default): preserve existing DOM order, new items go to top
@@ -2280,6 +2301,7 @@ async function loadProjects({ resort = false } = {}) {
     setRemoteHostLabels(globalSettings?.remoteHosts);
     cachedProjects = defaultProjects;
     cachedAllProjects = allProjects;
+    window.refreshArchivedManager?.(cachedAllProjects, globalSettings)?.catch(error => console.warn('[switchboard] archived refresh failed', error));
     window.clearReappearedProjectDeletionTargets?.(job.generation);
     const newerPending = state.latest !== job && state.latest.pending;
     loadingStatus.style.display = newerPending ? '' : 'none';
@@ -3279,7 +3301,9 @@ window.api.onProjectsChanged(payload => {
   if (activeTab === 'schedules' && payload?.cause?.some(cause => ['archive', 'project-added', 'project-deleted', 'project-remap', 'worktree-deleted', 'watcher', 'session-exit', 'session-attach'].includes(cause))) queueSchedulesReload();
   // Debounce to avoid rapid re-renders during bulk changes
   if (projectsChangedTimer) clearTimeout(projectsChangedTimer);
-  if (activeTab !== 'sessions') {
+  const archivedPage = document.getElementById('settings-page-archived');
+  const archivedVisible = archivedPage && !archivedPage.hidden && document.getElementById('settings-viewer')?.style.display !== 'none';
+  if (activeTab !== 'sessions' && !archivedVisible) {
     projectsChangedWhileAway = true;
     return;
   }

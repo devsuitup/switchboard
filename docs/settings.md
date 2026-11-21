@@ -150,11 +150,16 @@ Space. Select rows or a host group to unarchive several projects together.
 **Unarchive** applies immediately. Project restores offer a ten-second **Undo**;
 folder restores keep sessions archived and schedules off, with **Turn back on**
 offered at the top of the restored group. Re-archive a folder with **Archive folder**;
-in a mixed restore, Undo re-archives projects only. A combined row restores its
+in a mixed restore, Undo re-archives sessions and project archives only. A combined row restores its
 project archive first, then its folder archive. The row's
 **More actions** menu offers **Copy path** and **Delete project…**. Delete opens
 the same preview and confirmation as the sidebar, without unarchiving first.
-Archived session management will be added separately.
+Archived top-level sessions appear below, grouped by project and host, with dates,
+message counts and available file sizes. Groups show twelve rows and **Show N more**.
+Each row offers **Unarchive**, **Transcript**, and **Show in sidebar** in its menu.
+Selection is shared with projects: **Unarchive selected (N)** restores project
+entries first, then sessions, with one notice and Undo. The filter and checked
+items survive project updates. Sessions of archived projects appear after Unarchive.
 
 ### Advanced
 

@@ -122,6 +122,15 @@ test('filter matches name, path, host label and alias, clears by Escape and expo
   assert.equal(filter.value, ''); assert.equal(h.rows().length, 4);
 });
 
+test('settings lists projects and sessions as sibling groups with one heading each and a combined nav count', async t => {
+  const h = await setup(t);
+  h.w.cachedAllProjects = [{ projectPath: '/visible', sessions: [{ sessionId: 'archived', archived: 1, name: 'Archived session' }] }];
+  await h.w.openSettingsViewer('global', null, null, { section: 'archived' });
+  const headings = [...h.q('#settings-page-archived').querySelectorAll('h3')].map(el => el.textContent);
+  assert.deepEqual(headings, ['Projects and folders (4)', 'Sessions (1)']);
+  assert.equal(h.q('[data-section="archived"]').textContent, 'Archived (4 · 1)');
+});
+
 test('empty projects state explains both project and folder archives', async t => {
   const h = await setup(t, true);
   assert.match(h.q('#sv-archived-projects').textContent, /No archived project\./);

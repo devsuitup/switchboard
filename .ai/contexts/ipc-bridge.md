@@ -1,6 +1,6 @@
 # Context: ipc-bridge
 
-## Archived projects manager (#863 slices 2–3, #1167)
+## Archived projects manager (#863 slices 2–4, #1167, #1171)
 
 `settings-panel.js` mounts `renderArchivedProjects` from `archived-manager.js`
 after the shared renderer helpers, dialogs, notices and sidebar controller.
@@ -9,14 +9,15 @@ hidden entries/kinds, archive timestamps, cached projects and
 the working remote-host list. Host edits update labels without saving. The manager
 groups Local first, then configured hosts in order, then unknown aliases; it never
 collapses a worktree entry into its repository. The filter, selections and folds
-are local to the mounted list. Filtering clears selections outside the results.
+are local to the mounted list. Selection survives filtering and accepted snapshots;
+only entries no longer archived are removed from the checked set.
 Counts exclude deleted entries. Missing timestamps and unknown session counts
 are omitted, never invented. Names use `shortProjectPath` (last two segments).
 
 Unarchive uses the exact stored entry via `unarchiveProject` and/or `unarchiveFolder`, sequentially for a
 bulk action. Successful entries leave the list, reload projects and get one B8
-ten-second Undo notice for project archives only. Folder restores use an informational
-notice; mixed restores explain that Undo only re-archives projects and that folders
+ten-second Undo notice for project archives and sessions. Folder-only restores use an informational
+notice; mixed restores explain that Undo re-archives sessions and project archives and that folders
 must be archived again through Archive folder. Undo calls `archiveProjectSettings(path, folderKey)` and
 reads the new writer timestamp. After reopening Settings, Undo refreshes the
 currently mounted manager; a pending action does not consume its Undo notice.
@@ -62,6 +63,32 @@ Unarchive before Delete. The overflow also copies the full path through
 Native controls provide Tab navigation; Enter/Space folds host groups and Escape
 clears the filter. ResizeObserver alone controls the 720px stacked layout and
 480px search disclosure. New surfaces use existing dark chrome tokens.
+
+Slice 4 adds top-level archived sessions from `cachedAllProjects`, grouped by
+host-qualified project path, with twelve initially visible rows per group.
+Select-all covers the entire filtered group, including its collapsed tail.
+Session keys are separate from project entry keys. Names use `cleanDisplayName`;
+attribute values also escape quotes. Transcript uses `showJsonlViewer` without
+opening a terminal. Show in sidebar enables the archive filter, clears competing
+filters and search, cancels the deferred search redraw, expands the target's
+ancestors and focuses the row. The archive-filter footer uses `archivedCounts`
+over the all-project snapshot and non-deleted hidden project entries.
+
+The shared bulk action runs project/folder entries first, then
+`persistSessionArchive(session, 0)`. Its optional error callback collects failures
+for one `appAlert` rather than producing separate sidebar error notices. One
+success notice reverses successful projects and sessions only; session Undo uses
+`persistSessionArchive(session, 1)`. Folder-only restore still has no Undo.
+
+The accepted `loadProjects` snapshot calls `window.refreshArchivedManager`, which
+does no archive read when the Settings viewer is closed.
+Refresh reads folder records and preserves filter, selection, group expansion,
+working host labels and row-control focus. A version counter rejects stale reads;
+refreshes during an action are deferred until the action and any error alert end.
+`projects-changed` also schedules a reload when Archived is visible above another
+sidebar tab. Closed settings retain the normal deferred reload behaviour.
+Tests: `dom-archived-sessions.test.js`, plus the existing archived manager,
+session/folder Undo, archive-all and row-action error suites.
 
 Folder and project archives with the same exact entry share one row with both badges.
 Folder dates accept the stored ISO timestamp; metadata includes the number of disabled
