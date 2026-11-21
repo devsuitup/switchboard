@@ -84,6 +84,7 @@
     const maxAgeValue = fieldValue('sessionMaxAgeDays');
     const hideSdkValue = fieldValue('hideSdkSessions');
     let appliedHideSdk = hideSdkValue;
+    let appliedCodexUsage = fieldValue('showCodexUsage') === true;
     const themeValue = fieldValue('terminalTheme');
     const rightClickValue = fieldValue('terminalRightClick');
     const restoreStartupValue = fieldValue('restoreOnStartup');
@@ -137,6 +138,10 @@
           </div>
         </div>`).join('')}
         ${harnessList.some(h => h.id === 'codex') ? `
+        <div class="settings-field">
+          <div class="settings-field-info"><span class="settings-label">Show Codex usage</span><div class="settings-description" id="sv-show-codex-usage-help">Off by default. Uses your local Codex sign-in to request usage from chatgpt.com. Hides quietly when unavailable.</div></div>
+          <div class="settings-field-control"><label class="settings-toggle"><input type="checkbox" id="sv-show-codex-usage" aria-label="Show Codex usage" aria-describedby="sv-show-codex-usage-help" ${fieldValue('showCodexUsage') ? 'checked' : ''}><span class="settings-toggle-slider"></span></label></div>
+        </div>
         <div class="settings-field">
           <div class="settings-field-info"><span class="settings-label">Codex sandbox</span><div class="settings-description">Passed as <code>--sandbox</code>; empty leaves codex's own config</div></div>
           <div class="settings-field-control">${codexSelect('sv-codex-sandbox', 'codexSandbox', [['', 'Codex default'], ['read-only', 'Read-only'], ['workspace-write', 'Workspace write'], ['danger-full-access', 'Full access (danger)']])}</div>
@@ -868,6 +873,8 @@
         settings.preLaunchCmd = settingsViewerBody.querySelector('#sv-pre-launch').value.trim();
         settings.addDirs = settingsViewerBody.querySelector('#sv-add-dirs').value.trim();
         if (harnessToggles.length) settings.disabledHarnesses = harnessToggles.filter(t => !t.checked).map(t => t.dataset.harness);
+        const usageToggle = settingsViewerBody.querySelector('#sv-show-codex-usage');
+        if (usageToggle) settings.showCodexUsage = usageToggle.checked;
         for (const [key, id] of [['codexSandbox', 'sv-codex-sandbox'], ['codexApproval', 'sv-codex-approval'], ['codexModel', 'sv-codex-model'], ['codexEffort', 'sv-codex-effort']]) {
           const field = settingsViewerBody.querySelector('#' + id);
           if (field) settings[key] = field.value;
@@ -924,6 +931,10 @@
       // Update visibleSessionCount, sessionMaxAgeDays, and theme
       if (!isProject) {
         window._applySchedulesTab?.(settings.schedulesTab);
+        if (typeof settings.showCodexUsage === 'boolean' && settings.showCodexUsage !== appliedCodexUsage) {
+          window._applyCodexUsage?.(settings.showCodexUsage);
+          appliedCodexUsage = settings.showCodexUsage;
+        }
         if (settings.visibleSessionCount && typeof window._setVisibleSessionCount === 'function') {
           window._setVisibleSessionCount(settings.visibleSessionCount);
         }

@@ -93,3 +93,8 @@ in its tooltip, when it resets. They are fetched every 5 minutes from
 Anthropic's usage endpoint with the CLI's own OAuth credentials (the macOS
 Keychain, or `~/.claude/.credentials.json`), and are hidden when none are
 available. Clicking them opens the [Stats](activity-stats.md) tab.
+
+Enable **Show Codex usage** in Settings → Sessions → CLI Agents to add Codex
+gauges alongside Claude, including named model limits. It is off by default;
+unavailable Codex usage hides quietly. See [Settings](settings.md#cli-agents-and-codex)
+for the credentials and endpoint it uses.

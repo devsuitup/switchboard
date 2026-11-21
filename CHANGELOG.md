@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- Settings → Sessions → CLI Agents offers **Show Codex usage**, off by default. Turn it on to show your Codex limits in the status bar and Stats; usage hides quietly when unavailable. (#1139)
+
 ### Changed
 - After a restart, Switchboard re-reads only Claude Code transcripts changed since the previous run. Codex history is still re-read in full. (#1144)
 - Settings → Archived groups projects by host, shows their paths and archive dates, and filters by name, path or host. Restore one or several projects with Undo, or delete an archived project through the existing preview without restoring it first. Worktree entries whose repository is gone can be deleted; entries still grouped under a repository explain that you can delete their repository instead. (#863)

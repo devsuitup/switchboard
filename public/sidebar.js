@@ -903,7 +903,9 @@ window.flushDeferredProjectDeletionWrites = () => {
   const patch = window.projectDeletionDeferredSettings, workingSet = window.projectDeletionDeferredWorkingSet;
   window.projectDeletionDeferredSettings = null;
   window.projectDeletionDeferredWorkingSet = null;
-  if (patch) void saveGlobalSettings(patch.patch, { remove: patch.remove }).catch(() => {
+  if (patch) void saveGlobalSettings(patch.patch, { remove: patch.remove }).then(result => {
+    if (result === true && patch.patch.showCodexUsage === true) return window.refreshCodexUsage?.();
+  }).catch(() => {
     showAppNotice({ id: 'settings-delete-busy', kind: 'error',
       message: 'Settings could not be saved after the project deletion. Open Settings to review your values and save again.',
       actionLabel: 'Open Settings', onAction: () => openSettingsViewer('global') });

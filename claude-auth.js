@@ -199,4 +199,4 @@ async function fetchAndTransformUsage() {
   }
 }
 
-module.exports = { getOAuthToken, fetchUsage, fetchAndTransformUsage, getConfigDir };
+module.exports = { getOAuthToken, fetchUsage, fetchAndTransformUsage, getConfigDir, formatResetTime };
