@@ -195,7 +195,7 @@ Project Settings override, for one project, the fields on the **Launch** page: P
 and nothing is stored for the project.
 
 The **This project** page shows the project's name, full path, host, folder key
-and session row counts, including archived rows. Counts are unavailable when
+and the number of sessions, including archived ones. Counts are unavailable when
 the project is absent from the current project list. Its **Danger zone** holds
 **Archive Project** and **Delete Project**; the footer holds only **Cancel** and
 **Save Settings**. The first visit opens **Launch**; later visits remember the
