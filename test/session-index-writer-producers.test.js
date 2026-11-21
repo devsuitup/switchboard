@@ -11,13 +11,7 @@ const { createWriterCommands } = require('../session-index-commands');
 const { createSessionIndexWriter } = require('../session-index-writer');
 const os = require('node:os');
 const openStore = require('./fixtures/conversation-store.cjs');
-let isolatedCodex, previousCodex;
-test.before(() => {
-  previousCodex = process.env.CODEX_HOME;
-  isolatedCodex = fs.mkdtempSync(path.join(os.tmpdir(), 'producer-codex-1144-'));
-  process.env.CODEX_HOME = isolatedCodex;
-});
-test.after(() => { process.env.CODEX_HOME = previousCodex; fs.rmSync(isolatedCodex, { recursive: true, force: true }); });
+require('./fixtures/isolated-codex-home.cjs')(test);
 
 function durableFixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-1144-'));

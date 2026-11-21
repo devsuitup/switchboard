@@ -8,6 +8,7 @@ const { createSessionIndexWriter } = require('../../session-index-writer');
 const { encodeProjectPath } = require('../../encode-project-path');
 
 async function fixture(t, { separateReader = false } = {}) {
+  require('./isolated-codex-home.cjs')(t);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-1144-'));
   const previous = process.env.SWITCHBOARD_DATA_DIR;
   process.env.SWITCHBOARD_DATA_DIR = path.join(root, 'data');

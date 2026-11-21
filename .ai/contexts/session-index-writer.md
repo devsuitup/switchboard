@@ -717,8 +717,9 @@ continuity across chunks. An unrelated write between chunks breaks Projects
 receipt continuity without refusing token/witness-valid certificates.
 
 The commands bracket producer operations at the facade. They do not alter
-the generic chunk scheduler, producer-unit packing, transaction budgets,
-admission or deadlines (#1135). Certificate commands participate in existing
+the generic chunk scheduler, producer-unit packing, transaction budgets or
+admission. The payload deadlines below apply to every `effects` command,
+including refresh, project-worker and remote producers (#1135). Certificate commands participate in existing
 project-deletion ownership fencing. Repair invalidates its folder seal before
 scanning and joins startup population; its marker clears only after successful
 sealed publication.
@@ -766,3 +767,57 @@ The obsolete single-row worker `certifyFullRead` command is removed; certificate
 units invoke the store method directly inside `certifyFullReads`. The real
 worker facade test uses 80 certificates and an intervening setting write to
 prove `continuous:false` returns the body ACK.
+
+## Large-folder deadlines and interrupted publication (#1135)
+
+The transport scales the started-command deadline for every `effects` command,
+full-read certification and batched name derivation. The multiplier is the larger
+of one, the estimated payload's 32 KiB blocks, and its 32 work-row blocks.
+Bulk session, search, entrypoint and title effects count their immediate rows;
+other effects count once. Certification and name derivation count their candidates.
+Nested metrics are not counted again as work rows in both session upserts and
+metric replacement; their payload size still contributes to the byte estimate.
+A single iterative walk estimates bytes from string/key lengths (two bytes per
+UTF-16 code unit), structural delimiters and fixed-size scalar allowances,
+without serializing a copy. A WeakSet visits shared/cyclic objects once; BigInt
+uses the scalar allowance. An unreadable payload falls back to the maximum.
+Each block receives the existing 30-second allowance, capped by
+`MAX_WORK_COMMAND_TIMEOUT_MS` at ten minutes, matching the subset scan ceiling.
+Small/control commands, bootstrap, heartbeat and admission retain
+their existing budgets. This bounds a command by the work carried in its
+payload without changing the worker's transaction packing, yields, fences
+or scheduling. The work-row count also covers many small rows; estimated bytes
+cover large text/metrics/witness payloads. This is a finite
+work allowance, not a guarantee under arbitrary CPU starvation.
+
+After a startup folder's body ACK, the facade retains its existing pending
+token, configuration and proposed per-row certificates for a retry in this
+writer lifetime. It does not treat this memory as committed progress: on
+retry, it rereads the durable pending token and each row certificate/witness,
+and compares them with the newly scanned source candidate and configuration.
+Only matching, durably certified rows bypass replacement. A full retry uses
+the existing partial writer to preserve those rows, deletes vanished inventory
+rows, and still seals as a full scan only after the remaining writes and
+certificates. Multiple failed retries retain the preserved candidates.
+A superseded token, changed configuration/source/row or absent certificate
+requires republication. An unknown body outcome has no new certified progress
+and cannot authorize skipping its rows. No receipt table or parallel durable
+progress mechanism is introduced. After process restart the provenance hint
+is gone and A2 conservatively performs full validation again.
+
+The scan coordinator still allows only three delayed retries (30 s, 120 s,
+600 s), then retains its error with the retry time at Infinity until an
+explicit forced scan or a later startup. Unknown certificate outcomes leave
+the folder pending/unsealed and initial completion false on a cold failure.
+Seal remains last; an unknown seal outcome is logged without compensation.
+A2's successfully published deferred sources still count as complete for
+population while their folder remains pending.
+
+The regression uses real disposable SQLite, the production scan worker,
+facade and writer, with a virtual slow transport to exercise command expiry.
+The interrupted certificate test commits a prefix of single-row chunks,
+then loses the next outcome and verifies that retry preserves certified rows.
+Retry regressions also remove a transcript, edit a durable title without
+clearing its certificate, and change only source ctime while retaining identical
+parsed row witnesses. Each compares the resulting index with a separate full
+rebuild; the source-only case isolates the source-stamp reuse guard.

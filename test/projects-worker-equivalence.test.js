@@ -1,6 +1,7 @@
 'use strict';
 
 const test = require('node:test');
+require('./fixtures/isolated-codex-home.cjs')(test);
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
