@@ -1,6 +1,42 @@
 'use strict';
 
+const MAX_WORK_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
+
 // see .ai/contexts/session-index-writer.md
+function commandTimeoutMs(command, args, timeoutMs) {
+  if (!['effects', 'certifyFullReads', 'deriveCachedNames'].includes(command)) return timeoutMs;
+  try {
+    let rows = 0, bytes = 0;
+    if (command === 'effects') {
+      for (const effect of args[0]) {
+        rows += ['upsertCachedSessions', 'upsertSearchEntries', 'setCachedEntrypoints', 'setCachedCustomTitles'].includes(effect.name)
+          ? effect.args[0].length : 1;
+      }
+    } else rows = args[command === 'certifyFullReads' ? 2 : 0].length;
+    const pending = [args], seen = new WeakSet();
+    while (pending.length) {
+      const value = pending.pop();
+      if (typeof value === 'string') bytes += value.length * 2 + 2;
+      else if (value && typeof value === 'object') {
+        if (seen.has(value)) continue;
+        seen.add(value);
+        bytes += 2;
+        if (Array.isArray(value)) {
+          bytes += value.length;
+          for (const child of value) pending.push(child);
+        } else for (const key of Object.keys(value)) {
+          bytes += key.length * 2 + 3;
+          pending.push(value[key]);
+        }
+      } else bytes += 8;
+    }
+    const batches = Math.max(1, Math.ceil(rows / 32), Math.ceil(bytes / 32768));
+    return Math.min(MAX_WORK_COMMAND_TIMEOUT_MS, timeoutMs * batches);
+  } catch {
+    return MAX_WORK_COMMAND_TIMEOUT_MS;
+  }
+}
+
 function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusyCounts = () => {}, onBootstrap = () => {}, timeoutMs = 30000, maxRestarts = 3,
   now = () => Date.now(), setTimeout = global.setTimeout, clearTimeout = global.clearTimeout, heartbeatMs = 30000, log = console }) {
   let worker, closing, stopped = false, terminated = false, nextId = 0, restartTimer;
@@ -130,7 +166,7 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
       const job = active.get(message.id);
       if (!job) return;
       if (message.started) {
-        job.timer ||= setTimeout(() => settle(job, Object.assign(new Error(`writer command timed out for request ${job.id}; outcome unknown`), { code: 'WRITER_TIMEOUT', requestId: job.id })), timeoutMs);
+        job.timer ||= setTimeout(() => settle(job, Object.assign(new Error(`writer command timed out for request ${job.id}; outcome unknown`), { code: 'WRITER_TIMEOUT', requestId: job.id })), commandTimeoutMs(job.command, job.args, timeoutMs));
         return;
       }
       active.delete(message.id);

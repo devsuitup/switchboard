@@ -123,7 +123,11 @@ population, with at most two fresh folder attempts; unrelated folders are not
 rescanned. Retry snapshot failures remain scoped to their folder so later
 folders can publish. Shutdown prevents new retry workers and terminates admitted
 retry workers through the same registered scan-worker set. Population has no
-wall-clock deadline. Explicit remote/subset scans
+wall-clock deadline. Folder writer commands use payload-scaled deadlines;
+a retry preserves durably certified matching rows from an interrupted
+publication in the same writer lifetime (see session-index-writer.md, #1135).
+The retry still re-enumerates and validates sources; it does not claim to skip
+transcript parsing on a forced/cold retry. Explicit remote/subset scans
 retain the ten-minute ceiling. Population returns `{ok,...}`; initial completion,
 Projects reconciliation time and continuation-choice sweeping require success.
 
