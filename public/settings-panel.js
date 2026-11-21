@@ -84,6 +84,7 @@
     const maxAgeValue = fieldValue('sessionMaxAgeDays');
     const hideSdkValue = fieldValue('hideSdkSessions');
     let appliedHideSdk = hideSdkValue;
+    let appliedCodexUsage = fieldValue('showCodexUsage') === true;
     const themeValue = fieldValue('terminalTheme');
     const rightClickValue = fieldValue('terminalRightClick');
     const restoreStartupValue = fieldValue('restoreOnStartup');
@@ -930,7 +931,10 @@
       // Update visibleSessionCount, sessionMaxAgeDays, and theme
       if (!isProject) {
         window._applySchedulesTab?.(settings.schedulesTab);
-        window._applyCodexUsage?.(settings.showCodexUsage);
+        if (settings.showCodexUsage !== appliedCodexUsage) {
+          window._applyCodexUsage?.(settings.showCodexUsage);
+          appliedCodexUsage = settings.showCodexUsage;
+        }
         if (settings.visibleSessionCount && typeof window._setVisibleSessionCount === 'function') {
           window._setVisibleSessionCount(settings.visibleSessionCount);
         }

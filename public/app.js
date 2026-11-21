@@ -3433,11 +3433,13 @@ window.api.onUpdaterEvent(updaterHandler);
 // self-describing, so a newly launched model gets a bar without a code change.
 const quotaGaugeEl = document.getElementById('status-bar-quota');
 let quotaRequest = 0;
+let codexQuotaRequest = 0;
+let codexQuotaEnabled = true;
 
 // Full labels ("Week (all models)") are too long for a status bar; the tooltip
 // carries them in full.
 function shortQuotaLabel(row) {
-  if (row.kind === 'codex') return 'Codex ' + row.short;
+  if (row.kind === 'codex') return row.label || 'Codex ' + row.short;
   if (row.kind === 'session') return '5h';
   if (row.kind === 'weekly_all') return 'Week';
   return row.model || 'Week';
@@ -3473,11 +3475,9 @@ function buildQuotaBar(row) {
 
 async function refreshQuotaGauge() {
   const request = ++quotaRequest;
+  const codexRefresh = refreshCodexQuotaGauge();
   try {
-    const [usage, codex] = await Promise.all([
-      window.api.getUsage().catch(() => ({})),
-      window.api.getCodexUsage?.().catch(() => ({})) ?? {},
-    ]);
+    const usage = await window.api.getUsage().catch(() => ({}));
     if (request !== quotaRequest) return;
     // Prefer the API's self-describing rows; fall back to the flat 5-hour keys.
     const rows = Array.isArray(usage?.limits) && usage.limits.length
@@ -3485,20 +3485,38 @@ async function refreshQuotaGauge() {
       : (usage?.session !== undefined
         ? [{ kind: 'session', label: 'Current session', percent: usage.session, reset: usage.sessionReset }]
         : []);
-    rows.push(...(codex?.limits || []));
-    if (!rows.length) { quotaGaugeEl.replaceChildren(); quotaGaugeEl.style.display = 'none'; return; }
+    replaceQuotaRows(rows, 'claude');
+  } catch {} finally {
+    await codexRefresh;
+  }
+}
 
-    quotaGaugeEl.replaceChildren(...rows.map(buildQuotaBar));
-    quotaGaugeEl.style.display = '';
-  } catch {}
+function replaceQuotaRows(rows, runtime) {
+  quotaGaugeEl.querySelectorAll(`[data-runtime="${runtime}"]`).forEach(el => el.remove());
+  const bars = rows.map(buildQuotaBar);
+  if (runtime === 'claude') quotaGaugeEl.prepend(...bars);
+  else quotaGaugeEl.append(...bars);
+  quotaGaugeEl.style.display = quotaGaugeEl.children.length ? '' : 'none';
+}
+
+async function refreshCodexQuotaGauge() {
+  const request = ++codexQuotaRequest;
+  if (!codexQuotaEnabled) {
+    replaceQuotaRows([], 'codex');
+    return;
+  }
+  let usage;
+  try { usage = await window.api.getCodexUsage?.(); } catch {}
+  if (request !== codexQuotaRequest) return;
+  replaceQuotaRows(usage?.limits || [], 'codex');
 }
 
 function applyCodexUsage(enabled) {
-  quotaRequest++;
-  quotaGaugeEl.querySelectorAll('[data-runtime="codex"]').forEach(el => el.remove());
-  if (!quotaGaugeEl.children.length) quotaGaugeEl.style.display = 'none';
-  refreshQuotaGauge();
-  window.refreshCodexStatsUsage?.(enabled === true);
+  codexQuotaEnabled = enabled === true;
+  return Promise.all([
+    refreshCodexQuotaGauge(),
+    window.refreshCodexStatsUsage?.(codexQuotaEnabled),
+  ]);
 }
 window._applyCodexUsage = applyCodexUsage;
 refreshQuotaGauge();

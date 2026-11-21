@@ -16,7 +16,7 @@ function windowLabel(seconds) {
 function usageRows(raw) {
   const limits = [];
   const add = (win, model = null) => {
-    if (!win || !Number.isFinite(win.used_percent) || win.used_percent < 0 || win.used_percent > 100) return;
+    if (!win || !Number.isFinite(win.used_percent) || win.used_percent < 0) return;
     const percent = Math.floor(win.used_percent);
     if (model && percent === 0) return;
     const short = windowLabel(win.limit_window_seconds);

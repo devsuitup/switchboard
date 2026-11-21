@@ -60,6 +60,10 @@ test('on uses the fake CODEX_HOME and sends only renderable rows across IPC', as
   assert.equal(url, 'https://chatgpt.com/backend-api/wham/usage');
   assert.equal(options.headers.Authorization, `Bearer ${secret}`);
   assert.equal(options.headers['chatgpt-account-id'], 'fake-account');
+  assert.deepEqual(Object.keys(options.headers).sort(), ['Authorization', 'Content-Type', 'chatgpt-account-id', 'originator'].sort());
+  const { Authorization, ...otherHeaders } = options.headers;
+  assert.equal(Authorization, `Bearer ${secret}`);
+  assert.ok(!JSON.stringify({ url, headers: otherHeaders, body: options.body }).includes(secret), 'token appears only in Authorization');
   assert.equal(options.redirect, 'error', 'credentials must never follow a redirect');
   assert.ok(options.signal instanceof AbortSignal);
   assert.deepEqual(Object.keys(usage), ['limits']);
@@ -175,4 +179,41 @@ test('malformed endpoint data is quiet and invalid percentages never render', as
     primary_window: { used_percent: 'private-data' }, secondary_window: { used_percent: -1 },
   } }) }) });
   assert.deepEqual(await h.service.getUsage(), {});
+});
+
+test('over-limit percentages remain visible for account and model windows', async t => {
+  const h = setup(t, { fetch: async () => ({ ok: true, json: async () => ({
+    rate_limit: { primary_window: { used_percent: 125.8, limit_window_seconds: 18000 } },
+    additional_rate_limits: [{ limit_name: 'Spark', rate_limit: {
+      secondary_window: { used_percent: 110, limit_window_seconds: 604800 },
+    } }],
+  }) }) });
+  const usage = await h.service.getUsage();
+  assert.deepEqual(usage.limits?.map(row => row.percent), [125, 110], 'over-limit windows must not disappear');
+  assert.ok(usage.limits.every(row => row.severity === 'high'));
+});
+
+test('turning off without a generation change discards an in-flight response', async t => {
+  let resolve;
+  const h = setup(t, { fetch: () => new Promise(done => { resolve = done; }) });
+  const pending = h.service.getUsage();
+  h.state.enabled = false;
+  resolve({ ok: true, json: async () => response() });
+  assert.deepEqual(await pending, {}, 'disabled setting must suppress the result without settingsChanged');
+});
+
+test('Retry-After longer than an hour is capped at one hour', async t => {
+  let calls = 0;
+  const h = setup(t, { fetch: async () => {
+    calls++;
+    return calls === 1 ? { ok: false, status: 429, headers: { get: () => '7200' } }
+      : { ok: true, json: async () => response() };
+  } });
+  assert.deepEqual(await h.service.getUsage(), {});
+  h.state.time = 3599999;
+  assert.deepEqual(await h.service.getUsage(), {});
+  assert.equal(calls, 1);
+  h.state.time = 3600000;
+  assert.equal((await h.service.getUsage()).limits?.length, 3, 'retry resumes at the one-hour cap');
+  assert.equal(calls, 2);
 });

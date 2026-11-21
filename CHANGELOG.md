@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
-- Settings > Sessions > CLI Agents offers **Show Codex usage**, off by default. Turn it on to show your Codex limits in the sidebar and Stats; usage hides quietly when unavailable. (#1139)
+- Settings → Sessions → CLI Agents offers **Show Codex usage**, off by default. Turn it on to show your Codex limits in the status bar and Stats; usage hides quietly when unavailable. (#1139)
 
 ### Changed
 - Settings → Archived groups projects by host, shows their paths and archive dates, and filters by name, path or host. Restore one or several projects with Undo, or delete an archived project through the existing preview without restoring it first. For local worktree entries, Delete project explains how to delete the worktree or its repository. (#863)

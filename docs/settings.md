@@ -93,6 +93,12 @@ A saved `chrome` setting is read as the matching Browser choice: `true` selects
 The existing CLI switches and Codex sandbox, approval, model and reasoning-effort
 controls are grouped here. See [Launching sessions](launching-sessions.md).
 
+**Show Codex usage** (`showCodexUsage`, off by default) displays Codex rate
+limits in the status bar and Stats. When enabled, it reads `CODEX_HOME/auth.json`
+(or `~/.codex/auth.json`) and calls `chatgpt.com` with the Codex login token.
+Unavailable credentials, request failures or unsupported responses hide the
+Codex gauges quietly. Saving a changed toggle applies it immediately.
+
 #### Sidebar list
 
 | Setting | Key | Default | Effect |

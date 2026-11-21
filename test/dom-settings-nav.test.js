@@ -81,6 +81,28 @@ function setup(t) {
   return { w, q, nav, open, click, active, saved, timers, observers, ctx };
 }
 
+test('unrelated global saves and repeated saves do not reapply Codex usage', async t => {
+  const h = setup(t);
+  const applied = [];
+  h.w._applyCodexUsage = value => applied.push(value);
+  await h.open();
+  h.q('#sv-visible-count').value = '42';
+  h.q('#sv-save-btn').click();
+  await settle();
+  assert.deepEqual(applied, [], 'unrelated Save must not refresh usage');
+  for (const enabled of [true, false]) {
+    h.q('#sv-show-codex-usage').checked = enabled;
+    h.q('#sv-save-btn').click();
+    await settle();
+    assert.equal(applied.at(-1), enabled);
+    const count = applied.length;
+    h.q('#sv-save-btn').click();
+    await settle();
+    assert.equal(applied.length, count, 'unchanged repeated Save must not refresh usage');
+  }
+  assert.deepEqual(applied, [true, false]);
+});
+
 test('global and project navigation expose the ordered pages and named regions', async t => {
   const h = setup(t);
   await h.open();

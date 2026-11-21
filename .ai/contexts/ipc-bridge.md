@@ -520,7 +520,7 @@ uninitialised submodule refuses preview/deletion before force can hide its files
 
 #### Opt-in Codex usage (#1139)
 
-Settings > Sessions > CLI Agents has **Show Codex usage**, defaulting to false
+Settings → Sessions → CLI Agents has **Show Codex usage**, defaulting to false
 in `SETTING_DEFAULTS`. Saving applies it immediately. Only the global setting
 with the boolean value `true` authorizes a read or request; project settings and
 renderer IPC arguments cannot enable it.
@@ -532,17 +532,24 @@ Redirects are refused. No credentials, raw response, account metadata or error
 messages cross IPC; failures return `{}` and are never logged. This endpoint is
 undocumented and can change; unavailable usage simply disappears.
 
-A shared in-flight request covers sidebar and Stats callers. An AbortController
+A shared in-flight request covers status bar and Stats callers. An AbortController
 bounds the request and body read to ten seconds. Missing credentials, malformed
 responses, HTTP failures and timeouts back off for 30, 60, 120, 240 then 300
 seconds; HTTP 429 also honors Retry-After (seconds or HTTP date), capped at one
 hour. Success resets backoff. A saved setting change cancels the request and
 invalidates its generation; changing the toggle does not bypass backoff.
-The renderer removes Codex rows immediately on Save and rejects older refreshes.
-Sidebar polling remains every five minutes; Stats has its own refresh button.
+The Settings panel applies usage only when the toggle changes, including saves
+deferred by project deletion. Disabling removes Codex rows without fetching
+either provider; enabling refreshes only Codex. The status bar tracks Claude
+and Codex requests separately so neither provider replaces the other's rows.
+Disabling invalidates pending Codex renders and keeps status-bar polling from
+fetching Codex while the saved main-process setting may still be on.
+Status bar polling remains every five minutes; Stats has its own refresh button.
 
 Codex rows reuse `buildQuotaBar` and `buildUsageSection`; Claude keeps its own
 rows and error handling. Reset text shares `formatResetTime` from `claude-auth.js`.
+Model-specific status-bar labels include the limit name. Over-limit percentages
+remain visible; bar widths clamp to 100%.
 The adapted endpoint contract, duration labels and per-model filtering credit
 **Ali Basiri**, `doctly/switchboard`, commits `ee656523` and `3ca3d19d`.
 The fork adds explicit consent, quiet failure, timeout, backoff, redirect refusal
