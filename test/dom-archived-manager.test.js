@@ -122,8 +122,19 @@ test('filter matches name, path, host label and alias, clears by Escape and expo
   assert.equal(filter.value, ''); assert.equal(h.rows().length, 4);
 });
 
+test('settings lists projects and sessions as sibling groups with one heading each and a combined nav count', async t => {
+  const h = await setup(t);
+  h.w.cachedAllProjects = [{ projectPath: '/visible', sessions: [{ sessionId: 'archived', archived: 1, name: 'Archived session' }] }];
+  await h.w.openSettingsViewer('global', null, null, { section: 'archived' });
+  const headings = [...h.q('#settings-page-archived').querySelectorAll('h3')].map(el => el.textContent);
+  assert.deepEqual(headings, ['Projects and folders (4)', 'Sessions (1)']);
+  assert.equal(h.q('[data-section="archived"]').textContent, 'Archived (4 · 1)');
+});
+
 test('empty projects state explains both project and folder archives', async t => {
   const h = await setup(t, true);
+  h.w.cachedAllProjects = [{ projectPath: '/visible', sessions: [{ sessionId: 'archived', archived: 1 }] }];
+  await h.w.openSettingsViewer('global', null, null, { section: 'archived' });
   assert.match(h.q('#sv-archived-projects').textContent, /No archived project\./);
   assert.match(h.q('#sv-archived-projects').textContent, /Archive Project/);
   assert.match(h.q('#sv-archived-projects').textContent, /Archive folder/);
@@ -376,6 +387,40 @@ test('opening 40 overflow menus and copying paths spends no deletion previews', 
     row.querySelector('.archived-copy').click(); await settle();
   }
   assert.equal(h.calls.preview.length, 0, 'opening menus must not spend preview tokens or run discovery');
+});
+
+test('Settings owns the archive description without rendering a redundant section title', async t => {
+  const h = await setup(t);
+  const render = h.w.renderArchivedProjects;
+  let title, description;
+  h.w.renderArchivedProjects = (container, options) => {
+    title = container.parentElement.querySelector(':scope > .settings-section-title');
+    description = container.previousElementSibling;
+    return render(container, options);
+  };
+  await h.w.openSettingsViewer('global', null, null, { section: 'archived' });
+  assert.equal(title, null, 'Settings must not create a title for the manager to remove');
+  assert.equal(description.className, 'settings-description');
+  assert.equal(description.textContent, 'Unarchive restores sidebar groups. Folder schedules stay off until you choose Turn back on. Actions apply immediately.');
+  assert.equal(description.closest('.settings-page').id, 'settings-page-archived');
+  assert.equal(description.nextElementSibling.id, 'sv-archived-projects');
+});
+
+test('quoted project paths retain exact row identity, accessible labels and restore target', async t => {
+  const h = await setup(t, true), entry = '/repo/a "b" & <i';
+  h.settings.hiddenProjects = [entry];
+  await h.w.openSettingsViewer('global', null, null, { section: 'archived' });
+  const row = h.rows()[0], name = h.w.shortProjectPath(entry);
+  assert.equal(row.dataset.entry, entry);
+  assert.equal(row.querySelector('input').dataset.entry, entry);
+  assert.equal(row.querySelector('input').getAttribute('aria-label'), 'Select ' + name);
+  assert.equal(row.querySelector('summary').getAttribute('aria-label'), 'More actions for ' + name);
+  assert.equal(row.querySelector('.archived-name strong').textContent, name);
+  assert.equal(row.querySelector('.archived-path').textContent, entry);
+  assert.equal(row.querySelector('.archived-path').title, entry);
+  row.querySelector('input').click(); h.q('.archived-bulk').click();
+  await waitFor(() => h.rows().length === 0);
+  assert.deepEqual(h.calls.restore, [entry]);
 });
 
 for (const remembered of [false, true]) test(`one Delete click uses one preview with remembered choices=${remembered}`, async t => {

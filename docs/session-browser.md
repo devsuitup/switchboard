@@ -225,6 +225,21 @@ succeeds. Since #815, a scan worker that fails to start shows `Scan failed: <err
 
 ## Pin and archive
 
+**Settings → Archived** lists archived top-level sessions by project and host.
+Rows show their name, modified date, message count and size when available;
+each group shows twelve rows followed by **Show N more**. **Transcript** opens
+the read-only transcript. **Show in sidebar** clears conflicting filters,
+enables the archive filter and reveals the row.
+
+Select sessions and project or folder archives together, then **Unarchive selected (N)**.
+Project and folder entries restore first, then sessions. One notice offers
+**Undo** for restored sessions and project archives; folder archives must be
+archived again with **Archive folder**. Failed items stay selected for retry.
+Sessions belonging to an archived project appear after that project is restored.
+The filter and checked items survive project updates. While the sidebar archive
+filter is on, its footer counts archived top-level sessions and archived project
+entries and links to this page with **Manage**. Deleted projects are excluded.
+
 Name, pin and archive apply to the whole conversation, including compaction
 mirrors, rolled continuation parts and a live background row. It stays listed while any part is
 unarchived and is pinned when any part is pinned. Its name is the newest user

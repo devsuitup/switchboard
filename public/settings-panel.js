@@ -517,7 +517,6 @@
       </div>` : ''}
 
       ${!isProject ? `<div class="settings-section">
-        <div class="settings-section-title">Projects and folders</div>
         <div class="settings-description">Unarchive restores sidebar groups. Folder schedules stay off until you choose Turn back on. Actions apply immediately.</div>
         <div id="sv-archived-projects"></div>
       </div>` : ''}
@@ -685,6 +684,11 @@
       if (!pages.has(id)) id = pageDefs[0][0];
       selectedPage = id;
       applySettingsFilter();
+      if (id === 'archived' && activeArchivedProjectsManager?.dirty
+        && pages.get(id).contains(activeArchivedProjectsManager.container)) {
+        activeArchivedProjectsManager.refresh(cachedAllProjects)
+          .catch(error => console.warn('[switchboard] archived refresh failed', error));
+      }
       for (const button of navButtons) {
         const selected = button.dataset.section === id;
         button.classList.toggle('active', selected);

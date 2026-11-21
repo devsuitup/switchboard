@@ -82,7 +82,7 @@ function announceNotStopped(entries) {
   }
 }
 
-async function persistSessionArchive(session, value, stopped = false) {
+async function persistSessionArchive(session, value, stopped = false, onError) {
   const operation = value ? 'Archive' : 'Unarchive';
   try {
     if (typeof window.api.archiveSession !== 'function') throw new Error('The archive backend is unavailable');
@@ -102,7 +102,8 @@ async function persistSessionArchive(session, value, stopped = false) {
     return true;
   } catch (error) {
     const reason = stopped ? `The process was stopped, but the row is not archived: ${error.message || error}` : error;
-    showSessionActionFailure(operation, session, reason, 'Check the session location and connection, then retry ' + operation + ' from the sidebar.');
+    if (onError) onError(error);
+    else showSessionActionFailure(operation, session, reason, 'Check the session location and connection, then retry ' + operation + ' from the sidebar.');
     return false;
   }
 }
@@ -1291,6 +1292,13 @@ renderProjects.unchanged = projects => {
   return !sidebarRenderDirty && sidebarRenderKey === JSON.stringify(sidebarRenderInputs(projects));
 };
 
+function archivedCounts(projects, entries = [], kinds = {}, folders = {}) {
+  return {
+    sessions: new Set(projects.flatMap(project => project.sessions.filter(session => session.archived && !session.parentSessionId).map(session => session.sessionId))).size,
+    projects: new Set([...entries, ...Object.keys(folders)].filter(entry => kinds[entry] !== 'delete')).size,
+  };
+}
+
 function renderProjects(projects, resort, { keepFocus = false } = {}) {
   const scheduleRuns = new Map();
   const changedScheduleItems = new Set();
@@ -1776,6 +1784,15 @@ function renderProjects(projects, resort, { keepFocus = false } = {}) {
     newSidebar.appendChild(group);
   }
 
+  if (typeof showArchived !== 'undefined' && showArchived) {
+    const [entries, kinds, , folders] = renderProjects.hiddenSettings || [];
+    const counts = archivedCounts(cachedAllProjects, entries, kinds, folders);
+    const footer = document.createElement('div');
+    footer.className = 'sidebar-archived-footer';
+    footer.innerHTML = `${counts.sessions} archived session${counts.sessions === 1 ? '' : 's'} · ${counts.projects} archived ${counts.projects === 1 ? 'project or folder' : 'projects and folders'} — <button type="button" class="settings-action-btn">Manage</button>`;
+    newSidebar.append(footer);
+  }
+
   // Re-apply active state
   if (activeSessionId) {
     const activeItem = sessionItemEl(activeSessionId, newSidebar);
@@ -1862,6 +1879,8 @@ function renderProjects(projects, resort, { keepFocus = false } = {}) {
   sortedOrder = newSortedOrder;
 
   rebindSidebarEvents(projects);
+  const manageArchived = sidebarContent.querySelector('.sidebar-archived-footer button');
+  if (manageArchived) manageArchived.onclick = () => openSettingsViewer('global', null, null, { section: 'archived' });
   paintProjectDeletionBusy();
   if (typeof refreshGridCardMembers === 'function') refreshGridCardMembers();
 
