@@ -199,8 +199,12 @@ Project Settings override, for one project, the fields on the **Launch** page: P
 **Use global default** box; while it is checked the field shows the global value
 and nothing is stored for the project.
 
-The **This project** page reserves space for project identity. For now,
-**Archive Project** and **Delete Project** remain in the footer.
+The **This project** page shows the project's name, full path, host, folder key
+and the number of sessions, including archived ones. Counts are unavailable when
+the project is absent from the current project list. Its **Danger zone** holds
+**Archive Project** and **Delete Project**; the footer holds only **Cancel** and
+**Save Settings**. The first visit opens **Launch**; later visits remember the
+last project page.
 
 **Archive Project** removes the project and its nested worktrees from the
 sidebar immediately, without asking. A notice offers **Undo** for about 10

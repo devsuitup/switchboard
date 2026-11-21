@@ -167,6 +167,7 @@
     // Discover available shell profiles
     let shellProfiles = [];
     try { shellProfiles = await window.api.getShellProfiles(); } catch {};
+    const project = isProject ? cachedAllProjects.find(p => p.projectPath === projectPath && (!folderKey || p.folder === folderKey)) : null;
 
     settingsViewerBody.innerHTML = `
     <div class="settings-form">
@@ -567,10 +568,33 @@
     moveGroup(launchPage, 'Launch', ['sv-pre-launch', 'sv-add-dirs', 'sv-worktree', 'sv-worktree-name', 'sv-browser-mode', 'sv-sandbox']);
     moveGroup(launchPage, 'Claude', ['sv-perm-mode']);
     if (isProject) {
-      const placeholder = document.createElement('p');
-      placeholder.className = 'settings-description';
-      placeholder.textContent = 'Project actions are available below.';
-      pages.get('project').append(placeholder);
+      const identity = document.createElement('dl');
+      identity.className = 'settings-project-identity';
+      const alias = project?.remoteAlias || parseFolderKey(folderKey).alias;
+      const sessions = Array.isArray(project?.sessions)
+        ? project.sessions.filter(s => !s.parentSessionId && s.type !== 'terminal') : null;
+      const counts = Array.isArray(sessions)
+        ? `${sessions.length} session${sessions.length === 1 ? '' : 's'} · ${sessions.filter(session => session.archived).length} archived`
+        : 'Unavailable';
+      for (const [id, label, value] of [
+        ['name', 'Name', shortName],
+        ['path', 'Full path', projectPath],
+        ['host', 'Host', alias ? (typeof remoteHostLabel === 'function' ? remoteHostLabel(alias, globalSettings.remoteHosts) : alias) : 'Local'],
+        ['folder', 'Folder key', project?.folder || folderKey || 'Unavailable'],
+        ['sessions', 'Sessions', counts],
+      ]) {
+        const term = document.createElement('dt');
+        term.textContent = label;
+        const detail = document.createElement('dd');
+        detail.id = 'sv-project-' + id;
+        detail.textContent = value;
+        identity.append(term, detail);
+      }
+      const danger = document.createElement('div');
+      danger.className = 'settings-section settings-danger-zone';
+      danger.innerHTML = '<h3 class="settings-section-title">Danger zone</h3><div class="settings-project-actions"></div>';
+      danger.querySelector('.settings-project-actions').append(form.querySelector('#sv-archive-btn'), form.querySelector('#sv-delete-btn'));
+      pages.get('project').append(identity, danger);
     } else {
       moveGroup('general', 'Startup', ['sv-restore-startup']);
       moveGroup('general', 'Shell', ['sv-shell-profile']);
@@ -839,8 +863,6 @@
       });
     });
 
-    const project = isProject ? cachedAllProjects.find(p => p.projectPath === projectPath && (!folderKey || p.folder === folderKey)) : null;
-
     // Save button
     async function saveSettings() {
       let settings = {};
@@ -1080,7 +1102,7 @@
           document.getElementById('placeholder').style.display = 'flex';
           if (typeof loadProjects === 'function') await Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
         } catch (err) {
-          await showChoiceDialog({ title: `Could not ${action} project`, message: err.message, confirmLabel: 'OK', returnFocus: button });
+          await appAlert({ title: `Could not ${action} project`, message: err.message });
         }
       });
     }

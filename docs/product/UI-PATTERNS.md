@@ -160,8 +160,8 @@ The Changes badge is the one place that already meets "never colour alone".
 | Agents Delete | `agents-view.js` `runAgentVerb` | `Delete` | `claude rm` (conversation + worktree when safe) | Fresh refusal check, then danger `appConfirm`; refusal stays in the detail without a dialog |
 | Worktree Delete | `sidebar.js:1337-1352`, dialog `1949-2017` | `Delete anyway` | `git worktree remove` | custom modal with dirty-file list |
 | Worktree Archive project | `sidebar.js` (`worktree-hide-btn`) | `Archive Project` | removes the row, keeps settings and cache, suspends schedules; reversible from Settings | no confirmation; 10-second Undo notice |
-| Project Archive | `settings-panel.js` (`sv-archive-btn`) | `Archive Project` | same | no confirmation; 10-second Undo notice |
-| Project Delete | `settings-panel.js` (`sv-delete-btn`) | `Delete Project` | drops settings, cache, search index and schedule registration; no file on disk is deleted | `showChoiceDialog`, danger style, focus on Cancel |
+| Project Archive | Project Settings → This project → Danger zone, `settings-panel.js` (`sv-archive-btn`) | `Archive Project` | same | no confirmation; 10-second Undo notice |
+| Project Delete | Project Settings → This project → Danger zone, `settings-panel.js` (`sv-delete-btn`) | `Delete Project` | drops settings, cache, search index and schedule registration; no file on disk is deleted | `showChoiceDialog`, danger style, focus on Cancel |
 | Optional viewer file delete | `viewer-panel.js:284` | — | delete file | danger `appConfirm`, `Delete "<name>"?` / `This cannot be undone.`, button `Delete` |
 | Trace file delete | `activity-trace-panel.js:120` | — | delete file | same wording |
 
