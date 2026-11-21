@@ -13,6 +13,172 @@ const root = path.join(__dirname, '..');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const globalPages = ['general', 'sessions', 'keyboard', 'automation', 'remote', 'integrations', 'archived', 'advanced'];
 
+test('settings filter is labelled and keyboard reachable above navigation in both scopes', async t => {
+  const h = setup(t);
+  for (const scope of ['global', 'project']) {
+    await h.open(scope);
+    const filter = h.q('#sv-filter');
+    assert.ok(filter, 'Settings exposes a filter field');
+    assert.equal(filter.getAttribute('aria-label'), 'Filter settings');
+    assert.equal(filter.placeholder, 'Filter settings…');
+    assert.equal(filter.tabIndex, 0);
+    assert.ok(filter.compareDocumentPosition(h.q('.settings-nav')) & h.w.Node.DOCUMENT_POSITION_FOLLOWING);
+    filter.focus();
+    assert.equal(h.w.document.activeElement, filter);
+  }
+});
+
+function filterSettings(h, value) {
+  const filter = h.q('#sv-filter');
+  assert.ok(filter, 'Settings exposes a filter field');
+  filter.value = value;
+  filter.dispatchEvent(new h.w.Event('input', { bubbles: true }));
+  return filter;
+}
+
+function visibleSettingsRows(h) {
+  return [...h.w.document.querySelectorAll('.settings-page .settings-field')]
+    .filter(row => !row.closest('[hidden]'));
+}
+
+test('filter beta leaves only its row under General and dims every other navigation item', async t => {
+  const h = setup(t);
+  await h.open();
+  h.click('sessions');
+  filterSettings(h, '  BeTa  ');
+  assert.deepEqual(h.active(), ['general']);
+  assert.deepEqual(visibleSettingsRows(h).map(row => row.querySelector('.settings-label').textContent), ['Receive beta versions']);
+  assert.equal(h.q('#settings-page-general h2').textContent, 'General');
+  for (const button of h.nav()) assert.equal(button.classList.contains('settings-no-match'), button.dataset.section !== 'general');
+  assert.deepEqual([...h.q('#settings-page-general').querySelectorAll('.settings-section')].filter(group => !group.hidden).map(group => group.querySelector('h3').textContent), ['Updates']);
+});
+
+test('filter reads current descriptions across pages, not ids, values or fuzzy words', async t => {
+  const h = setup(t);
+  await h.open();
+  filterSettings(h, 'downgrades');
+  assert.deepEqual(visibleSettingsRows(h).map(row => row.querySelector('input')?.id), ['sv-receive-beta-versions']);
+  h.q('#sv-pre-launch').value = 'uniquefiltervalue';
+  for (const term of ['uniquefiltervalue', 'sv-receive-beta-versions', 'recbeta']) {
+    filterSettings(h, term);
+    assert.deepEqual(visibleSettingsRows(h), [], term + ' must not match');
+    assert.deepEqual(h.active(), []);
+    assert.equal(h.q('.settings-filter-empty')?.hidden, false);
+    assert.match(h.q('.settings-filter-empty').textContent, /No settings match/);
+  }
+  for (const id of ['sv-receive-beta-versions', 'sv-pre-launch']) {
+    h.q('#' + id).closest('.settings-field').querySelector('.settings-description').append(' currentfiltertext');
+  }
+  filterSettings(h, 'currentfiltertext');
+  assert.deepEqual(h.active(), ['general', 'sessions']);
+  assert.equal(visibleSettingsRows(h).length, 2, 'matching reads live DOM descriptions');
+});
+
+test('Escape or clearing restores the current page, rows and navigation without persisting a filter', async t => {
+  const h = setup(t);
+  await h.open();
+  h.click('keyboard');
+  const filter = filterSettings(h, 'beta');
+  assert.deepEqual(h.active(), ['general']);
+  assert.equal(h.w.localStorage.getItem('settingsSection:global'), 'keyboard');
+  filter.focus();
+  const escape = new h.w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+  filter.dispatchEvent(escape);
+  assert.equal(filter.value, '');
+  assert.equal(escape.defaultPrevented, true);
+  assert.equal(h.w.document.activeElement, filter);
+  assert.deepEqual(h.active(), ['keyboard']);
+  assert.equal(visibleSettingsRows(h).length, 8);
+  assert.ok(h.nav().every(button => !button.classList.contains('settings-no-match')));
+  filterSettings(h, 'beta');
+  filterSettings(h, '');
+  assert.deepEqual(h.active(), ['keyboard']);
+  filterSettings(h, 'beta');
+  await h.open();
+  assert.equal(h.q('#sv-filter').value, '');
+  assert.deepEqual(h.active(), ['keyboard']);
+});
+
+test('filtered navigation keeps results stacked and Tab focuses a visible matching control', async t => {
+  const h = setup(t);
+  await h.open();
+  filterSettings(h, 'beta');
+  const nav = h.click('sessions');
+  assert.deepEqual(h.active(), ['general'], 'navigation cannot expose unrelated rows while filtering');
+  nav.dispatchEvent(new h.w.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+  assert.equal(h.w.document.activeElement, h.q('#sv-receive-beta-versions'));
+  filterSettings(h, '');
+  assert.deepEqual(h.active(), ['sessions']);
+});
+
+test('a filtered global row saves through the same form and filtering is never a dirty edit', async t => {
+  const h = setup(t);
+  await h.open();
+  const toggle = h.q('#sv-receive-beta-versions');
+  filterSettings(h, 'beta');
+  assert.equal(h.q('#sv-unsaved').textContent, '', 'filter is not a setting');
+  assert.deepEqual(visibleSettingsRows(h), [toggle.closest('.settings-field')]);
+  assert.equal(h.q('#sv-receive-beta-versions'), toggle);
+  toggle.click();
+  h.q('#sv-save-btn').click();
+  await settle();
+  assert.equal(h.saved.global.receiveBetaVersions, true);
+  assert.equal(Object.hasOwn(h.saved.global, 'filter'), false);
+  assert.equal(h.q('#sv-unsaved').textContent, '');
+  filterSettings(h, 'other text');
+  assert.equal(h.q('#sv-unsaved').textContent, '');
+});
+
+test('project filtering reveals Launch settings, preserves inheritance and saves overrides', async t => {
+  const h = setup(t);
+  await h.open('project');
+  h.click('project');
+  filterSettings(h, 'pre-launch');
+  assert.deepEqual(h.active(), ['launch']);
+  assert.deepEqual(visibleSettingsRows(h).map(row => row.querySelector('.settings-label').textContent), ['Pre-launch Command']);
+  const field = h.q('#sv-pre-launch');
+  assert.equal(field.disabled, true);
+  h.q('[data-field="preLaunchCmd"]').click();
+  field.value = 'echo filter';
+  field.dispatchEvent(new h.w.Event('input', { bubbles: true }));
+  h.q('#sv-save-btn').click();
+  await settle();
+  assert.equal(h.saved['project:/project'].preLaunchCmd, 'echo filter');
+  filterSettings(h, '');
+  assert.deepEqual(h.active(), ['project']);
+  assert.equal(h.q('#sv-archive-btn').closest('[hidden]'), null);
+});
+
+test('Archived retains its independent filter and selection when settings filtering is cleared', async t => {
+  const h = setup(t);
+  h.saved.global = { hiddenProjects: ['/alpha', '/beta'] };
+  await h.open('global', { section: 'archived' });
+  const archivedFilter = h.q('.archived-filter');
+  archivedFilter.value = 'beta';
+  archivedFilter.dispatchEvent(new h.w.Event('input', { bubbles: true }));
+  const selection = h.q('.archived-row input[type="checkbox"]');
+  assert.ok(selection);
+  selection.click();
+  filterSettings(h, 'beta');
+  assert.deepEqual(h.active(), ['general'], 'Archived is excluded from settings matches');
+  assert.equal(h.q('#sv-unsaved').textContent, '');
+  filterSettings(h, '');
+  assert.deepEqual(h.active(), ['archived']);
+  assert.equal(h.q('.archived-filter'), archivedFilter);
+  assert.equal(archivedFilter.value, 'beta');
+  assert.equal(selection.checked, true);
+  assert.equal(h.w.document.querySelectorAll('.archived-row').length, 1);
+  assert.match(h.q('.archived-row').textContent, /beta/);
+});
+
+test('filter layout hides unmatched flex rows and stacks results in a shared scrolling area', () => {
+  const css = fs.readFileSync(path.join(root, 'public/style.css'), 'utf8');
+  assert.match(css, /\.settings-layout \[hidden\]\s*\{\s*display:\s*none/);
+  assert.match(css, /\.settings-filtering \.settings-pages\s*\{[^}]*overflow-y:\s*auto/);
+  assert.match(css, /\.settings-filtering \.settings-page\s*\{[^}]*height:\s*auto/);
+  assert.match(css, /\.settings-nav button\.settings-no-match\s*\{[^}]*opacity:/);
+});
+
 test('Codex usage is opt-in under CLI Agents and saving applies it without restart', async t => {
   const h = setup(t);
   const applied = [];

@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
+- Filter Global or Project Settings by label or description across pages, edit matching settings, and press Escape to return to your page. (#1173)
 - Settings → Sessions → CLI Agents offers **Show Codex usage**, off by default. Turn it on to show your Codex limits in the status bar and Stats; usage hides quietly when unavailable. (#1139)
 
 ### Changed

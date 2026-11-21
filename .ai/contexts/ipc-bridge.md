@@ -618,6 +618,20 @@ pages are `general`, `sessions`, `keyboard`, `automation`, `remote`, `integratio
 
 The panel reparents existing rows into named regions before wiring their handlers.
 Hidden pages remain in the DOM, preserving every field id and the one Save path.
+The settings filter (`#sv-filter`) reads each `.settings-field-info.textContent`
+on input, using a trimmed, case-insensitive substring. It hides unmatched rows,
+empty groups and disclosure prose, then stacks matching pages in one scrolling
+area. It does not build an index, read ids or control values, re-render controls,
+or enter the dirty snapshot. No-match navigation items are dimmed but remain
+operable; selection changes the remembered page without leaving filter mode.
+Tab from navigation enters a visible matching control, or Save when there are no
+results. Escape in the filter clears it, consumes the key and keeps focus; clearing
+restores the selected page and all its groups. Reopening starts with an empty filter.
+Archived is excluded because it manages objects with its own filter and selection;
+the settings filter never modifies that manager's DOM. Project identity and Danger
+zone have no settings rows and are excluded too. The existing ResizeObserver remains
+the only narrow-layout trigger; the filter stays above the horizontal nav strip.
+DOM regressions and CSS contracts live in `test/dom-settings-nav.test.js`.
 The Archived projects manager is documented above. This project shows the identity
 from the same path-and-folder-key project lookup used by deletion, performed after
 shell-profile loading finishes: name, full path, host label, folder key and cached

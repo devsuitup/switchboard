@@ -537,7 +537,7 @@
       : [['general', 'General'], ['sessions', 'Sessions'], ['keyboard', 'Keyboard'], ['automation', 'Automation'], ['remote', 'Remote hosts'], ['integrations', 'Integrations'], ['archived', 'Archived'], ['advanced', 'Advanced']];
     const layout = document.createElement('div');
     layout.className = 'settings-layout';
-    layout.innerHTML = `<nav class="settings-nav" aria-label="Settings sections"><ul>${pageDefs.map(([id, label]) => `<li><button type="button" data-section="${id}" aria-controls="settings-page-${id}" tabindex="-1">${label}</button></li>`).join('')}</ul></nav><div class="settings-pages"></div>`;
+    layout.innerHTML = `<div class="settings-navigation"><input type="search" id="sv-filter" class="settings-input settings-filter" aria-label="Filter settings" placeholder="Filter settings…"><nav class="settings-nav" aria-label="Settings sections"><ul>${pageDefs.map(([id, label]) => `<li><button type="button" data-section="${id}" aria-controls="settings-page-${id}" tabindex="-1">${label}</button></li>`).join('')}</ul></nav></div><div class="settings-pages"></div>`;
     form.prepend(layout);
     const pages = new Map(pageDefs.map(([id, label]) => {
       const page = document.createElement('section');
@@ -631,6 +631,45 @@
     });
     const navButtons = [...layout.querySelectorAll('.settings-nav button')];
     const storageKey = 'settingsSection:' + (isProject ? 'project' : 'global');
+    const filter = layout.querySelector('#sv-filter');
+    const emptyResults = document.createElement('p');
+    emptyResults.className = 'settings-description settings-filter-empty';
+    emptyResults.setAttribute('role', 'status');
+    emptyResults.textContent = 'No settings match. Clear the filter to see all settings.';
+    emptyResults.hidden = true;
+    layout.querySelector('.settings-pages').append(emptyResults);
+    let selectedPage;
+    function applySettingsFilter() {
+      const query = filter.value.trim().toLowerCase();
+      layout.classList.toggle('settings-filtering', Boolean(query));
+      let anyMatch = false;
+      for (const [id, page] of pages) {
+        let matches = false;
+        if (id !== 'archived') {
+          for (const row of page.querySelectorAll('.settings-field')) {
+            const text = row.querySelector('.settings-field-info')?.textContent.toLowerCase() || '';
+            row.hidden = Boolean(query) && !text.includes(query);
+            if (!row.hidden) matches = true;
+          }
+          for (const group of page.querySelectorAll('.settings-section')) {
+            group.hidden = Boolean(query) && ![...group.querySelectorAll('.settings-field')].some(row => !row.hidden);
+          }
+          page.querySelectorAll('.settings-details').forEach(details => { details.hidden = Boolean(query); });
+        }
+        page.hidden = query ? !matches : id !== selectedPage;
+        navButtons.find(button => button.dataset.section === id).classList.toggle('settings-no-match', Boolean(query) && !matches);
+        anyMatch ||= matches;
+      }
+      emptyResults.hidden = !query || anyMatch;
+    }
+    filter.addEventListener('input', applySettingsFilter);
+    filter.addEventListener('keydown', event => {
+      if (event.key !== 'Escape' || !filter.value) return;
+      event.preventDefault();
+      event.stopPropagation();
+      filter.value = '';
+      applySettingsFilter();
+    });
     function revealActiveNav() {
       if (settingsViewer.classList.contains('settings-narrow')) {
         navButtons.find(button => button.classList.contains('active'))?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
@@ -638,7 +677,8 @@
     }
     function selectPage(id) {
       if (!pages.has(id)) id = pageDefs[0][0];
-      for (const [pageId, page] of pages) page.hidden = pageId !== id;
+      selectedPage = id;
+      applySettingsFilter();
       for (const button of navButtons) {
         const selected = button.dataset.section === id;
         button.classList.toggle('active', selected);
@@ -663,8 +703,10 @@
           navButtons[next].focus();
         } else if (event.key === 'Tab' && !event.shiftKey) {
           event.preventDefault();
-          const page = pages.get(button.dataset.section);
-          (page.querySelector('input:not(:disabled), select:not(:disabled), button:not(:disabled), summary') || page.querySelector('h2')).focus();
+          const selected = pages.get(button.dataset.section);
+          const page = selected.hidden ? [...pages.values()].find(page => !page.hidden) : selected;
+          const control = page && [...page.querySelectorAll('input:not(:disabled), select:not(:disabled), button:not(:disabled), summary')].find(control => !control.closest('[hidden]'));
+          (control || page?.querySelector('h2') || form.querySelector('#sv-save-btn')).focus();
         }
       });
     }
@@ -689,7 +731,7 @@
     unsaved.className = 'settings-unsaved';
     unsaved.setAttribute('role', 'status');
     footer.prepend(unsaved);
-    const trackedControls = [...form.querySelectorAll('input, select')].filter(control => !['sv-activity-trace', 'sv-activity-reporting'].includes(control.id));
+    const trackedControls = [...form.querySelectorAll('input, select')].filter(control => !['sv-filter', 'sv-activity-trace', 'sv-activity-reporting'].includes(control.id));
     const controlValue = control => String(control.type === 'checkbox' ? control.checked : control.value);
     let initialHosts;
     let initialShortcuts;
