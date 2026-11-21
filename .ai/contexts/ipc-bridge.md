@@ -33,10 +33,12 @@ answers still match. Changed answers require a fresh preview. Other callers keep
 their existing flow. If a remembered choice is unavailable (shared settings), the
 dialog unchecks it and obtains the matching plan; the refused initial plan has no
 token. A refusal disables Delete and writes its reason into the row;
-`aria-describedby` uses an entry-derived stable ID. Transient refusals (timeout,
-NOT_READY or unavailable discovery) explain how to reopen the menu and click
-Delete again; reopening only re-enables that explicit action. Detached rows ignore
-refusal updates.
+`aria-describedby` uses an entry-derived stable ID on both Delete and the row's
+summary. Every refusal except the grouped-worktree hint, including thrown IPC
+errors, explains how to reopen the menu and click Delete again; reopening only
+re-enables that explicit action, with no preview. Detached rows ignore refusal
+updates. The shared flow's `onDialogOpen` callback clears the row's checking
+message when the dialog opens.
 The real inventory groups a local worktree only when its repository exists, so
 orphaned entries can be deleted. Only the local worktree hints-conflict refusal
 explains in user wording that the entry is grouped under its repository and
@@ -46,8 +48,11 @@ Parsing uses the shared `parseFolderKey` and `isValidAlias` in
 means `/`, matching the writer. Accepted entries call the existing
 `confirmAndDeleteProjectFolder`, retaining preview tokens, options,
 refusal handling and committed-result semantics. After cancellation or refusal,
-the manager unlocks the controls before returning focus to an enabled Delete button;
-unlocking keeps refused actions disabled. It never calls
+the manager unlocks the controls before returning focus to an enabled Delete button
+or, after refusal, the row's summary with its reason. Passing `onUnavailable`
+leaves fallback focus to that caller; sidebar and project-settings callers retain
+their existing project-header/sidebar fallback. Unlocking keeps refused actions
+disabled until the menu reopens. It never calls
 Unarchive before Delete. The overflow also copies the full path through
 `writeClipboard`. No new IPC or launch code is introduced.
 
