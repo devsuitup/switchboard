@@ -517,8 +517,8 @@
       </div>` : ''}
 
       ${!isProject ? `<div class="settings-section">
-        <div class="settings-section-title">Archived projects</div>
-        <div class="settings-description">Unarchive restores a project's sidebar row and schedules. Actions apply immediately.</div>
+        <div class="settings-section-title">Projects and folders</div>
+        <div class="settings-description">Unarchive restores sidebar groups. Folder schedules stay off until you choose Turn back on. Actions apply immediately.</div>
         <div id="sv-archived-projects"></div>
       </div>` : ''}
 
@@ -733,6 +733,7 @@
       const archivedManager = renderArchivedProjects(list, {
         entries: current.hiddenProjects || [], kinds: { ...current.hiddenProjectKinds },
         dates: current.hiddenProjectArchivedAt || {}, hosts: remoteHosts,
+        folders: await window.api.getSetting('archivedProjects') || {},
         projects: typeof cachedAllProjects === 'undefined' ? [] : cachedAllProjects,
         onCount: count => {
           const nav = settingsViewerBody.querySelector('.settings-nav [data-section="archived"]');

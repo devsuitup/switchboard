@@ -302,3 +302,49 @@ test('PR5b review one session archive failure keeps the folder and offers no fol
   assert.equal(undo(ctx), undefined);
   assert.match(ctx.document.getElementById('app-notices').textContent, /Some sessions could not be archived; the folder was kept/);
 });
+
+test('failed folder Undo offers Open Archived navigation', async t => {
+  const ctx = setup(t);
+  const opened = [];
+  ctx.window.openSettingsViewer = (...args) => opened.push(plain(args));
+  ctx.window.api.undoArchiveProject = async () => ({ error: 'writer unavailable' });
+  await archive(ctx);
+  undo(ctx).click();
+  await settle();
+  const action = ctx.document.querySelector('[role="alert"] .app-notice-action');
+  assert.ok(action, 'folder Undo recovery must have an action');
+  assert.equal(action.textContent, 'Open Archived');
+  action.click();
+  assert.deepEqual(opened, [['global', null, null, { section: 'archived' }]]);
+});
+
+for (const schedulesTab of [false, true]) test(`partial folder archive opens Archived, schedules tab=${schedulesTab}`, async t => {
+  const ctx = setup(t);
+  ctx.window.schedulesTabEnabled = schedulesTab;
+  const opened = [];
+  ctx.window.openSettingsViewer = (...args) => opened.push(plain(args));
+  ctx.window.api.archiveProject = async () => ({ ok: true, archivedAt: 123, failed: [{ name: 'Audit', error: 'read-only' }], disabled: [] });
+  await archive(ctx);
+  const notice = ctx.document.querySelector('[role="alert"]');
+  assert.match(notice.textContent, /Archive folder partly done/);
+  assert.match(notice.textContent, schedulesTab ? /Schedules tab/ : /Agent Files tab/);
+  const action = notice.querySelector('.app-notice-action');
+  assert.ok(action, 'partial folder archive recovery must have an action');
+  assert.equal(action.textContent, 'Open Archived');
+  action.click();
+  assert.deepEqual(opened, [['global', null, null, { section: 'archived' }]]);
+});
+
+test('restored folder schedule offer appears first in its sidebar group', t => {
+  const ctx = setup(t);
+  const { archivedEntry, clearArchivedEntry, applyAndPersistArchived } = require('../archived-projects');
+  const entry = archivedEntry(null, '/p');
+  const state = { archivedProjects: { [entry]: { disabledSchedules: ['schedule-audit.md'] } } };
+  const getSetting = key => state[key], setSetting = (key, value) => { state[key] = value; };
+  assert.equal(clearArchivedEntry(getSetting, setSetting, null, '/p'), true);
+  const projects = applyAndPersistArchived(ctx.window.cachedAllProjects, false, { getSetting, setSetting, scheduleName: () => 'Audit' });
+  ctx.sidebar.renderProjects(projects, true);
+  const notice = ctx.document.querySelector('.schedule-reenable-notice');
+  assert.ok(notice, 'restored folder shows its schedule offer');
+  assert.equal(notice.parentElement.firstElementChild, notice, 'schedule offer is at the top of its group');
+});

@@ -53,6 +53,49 @@ function setup(t, extra = {}) {
   return { ...h, session, project, render, click, notice, focus, timers, confirmations };
 }
 
+test('folder partial success names Schedules tab and uses a partial headline with one path', async t => {
+  const h = setup(t);
+  h.window.api.getProjectArchivePlan = async () => ({ schedules: [] });
+  h.window.api.archiveProject = async () => ({ ok: true, failed: [{ name: 'nightly', error: 'EACCES' }] });
+  const pending = h.click('.project-archive-btn');
+  await answerChoiceDialog(h, { confirm: true });
+  await pending;
+  const el = h.document.querySelector('[role="alert"]');
+  assert.match(el.textContent, /^Archive folder partly done/);
+  assert.match(el.textContent, /Schedules tab/);
+  assert.match(el.textContent, /To retry Archive folder, restore the folder in Archived first\./);
+  assert.equal(el.querySelector('.app-notice-action').textContent, 'Open Archived');
+  assert.doesNotMatch(el.textContent, /schedules in Settings|Archive folder failed/);
+  assert.equal(el.textContent.split('/project').length - 1, 1);
+});
+
+for (const partial of [false, true]) {
+  test(`off-mode folder archive ${partial ? 'partly done' : 'failure'} points to Agent Files`, async t => {
+    const h = setup(t);
+    h.window.schedulesTabEnabled = false;
+    h.window.api.getProjectArchivePlan = async () => ({ schedules: [] });
+    h.window.api.archiveProject = async () => partial
+      ? { ok: true, failed: [{ name: 'nightly', error: 'EACCES' }] }
+      : { ok: false, error: 'database locked' };
+    const pending = h.click('.project-archive-btn');
+    await answerChoiceDialog(h, { confirm: true });
+    await pending;
+    const el = h.document.querySelector('[role="alert"]');
+    assert.ok(el, 'archive recovery stays visible');
+    assert.match(el.textContent, partial
+      ? /Review schedule-\*\.md in the Agent Files tab/
+      : /Check schedule-\*\.md in the Agent Files tab/);
+    assert.match(el.textContent, partial ? /^Archive folder partly done/ : /^Archive folder failed/);
+    assert.match(el.textContent, partial ? /nightly: EACCES/ : /database locked/);
+    assert.match(el.textContent, /retry Archive folder/);
+    if (partial) {
+      assert.match(el.textContent, /To retry Archive folder, restore the folder in Archived first\./);
+      assert.equal(el.querySelector('.app-notice-action').textContent, 'Open Archived');
+    }
+    assert.doesNotMatch(el.textContent, /Schedules tab/);
+  });
+}
+
 test('successive not-stopped batches merge by host and refresh a repeated member reason', t => {
   const h = setup(t, { remoteAlias: 'vps' });
   const second = { ...h.session, sessionId: 's2', name: 'Second' };
@@ -391,43 +434,6 @@ test('a failed Unarchive names that action and preserves its archived state', as
   h.notice('database locked', 'Unarchive');
   assert.equal(h.session.archived, 1);
 });
-
-test('folder partial success names Schedules tab and uses a partial headline with one path', async t => {
-  const h = setup(t);
-  h.window.api.getProjectArchivePlan = async () => ({ schedules: [] });
-  h.window.api.archiveProject = async () => ({ ok: true, failed: [{ name: 'nightly', error: 'EACCES' }] });
-  const pending = h.click('.project-archive-btn');
-  await answerChoiceDialog(h, { confirm: true });
-  await pending;
-  const el = h.document.querySelector('[role="alert"]');
-  assert.match(el.textContent, /^Archive folder partly done/);
-  assert.match(el.textContent, /Schedules tab/);
-  assert.doesNotMatch(el.textContent, /schedules in Settings|Archive folder failed/);
-  assert.equal(el.textContent.split('/project').length - 1, 1);
-});
-
-for (const partial of [false, true]) {
-  test(`off-mode folder archive ${partial ? 'partly done' : 'failure'} points to Agent Files`, async t => {
-    const h = setup(t);
-    h.window.schedulesTabEnabled = false;
-    h.window.api.getProjectArchivePlan = async () => ({ schedules: [] });
-    h.window.api.archiveProject = async () => partial
-      ? { ok: true, failed: [{ name: 'nightly', error: 'EACCES' }] }
-      : { ok: false, error: 'database locked' };
-    const pending = h.click('.project-archive-btn');
-    await answerChoiceDialog(h, { confirm: true });
-    await pending;
-    const el = h.document.querySelector('[role="alert"]');
-    assert.ok(el, 'archive recovery stays visible');
-    assert.match(el.textContent, partial
-      ? /Review schedule-\*\.md in the Agent Files tab/
-      : /Check schedule-\*\.md in the Agent Files tab/);
-    assert.match(el.textContent, partial ? /^Archive folder partly done/ : /^Archive folder failed/);
-    assert.match(el.textContent, partial ? /nightly: EACCES/ : /database locked/);
-    assert.match(el.textContent, /retry Archive folder/);
-    assert.doesNotMatch(el.textContent, /Schedules tab/);
-  });
-}
 
 test('an Archive database failure after Stop says the process stopped and the row is not archived', async t => {
   const h = setup(t);

@@ -1,10 +1,11 @@
 # Context: ipc-bridge
 
-## Archived projects manager (#863 slice 2)
+## Archived projects manager (#863 slices 2–3, #1167)
 
 `settings-panel.js` mounts `renderArchivedProjects` from `archived-manager.js`
 after the shared renderer helpers, dialogs, notices and sidebar controller.
-It passes a copy of hidden entries/kinds, archive timestamps, cached projects and
+It reads `archivedProjects` through `getSetting` and passes a copy of folder records,
+hidden entries/kinds, archive timestamps, cached projects and
 the working remote-host list. Host edits update labels without saving. The manager
 groups Local first, then configured hosts in order, then unknown aliases; it never
 collapses a worktree entry into its repository. The filter, selections and folds
@@ -12,9 +13,11 @@ are local to the mounted list. Filtering clears selections outside the results.
 Counts exclude deleted entries. Missing timestamps and unknown session counts
 are omitted, never invented. Names use `shortProjectPath` (last two segments).
 
-Unarchive uses the exact stored entry via `unarchiveProject`, sequentially for a
+Unarchive uses the exact stored entry via `unarchiveProject` and/or `unarchiveFolder`, sequentially for a
 bulk action. Successful entries leave the list, reload projects and get one B8
-ten-second Undo notice. Undo calls `archiveProjectSettings(path, folderKey)` and
+ten-second Undo notice for project archives only. Folder restores use an informational
+notice; mixed restores explain that Undo only re-archives projects and that folders
+must be archived again through Archive folder. Undo calls `archiveProjectSettings(path, folderKey)` and
 reads the new writer timestamp. After reopening Settings, Undo refreshes the
 currently mounted manager; a pending action does not consume its Undo notice.
 The notice stores its entry array and load generation. A later accepted project
@@ -54,12 +57,20 @@ leaves fallback focus to that caller; sidebar and project-settings callers retai
 their existing project-header/sidebar fallback. Unlocking keeps refused actions
 disabled until the menu reopens. It never calls
 Unarchive before Delete. The overflow also copies the full path through
-`writeClipboard`. No new IPC or launch code is introduced.
+`writeClipboard`. The folder restore IPC does not change launch code.
 
 Native controls provide Tab navigation; Enter/Space folds host groups and Escape
 clears the filter. ResizeObserver alone controls the 720px stacked layout and
-480px search disclosure. New surfaces use existing dark chrome tokens. Folder
-archives and archived sessions are not listed in this slice.
+480px search disclosure. New surfaces use existing dark chrome tokens.
+
+Folder and project archives with the same exact entry share one row with both badges.
+Folder dates accept the stored ISO timestamp; metadata includes the number of disabled
+schedules. Deleted entries stay excluded. Combined restoration clears the project
+archive first. The existing project writer also clears its folder record, so a following
+`unarchiveFolder` returning `NOT_ARCHIVED` counts as success only after that project's
+successful restore. A genuine folder failure retains a Folder-only row for retry;
+a project failure prevents the folder call. Refresh reads both stores and retains the
+filter and folded groups. Archived sessions remain outside this slice.
 
 **Purpose**: The trust boundary between the Electron main process (Node, full filesystem) and the renderer (Chromium, sandboxed). The renderer can only call what `preload.js` exposes via `contextBridge`; everything else is denied.
 
@@ -463,6 +474,7 @@ consent and avoid recovery during a system exit. See window-frame.md.
 | `add-project` | `(projectPath)` | Register a project (creates folder index) |
 | `archive-project-settings` | `(projectPath, folderKey)` | Archive the project reversibly; preserve settings/cache/registration, suspend schedules through hidden-state filtering. Returns `{ ok: true, entry }`, where `entry` is the exact stored bare path or `alias::path` for `unarchiveProject(entry)`. Bridge: `archiveProjectSettings`. |
 | `unarchive-project` | `(entry)` | Refuse entries marked `delete` before effects with `{ error, code: 'DELETED' }`; missing entries return `{ error, code: 'NOT_ARCHIVED' }`. Remove an archived or legacy hidden entry, refresh its folder and restore legacy local schedule registration. Bridge: `unarchiveProject`. |
+| `unarchive-folder` | `(entry)` | Restore an exact folder archive through `writer.clearArchivedEntry`; missing entries return `{ error, code: NOT_ARCHIVED }`. Keep session archive flags and schedule files unchanged; preserve disabled schedules as a re-enable offer and notify once with `archive`. Bridge: `unarchiveFolder`. |
 | `archive-project` | `(groups, opts)` | Archive folder groups and confirmed schedules; success includes `archivedAt` for the reverse path. Bridge: `archiveProject`. |
 | `undo-archive-project` | `(groups, archivedAt)` | Refuse invalid groups or a stale timestamp before any effects; remove those folder archives, restore consumed offers and re-enable exactly their `disabledByArchive` files. Bridge: `undoArchiveProject`; folder Archive Undo passes the original groups and returned timestamp before restoring session archive flags. |
 | `remove-project` | `(projectPath, folderKey)` | Legacy removal: drop settings, cache/search and schedule registration; no disk deletion. Bridge: `removeProjectLegacy`; neither current Delete entry point uses it. |

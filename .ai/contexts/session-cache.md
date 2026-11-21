@@ -2480,8 +2480,11 @@ Project Settings offers **Archive Project** and **Delete Project** (#568).
 Archive writes only the existing `global.hiddenProjects` array through
 `archive-project-settings`. Bare paths keep their historical all-host matching;
 `alias::path` entries match only that host. There is no key migration. Old Hide
-entries remain listed in Global Settings → **Archived projects**; entries marked
-as deleted are excluded.
+entries remain listed in Global Settings → **Archived**; entries marked
+as deleted are excluded. Folder archives share this manager, with separate badges
+and restore semantics described below. A combined row clears the project archive
+first; that existing writer operation also clears its folder archive and preserves
+the disabled schedules as an offer.
 
 Archive keeps `project:<path>`, cache metadata, session rows, search rows and
 `scheduleProjects`. `buildProjectsFromCache` already filters hidden entries;
@@ -2607,8 +2610,22 @@ lists never cross the writer transport. See `session-index-writer.md` for orderi
   local groups in the schedule registry; `archive-project` re-scans and disables
   only the ones the renderer confirmed — see
   [schedule-runner.md](schedule-runner.md) ("Disabling a schedule file").
-- **Clearing by hand.** `add-project` and `delete-worktree` call
-  `clearArchivedEntry`.
+- **Clearing by hand.** Settings → Archived lists the keys of `archivedProjects`
+  alongside non-deleted `hiddenProjects`, merging an exact entry into one row with
+  Project and Folder badges. `unarchive-folder(entry)` calls the writer's
+  `clearArchivedEntry` and sends one `projects-changed('archive')` notification on
+  success; missing entries return `NOT_ARCHIVED`. The own-key check precedes
+  writer normalization: `vps::/srv/x/` cannot restore stored `vps::/srv/x`.
+  `add-project` and
+  `delete-worktree` retain their existing clearing paths. A plain folder restore
+  keeps session archive flags and schedule file bytes unchanged. The existing
+  clearing helper moves disabled schedules into a re-enable offer, preserving
+  unrelated offers. Folder Undo remains the separate timestamp-checked path.
+  Recovery notices for a failed Undo or partial Archive expose **Open Archived**.
+  Partial Archive notices also explain that retrying Archive folder requires
+  restoring the folder in Archived first, with either Schedules tab setting.
+  Folder rows show disabled schedule counts only above zero, using singular
+  "1 schedule off" for one file.
 - **Re-enable offers.** An entry records `disabledSchedules`, the files the
   archive actually disabled. When an entry leaves `archivedProjects` (a
   reappearance in `get-projects`, or `clearArchivedEntry`), a non-empty list
