@@ -1,19 +1,40 @@
 'use strict';
 
-const { Buffer } = require('node:buffer');
+const MAX_WORK_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 
 // see .ai/contexts/session-index-writer.md
 function commandTimeoutMs(command, args, timeoutMs) {
   if (!['effects', 'certifyFullReads', 'deriveCachedNames'].includes(command)) return timeoutMs;
-  let rows = 0;
-  const pending = [args];
-  while (pending.length) {
-    const value = pending.pop();
-    if (Array.isArray(value)) rows += value.length;
-    if (value && typeof value === 'object') for (const child of Object.values(value)) pending.push(child);
+  try {
+    let rows = 0, bytes = 0;
+    if (command === 'effects') {
+      for (const effect of args[0]) {
+        rows += ['upsertCachedSessions', 'upsertSearchEntries', 'setCachedEntrypoints', 'setCachedCustomTitles'].includes(effect.name)
+          ? effect.args[0].length : 1;
+      }
+    } else rows = args[command === 'certifyFullReads' ? 2 : 0].length;
+    const pending = [args], seen = new WeakSet();
+    while (pending.length) {
+      const value = pending.pop();
+      if (typeof value === 'string') bytes += value.length * 2 + 2;
+      else if (value && typeof value === 'object') {
+        if (seen.has(value)) continue;
+        seen.add(value);
+        bytes += 2;
+        if (Array.isArray(value)) {
+          bytes += value.length;
+          for (const child of value) pending.push(child);
+        } else for (const key of Object.keys(value)) {
+          bytes += key.length * 2 + 3;
+          pending.push(value[key]);
+        }
+      } else bytes += 8;
+    }
+    const batches = Math.max(1, Math.ceil(rows / 32), Math.ceil(bytes / 32768));
+    return Math.min(MAX_WORK_COMMAND_TIMEOUT_MS, timeoutMs * batches);
+  } catch {
+    return MAX_WORK_COMMAND_TIMEOUT_MS;
   }
-  const batches = Math.max(1, Math.ceil(rows / 32), Math.ceil(Buffer.byteLength(JSON.stringify(args)) / 32768));
-  return Math.min(2147483647, timeoutMs * batches);
 }
 
 function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusyCounts = () => {}, onBootstrap = () => {}, timeoutMs = 30000, maxRestarts = 3,

@@ -2,8 +2,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { fixture, supported } = require('./fixtures/warm-start-1144.cjs');
+const { fixture, assertRebuildOracle, supported } = require('./fixtures/warm-start-1144.cjs');
+const { rowWitness } = require('../src/main/session-index/full-read-state');
 const { createWriterWorkerClient } = require('../session-index-writer-client');
 const { createWorker } = require('./fixtures/project-deletion-worker.cjs');
 const sqlite = { skip: !supported && 'SQLite requires native binding or Node 22' };
@@ -141,4 +143,128 @@ test('a single large text payload receives a byte budget independently of row co
   slowTransport(t, f);
   await assert.doesNotReject(f.worker.client.request('effects', [{ name: 'upsertSearchEntries',
     args: [[{ id: 'large', type: 'session', body: 'x'.repeat(131072) }]] }], 0));
+});
+
+function deadlineTransport(t, timeoutMs = 30000) {
+  const worker = new EventEmitter();
+  const timers = new Set();
+  let sent;
+  worker.postMessage = message => { sent = message; };
+  worker.terminate = async () => {};
+  const client = createWriterWorkerClient({
+    workerFactory: () => worker, timeoutMs, heartbeatMs: 1234567,
+    setTimeout(fn, ms) { const timer = { fn, ms }; timers.add(timer); return timer; },
+    clearTimeout(timer) { timers.delete(timer); },
+  });
+  worker.emit('message', { ready: true });
+  t.after(() => client.terminate());
+  return async (command, ...args) => {
+    const result = client.request(command, ...args);
+    result.catch(() => {});
+    assert.doesNotThrow(() => worker.emit('message', { id: sent.id, started: true }), 'payload estimation must not escape the message listener');
+    const deadline = [...timers].find(timer => timer.ms !== 1234567);
+    assert.ok(deadline, 'started work has a deadline');
+    worker.emit('message', { id: sent.id, result: true });
+    await result;
+    return deadline.ms;
+  };
+}
+
+test('deadline byte estimate avoids serialization and tracks representative payload size', async t => {
+  const deadline = deadlineTransport(t, 1);
+  const args = [[{ name: 'upsertSearchEntries', args: [[{
+    id: 'large', body: 'ASCII café 漢字 😀 \"\n'.repeat(4000), count: 42, enabled: true,
+  }]] }], 0];
+  const realBlocks = Math.ceil(Buffer.byteLength(JSON.stringify(args)) / 32768);
+  const stringify = t.mock.method(JSON, 'stringify');
+  const estimatedBlocks = await deadline('effects', ...args);
+  assert.equal(stringify.mock.callCount(), 0, 'deadline estimation must not serialize the payload');
+  assert.ok(estimatedBlocks >= realBlocks / 3 && estimatedBlocks <= realBlocks * 3,
+    'estimated byte blocks stay within a factor of three of serialized size');
+});
+
+test('all scaled command deadlines are capped at ten minutes', async t => {
+  const deadline = deadlineTransport(t);
+  const rows = Array.from({ length: 1000 }, () => ({}));
+  for (const [command, args] of [
+    ['effects', [[{ name: 'upsertCachedSessions', args: [rows] }], 0]],
+    ['deriveCachedNames', [rows]],
+    ['certifyFullReads', ['folder', 'token', rows]],
+  ]) assert.equal(await deadline(command, ...args), 10 * 60 * 1000, command + ' has a ten-minute ceiling');
+});
+
+test('nested metrics do not count as duplicate work rows', async t => {
+  const deadline = deadlineTransport(t, 1);
+  const metrics = Array.from({ length: 160 }, () => ({}));
+  const effects = [{ name: 'upsertCachedSessions', args: [[{ sessionId: 'one', dailyMetrics: metrics }]] },
+    { name: 'replaceSessionMetrics', args: ['one', structuredClone(metrics)] }];
+  assert.equal(await deadline('effects', effects, 0), 1, 'two operations with small nested metrics fit one work block');
+});
+
+test('BigInt payloads still receive a bounded command timer', async t => {
+  const deadline = deadlineTransport(t);
+  const ms = await deadline('deriveCachedNames', [{ value: 1n }]);
+  assert.ok(ms >= 30000 && ms <= 600000);
+});
+
+test('cyclic payloads still receive a bounded command timer', async t => {
+  const deadline = deadlineTransport(t);
+  const row = { sessionId: 'cycle' };
+  row.self = row;
+  const ms = await deadline('deriveCachedNames', [row]);
+  assert.ok(ms >= 30000 && ms <= 600000);
+});
+
+test('resumed full retry removes a deleted transcript and its search entry', sqlite, async t => {
+  const f = await loadFixture(t);
+  for (let i = 0; i < 6; i++) f.write('r' + i);
+  const committed = loseCertificateBatch(t, f);
+  assert.equal((await f.cache.populateCacheViaWorker()).ok, false);
+  const victim = f.db.getCachedByFolder(f.folder).find(row => !committed.has(row.sessionId)).sessionId;
+  assert.ok(f.db.connection.prepare('SELECT id FROM search_map WHERE id = ?').get(victim), 'victim has a search entry before deletion');
+  fs.unlinkSync(path.join(f.dir, victim + '.jsonl'));
+  const retried = await f.restart();
+  assert.equal(retried.ok, true, retried.error);
+  assert.equal(f.db.getCachedSession(victim), null, 'vanished transcript deleted on resumed full retry');
+  assert.equal(f.db.connection.prepare('SELECT count(*) AS n FROM search_map WHERE id = ?').get(victim).n, 0, 'vanished transcript search entry is deleted');
+  assert.equal(f.db.getFolderMeta(f.folder).fullIndexPending, null);
+  await assertRebuildOracle(t, f);
+});
+
+test('resume rejects a durable witness change even when its certificate survives', sqlite, async t => {
+  const f = await loadFixture(t);
+  for (let i = 0; i < 6; i++) f.write('r' + i);
+  const writes = observeWrites(t, f), committed = loseCertificateBatch(t, f);
+  assert.equal((await f.cache.populateCacheViaWorker()).ok, false);
+  const changed = [...committed][0], before = f.db.getCachedSession(changed);
+  f.db.connection.prepare('UPDATE session_cache SET customTitle = ? WHERE sessionId = ?').run('external', changed);
+  const external = f.db.getCachedSession(changed);
+  assert.equal(external.fullReadStamp, before.fullReadStamp, 'external edit leaves certificate intact');
+  assert.notEqual(rowWitness(external), rowWitness(before), 'only the durable witness is invalidated');
+  const retried = await f.restart();
+  assert.equal(retried.ok, true, retried.error);
+  assert.equal(writes.get(changed), 2, 'changed durable witness forbids reuse');
+  assert.equal(f.db.getCachedSession(changed).customTitle, before.customTitle);
+  for (const id of [...committed].slice(1)) assert.equal(writes.get(id), 1, 'stable certified neighbor is reused');
+  await assertRebuildOracle(t, f);
+});
+
+test('resume rejects a changed source observation with identical bytes and row witness', sqlite, async t => {
+  const f = await loadFixture(t);
+  const timestamp = new Date('2024-01-02T00:00:00.000Z');
+  for (let i = 0; i < 6; i++) fs.utimesSync(f.write('r' + i), timestamp, timestamp);
+  const writes = observeWrites(t, f), committed = loseCertificateBatch(t, f);
+  assert.equal((await f.cache.populateCacheViaWorker()).ok, false);
+  const changed = [...committed][0], before = f.db.getCachedSession(changed);
+  const file = path.join(f.dir, changed + '.jsonl');
+  fs.utimesSync(file, timestamp, timestamp);
+  const fresh = require('../read-session-file').readSessionFile(file, f.folder, f.root);
+  assert.equal(rowWitness(fresh), rowWitness(before), 'ctime change keeps the parsed row witness identical');
+  assert.notEqual(fresh.fullReadStamp, before.fullReadStamp, 'ctime changes only source observation');
+  const retried = await f.restart();
+  assert.equal(retried.ok, true, retried.error);
+  assert.equal(writes.get(changed), 2, 'changed source stamp forbids reuse');
+  assert.equal(f.db.getCachedSession(changed).fullReadStamp, fresh.fullReadStamp);
+  for (const id of [...committed].slice(1)) assert.equal(writes.get(id), 1, 'stable certified neighbor is reused');
+  await assertRebuildOracle(t, f);
 });
