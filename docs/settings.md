@@ -22,6 +22,25 @@ All pages share one Save: switching pages keeps edits, and the footer counts
 unsaved changes. Save keeps Settings open and flashes Saved; Cancel discards edits
 without asking. Live switches and Unarchive still take effect immediately.
 
+**Filter settings…**, above the navigation, finds text in setting labels and
+descriptions across all pages, in both Global and Project Settings. Matching rows
+appear under their page titles; pages without matches are dimmed in the navigation.
+Matching ignores case and outer spaces. It searches only setting names and
+descriptive prose. Control text and values (including option labels, shortcut
+bindings and Use global default), ids, version and status messages, ActivityWatch
+destination and URL values, SSH host entries and their action buttons, and trace
+file paths and entries are excluded. Expanded explanatory disclosures are not
+searched either.
+There is no fuzzy matching. You can edit and save the matching rows normally.
+Press Escape in the field, or clear it, to return to the current page. Selecting a
+navigation item while filtering keeps the results visible and chooses the page
+to return to. The filter is keyboard reachable and does not count as an edit.
+
+Archived keeps its own **Filter by name, path or host…** field: archives are excluded
+from the settings filter. Clear the settings filter to use Archived; its filter
+and selected rows are preserved. Project identity and Danger zone actions are
+also outside the settings search.
+
 ### General
 
 Startup, Shell, Terminal and IDE settings:
