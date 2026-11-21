@@ -31,7 +31,7 @@ function createCacheEffects(read) {
     getCachedByFolder: folder => active ? mergedRows(read.getCachedByFolder(folder)).filter(row => row.folder === folder) : read.getCachedByFolder(folder),
     getCachedSession: id => active ? rowFor(id) || null : read.getCachedSession(id),
     getAllMeta: (...args) => active ? new Map([...read.getAllMeta(...args), ...meta]) : read.getAllMeta(...args),
-    getMeta: id => active ? metaFor(id) : read.getMeta(id),
+    getMeta: (id, ...args) => active ? metaFor(id) : read.getMeta(id, ...args),
     getAllFolderMeta: () => active ? new Map([...read.getAllFolderMeta(), ...folders]) : read.getAllFolderMeta(),
     getFolderMeta: folder => active ? folders.has(folder) ? folders.get(folder) : read.getFolderMeta(folder) : read.getFolderMeta(folder),
     getSetting: key => {

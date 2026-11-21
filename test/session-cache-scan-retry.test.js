@@ -21,7 +21,7 @@ function fixture({ complete = true, folders = ['broken', 'healthy'] } = {}) {
       if (faults.worker) throw faults.worker;
       workers.push(workerData);
       setImmediate(() => {
-        const scope = workerData.folders || folders;
+        const scope = workerData.startup ? workerData.startup.scope || folders : workerData.folders || folders;
         scope.forEach((folder, index) => this.emit('message', {
           type: 'folder', result: { folder }, current: index + 1, total: scope.length,
         }));
@@ -53,7 +53,7 @@ function fixture({ complete = true, folders = ['broken', 'healthy'] } = {}) {
     db: { getSetting() {
       if (faults.remaps) throw faults.remaps;
       return null;
-    }, isInitialScanComplete() {
+    }, getAllCached: () => [], getAllMeta: () => new Map(), getAllFolderMeta: () => new Map(), isInitialScanComplete() {
       if (faults.initialScan) throw faults.initialScan;
       return complete;
     }, setInitialScanComplete() {} },
@@ -85,7 +85,9 @@ function fixture({ complete = true, folders = ['broken', 'healthy'] } = {}) {
     const [id, timer] = next;
     timers.delete(id);
     now = timer.at - by;
-    assert.doesNotThrow(() => timer.callback(), 'the timer must contain synchronous errors');
+    let pending;
+    assert.doesNotThrow(() => { pending = timer.callback(); }, 'the timer must contain synchronous errors');
+    await pending;
     await new Promise(resolve => setImmediate(resolve));
   }
   return { cache, failing, reasons, workers, workerAttempts, statuses, written, advance, fireRetryEarly,
@@ -156,7 +158,8 @@ for (const fault of ['worker', 'remaps']) {
     assert.equal(f.workers.length, 0, 'ordinary callers must respect the backoff');
     await f.advance(1);
     assert.equal(f.workers.length, 1, 'the retry must recover without a caller');
-    assert.equal(f.workers[0].folders, undefined, 'an unknown failure retries the full scan');
+    assert.equal(f.workers[0].startup.scope, undefined, 'an unknown failure retries the full scan');
+    assert.deepEqual(Array.from(f.workers[0].folders), [], 'startup always uses explicit folder routing');
     assert.equal(f.statuses.at(-1).level, 'done');
     await f.advance(5000);
     assert.equal(f.statuses.at(-1).message, '');
@@ -207,7 +210,7 @@ for (const complete of [true, false]) {
     f.failing.clear();
     await f.advance(1);
     assert.equal(f.workers.length, 2, 'startup failure must retry without get-projects or another trigger');
-    assert.deepEqual(Array.from(f.workers[1].folders), ['broken']);
+    assert.deepEqual(Array.from(f.workers[1].startup.scope), ['broken']);
     assert.deepEqual(f.written, ['broken', 'healthy', 'broken']);
     assert.equal(f.complete(), true);
     assert.equal(f.statuses.at(-1).level, 'done');

@@ -48,6 +48,13 @@ run `npm run bundle:mermaid` again.
 | `task db:reset` | deletes `~/.switchboard/switchboard.db` — the **installed app's** database — without asking |
 | `task clean` | deletes `dist/`, both generated viewer bundles and the installed app's database, after typing `YES` |
 
+Coverage uses c8's incremental asynchronous merge (`merge-async` in `.c8rc.json`).
+The default eager merge retains every raw V8 worker report before filtering;
+startup worker tests add a report for each scan. The incremental merge keeps the
+same coverage counts while avoiding that accumulation during report generation.
+The regression is `test/coverage-report.test.js`; full Node 20 CI remains the
+memory qualification for the complete suite.
+
 Other npm scripts: `npm run electron` (`electron .`), `npm run electron-dev`
 (the same with `SWITCHBOARD_DATA_DIR=~/.switchboard-dev`), `npm run build:mac`,
 `build:mac:arm64`, `build:win`, `build:linux`, `npm run release`,

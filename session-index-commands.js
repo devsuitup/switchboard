@@ -155,18 +155,18 @@ function createWriterCommands(db) {
     beginFullIndex(folder, token, control) {
       const revision = db.getSetting('_writer_revision') || 0;
       if (control?.expectedRevision !== undefined && control.expectedRevision !== revision) throw requestError('WRITER_STALE', 'Index producer snapshot changed before begin');
+      const { folderReadWitness } = require('./src/main/session-index/full-read-state');
+      if (control?.expectedFolder !== undefined && control.expectedFolder !== folderReadWitness(db, folder, control.sessionIds)) {
+        throw requestError('WRITER_STALE', 'Index folder changed before begin');
+      }
       const previous = db.beginFullIndex(folder, token);
-      return control?.receipt ? { previous, committedRevision: revision + 1 } : previous;
+      return control?.receipt ? { previous, committedRevision: revision + 1,
+        ...(control.expectedFolder !== undefined ? { folderWitness: folderReadWitness(db, folder, control.sessionIds) } : {}) } : previous;
     },
     sealFullIndex(...args) {
       const beforeRevision = db.getSetting('_writer_revision') || 0;
       const sealed = db.sealFullIndex(...args);
       return args[5]?.receipt ? { sealed, beforeRevision, committedRevision: beforeRevision + (sealed ? 1 : 0) } : sealed;
-    },
-    certifyFullRead(...args) {
-      const beforeRevision = db.getSetting('_writer_revision') || 0;
-      const certified = db.certifyFullRead(...args);
-      return args[5]?.receipt ? { certified, beforeRevision, committedRevision: beforeRevision + (certified ? 1 : 0) } : certified;
     },
     certifyFullReads(folder, token, rows, control) {
       const beforeRevision = db.getSetting('_writer_revision') || 0;
