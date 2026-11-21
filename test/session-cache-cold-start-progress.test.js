@@ -21,6 +21,7 @@
 // test/search-worker-db-failure.test.js (a different real worker).
 
 const test = require('node:test');
+require('./fixtures/isolated-codex-home.cjs')(test);
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');

@@ -9,6 +9,7 @@ const { Worker } = require('node:worker_threads');
 const { createSessionIndexWriter } = require('../../session-index-writer');
 const { createProjectsWorkerClient } = require('../../projects-worker-client');
 const { encodeProjectPath } = require('../../encode-project-path');
+const { restore } = require('./isolated-codex-home.cjs')();
 
 async function run() {
   const warm = process.argv[2].startsWith('warm-');
@@ -128,4 +129,4 @@ async function run() {
   }
 }
 
-run().catch(error => { console.error(error); process.exitCode = 1; });
+run().finally(restore).catch(error => { console.error(error); process.exitCode = 1; });

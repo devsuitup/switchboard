@@ -9,6 +9,7 @@
 // ("Remote hosts file-level rescan").
 
 const test = require('node:test');
+require('./fixtures/isolated-codex-home.cjs')(test);
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');

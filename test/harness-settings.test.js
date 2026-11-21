@@ -1,6 +1,7 @@
 'use strict';
 
 const test = require('node:test');
+require('./fixtures/isolated-codex-home.cjs')(test);
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -38,13 +39,10 @@ test('the writer refuses a global patch that switches every CLI off', () => {
 
 test('a switched-off CLI is neither listed nor shown, its rows are kept', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-toggle-'));
-  const codexHome = path.join(root, 'codex-home');
+  const { home: codexHome } = require('./fixtures/isolated-codex-home.cjs')(t);
   const day = path.join(codexHome, 'sessions', '2026', '08', '26');
   fs.mkdirSync(day, { recursive: true });
-  const previous = process.env.CODEX_HOME;
-  process.env.CODEX_HOME = codexHome;
   t.after(() => {
-    if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous;
     fs.rmSync(root, { recursive: true, force: true });
   });
   fs.writeFileSync(path.join(day, `rollout-2026-08-26T11-55-02-${ID}.jsonl`), [
