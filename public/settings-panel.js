@@ -517,7 +517,6 @@
       </div>` : ''}
 
       ${!isProject ? `<div class="settings-section">
-        <div class="settings-section-title">Projects and folders</div>
         <div class="settings-description">Unarchive restores sidebar groups. Folder schedules stay off until you choose Turn back on. Actions apply immediately.</div>
         <div id="sv-archived-projects"></div>
       </div>` : ''}

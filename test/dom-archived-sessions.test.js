@@ -24,7 +24,7 @@ function setup(t, count = 2) {
   const projects = [{ projectPath: '/repo', folder: '-repo', sessions: [...sessions,
     { sessionId: 'live', archived: 0 }, { sessionId: 'child', archived: 1, parentSessionId: 's0' }] },
   { projectPath: '/repo', folder: 'vps::-repo', remoteAlias: 'vps', sessions: [
-    { sessionId: 'remote', aiTitle: '<b>Remote & safe</b>', archived: 1, remoteAlias: 'vps', bgJobId: 'job' }] }];
+    { sessionId: 'remote', aiTitle: 'a "b" & <i', archived: 1, remoteAlias: 'vps', bgJobId: 'job' }] }];
   const settings = { hiddenProjects: ['/hidden'], hiddenProjectKinds: { '/hidden': 'archive', '/deleted': 'delete' } };
   w.cachedAllProjects = projects;
   w.api.getSetting = async key => key === 'global' ? settings : {};
@@ -48,8 +48,12 @@ test('archived sessions are top-level only, grouped by host-qualified project wi
   assert.deepEqual([...h.container.querySelectorAll('.archived-session-group .archived-group-toggle')].map(el => el.textContent.trim()), ['▾ repo (2)', '▾ Server · repo (1)']);
   assert.match(h.rows()[0].textContent, /Session 0.*4 msgs.*2 KB/s);
   assert.ok(h.rows()[0].querySelector('time[datetime]'));
-  assert.match(h.rows()[2].textContent, /Remote & safe.*vps.*bg/s);
-  assert.equal(h.q('remote'), null);
+  const remote = h.rows()[2];
+  assert.equal(remote.querySelector('.archived-name strong').textContent, 'a "b" & <i');
+  assert.equal(remote.querySelector('input').getAttribute('aria-label'), 'Select a "b" & <i');
+  assert.equal(remote.querySelector('summary').getAttribute('aria-label'), 'More actions for a "b" & <i');
+  assert.equal(remote.dataset.entry, 'session:remote');
+  assert.equal(remote.querySelector('input').dataset.entry, 'session:remote');
   assert.match(h.container.textContent, /Sessions of archived projects appear after Unarchive/);
 });
 
@@ -140,7 +144,7 @@ test('archive filter footer counts top-level sessions and non-deleted project en
   h.w.showArchived = true; h.w.renderProjects([]);
   const footer = h.document.querySelector('.sidebar-archived-footer');
   assert.ok(footer, 'archive filter exposes a management footer even with no visible project');
-  assert.match(footer.textContent, /3 archived sessions · 1 archived projects — Manage/);
+  assert.equal(footer.textContent, '3 archived sessions · 1 archived project or folder — Manage');
   footer.querySelector('button').click();
   assert.deepEqual(JSON.parse(JSON.stringify(opened)), [['global', null, null, { section: 'archived' }]]);
   assert.equal(typeof h.w.archivedCounts, 'function', 'counts helper exported to renderer tests');
@@ -182,12 +186,12 @@ test('Show in sidebar reveals an old archived row through conflicting filters wi
   assert.equal(renders, 1, 'no deferred clear-search rebuild may steal the revealed row focus');
 });
 
-test('empty sessions and entirely empty archives explain how to archive', async t => {
+test('entirely empty archives show only the shared explanation', async t => {
   const h = setup(t);
   h.w.cachedAllProjects = []; h.settings.hiddenProjects = [];
   await h.manager.refresh();
-  assert.match(h.container.textContent, /Nothing is archived\./);
-  assert.match(h.container.textContent, /No archived session\. The archive button on a sidebar row lists it here\./);
+  assert.equal(h.q('.archived-list').textContent, 'Nothing is archived. Archive hides a session, a folder or a project from the sidebar and keeps everything on disk; it is listed here.');
+  assert.equal(h.container.querySelectorAll('.archived-empty').length, 1);
 });
 
 test('mixed partial failures keep failed rows and Undo restores successful sessions only', async t => {
@@ -252,4 +256,46 @@ test('accepted snapshots do not read archive settings for a closed viewer', asyn
   h.w.api.getSetting = async () => { reads++; return {}; };
   await h.w.refreshArchivedManager(h.projects, h.settings);
   assert.equal(reads, 0, 'closed Settings must not add archive reads to every sidebar refresh');
+});
+
+test('accepted snapshots leave a hidden Archived page untouched while Settings is open elsewhere', async t => {
+  const h = setup(t);
+  const viewer = h.document.createElement('div'); viewer.id = 'settings-viewer'; viewer.style.display = 'flex';
+  const page = h.document.createElement('section'); page.id = 'settings-page-archived'; page.hidden = true;
+  h.document.body.append(viewer); viewer.append(page); page.append(h.container);
+  const row = h.rows()[0];
+  let reads = 0;
+  h.w.api.getSetting = async () => { reads++; return {}; };
+  await h.w.refreshArchivedManager(h.projects, h.settings);
+  assert.equal(reads, 0, 'hidden Archived page must not read archive settings');
+  assert.equal(h.rows()[0], row, 'hidden Archived page retains its DOM');
+  page.hidden = false;
+  await h.w.refreshArchivedManager(h.projects, h.settings);
+  assert.equal(reads, 1, 'visible Archived page still refreshes');
+  assert.notEqual(h.rows()[0], row);
+});
+
+test('loadProjects footer counts folder-only and combined archives exactly like the page', async t => {
+  const h = setup(t, 0);
+  const folders = { '/folder': {}, '/hidden': {}, '/deleted': {} };
+  h.settings.hiddenProjects.push('/deleted');
+  h.w.api.getSetting = async key => key === 'global' ? h.settings : folders;
+  h.w.api.getProjects = async () => ({ defaultProjects: [], allProjects: h.projects });
+  h.w.api.getActiveTerminals = async () => [];
+  h.w.loadingStatus = h.document.createElement('div');
+  for (const name of ['reportActivityFocus', 'reportActivityTitles', 'renderDefaultStatus']) h.w[name] = () => {};
+  h.w.pollActiveSessions = async () => {};
+  h.w.refreshSidebar = ({ hiddenSettings }) => {
+    h.w.renderProjects.hiddenSettings = hiddenSettings;
+    h.w.renderProjects([]);
+  };
+  h.w.showArchived = true;
+  await loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects'] }).loadProjects();
+  await h.manager.refresh(h.projects, h.settings);
+  assert.equal(h.q('.settings-section-title').textContent, 'Projects and folders (2)');
+  assert.equal(h.document.querySelector('.sidebar-archived-footer').textContent,
+    '1 archived session · 2 archived projects and folders — Manage');
+  assert.equal(h.w.renderProjects.unchanged([]), true);
+  delete folders['/folder'];
+  assert.equal(h.w.renderProjects.unchanged([]), false, 'folder archives participate in the sidebar render key');
 });

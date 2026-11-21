@@ -72,7 +72,15 @@ attribute values also escape quotes. Transcript uses `showJsonlViewer` without
 opening a terminal. Show in sidebar enables the archive filter, clears competing
 filters and search, cancels the deferred search redraw, expands the target's
 ancestors and focuses the row. The archive-filter footer uses `archivedCounts`
-over the all-project snapshot and non-deleted hidden project entries.
+over the all-project snapshot and the union of hidden project entries and
+`archivedProjects` folder keys, excluding deleted entries and counting combined
+archives once, just like the page. `loadProjects` supplies folder records as the
+fourth `hiddenSettings` value, so folder changes also invalidate the sidebar render
+key. The footer uses singular session and project-or-folder labels for one item.
+Project row attributes escape quotes as session rows do. Settings owns the
+description above the manager, without adding a redundant section title.
+Entirely empty archives show only the shared "Nothing is archived" explanation;
+the per-group explanations remain for a missing group when another has items.
 
 The shared bulk action runs project/folder entries first, then
 `persistSessionArchive(session, 0)`. Its optional error callback collects failures
@@ -81,7 +89,8 @@ success notice reverses successful projects and sessions only; session Undo uses
 `persistSessionArchive(session, 1)`. Folder-only restore still has no Undo.
 
 The accepted `loadProjects` snapshot calls `window.refreshArchivedManager`, which
-does no archive read when the Settings viewer is closed.
+does no manager archive read when the Settings viewer is closed or its Archived
+page is hidden. The sidebar snapshot still reads folder archives for its count.
 Refresh reads folder records and preserves filter, selection, group expansion,
 working host labels and row-control focus. A version counter rejects stale reads;
 refreshes during an action are deferred until the action and any error alert end.

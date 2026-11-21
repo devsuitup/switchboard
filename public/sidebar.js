@@ -1292,10 +1292,10 @@ renderProjects.unchanged = projects => {
   return !sidebarRenderDirty && sidebarRenderKey === JSON.stringify(sidebarRenderInputs(projects));
 };
 
-function archivedCounts(projects, entries = [], kinds = {}) {
+function archivedCounts(projects, entries = [], kinds = {}, folders = {}) {
   return {
     sessions: new Set(projects.flatMap(project => project.sessions.filter(session => session.archived && !session.parentSessionId).map(session => session.sessionId))).size,
-    projects: new Set(entries.filter(entry => kinds[entry] !== 'delete')).size,
+    projects: new Set([...entries, ...Object.keys(folders)].filter(entry => kinds[entry] !== 'delete')).size,
   };
 }
 
@@ -1785,11 +1785,11 @@ function renderProjects(projects, resort, { keepFocus = false } = {}) {
   }
 
   if (typeof showArchived !== 'undefined' && showArchived) {
-    const [entries, kinds] = renderProjects.hiddenSettings || [];
-    const counts = archivedCounts(cachedAllProjects, entries, kinds);
+    const [entries, kinds, , folders] = renderProjects.hiddenSettings || [];
+    const counts = archivedCounts(cachedAllProjects, entries, kinds, folders);
     const footer = document.createElement('div');
     footer.className = 'sidebar-archived-footer';
-    footer.innerHTML = `${counts.sessions} archived sessions · ${counts.projects} archived projects — <button type="button" class="settings-action-btn">Manage</button>`;
+    footer.innerHTML = `${counts.sessions} archived session${counts.sessions === 1 ? '' : 's'} · ${counts.projects} archived ${counts.projects === 1 ? 'project or folder' : 'projects and folders'} — <button type="button" class="settings-action-btn">Manage</button>`;
     newSidebar.append(footer);
   }
 

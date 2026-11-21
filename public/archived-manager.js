@@ -3,11 +3,11 @@ let activeArchivedProjectsManager = null;
 
 window.refreshArchivedManager = (projects, settings) => {
   if (activeArchivedProjectsManager?.container.closest('#settings-viewer')?.style.display === 'none') return;
+  if (activeArchivedProjectsManager?.container.closest('#settings-page-archived')?.hidden) return;
   if (activeArchivedProjectsManager?.container.isConnected) return activeArchivedProjectsManager.refresh(projects, settings);
 };
 
 function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, folders = {}, hosts = [], projects = [], onCount }) {
-  if (container.parentElement?.classList.contains('settings-section')) container.parentElement.querySelector(':scope > .settings-section-title')?.remove();
   let projectEntries = new Set(entries.filter(entry => kinds[entry] !== 'delete'));
   folders = { ...folders };
   let archived = [...new Set([...projectEntries, ...Object.keys(folders)])].filter(entry => kinds[entry] !== 'delete');
@@ -202,6 +202,10 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, fo
       list.querySelector('.archived-clear')?.addEventListener('click', clearFilter);
       selection(); return;
     }
+    if (!archived.length && !sessionEntries.size && !query) {
+      list.innerHTML = '<div class="archived-empty" role="status">Nothing is archived. Archive hides a session, a folder or a project from the sidebar and keeps everything on disk; it is listed here.</div>';
+      selection(); return;
+    }
     const aliases = [...new Set([null, ...hosts.map(h => h.alias.trim()), ...matches.map(entry => identity(entry).remoteAlias)])];
     list.innerHTML = `<h3 class="settings-section-title">Projects and folders (${archived.length})</h3>` + (matches.length ? aliases.map(alias => {
       const group = matches.filter(entry => identity(entry).remoteAlias === alias);
@@ -215,17 +219,16 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, fo
           const folder = folders[entry], hasFolder = Object.hasOwn(folders, entry), hasProject = projectEntries.has(entry);
           const archivedAt = folder?.archivedAt ?? dates[entry];
           const date = typeof archivedAt === 'number' || typeof archivedAt === 'string' ? new Date(archivedAt) : null;
-          return `<div class="archived-row" data-entry="${escapeHtml(entry)}">
-            <input type="checkbox" class="archived-select" data-entry="${escapeHtml(entry)}" aria-label="Select ${escapeHtml(p.name)}" ${busy ? 'disabled' : ''}>
+          return `<div class="archived-row" data-entry="${attribute(entry)}">
+            <input type="checkbox" class="archived-select" data-entry="${attribute(entry)}" aria-label="Select ${attribute(p.name)}" ${busy ? 'disabled' : ''}>
             <div class="archived-main"><div class="archived-name"><strong>${escapeHtml(p.name)}</strong> ${hasProject ? '<span class="archived-badge">Project</span>' : ''}${hasFolder ? ' <span class="archived-badge">Folder</span>' : ''}${hasProject && kinds[entry] === undefined ? ' <span class="archived-badge">legacy</span>' : ''}${alias ? ` <span class="archived-badge" title="${escapeHtml(label)}">${escapeHtml(alias)}</span>` : ''}</div>
-            <div class="archived-path" title="${escapeHtml(p.projectPath)}">${escapeHtml(p.projectPath)}</div>
+            <div class="archived-path" title="${attribute(p.projectPath)}">${escapeHtml(p.projectPath)}</div>
             <div class="archived-meta">${date && Number.isFinite(date.getTime()) ? `<time datetime="${date.toISOString()}">archived ${escapeHtml(date.toLocaleDateString())}</time>` : ''}${p.cached ? ` <span>${p.sessions.length} session${p.sessions.length === 1 ? '' : 's'}</span>` : ''}${Array.isArray(folder?.disabledSchedules) && folder.disabledSchedules.length > 0 ? ` <span>${folder.disabledSchedules.length} schedule${folder.disabledSchedules.length === 1 ? '' : 's'} off</span>` : ''}</div></div>
             <div class="archived-actions"><button type="button" class="settings-action-btn archived-unarchive" ${busy ? 'disabled' : ''}>Unarchive</button>
-            <details class="archived-overflow"><summary aria-label="More actions for ${escapeHtml(p.name)}" aria-describedby="${escapeHtml(reasonId)}">⋯</summary><div class="archived-menu"><button type="button" class="settings-action-btn archived-copy">Copy path</button><button type="button" class="settings-action-btn archived-delete" ${busy ? 'disabled' : ''} aria-describedby="${escapeHtml(reasonId)}">Delete project…</button><span class="archived-delete-reason" id="${escapeHtml(reasonId)}"></span></div></details></div>
+            <details class="archived-overflow"><summary aria-label="More actions for ${attribute(p.name)}" aria-describedby="${escapeHtml(reasonId)}">⋯</summary><div class="archived-menu"><button type="button" class="settings-action-btn archived-copy">Copy path</button><button type="button" class="settings-action-btn archived-delete" ${busy ? 'disabled' : ''} aria-describedby="${escapeHtml(reasonId)}">Delete project…</button><span class="archived-delete-reason" id="${escapeHtml(reasonId)}"></span></div></details></div>
           </div>`;
         }).join('')}</div></section>`;
     }).join('') : '<div class="archived-empty" role="status">No archived project. Archive Project (a project’s settings) or Archive folder (a project header) lists it here.</div>');
-    if (!archived.length && !sessionEntries.size && !query) list.insertAdjacentHTML('afterbegin', '<div class="archived-empty" role="status">Nothing is archived. Archive hides a session, a folder or a project from the sidebar and keeps everything on disk; it is listed here.</div>');
     list.insertAdjacentHTML('beforeend', `<h3 class="settings-section-title">Sessions (${sessionEntries.size})</h3>${projectEntries.size ? '<div class="archived-empty">Sessions of archived projects appear after Unarchive.</div>' : ''}`);
     if (!sessionGroups.size) list.insertAdjacentHTML('beforeend', '<div class="archived-empty" role="status">No archived session. The archive button on a sidebar row lists it here.</div>');
     for (const [key, sessions] of sessionGroups) {

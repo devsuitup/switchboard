@@ -2290,6 +2290,8 @@ async function loadProjects({ resort = false } = {}) {
     const { defaultProjects, allProjects } = response;
     const globalSettings = await window.api.getSetting('global');
     if (obsolete()) return state.outcome;
+    const folderArchives = await window.api.getSetting('archivedProjects') || {};
+    if (obsolete()) return state.outcome;
     let activeTerminals;
     try { activeTerminals = await window.api.getActiveTerminals(); } catch {}
     if (obsolete()) return state.outcome;
@@ -2381,7 +2383,7 @@ async function loadProjects({ resort = false } = {}) {
     }
     if (typeof observeSessionProjection === 'function') observeSessionProjection({ generation: job.generation, cause: 'projects', provenance: response.projection });
     refreshSidebar({ resort: job.resort, skipUnchanged: true,
-      hiddenSettings: [globalSettings?.hiddenProjects, globalSettings?.hiddenProjectKinds, globalSettings?.hiddenProjectScopes] });
+      hiddenSettings: [globalSettings?.hiddenProjects, globalSettings?.hiddenProjectKinds, globalSettings?.hiddenProjectScopes, folderArchives] });
     renderDefaultStatus();
     return state.outcome;
   };
