@@ -70,7 +70,7 @@ function messageSignature(entry) {
   return JSON.stringify([entry.type === 'message' ? entry.role : entry.type, entry.message]);
 }
 
-function attachMessageSignatures(row, filePath) {
+function attachMessageSignatures(row, filePath, byteLength) {
   Object.defineProperty(row, 'messageSignatures', {
     configurable: true,
     get() {
@@ -82,8 +82,10 @@ function attachMessageSignatures(row, filePath) {
           !(entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'))) return;
         signatures.push({ signature: messageSignature(entry), uuid: typeof entry.uuid === 'string' && entry.uuid ? entry.uuid : null });
       };
-      const scan = bodyRead(filePath, () => scanLines(filePath, 0, add));
-      if (scan.tail) add(scan.tail);
+      try {
+        const scan = bodyRead(filePath, () => scanLines(filePath, 0, add, byteLength));
+        if (scan.tail) add(scan.tail);
+      } catch { signatures.length = 0; }
       Object.defineProperty(row, 'messageSignatures', { value: signatures, configurable: true });
       return signatures;
     },
@@ -386,7 +388,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
 
     const fileMtime = continuationMtime({ mtimeNs: BigInt(stamp.mtimeNs) });
     const pending = witness.pending;
-    const skipLine = pending.length > 1024 * 1024;
+    const skipLine = witness.skipLine || pending.length > 1024 * 1024;
     const row = {
       sessionId: fileBase, folder, projectPath,
       summary, firstPrompt: summary,
@@ -413,7 +415,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       dailyMetrics,
     };
     if (bridgeSessionId) {
-      attachMessageSignatures(row, filePath);
+      attachMessageSignatures(row, filePath, scan.read);
     }
     row.fullReadStamp = certificate(scan.read);
     return row;

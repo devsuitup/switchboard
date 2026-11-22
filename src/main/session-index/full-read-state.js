@@ -28,7 +28,11 @@ function fullReadStamp(file, runtime, relativePath, before, bytes, dependencies 
 }
 
 function readFailures(meta) {
-  try { return new Map(JSON.parse(meta?.readFailures || '[]')); } catch { return new Map(); }
+  try { return new Map(JSON.parse(meta?.readFailures || '[]').filter(([, failure]) => deterministicReadFailure(failure.error))); } catch { return new Map(); }
+}
+
+function deterministicReadFailure(error) {
+  return ['ERR_STRING_TOO_LONG', 'RangeError', 'TypeError', 'SyntaxError'].includes(error);
 }
 
 function failureStamp(file, runtime, relativePath, before, dependencies = {}) {
@@ -165,5 +169,5 @@ function folderReadWitness(db, folder, sessionIds = null) {
     metadata: rows.map(row => [row.sessionId, db.getMeta(row.sessionId, true) || null]) });
 }
 
-module.exports = { SESSION_CONTENT_INDEX_VERSION, CONTENT_GOLDEN_DIGESTS, readFailures, failureStamp, observation, relativeSource, fullReadStamp, fullIndexConfig, rowWitness,
+module.exports = { SESSION_CONTENT_INDEX_VERSION, CONTENT_GOLDEN_DIGESTS, deterministicReadFailure, readFailures, failureStamp, observation, relativeSource, fullReadStamp, fullIndexConfig, rowWitness,
   matchesFullRead, sourceRelativePath, safeRelativePath, startupFolderPath, startupSourcePath, nameDerivationWitness, folderReadWitness, startupTouchedIds, startupInventoryMatches, deferStartupSources };

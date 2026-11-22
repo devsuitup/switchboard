@@ -330,11 +330,11 @@ test('a UUID-complete bridge row gets signatures by re-reading instead of retain
   f.write('a', [f.msg('known', '01', 'Original synthetic payload')]);
   const row = f.reread('a');
   assert.equal(row.messageUuidsComplete, true);
-  f.write('a', [f.msg('known', '01', 'Re-read synthetic payload')]);
+  f.write('a', [f.msg('known', '01', 'Re-read! synthetic payload')]);
   const reads = [], original = fs.openSync;
   fs.openSync = (file, ...args) => { if (/scanLines/.test(new Error().stack)) reads.push(file); return original(file, ...args); };
   try {
-    assert.ok(row.messageSignatures[0].signature.includes('Re-read synthetic payload'));
+    assert.ok(row.messageSignatures[0].signature.includes('Re-read! synthetic payload'));
     assert.deepEqual(reads, [path.join(f.dir, 'a.jsonl')]);
     assert.equal(row.messageSignatures.length, 1);
     assert.equal(reads.length, 1, 'computed signatures are memoized');

@@ -9,7 +9,7 @@ require('./fixtures/isolated-codex-home.cjs')(test);
 const options = { skip: !base.supported && 'SQLite fixture unavailable on Node 20' };
 
 for (const runtime of ['claude', 'codex']) {
-  test(runtime + ': a stable I/O failure preserves the old row and survives reopening', options, async t => {
+  test(runtime + ': a deterministic failure preserves the old row and survives reopening', options, async t => {
     const f = await (runtime === 'codex' ? codex : base).fixture(t);
     const folder = runtime === 'codex' ? f.codexFolder : f.folder;
     const file = runtime === 'codex' ? f.codexWrite(0, 'old') : f.write('old', 'old');
@@ -19,13 +19,13 @@ for (const runtime of ['claude', 'codex']) {
     const inventory = [{ folder, meta: f.db.getFolderMeta(folder), rows: f.db.getCachedByFolder(folder), metadata: [] }];
     const open = fs.openSync;
     const patch = t.mock.method(fs, 'openSync', function (target, ...args) {
-      if (target === file && /at (?:Object\.)?readSessionFile /.test(new Error().stack)) throw Object.assign(new Error('synthetic I/O failure'), { code: 'EIO' });
+      if (target === file && /at (?:Object\.)?readSessionFile /.test(new Error().stack)) throw new RangeError('synthetic deterministic failure');
       return open.call(this, target, ...args);
     });
     const messages = codex.scan({ projectsDir: f.projects, inventory, scope: [folder], disabledHarnesses: [] });
     patch.mock.restore();
     const result = messages.find(msg => msg.result)?.result;
-    assert.ok(result?.readFailures?.length, 'stable I/O failure produces a durable witness instead of failing its folder');
+    assert.ok(result?.readFailures?.length, 'deterministic failure produces a durable witness instead of failing its folder');
     await f.writer.writeScannedFolderPartial(result);
     const id = runtime === 'codex' ? f.ids[0] : 'old';
     assert.equal(f.db.getCachedSession(id).summary, 'old');
@@ -41,7 +41,7 @@ for (const runtime of ['claude', 'codex']) {
     });
     await f.writer.refreshFolder(folder);
     refreshOpen.mock.restore();
-    assert.equal(refreshReads, 0, 'refresh also honors the unchanged failure witness');
+    assert.equal(refreshReads, 1, 'explicit refresh retries the witnessed source');
     fs.appendFileSync(file, '\n');
     assert.equal((await f.restart()).ok, true);
     assert.equal(f.scans().find(item => item.folder === folder).filesRead, 1);
@@ -75,7 +75,7 @@ for (const kind of ['P full baseline', 'S sealed baseline']) {
     });
     await f.writer.refreshFolder(f.folder);
     patch.mock.restore();
-    assert.equal(refreshReads, 0, 'refresh does not retry an unchanged unindexed failure');
+    assert.equal(refreshReads, 1, 'explicit refresh retries an unchanged unindexed failure');
     f.write('poison', 'repaired');
     assert.equal((await f.restart()).ok, true);
     assert.equal(f.scans()[0].filesRead, 1, 'only the changed failed file is retried');

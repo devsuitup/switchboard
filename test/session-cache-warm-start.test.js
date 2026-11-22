@@ -215,7 +215,10 @@ test('Codex actual body and auxiliary bytes are accounted', t => {
     bytes = 0; aux = 0;
     const messages = f.scan(), msg = messages.find(msg => msg.folder === f.folder);
     assert.equal(messages.at(-1).ok, true);
-    if (failRead) assert.equal(msg.result.readFailures.length, 1, 'stable failed read has a witness');
+    if (failRead) {
+      assert.equal(msg.result.readFailures.length, 0, 'short reads have no durable witness');
+      assert.ok(msg.result.deferred.includes(path.basename(f.file)));
+    }
     assert.equal(msg.counters.bytesRead, bytes, 'actual returned rollout bytes equal instrumentation');
     assert.equal(msg.counters.auxiliaryBytesRead, aux, 'actual title bytes are counted exactly once');
     if (delta === 'skip') assert.equal(bytes, 0, 'empty subset has zero actual body bytes');

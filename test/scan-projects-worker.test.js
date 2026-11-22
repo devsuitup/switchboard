@@ -103,8 +103,8 @@ for (const kind of ['subagent', 'empty', 'EACCES', 'short', 'race']) {
       } else {
         assert.equal(messages.at(-1).ok, true, 'stable I/O and short-read failures do not fail the day');
         assert.deepEqual(Array.from(messages.at(-1).failedFolders), []);
-        assert.equal(result.readFailures.length, 1);
-        assert.equal(result.readFailures[0][0], path.basename(f.file));
+        assert.equal(result.readFailures.length, 0);
+        assert.ok(result.deferred.includes(path.basename(f.file)));
       }
       assert.ok(!result?.toDelete?.includes(f.row.sessionId), 'failed parse cannot delete the prior row');
       if (result) assert.deepEqual(Array.from(result.deferredIds || []), [f.row.sessionId], 'deferral uses the filename UUID');
@@ -268,7 +268,7 @@ test('M23 a null subagent with a sidecar race retains its cached row', t => {
   assert.ok(!result.toDelete.includes('sub:parent:race'), 'raced null parse cannot delete the prior row');
 });
 
-test('A2 whole missing root plans deletion while stable failed body reads retain witnesses', t => {
+test('A2 whole missing root plans deletion while transient body failures defer', t => {
   const gone = startupScan(t, ({ root }) => fs.rmSync(root, { recursive: true }));
   assert.ok(gone.messages.find(message => message.type === 'folder').result.toDelete.includes('source'));
   const failed = startupScan(t, ({ file }) => {
@@ -280,8 +280,8 @@ test('A2 whole missing root plans deletion while stable failed body reads retain
     });
   });
   const result = failed.messages.find(message => message.type === 'folder').result;
-  assert.equal(result.readFailures[0][0], 'source.jsonl');
-  assert.equal(result.deferred.length, 0);
+  assert.equal(result.readFailures.length, 0);
+  assert.deepEqual(Array.from(result.deferred), ['source.jsonl']);
   assert.ok(!result.toDelete.includes('source'));
 });
 

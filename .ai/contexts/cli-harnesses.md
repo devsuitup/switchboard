@@ -426,9 +426,14 @@ rendering and save are not covered by a dom test.
 
 `jsonl-scan.js` (root, listed in `test/fixtures/root-app-modules.json`) is
 upstream's `scanLines(filePath, startByte, onLine, endByte)` / `readHead`. It
-holds one 256 KiB chunk plus the current line; `onLine` may return false to
-stop. Tool output makes rollouts reach hundreds of MB, and a JS string costs
-twice the file size.
+holds one 256 KiB chunk plus at most 64 MiB for the current line; `onLine` may
+return false to stop. Above the exported `MAX_LINE_BYTES` cap, it discards the
+record through the next newline without converting it to a string. An oversized
+unterminated tail is omitted and marked in the optional witness. The cap is
+shared by full readers, bridge signature scans and incremental message counts;
+tests lower the exported cap. A zero-byte read before the observed EOF throws
+`ERR_JSONL_SHORT_READ`, a retryable startup deferral. Tool output makes rollouts
+reach hundreds of MB, and a JS string costs twice the file size.
 
 ### Harness folders in the index
 

@@ -431,14 +431,14 @@ function refreshHarnessFolder(harness, folder) {
     if (!sessionId) continue;
     current.add(sessionId);
     const failure = failures.get(path.basename(file));
-    if (failure && matchesFullRead(file, failure.stamp, harness.id, path.basename(file))) continue;
     let stat;
     try { stat = fs.statSync(file); } catch { continue; }
     const row = cached.get(sessionId);
     const title = titles instanceof Map ? titles.get(sessionId) || null : row?.aiTitle || null;
-    if (row && row.fileMtime === stat.mtime.toISOString() && (row.fileSize ?? null) === stat.size && (row.aiTitle || null) === title) continue;
+    if (!failure && row && row.fileMtime === stat.mtime.toISOString() && (row.fileSize ?? null) === stat.size && (row.aiTitle || null) === title) continue;
     const session = harness.readSessionFile(file, folder, null);
     if (!session) continue;
+    failures.delete(path.basename(file));
     sessionsToUpsert.push(session);
     const name = getMeta(session.sessionId)?.name || session.customTitle || session.aiTitle || '';
     searchEntriesToUpsert.push({ id: session.sessionId, type: 'session', folder,
@@ -458,7 +458,7 @@ function refreshHarnessFolder(harness, folder) {
     deleteSearchSession(sessionId);
     changed = true;
   }
-  setFolderMeta(folder, null, harnessFolderIndexMtimeMs(harness, dir, files));
+  setFolderMeta(folder, null, harnessFolderIndexMtimeMs(harness, dir, files), [...failures]);
   return changed;
 }
 
@@ -619,10 +619,6 @@ function refreshFolder(folder, opts = {}) {
     const relativeFile = path.relative(folderPath, filePath);
     const relativeSource = relativeFile.split(path.sep).join('/');
     const failure = failures.get(relativeSource);
-    if (failure && matchesFullRead(filePath, failure.stamp, 'claude', relativeSource)) {
-      collector.accounted.add(relativeFile);
-      continue;
-    }
     const linked = cachedEntry && !parentSessionId && linkedContinuation(cachedEntry);
     const changedLinked = linked && changedContinuation(cachedEntry, filePath, stat);
     const plan = opts.preparedContinuations?.get(cachedDbId);
@@ -645,7 +641,7 @@ function refreshFolder(folder, opts = {}) {
     }
     const changedIndex = snapshot ? !sameContinuationStamp(snapshot, stat)
       : persistedStamp && !matchesContinuationStamp(persistedStamp, stat);
-    if (!changedLinked && !changedSize && cachedEntry && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
+    if (!failure && !changedLinked && !changedSize && cachedEntry && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
       && (!cachedEntry.continuationIndex || !changedIndex || parentSessionId || cachedEntry.parentSessionId)) {
       collector.accounted.add(relativeFile);
       continue; // unchanged, skip
@@ -653,7 +649,7 @@ function refreshFolder(folder, opts = {}) {
 
     const fullReadPinned = changedSize && !linked && cachedEntry.fileMtime === fileMtime && fileSize <= continuationBytesLeft;
     if (fullReadPinned) continuationBytesLeft = 0;
-    if (cachedEntry && !fullReadPinned) {
+    if (!failure && cachedEntry && !fullReadPinned) {
       let continuationIndex = cachedEntry.continuationIndex;
       if (validPlan) continuationIndex = plan.serialized;
       else if (opts.preparedContinuations?.has(cachedDbId) && changedLinked) { defer(); continue; }
@@ -737,6 +733,7 @@ function refreshFolder(folder, opts = {}) {
     // may still be replaced by a cutoff-filtered re-derivation, or dropped).
     const s = readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
     if (s) {
+      failures.delete(relativeSource);
       if (!parentSessionId && s.continuationIndex) {
         const head = continuationHead(filePath, stat.size);
         const after = fs.statSync(filePath, { bigint: true });
@@ -870,7 +867,7 @@ function refreshFolder(folder, opts = {}) {
   // Update folder mtime
   const outstanding = new Set([...(deferredContinuationFiles.get(folder) || []), ...collector.deferred]);
   for (const file of collector.accounted) outstanding.delete(file);
-  setFolderMeta(folder, projectPath, outstanding.size ? 0 : getFolderIndexMtimeMs(folderPath));
+  setFolderMeta(folder, projectPath, outstanding.size ? 0 : getFolderIndexMtimeMs(folderPath), [...failures]);
   if (!opts.managedContinuations) applyContinuationRefresh(folder, collector, true);
   if (sidebarChanged || [...updatedRows].some(([id, row]) => beforeRows.get(id) !== sidebarRowState(row))) return true;
   if (activityChanged || [...updatedRows].some(([id, row]) =>

@@ -20,11 +20,17 @@ test('a same-size subagent rewrite after reading stays stale and is refreshed', 
   fs.writeFileSync(file, before);
   fs.utimesSync(file, new Date('2026-10-29T10:00:00Z'), new Date('2026-10-29T10:00:00Z'));
   const expected = continuationMtime(fs.statSync(file, { bigint: true }));
-  const read = fs.readFileSync;
+  const read = fs.readSync, open = fs.openSync;
+  let fd;
+  t.mock.method(fs, 'openSync', (target, ...args) => {
+    const value = open(target, ...args);
+    if (target === file) fd = value; else if (value === fd) fd = undefined;
+    return value;
+  });
   let rewritten = false;
-  const replacement = t.mock.method(fs, 'readFileSync', (target, ...args) => {
-    const bytes = read(target, ...args);
-    if (target === file && !rewritten) {
+  const replacement = t.mock.method(fs, 'readSync', (handle, ...args) => {
+    const bytes = read(handle, ...args);
+    if (handle === fd && !rewritten) {
       rewritten = true;
       fs.writeFileSync(file, after);
       fs.utimesSync(file, new Date('2026-10-29T11:00:00Z'), new Date('2026-10-29T11:00:00Z'));
