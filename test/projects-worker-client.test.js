@@ -11,7 +11,7 @@ function fixture(options = {}) {
   let version = 0;
   const applied = [];
   worker.postMessage = message => messages.push(message);
-  worker.terminate = () => Promise.resolve();
+  worker.terminate = async () => { worker.terminated = true; };
   const client = createProjectsWorkerClient({
     workerFactory: () => worker,
     snapshot: () => ({ version, state: version }),
@@ -259,7 +259,7 @@ test('version retries cannot extend an individual caller deadline', async () => 
   try { await rejected; } finally { clearInterval(interval); clearTimeout(guard); f.client.shutdown(); }
 });
 
-test('completed folder writes survive a caller timeout and a slow reconcile advances on completion', async () => {
+test('completed folder writes and the final result survive a reconcile caller timeout', async () => {
   const f = fixture({ timeoutMs: 20 });
   const waiter = f.client.request({ reconcile: true });
   const rejected = assert.rejects(waiter, /timed out/);
@@ -268,7 +268,7 @@ test('completed folder writes survive a caller timeout and a slow reconcile adva
     assert.equal(f.applied.length, 1);
     await rejected;
     f.reply(0, { value: 'complete', effects: [], keptLiveRows: [], reconciled: true });
-    assert.equal(f.applied.at(-1).reconciled, true);
+    assert.equal(f.applied.length, 2, 'a reconcile must finish applying after its last waiter expired');
     const next = f.client.request({ reconcile: false });
     f.reply(1, { value: 'built' });
     assert.deepEqual(await next, { value: 'built' });
@@ -361,6 +361,39 @@ function liveFixture(options = {}) {
 }
 const effectFree = value => ({ effects: [], keptLiveRows: [], reconciled: false, value });
 
+test('a reconcile queued before populate becomes a cache read when dispatched during populate', async () => {
+  let allowed = true;
+  const f = fixture({ canReconcile: () => allowed });
+  try {
+    const first = f.client.request();
+    const queued = f.client.request({ reconcile: true });
+    queued.catch(() => {});
+    allowed = false;
+    f.reply(0, effectFree('first'));
+    await first;
+    assert.equal(f.messages[1].reconcile, false, 'dispatch must recheck populate, not only the IPC request');
+    assert.equal(f.messages[1].readOnly, true);
+    f.reply(1, effectFree('cached'));
+    await queued;
+  } finally { await f.client.shutdown(); }
+});
+
+test('the last read-only build waiter timeout terminates its worker and cannot re-dispatch', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture({ timeoutMs: 30 });
+  try {
+    const request = f.client.request({ reconcile: false, readOnly: true });
+    const rejected = assert.rejects(request, { code: 'PROJECTS_WORKER_TIMEOUT' });
+    t.mock.timers.tick(30);
+    await rejected;
+    assert.equal(f.worker.terminated, true);
+    f.change();
+    f.reply(0, { effects: [{ name: 'setName' }], keptLiveRows: [], reconciled: true });
+    assert.equal(f.messages.length, 1);
+    assert.equal(f.applied.length, 0);
+  } finally { await f.client.shutdown(); }
+});
+
 test('a third live-snapshot conflict of an effect-free build delivers the last snapshot flagged stale', async () => {
   const f = liveFixture();
   try {
@@ -383,20 +416,85 @@ test('a third conflict of a reply carrying retained rows still rejects', async (
   } finally { await f.client.shutdown(); }
 });
 
-test('an acceptance after every caller expired reports delivered:false', async () => {
+test('an abandoned reconcile publishes late acceptance as undelivered and serves the next caller', async () => {
   const accepted = [];
   const f = liveFixture({ timeoutMs: 20, accepted: (result, info) => accepted.push([result.value, info]) });
   try {
     const expired = f.client.request({ reconcile: true });
     await assert.rejects(expired, /timed out/);
     f.reply(0, { effects: [], keptLiveRows: [], reconciled: true, value: 'late' });
-    assert.deepEqual(accepted, [['late', { delivered: false }]]);
+    assert.deepEqual(accepted, [['late', { delivered: false }]], 'an undelivered reconcile must advance the throttle and notify main');
     const answered = f.client.request();
     f.reply(1, effectFree('in time'));
     await answered;
     assert.deepEqual(accepted[1], ['in time', { delivered: true }]);
   } finally { await f.client.shutdown(); }
 });
+
+test('an abandoned reconcile is terminated at its original hard ceiling', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture({ timeoutMs: 30, reconcileTimeoutMs: 100 });
+  try {
+    const request = f.client.request({ reconcile: true });
+    const rejected = assert.rejects(request, /projects worker timed out/);
+    t.mock.timers.tick(30);
+    await rejected;
+    assert.equal(f.worker.terminated, undefined, 'caller deadline must leave the reconcile running');
+    t.mock.timers.tick(70);
+    await Promise.resolve();
+    assert.equal(f.worker.terminated, true, 'the hard ceiling must still terminate abandoned reconciles');
+  } finally { await f.client.shutdown(); }
+});
+
+test('an abandoned reconcile retries a conflict without extending its hard ceiling', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
+  const f = fixture({ timeoutMs: 30, reconcileTimeoutMs: 100 });
+  try {
+    const request = f.client.request({ reconcile: true });
+    const rejected = assert.rejects(request, /projects worker timed out/);
+    t.mock.timers.tick(30);
+    await rejected;
+    t.mock.timers.tick(10);
+    f.change();
+    f.reply(0, { effects: [{ name: 'stale' }], keptLiveRows: [], reconciled: true });
+    assert.equal(f.messages.length, 2, 'an abandoned reconcile must retry stale effects against a fresh snapshot');
+    assert.equal(f.applied.length, 0);
+    t.mock.timers.tick(60);
+    await Promise.resolve();
+    assert.equal(f.worker.terminated, true, 'retry must retain the original reconcile ceiling');
+  } finally { await f.client.shutdown(); }
+});
+
+for (const progress of [false, true]) {
+  for (const reset of ['shutdown', 'error', 'timeout']) {
+    test(`shutdown awaits an abandoned ${progress ? 'progress' : 'final'} effect after ${reset}`, async t => {
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      let release;
+      const applying = new Promise(resolve => { release = resolve; });
+      const f = fixture({ timeoutMs: 30, apply: () => applying });
+      let stopping;
+      try {
+        const request = f.client.request();
+        const rejected = assert.rejects(request, /shut down|broken|timed out/);
+        f.worker.emit('message', { id: f.messages[0].id,
+          [progress ? 'progress' : 'result']: { effects: [{ name: 'setName' }], keptLiveRows: [], reconciled: false } });
+        if (reset === 'error') f.worker.emit('error', new Error('broken'));
+        if (reset === 'timeout') t.mock.timers.tick(30);
+        let stopped = false;
+        stopping = f.client.shutdown().then(() => { stopped = true; });
+        await rejected;
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(stopped, false, 'shutdown must await effects already handed to the writer');
+        release();
+        await stopping;
+        assert.equal(stopped, true);
+      } finally {
+        release();
+        await (stopping || f.client.shutdown());
+      }
+    });
+  }
+}
 
 test('a terminal live conflict names its reason and both snapshots', async () => {
   const f = liveFixture();

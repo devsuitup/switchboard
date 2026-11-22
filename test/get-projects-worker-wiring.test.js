@@ -8,6 +8,7 @@ const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const cliSessionState = require('../cli-session-state');
 const loadGetProjectsHandler = require('./get-projects-handler.cjs');
+const { createProjectsWorkerClient } = require('../projects-worker-client');
 
 function handler(overrides = {}) {
   const context = {
@@ -135,6 +136,82 @@ test('projects snapshot carries cached background state and attach identity in i
 
 // #1125: the reconcile throttle after a cold scan, undelivered reconciles, stale deliveries and conflict diagnostics.
 const flush = () => new Promise(resolve => setImmediate(resolve));
+
+test('warm startup reads during a partial populate and reconciles once despite a recent throttle', async () => {
+  let finished = false;
+  const requests = [];
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const invoke = handler({
+    Date: { now: () => 100000 },
+    projectsReconciledAt: 99999,
+    isIndexingFinished: () => finished,
+    populateCacheViaWorker: async () => ({ ok: false }),
+    projectsClient: { request: async options => {
+      requests.push(options);
+      if (options.reconcile && finished) await gate;
+      return { defaultProjects: [], allProjects: [], reconciled: options.reconcile };
+    } },
+  });
+  for (let i = 0; i < 20; i++) await invoke(null, 'both');
+  assert.equal(requests.filter(options => options.reconcile).length, 0, 'populate must serve cache reads without filesystem reconciliation');
+  finished = true;
+  const first = invoke(null, 'both');
+  const second = invoke(null, 'both');
+  release();
+  await Promise.all([first, second]);
+  assert.equal(requests.filter(options => options.reconcile).length, 1, 'one post-populate reconcile even with overlapping loads');
+});
+
+test('the main client downgrades a queued reconcile when populate starts before dispatch', async t => {
+  let finished = true, client;
+  const messages = [];
+  const worker = new EventEmitter();
+  worker.postMessage = message => messages.push(message);
+  worker.terminate = async () => {};
+  handler({
+    isIndexingFinished: () => finished,
+    createProjectsWorkerClient: options => {
+      client = createProjectsWorkerClient({ ...options, workerFactory: () => worker,
+        snapshot: () => ({ version: 0, liveVersion: 'stable' }), apply: () => {} });
+      return client;
+    },
+  });
+  t.after(() => client.shutdown());
+  const first = client.request();
+  const queued = client.request({ reconcile: true });
+  queued.catch(() => {});
+  finished = false;
+  const result = { defaultProjects: [], allProjects: [], effects: [], keptLiveRows: [], reconciled: false };
+  worker.emit('message', { id: messages[0].id, result });
+  await first;
+  assert.equal(messages[1].reconcile, false, 'main must wire the live populate guard into worker dispatch');
+  assert.equal(messages[1].readOnly, true, 'a warm request during populate must be a read-only build');
+  worker.emit('message', { id: messages[1].id, result });
+  await queued;
+});
+
+test('a successful warm populate clears deferred reconciliation and advances the throttle', async () => {
+  let finished = false, finishScan;
+  const scan = new Promise(resolve => { finishScan = resolve; });
+  const requests = [];
+  const invoke = handler({
+    Date: { now: () => 100000 },
+    isIndexingFinished: () => finished,
+    populateCacheViaWorker: () => scan,
+    projectsClient: { request: async options => {
+      requests.push(options);
+      return { defaultProjects: [], allProjects: [] };
+    } },
+  });
+  await invoke(null, 'both');
+  finished = true;
+  finishScan({ ok: true });
+  await flush();
+  await invoke(null, 'both');
+  assert.equal(requests[1].reconcile, false, 'a successful warm populate already re-read every changed file');
+  assert.equal(invoke.reconciledAt(), 100000);
+});
 
 test('a completed cold scan advances the reconcile throttle', async () => {
   let now = 100000, scanDone = false, finishScan;

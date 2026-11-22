@@ -449,6 +449,26 @@ count suffix. Subagents skip continuation scanning.
 
 ## Projects query worker
 
+During population, both the IPC handler and the client's dispatch-time
+`canReconcile` guard suppress reconciliation; dispatch produces a read-only
+build even for a reconcile queued before population began. A warm scan write
+outside a populate still allows reconciliation and retains the effect-conflict
+checks. The handler observes the shared populate promise on cold and warm
+loads. Success with the completeness marker advances the five-second throttle
+and clears deferred reconciliation, so the first post-scan load is a plain
+build. A failed or partial populate leaves the deferred request armed, even
+inside that throttle window. Module-level state coalesces overlapping loads
+into one reconcile.
+
+Caller deadlines cancel an abandoned read-only build, but leave a reconcile
+running and retrying within its existing conflict budget and original hard
+ceiling. Late accepted reconciles still reach the `delivered: false` callback
+and notify the sidebar. Only timeout resets detach the receive queue so a
+replacement worker can proceed past a stalled writer acknowledgment. All
+unsettled receive chains, including detached ones, remain tracked until they
+settle; shutdown awaits them as well as worker termination before the writer
+can close.
+
 Issue #616 slice 1 routes get-projects through projects-worker-client.js to workers/projects-query.js. The worker opens its own readonly, fileMustExist better-sqlite3 connection to DB_PATH; the writer worker enables WAL. It materialises session_cache, session_meta, cache_meta and settings in one short read transaction, releasing the snapshot before filesystem work. Reconciliation's stat sweep, incremental header reads, bridge computation and both project builds reuse session-cache.js with an in-memory DB adapter. The adapter collects ordered effects instead of writing SQLite. The original synchronous helpers remain for explicit archive operations and tests.
 
 Async reconciliation logs a missing projects directory and resolves, matching the synchronous entry point. Each folder has its own error boundary so a failed refresh does not prevent later folders from reconciling. Deleted deferred transcripts are accounted for even in full refreshes; vanished folders and folders without a project path clear deferred work after the writer acknowledges the effects. The final synchronous refresh checks filesystem stamps before applying its batch; no intervening await or cache-index write can change the cached continuation index there.
