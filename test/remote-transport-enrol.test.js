@@ -71,7 +71,7 @@ test('the probe and the inventory commands are untouched by enrolment', () => {
   assert.equal(PROBE_COMMAND,
     'if command -v tmux >/dev/null 2>&1; then echo tmux=1; else echo tmux=0; fi; '
     + 'if command -v inotifywait >/dev/null 2>&1; then echo inotifywait=1; else echo inotifywait=0; fi');
-  assert.ok(LIST_COMMAND.startsWith('find .claude/projects'));
+  assert.ok(LIST_COMMAND.startsWith('if [ -d .claude/projects ]; then find .claude/projects'));
 });
 
 test('parseEnrol reads the facts and keeps unknown auth distinct from logged out', () => {

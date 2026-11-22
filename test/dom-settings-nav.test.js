@@ -61,6 +61,7 @@ test('host launch requires a saved enabled alias and follows alias edits and Sav
   await h.open('global', { section: 'remote' });
   const rows = [...h.w.document.querySelectorAll('.remote-host-row')];
   assert.ok(rows[0].querySelector('.rh-new-session'), 'each host row offers the action');
+  assert.equal(rows[1].querySelector('.rh-new-session').disabled, true, 'a disabled host has a disabled launch button');
   rows[1].querySelector('.rh-new-session').click();
   await settle();
   assert.deepEqual(opened, [], 'disabled hosts cannot launch');
@@ -75,6 +76,61 @@ test('host launch requires a saved enabled alias and follows alias edits and Sav
   h.q('.rh-new-session').click();
   await settle();
   assert.deepEqual(opened, ['unsaved']);
+});
+
+test('host launch button follows host toggle changes', async t => {
+  const h = setup(t);
+  h.saved.global = { remoteHosts: [{ alias: 'box', enabled: true }] };
+  await h.open('global', { section: 'remote' });
+  const toggle = h.q('.rh-enabled');
+  for (const enabled of [false, true]) {
+    toggle.checked = enabled;
+    toggle.dispatchEvent(new h.w.Event('change', { bubbles: true }));
+    assert.equal(h.q('.rh-new-session').disabled, !enabled, 'the launch button follows the host toggle');
+  }
+});
+
+test('host launch title follows label and alias edits', async t => {
+  const h = setup(t);
+  h.saved.global = { remoteHosts: [{ alias: 'box', label: 'Sandbox', enabled: true }] };
+  await h.open('global', { section: 'remote' });
+  const label = h.q('.rh-label');
+  label.value = 'Renamed';
+  label.dispatchEvent(new h.w.Event('input', { bubbles: true }));
+  assert.equal(h.q('.rh-new-session').title, 'New session on Renamed…');
+  label.value = '';
+  label.dispatchEvent(new h.w.Event('input', { bubbles: true }));
+  assert.equal(h.q('.rh-new-session').title, 'New session on box…');
+  h.q('.rh-alias').value = 'other';
+  h.q('.rh-alias').dispatchEvent(new h.w.Event('input', { bubbles: true }));
+  assert.equal(h.q('.rh-new-session').title, 'New session on other…');
+});
+
+test('repeated host launch clicks open only one dialog while the saved settings read is pending', async t => {
+  const h = setup(t);
+  h.saved.global = { remoteHosts: [{ alias: 'box', enabled: true }] };
+  await h.open('global', { section: 'remote' });
+  let resolve;
+  let reads = 0;
+  h.w.api.getSetting = () => { reads++; return new Promise(r => { resolve = r; }); };
+  const opened = [];
+  h.w.showRemoteLaunchDialog = p => opened.push(p.remoteAlias);
+  const button = h.q('.rh-new-session');
+  button.click();
+  assert.equal(button.disabled, true, 'the pending settings read disables the launch button synchronously');
+  button.click();
+  const toggle = h.q('.rh-enabled');
+  toggle.checked = false;
+  toggle.dispatchEvent(new h.w.Event('change', { bubbles: true }));
+  toggle.checked = true;
+  toggle.dispatchEvent(new h.w.Event('change', { bubbles: true }));
+  assert.equal(button.disabled, true, 'toggling the host cannot unlock a pending launch');
+  button.dispatchEvent(new h.w.Event('click'));
+  assert.equal(reads, 1, 'repeated clicks share one pending settings read');
+  resolve(h.saved.global);
+  await settle();
+  assert.deepEqual(opened, ['box']);
+  assert.equal(button.disabled, false, 'the button is restored after the read settles');
 });
 
 test('General Appearance offers and saves Theme only globally', async t => {

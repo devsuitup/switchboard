@@ -824,16 +824,29 @@
           <div class="remote-host-enrol" data-i="${i}"></div>`).join('');
         listEl.querySelectorAll('.remote-host-row').forEach(row => {
           const i = Number(row.dataset.i);
-          row.querySelector('.rh-alias').addEventListener('input', e => { remoteHosts[i].alias = e.target.value; renderArchived(); });
+          const launchButton = row.querySelector('.rh-new-session');
+          let launchPending = false;
+          const updateLaunchTitle = () => {
+            launchButton.title = `New session on ${remoteHostLabel(remoteHosts[i].alias, remoteHosts)}…`;
+          };
+          row.querySelector('.rh-alias').addEventListener('input', e => {
+            remoteHosts[i].alias = e.target.value;
+            updateLaunchTitle();
+            renderArchived();
+          });
           row.querySelector('.rh-label').addEventListener('input', e => {
             remoteHosts[i].label = e.target.value;
+            updateLaunchTitle();
             renderArchived();
           });
           row.querySelector('.rh-enabled').addEventListener('change', e => {
             remoteHosts[i].enabled = e.target.checked;
-            row.querySelector('.rh-new-session').disabled = !e.target.checked;
+            launchButton.disabled = launchPending || !e.target.checked;
           });
-          row.querySelector('.rh-new-session').addEventListener('click', async () => {
+          launchButton.addEventListener('click', async () => {
+            if (launchPending) return;
+            launchPending = true;
+            launchButton.disabled = true;
             const alias = remoteHosts[i].alias.trim();
             const status = listEl.querySelector(`.remote-host-enrol[data-i="${i}"]`);
             try {
@@ -846,6 +859,9 @@
               showRemoteLaunchDialog({ remoteAlias: alias, projectPath: '' });
             } catch (error) {
               status.textContent = 'Could not open a new session: ' + error.message;
+            } finally {
+              launchPending = false;
+              launchButton.disabled = !remoteHosts[i]?.enabled;
             }
           });
           if (typeof wireRemoteEnrolControls === 'function') {

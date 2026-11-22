@@ -276,8 +276,6 @@ function createRemoteIndexer(ctx) {
     const manifestPath = manifestPathFor(ctx.dataDir, host.alias);
     fs.mkdirSync(projectsDir, { recursive: true });
 
-    const toolsChanged = await probeHostTools(host.alias);
-    if (cancelled()) return false;
     const result = await sync({
       alias: host.alias,
       transport: ctx.transport,
@@ -385,6 +383,8 @@ function createRemoteIndexer(ctx) {
     log.info(`[remote:${host.alias}] ${result.fetched} fetched, ${result.unchanged} unchanged, ` +
       `${result.removed} removed, ${result.failed} failed, ${indexedFolders} folders indexed`);
 
+    if (cancelled()) return scannedRows;
+    const toolsChanged = await probeHostTools(host.alias);
     if (cancelled()) return scannedRows;
     if (ctx.refreshHeadTurns) {
       try {

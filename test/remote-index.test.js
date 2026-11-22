@@ -649,7 +649,12 @@ test('restart() after adding a host keeps the transport usable', async () => {
     hosts = [{ alias: 'planificator', enabled: true }];
     assert.equal(indexer.restart(), true, 'restart() must arm the timer');
     await indexer.refreshNow();
-    await inventory;
+    let deadline;
+    try {
+      await Promise.race([inventory, new Promise(resolve => {
+        deadline = setTimeout(() => resolve('timeout'), 2_000);
+      })]).then(result => assert.notEqual(result, 'timeout', 'inventory must run within 2 seconds after restart'));
+    } finally { clearTimeout(deadline); }
 
     assert.equal(transport.isDisposed(), false, 'restart() must never dispose the transport');
     assert.ok(transport.calls.length > 0, 'the inventory must actually run after restart()');

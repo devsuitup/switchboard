@@ -8,6 +8,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawn } = require('child_process');
+const { createSshTransport, LIST_COMMAND } = require('../src/main/remote/remote-transport');
 
 const { createRemoteIndexer, PROBE_INTERVAL_MS, PROBE_RETRY_MS } = require('../src/main/remote/remote-index');
 
@@ -39,7 +41,7 @@ function harness({ probe, syncFails = () => false, hosts = [{ alias: 'box' }] } 
     log: { info() {}, warn: (m) => warnings.push(m), error() {} },
     now: () => t,
     sync: async () => {
-      if (syncFails()) throw new Error('connect timed out');
+      if (syncFails()) throw Object.assign(new Error('connect timed out'), { remoteTransport: true });
       return { changedFolders: [], sessions: [] };
     },
   });
@@ -142,13 +144,39 @@ test('a failed probe keeps the previous answer rather than forgetting it', async
   } finally { h.cleanup(); }
 });
 
-test('a host without a transcript directory can launch after its tool probe even when mirroring fails', async () => {
+test('no probe runs when the sync itself failed, including forced reconnects and post-launch refreshes', async () => {
   const h = harness({ probe: async () => ({ tmux: true, inotifywait: true }), syncFails: () => true });
   try {
-    await h.indexer.refreshNow();
+    for (const refresh of [() => h.indexer.refreshNow(), () => h.indexer.refreshNow({ force: true }),
+      () => h.indexer.refreshHostNow('box', { force: true })]) {
+      await refresh();
+      assert.deepEqual(h.probes, [], 'a failed sync must not spend another SSH attempt on a probe');
+    }
+  } finally { h.cleanup(); }
+});
+
+test('a fresh host without a transcript directory mirrors empty, probes, notifies and can launch', async () => {
+  const dataDir = tmp();
+  const remoteDir = tmp();
+  const calls = [];
+  const transport = createSshTransport({ spawn: (_cmd, args, options) => {
+    const inventory = args.at(-1) === LIST_COMMAND;
+    calls.push(inventory ? 'inventory' : 'probe');
+    return spawn('sh', ['-c', inventory ? LIST_COMMAND : "printf 'tmux=1\\ninotifywait=1\\n'"], { ...options, cwd: remoteDir });
+  } });
+  let notifications = 0;
+  const indexer = createRemoteIndexer({ getHosts: () => [{ alias: 'box' }], dataDir, transport,
+    timers: fakeTimers(), listIndexedFolderKeys: () => [], notify: () => { notifications++; } });
+  const h = { indexer };
+  try {
+    const result = await indexer.refreshNow();
+    assert.deepEqual(result.errors, [], 'a missing transcript directory is an empty successful mirror');
+    assert.deepEqual(calls, ['inventory', 'probe'], 'one inventory round trip precedes the probe');
+    assert.deepEqual(indexer.getRemoteSessions('box').sessions, []);
+    assert.equal(indexer.getRemoteHostState('box').consecutiveFailures, 0);
+    assert.equal(notifications, 1, 'the newly available launch tier reaches the renderer');
     assert.equal(h.indexer.getRemoteHostProfile('box').tiers.find(t => t.tier === 'launch').available, true,
-      'a reachable tmux host can launch its first session despite missing transcripts');
-    assert.deepEqual(h.probes, ['box']);
+      'a reachable tmux host can launch its first session with no transcripts');
     const { handleLaunchRequest, createRemoteLaunchAdapter } = require('../src/main/remote/remote-launch');
     const { launchBlockReason } = require('../src/main/remote/remote-host-profile');
     const commands = [];
@@ -166,7 +194,11 @@ test('a host without a transcript directory can launch after its tool probe even
     assert.equal((await handleLaunchRequest(payload, deps)).ok, true);
     assert.equal(commands[0].alias, 'box');
     assert.match(commands[0].command, /tmux new-session/);
-  } finally { h.cleanup(); }
+  } finally {
+    indexer.dispose();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(remoteDir, { recursive: true, force: true });
+  }
 });
 
 test('a transport with no probe is left alone', async () => {
