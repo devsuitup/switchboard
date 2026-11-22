@@ -780,7 +780,9 @@ metric replacement; their payload size still contributes to the byte estimate.
 A single iterative walk estimates bytes from string/key lengths (two bytes per
 UTF-16 code unit), structural delimiters and fixed-size scalar allowances,
 without serializing a copy. A WeakSet visits shared/cyclic objects once; BigInt
-uses the scalar allowance. An unreadable payload falls back to the maximum.
+uses the scalar allowance. An unreadable payload or a missing, non-finite or
+negative work-row length falls back to the maximum, so malformed payloads cannot
+schedule a NaN deadline.
 Each block receives the existing 30-second allowance, capped by
 `MAX_WORK_COMMAND_TIMEOUT_MS` at ten minutes, matching the subset scan ceiling.
 Small/control commands, bootstrap, heartbeat and admission retain

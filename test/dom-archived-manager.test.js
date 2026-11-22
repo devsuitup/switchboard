@@ -481,8 +481,26 @@ test('unavailable remembered settings can be kept without blocking Archived dele
   h.q('.choice-dialog-cancel').click(); await settle();
 });
 
+for (const replacement of [true, false]) test(`closing Archived Delete after a row render restores focus, replacement=${replacement}`, async t => {
+  const h = await setup(t), planner = plannerFor(h), row = h.rows()[0];
+  h.w.api.previewProjectDelete = async input => ({ ...await planner.preview(JSON.parse(JSON.stringify(input))), token: 'focus' });
+  await openDelete(row);
+  row.querySelector('.archived-delete').click();
+  await waitFor(() => h.q('.choice-dialog-confirm') && !h.q('.choice-dialog-confirm').disabled);
+  const filter = h.q('.archived-filter');
+  filter.value = replacement ? 'alpha' : 'beta';
+  filter.dispatchEvent(new h.w.Event('input'));
+  assert.equal(row.isConnected, false, 'the row is replaced while the real dialog stays open');
+  const expected = replacement ? h.rows().find(item => item.dataset.entry === row.dataset.entry).querySelector('summary') : filter;
+  h.q('.choice-dialog-cancel').click();
+  await settle(); await settle();
+  assert.equal(h.document.activeElement, expected, 'dialog close must focus the replacement row or the Archived filter');
+});
+
 for (const refusal of [
-  { code: 'IDENTITY_UNAVAILABLE', error: 'No unambiguous known project mapping; reload projects.', retry: true },
+  { code: 'IDENTITY_UNAVAILABLE', error: 'No unambiguous known project mapping; reload projects.', retry: true, nextStep: true },
+  { error: 'Stop the background job from the Agents view first, then reopen Delete project.', retry: true, nextStep: true },
+  { error: 'Background worker liveness cannot be verified. Check the Agents view. Stopping a job may not unblock project deletion.', retry: true, nextStep: true },
   { code: 'INVALID_REQUEST', error: 'Invalid project selection.', retry: true },
   { code: 'SNAPSHOT_STALE', error: 'Snapshot changed.', refresh: true, retry: true },
   { code: 'TOKEN_LIMIT', error: 'Too many previews.', retry: true },
@@ -505,7 +523,8 @@ for (const refusal of [
   const reason = h.document.getElementById(button.getAttribute('aria-describedby'));
   assert.ok(reason && reason.textContent, 'refused Delete keeps its accessible reason');
   assert.doesNotMatch(reason.textContent, /delete its repository|Folder and path hints conflict/i);
-  assert.equal(/try again/i.test(reason.textContent), refusal.retry, 'every non-grouped refusal offers another Delete attempt');
+  assert.equal(/try again/i.test(reason.textContent), refusal.retry && !refusal.nextStep, 'only refusals without a next step need the generic retry sentence');
+  if (refusal.nextStep) assert.equal(reason.textContent, refusal.error, 'keep the existing next step without a duplicate retry sentence');
   assert.doesNotMatch(reason.textContent, /Close and reopen this menu to retry|Retry preview, or cancel/i);
   assert.equal(h.calls.execute.length, 0);
   if (refusal.retry) {

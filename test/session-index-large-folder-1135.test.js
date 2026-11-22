@@ -170,6 +170,19 @@ function deadlineTransport(t, timeoutMs = 30000) {
   };
 }
 
+test('malformed work-row lengths retain a finite maximum deadline', async t => {
+  const deadline = deadlineTransport(t);
+  for (const rows of [{}, { length: NaN }, { length: Infinity }, { length: -1 }, null]) {
+    for (const [command, args] of [
+      ['deriveCachedNames', [rows]],
+      ['certifyFullReads', ['folder', 'token', rows]],
+      ['effects', [[{ name: 'upsertCachedSessions', args: [rows] }]]],
+    ]) {
+      assert.equal(await deadline(command, ...args), 600000, command + ' must retain a finite fallback for malformed rows');
+    }
+  }
+});
+
 test('deadline byte estimate avoids serialization and tracks representative payload size', async t => {
   const deadline = deadlineTransport(t, 1);
   const args = [[{ name: 'upsertSearchEntries', args: [[{

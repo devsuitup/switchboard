@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- Closing an archived project's Delete dialog returns keyboard focus to its row after the list refreshes, or to the filter if the row is gone. (#1162)
+
 ## v0.0.108 — 2026-11-21
 
 ### New

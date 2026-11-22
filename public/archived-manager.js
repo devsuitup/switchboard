@@ -165,7 +165,7 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, fo
         const retryable = !grouped;
         reason.textContent = grouped ? 'This worktree is grouped under its repository. To remove it from Switchboard, delete its repository instead.'
           : message.replace(/\s*(?:Close and reopen Delete to retry\.|Retry preview, or cancel\.)/g, '')
-            + (retryable ? ' Reopen the menu and click Delete project to try again.' : '');
+            + (retryable && !/(?:^|[.;]\s*)(?:stop|check|reload)\b/i.test(message) ? ' Reopen the menu and click Delete project to try again.' : '');
         button.dataset.unavailable = 'true'; button.dataset.retryable = String(retryable); button.disabled = true;
       } })) {
         projectEntries.delete(entry); delete folders[entry];
@@ -175,8 +175,10 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, fo
     finally {
       if (reason.textContent === 'Checking deletion availability…') reason.textContent = '';
       lock(false);
-      if (button.isConnected) (button.disabled ? row.querySelector('summary') : button).focus();
       await finishRefresh();
+      const currentRow = [...list.querySelectorAll('.archived-row')].find(item => item.dataset.entry === entry);
+      const target = button.isConnected && !button.disabled ? button : currentRow?.querySelector('summary') || filter;
+      target.focus();
     }
   }
   function render() {
