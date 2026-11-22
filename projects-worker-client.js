@@ -3,7 +3,7 @@
 // see .ai/contexts/session-cache.md ("Projects query worker")
 const RECONCILE_TIMEOUT_MS = 5 * 60 * 1000;
 
-function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted = () => {}, timeoutMs = 30000, reconcileTimeoutMs = RECONCILE_TIMEOUT_MS, maxDiscards = 3 }) {
+function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted = () => {}, canReconcile = () => true, timeoutMs = 30000, reconcileTimeoutMs = RECONCILE_TIMEOUT_MS, maxDiscards = 3 }) {
   let worker = null;
   const terminations = new Set();
   let stopped = false;
@@ -12,6 +12,7 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
   let nextId = 0;
   const waiters = new Set();
   let receiving = null;
+  const receiveChains = new Set();
   const mergeOptions = (a, b) => ({ ...a, ...b, reconcile: !!(a?.reconcile || b?.reconcile),
     readOnly: !!(a?.readOnly || b?.readOnly), measureBytes: !!(a?.measureBytes || b?.measureBytes) });
   const deliverable = result => result?.effects?.length === 0 && result.keptLiveRows?.length === 0 && !result.reconciled;
@@ -56,7 +57,7 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
   function conflict(job, result) {
     if (active !== job) return;
     clearTimeout(job.timer);
-    if (++job.discards < maxDiscards && job.waiters.some(waiter => waiters.has(waiter))) {
+    if (++job.discards < maxDiscards && (job.options.reconcile || job.waiters.some(waiter => waiters.has(waiter)))) {
       if (!(job.options.readOnly && pending?.options.reconcile)) {
         job.options = mergeOptions(job.options, pending?.options);
         job.waiters.push(...(pending?.waiters || []));
@@ -153,7 +154,11 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
           const receiveCurrent = () => worker === current ? receive(message) : undefined;
           const result = receiving ? receiving.then(receiveCurrent) : receiveCurrent();
           if (result?.then) {
-            const queued = Promise.resolve(result).finally(() => { if (receiving === queued) receiving = null; });
+            const queued = Promise.resolve(result).finally(() => {
+              receiveChains.delete(queued);
+              if (receiving === queued) receiving = null;
+            });
+            receiveChains.add(queued);
             receiving = queued;
           }
         });
@@ -161,10 +166,14 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
         current.on('exit', code => { if (worker === current) fail(new Error(`projects worker exited ${code}`)); });
       }
       const state = snapshot();
+      if (!canReconcile()) job.options = { ...job.options, reconcile: false, readOnly: true };
       active = { ...job, id: ++nextId, version: state.version, liveVersion: state.liveVersion, stale: false, conflict: undefined };
       if (job.options.reconcile || active.hardDeadline) {
         active.hardDeadline ||= Date.now() + reconcileTimeoutMs;
-        active.timer = setTimeout(() => fail(new Error('projects worker reconcile timed out')), Math.max(0, active.hardDeadline - Date.now()));
+        active.timer = setTimeout(() => {
+          receiving = null;
+          fail(new Error('projects worker reconcile timed out'));
+        }, Math.max(0, active.hardDeadline - Date.now()));
       }
       worker.postMessage({ ...state, ...job.options, id: active.id });
     } catch (error) { fail(error); }
@@ -180,6 +189,7 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
           ...(active ? { reconcile: !!active.options.reconcile, dispatches: active.discards + 1 } : {}) }));
         if (active && !active.options.reconcile && !active.waiters.some(w => waiters.has(w))) {
           resetWorker();
+          receiving = null;
           dispatchPending();
         }
       }, timeoutMs);
@@ -194,7 +204,7 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
   async function shutdown() {
     stopped = true;
     fail(new Error('projects worker shut down'));
-    await Promise.all([...terminations, receiving?.catch(() => {})].filter(Boolean));
+    await Promise.all([...terminations, ...[...receiveChains].map(chain => chain.catch(() => {}))]);
   }
 
   return { request, shutdown };

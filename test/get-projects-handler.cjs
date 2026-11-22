@@ -13,11 +13,12 @@ module.exports = function loadGetProjectsHandler(context) {
   const end = source.indexOf('\n});', start) + 4;
   assert.ok(start >= 0 && end > start, 'shipped get-projects registration must exist');
   let handler;
-  const helperStart = source.indexOf('async function getProjectsSnapshot(');
+  const helperStart = source.indexOf('let projectsReconcileAfterPopulate = false;');
   const helperEnd = source.indexOf('\n}', helperStart) + 2;
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
   const sandbox = {
     console, performance, structuredClone, Buffer, cliSessionState, require: createRequire(filename),
+    isIndexingFinished: () => context.isInitialScanComplete(),
     log: { warn() {}, info() {}, error() {} }, notifyRendererProjectsChanged() {}, lastKnownProjects: { remember() {} }, ...context,
     ipcMain: { handle: (name, callback) => { assert.equal(name, 'get-projects'); handler = callback; } },
   };
@@ -27,7 +28,13 @@ module.exports = function loadGetProjectsHandler(context) {
   const acceptedStart = source.indexOf('\n  accepted: ', clientStart);
   const acceptedEnd = source.indexOf('\n});', acceptedStart);
   assert.ok(clientStart >= 0 && acceptedStart > clientStart && acceptedEnd > acceptedStart, 'shipped acceptance callback must exist');
-  handler.accepted = vm.runInContext('(' + source.slice(acceptedStart + '\n  accepted: '.length, acceptedEnd).replace(/,\s*$/, '') + ')', sandbox, { filename });
+  sandbox.projectsSnapshot = () => ({});
+  sandbox.createProjectsWorkerClient = options => {
+    handler.accepted = options.accepted;
+    return context.createProjectsWorkerClient ? context.createProjectsWorkerClient(options) : sandbox.projectsClient;
+  };
+  vm.runInContext(source.slice(clientStart, acceptedEnd + 4), sandbox, { filename,
+    lineOffset: source.slice(0, clientStart).split('\n').length - 1 });
   handler.reconciledAt = () => sandbox.projectsReconciledAt;
   return handler;
 };
