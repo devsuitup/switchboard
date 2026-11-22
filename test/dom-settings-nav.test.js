@@ -13,6 +13,26 @@ const root = path.join(__dirname, '..');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const globalPages = ['general', 'sessions', 'keyboard', 'automation', 'remote', 'integrations', 'archived', 'advanced'];
 
+test('General Appearance offers and saves Theme only globally', async t => {
+  const h = setup(t);
+  const applied = [];
+  h.w.appTheme = { apply: value => applied.push(value) };
+  await h.open();
+  const select = h.q('#sv-theme');
+  assert.ok(select, 'Theme select exists');
+  assert.equal(select.closest('.settings-page').dataset.section, 'general');
+  assert.equal(select.value, 'dark');
+  assert.deepEqual([...select.options].map(o => [o.value, o.textContent]), [['dark', 'Dark'], ['light', 'Light'], ['system', 'System']]);
+  select.value = 'system';
+  h.q('#sv-save-btn').click(); await settle(); await settle();
+  assert.equal(h.saved.global.theme, 'system');
+  assert.deepEqual(applied, ['system']);
+  await h.open();
+  assert.equal(h.q('#sv-theme').value, 'system');
+  await h.open('project');
+  assert.equal(h.q('#sv-theme'), null);
+});
+
 test('settings filter is labelled and keyboard reachable above navigation in both scopes', async t => {
   const h = setup(t);
   for (const scope of ['global', 'project']) {

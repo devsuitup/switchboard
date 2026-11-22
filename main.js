@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, screen, session, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, powerMonitor, screen, session, shell } = require('electron');
 const { Worker } = require('worker_threads');
 const { performance } = require('node:perf_hooks');
 const { createMainLoopMonitor } = require('./src/main/app/main-loop-monitor');
@@ -44,6 +44,7 @@ const activityTrace = require('./src/main/shared/activity-trace');
 const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDecision } = activityTrace;
 
 const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./src/main/app/window-frame');
+const { installWindowTheme } = require('./src/main/app/window-theme');
 const { createUnsavedGuard } = require('./src/main/app/unsaved-guard');
 const { inventory, runExitHandoffs } = require('./src/main/app/session-exit');
 const { backgroundRefusal } = require('./src/main/bg-agents/bg-handoff');
@@ -411,6 +412,8 @@ function resolveAllowedMemoryPath(filePath) {
 const subagentWatchers = new Map();
 let subagentWatcherSeq = 0;
 
+const windowTheme = installWindowTheme({ ipcMain, nativeTheme, getSetting, getWindow: () => mainWindow, platform: process.platform });
+
 function createWindow() {
   // Restore saved window bounds
   const savedBounds = getSetting('global')?.windowBounds;
@@ -442,6 +445,8 @@ function createWindow() {
     minHeight: 500,
     title: appTitle,
     ...windowFrameOptions(process.platform),
+    ...windowTheme.frameOptions(),
+    backgroundColor: windowTheme.colors().background,
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -453,6 +458,7 @@ function createWindow() {
     },
   });
 
+  windowTheme.refresh();
   powerLog ||= createPowerLog({ powerMonitor, logger: log });
   powerLog.observeWindow(mainWindow);
   triggerRendererBridge.attach(mainWindow);
@@ -1816,6 +1822,7 @@ ipcMain.handle('set-setting', async (_event, key, value) => {
   const usageBefore = key === 'global' ? getSetting('global')?.showCodexUsage : undefined;
   await setSetting(key, value);
   if (key === 'global') {
+    windowTheme.refresh();
     if (value?.showCodexUsage !== usageBefore) codexUsage.settingsChanged();
     applyUpdateChannel();
     // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")

@@ -223,7 +223,7 @@ function renderToolUse(block) {
     try { return renderMcpAction(name, input, block); } catch {}
   }
   // Default: collapsible JSON
-  return toolBlock('#8888a0', name, '', makeCollapsible('jsonl-tool-result', 'Input', input, true));
+  return toolBlock('var(--text-tool)', name, '', makeCollapsible('jsonl-tool-result', 'Input', input, true));
 }
 
 function renderMcpAction(name, input, block) {
@@ -265,7 +265,7 @@ function renderMcpAction(name, input, block) {
     content = pre;
   }
 
-  return toolBlock('#c090e0', label, summary, content);
+  return toolBlock('var(--tool-search)', label, summary, content);
 }
 
 function shortPath(p) {
@@ -280,7 +280,7 @@ const toolRenderers = {
       const start = input.offset || 0;
       range = input.limit ? `:${start}-${start + input.limit}` : `:${start}`;
     }
-    return toolBlock('#8888a0', 'Read', '<code>' + escapeHtml(shortPath(path) + range) + '</code>', null);
+    return toolBlock('var(--text-tool)', 'Read', '<code>' + escapeHtml(shortPath(path) + range) + '</code>', null);
   },
 
   Edit(input) {
@@ -299,7 +299,7 @@ const toolRenderers = {
       diff.innerHTML = html;
       content = diff;
     }
-    return toolBlock('#e0a040', 'Edit', '<code>' + escapeHtml(shortPath(path)) + '</code>', content);
+    return toolBlock('var(--tool-edit)', 'Edit', '<code>' + escapeHtml(shortPath(path)) + '</code>', content);
   },
 
   Write(input) {
@@ -310,7 +310,7 @@ const toolRenderers = {
     if (input.content) {
       content = makeCollapsible('jsonl-tool-result', 'Content', input.content, true);
     }
-    return toolBlock('#60c060', 'Write', detail, content);
+    return toolBlock('var(--tool-write)', 'Write', detail, content);
   },
 
   Bash(input) {
@@ -318,7 +318,7 @@ const toolRenderers = {
     const pre = document.createElement('pre');
     pre.className = 'jsonl-tool-cmd-block';
     pre.textContent = cmd;
-    return toolBlock('#80c0e0', 'Bash', null, pre);
+    return toolBlock('var(--tool-shell)', 'Bash', null, pre);
   },
 
   Grep(input) {
@@ -326,12 +326,12 @@ const toolRenderers = {
     const path = input.path || '';
     const sp = path ? shortPath(path) : '';
     const summary = '<code>' + escapeHtml(pattern) + (sp ? ' in ' + escapeHtml(sp) : '') + '</code>';
-    return toolBlock('#c090e0', 'Grep', summary, null);
+    return toolBlock('var(--tool-search)', 'Grep', summary, null);
   },
 
   Glob(input) {
     const pattern = input.pattern || '';
-    return toolBlock('#c090e0', 'Glob', '<code>' + escapeHtml(pattern) + '</code>', null);
+    return toolBlock('var(--tool-search)', 'Glob', '<code>' + escapeHtml(pattern) + '</code>', null);
   },
 
   Agent(input, block) {
@@ -341,7 +341,7 @@ const toolRenderers = {
     const summary = caretSpan
       + (type ? '<span class="jsonl-tool-detail">' + escapeHtml(type) + '</span> ' : '')
       + escapeHtml(desc);
-    const el = toolBlock('#f0a050', 'Agent', summary, null);
+    const el = toolBlock('var(--state-waiting)', 'Agent', summary, null);
     el.classList.add('jsonl-agent-expandable');
     // Capture context at render time
     const parentSessionId = currentViewerSessionId;
@@ -450,7 +450,7 @@ function renderLocalCommand({ cmd, output }) {
   pre.className = 'jsonl-tool-cmd-block';
   pre.textContent = cmd;
 
-  const el = toolBlock('#80c0e0', 'Bash', '<span class="jsonl-tool-detail">local</span>', pre);
+  const el = toolBlock('var(--tool-shell)', 'Bash', '<span class="jsonl-tool-detail">local</span>', pre);
 
   if (output) {
     let contentEl = el.querySelector('.jsonl-tool-content');

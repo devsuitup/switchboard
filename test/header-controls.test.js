@@ -216,7 +216,9 @@ test('the activity slot sits before the session name, with its words in the tool
 // jsdom cascades the real stylesheet with specificity, so a later, more
 // specific rule for one toggle shows up here as a difference.
 function cascadedRow() {
-  const dom = new JSDOM(`<!DOCTYPE html><head><style>${RAW_CSS}</style></head><body class="window-frameless platform-linux">
+  const rootTokens = Object.fromEntries([...CSS.match(/:root\s*\{([^}]+)\}/)[1].matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(m => [m[1], m[2].trim()]));
+  const resolvedCss = RAW_CSS.replace(/var\((--[\w-]+)\)/g, (match, key) => rootTokens[key] || match);
+  const dom = new JSDOM(`<!DOCTYPE html><head><style>${resolvedCss}</style></head><body class="window-frameless platform-linux">
     <div id="terminal-header"><div id="terminal-header-info"><span id="terminal-header-status"></span><span id="terminal-header-name">n</span></div>
     <div id="terminal-header-session">
       <button id="panel-terminal-toggle-btn" class="icon-btn active"></button>

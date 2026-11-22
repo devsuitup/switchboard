@@ -21,6 +21,7 @@ const SETTING_DEFAULTS = {
   sessionMaxAgeDays: 3,
   hideSdkSessions: true,
   sidebarWidth: 340,
+  theme: 'dark',
   terminalTheme: 'switchboard',
   terminalRightClick: 'menu',
   restoreOnStartup: 'ask',

@@ -1,0 +1,32 @@
+{
+  "tokens": {
+    "--tool-bar-width": "34px",
+    "--tool-panel-floor": "280px",
+    "--tool-main-floor": "214px",
+    "--tool-open-main-floor": "498px",
+    "--tool-sidebar-offset": "204px",
+    "--tool-panel-offset": "422px",
+    "--surface-chrome": "#18181f",
+    "--surface-sunken": "#111118",
+    "--hairline": "rgba(255,255,255,0.06)",
+    "--control-border": "rgba(255,255,255,0.08)",
+    "--control-surface": "rgba(255,255,255,0.04)",
+    "--accent": "#8088ff",
+    "--accent-border": "rgba(120,130,255,0.3)",
+    "--accent-border-strong": "rgba(120,130,255,0.4)",
+    "--accent-wash": "rgba(120,130,255,0.06)",
+    "--accent-wash-strong": "rgba(120,130,255,0.12)",
+    "--text-muted": "#9090a8",
+    "--state-waiting": "#f0a050",
+    "--strip-height": "32px",
+    "--strip-min-height": "max(var(--strip-height), env(titlebar-area-height, 0px))",
+    "--strip-inset-left": "0px",
+    "--strip-inset-right": "calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw))"
+  },
+  "cssHash": "9067ff7b11617f1c4b72ca6a011ef2d558616c96f9bb94e2c3aa89833b6f824e",
+  "inline": {
+    "sidebar.js": "ddf3a3c5b50cddcf23529cda82ba3d100be61c70469bef621cfc1f90259dd5c9",
+    "jsonl-viewer.js": "d74bf42a3c33ba87b8f4cf9441df0814380890a6ca0c239f3479207f36c73e2a",
+    "viewer-toolbar.js": "1ec7045aa2659f8933cb9e277503536952d044d3aa186855b2770f43648fa1f1"
+  }
+}
