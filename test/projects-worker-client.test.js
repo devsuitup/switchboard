@@ -11,7 +11,7 @@ function fixture(options = {}) {
   let version = 0;
   const applied = [];
   worker.postMessage = message => messages.push(message);
-  worker.terminate = () => Promise.resolve();
+  worker.terminate = async () => { worker.terminated = true; };
   const client = createProjectsWorkerClient({
     workerFactory: () => worker,
     snapshot: () => ({ version, state: version }),
@@ -259,7 +259,7 @@ test('version retries cannot extend an individual caller deadline', async () => 
   try { await rejected; } finally { clearInterval(interval); clearTimeout(guard); f.client.shutdown(); }
 });
 
-test('completed folder writes survive a caller timeout and a slow reconcile advances on completion', async () => {
+test('completed folder writes survive a caller timeout but the abandoned reconcile is cancelled', async () => {
   const f = fixture({ timeoutMs: 20 });
   const waiter = f.client.request({ reconcile: true });
   const rejected = assert.rejects(waiter, /timed out/);
@@ -268,7 +268,7 @@ test('completed folder writes survive a caller timeout and a slow reconcile adva
     assert.equal(f.applied.length, 1);
     await rejected;
     f.reply(0, { value: 'complete', effects: [], keptLiveRows: [], reconciled: true });
-    assert.equal(f.applied.at(-1).reconciled, true);
+    assert.equal(f.applied.length, 1, 'late reconcile must not apply after its last waiter expired');
     const next = f.client.request({ reconcile: false });
     f.reply(1, { value: 'built' });
     assert.deepEqual(await next, { value: 'built' });
@@ -361,6 +361,39 @@ function liveFixture(options = {}) {
 }
 const effectFree = value => ({ effects: [], keptLiveRows: [], reconciled: false, value });
 
+test('a reconcile queued before populate becomes a cache read when dispatched during populate', async () => {
+  let allowed = true;
+  const f = fixture({ canReconcile: () => allowed });
+  try {
+    const first = f.client.request();
+    const queued = f.client.request({ reconcile: true });
+    queued.catch(() => {});
+    allowed = false;
+    f.reply(0, effectFree('first'));
+    await first;
+    assert.equal(f.messages[1].reconcile, false, 'dispatch must recheck populate, not only the IPC request');
+    assert.equal(f.messages[1].readOnly, true);
+    f.reply(1, effectFree('cached'));
+    await queued;
+  } finally { await f.client.shutdown(); }
+});
+
+test('the last reconcile waiter timeout terminates its worker and cannot re-dispatch', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture({ timeoutMs: 30 });
+  try {
+    const request = f.client.request({ reconcile: true });
+    const rejected = assert.rejects(request, { code: 'PROJECTS_WORKER_TIMEOUT' });
+    t.mock.timers.tick(30);
+    await rejected;
+    assert.equal(f.worker.terminated, true);
+    f.change();
+    f.reply(0, { effects: [{ name: 'setName' }], keptLiveRows: [], reconciled: true });
+    assert.equal(f.messages.length, 1);
+    assert.equal(f.applied.length, 0);
+  } finally { await f.client.shutdown(); }
+});
+
 test('a third live-snapshot conflict of an effect-free build delivers the last snapshot flagged stale', async () => {
   const f = liveFixture();
   try {
@@ -383,18 +416,18 @@ test('a third conflict of a reply carrying retained rows still rejects', async (
   } finally { await f.client.shutdown(); }
 });
 
-test('an acceptance after every caller expired reports delivered:false', async () => {
+test('an abandoned reconcile ignores late acceptance and restarts for the next caller', async () => {
   const accepted = [];
   const f = liveFixture({ timeoutMs: 20, accepted: (result, info) => accepted.push([result.value, info]) });
   try {
     const expired = f.client.request({ reconcile: true });
     await assert.rejects(expired, /timed out/);
     f.reply(0, { effects: [], keptLiveRows: [], reconciled: true, value: 'late' });
-    assert.deepEqual(accepted, [['late', { delivered: false }]]);
+    assert.deepEqual(accepted, [], 'expired jobs cannot publish late acceptance');
     const answered = f.client.request();
     f.reply(1, effectFree('in time'));
     await answered;
-    assert.deepEqual(accepted[1], ['in time', { delivered: true }]);
+    assert.deepEqual(accepted[0], ['in time', { delivered: true }]);
   } finally { await f.client.shutdown(); }
 });
 

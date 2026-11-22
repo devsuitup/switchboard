@@ -2,6 +2,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { createLastKnownProjectsStore } = require('../src/main/projects/last-known-projects');
 const { setupSidebarDom } = require('./dom-setup');
 const { loadAppFunctions, readAppSource } = require('./app-source');
 
@@ -12,6 +16,44 @@ const lastKnown = {
   savedAt: 1,
 };
 const fresh = { defaultProjects: [{ projectPath: '/fresh', sessions: [] }], allProjects: [{ projectPath: '/fresh', sessions: [] }] };
+
+test('compact disk snapshots retain the rendered sidebar for local, archived, scheduled, remote and subagent rows', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sidebar-snapshot-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const row = { sessionId: 'root-123', summary: 'original prompt', firstPrompt: 'original prompt',
+    name: 'Named conversation', aiTitle: 'Generated title', modified: '2026-11-22T10:20:30.000Z', messageCount: 42,
+    starred: 1, runtime: 'claude', projectPath: '/fixture', cwd: '/fixture', sourceFolder: '-fixture', canLaunch: true };
+  const allProjects = [
+    { projectPath: '/fixture', folder: '-fixture', sessions: [row,
+      { ...row, sessionId: 'scheduled-123', name: 'Scheduled audit', scheduleSlug: 'nightly' },
+      { ...row, sessionId: 'child-123', parentSessionId: row.sessionId, agentId: 'agent-one', subagentType: 'explorer', description: 'Read source' },
+      { ...row, sessionId: 'child-456', parentSessionId: row.sessionId, agentId: 'agent-two', subagentType: 'explorer' },
+      { ...row, sessionId: 'archived-123', archived: 1, name: 'Archived chat', runtime: 'codex', runtimeLabel: 'Codex' },
+    ] },
+    { projectPath: '/remote', remoteAlias: 'host', missing: true, sessions: [
+      { ...row, sessionId: 'remote-123', name: 'Remote chat', projectPath: '/remote', remoteAlias: 'host', remoteAttachable: false },
+    ] },
+  ];
+  const defaultProjects = [{ ...allProjects[0], sessions: allProjects[0].sessions.filter(s => !s.archived) }];
+  const store = createLastKnownProjectsStore({ dir, appVersion: 'test' });
+  store.remember({ defaultProjects, allProjects });
+  await store.flush();
+  const loaded = await store.load();
+  function paint(projects, archived) {
+    const h = setupSidebarDom();
+    try {
+      h.window.showArchived = archived;
+      h.window.cachedAllProjects = projects;
+      h.window.cachedProjects = projects;
+      loadAppFunctions(h.context, { functions: ['dedup'] });
+      h.window.dedup(projects);
+      h.window.renderProjects(projects, true);
+      return h.window.sidebarContent.innerHTML;
+    } finally { h.destroy(); }
+  }
+  assert.equal(paint(loaded.defaultProjects, false), paint(structuredClone(defaultProjects), false));
+  assert.equal(paint(loaded.allProjects, true), paint(structuredClone(allProjects), true));
+});
 
 function setup({ last = lastKnown, projects = fresh } = {}) {
   const h = setupSidebarDom();

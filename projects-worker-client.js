@@ -3,7 +3,7 @@
 // see .ai/contexts/session-cache.md ("Projects query worker")
 const RECONCILE_TIMEOUT_MS = 5 * 60 * 1000;
 
-function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted = () => {}, timeoutMs = 30000, reconcileTimeoutMs = RECONCILE_TIMEOUT_MS, maxDiscards = 3 }) {
+function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted = () => {}, canReconcile = () => true, timeoutMs = 30000, reconcileTimeoutMs = RECONCILE_TIMEOUT_MS, maxDiscards = 3 }) {
   let worker = null;
   const terminations = new Set();
   let stopped = false;
@@ -28,6 +28,7 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
     const old = worker;
     worker = null;
     active = null;
+    receiving = null;
     if (old) {
       const terminated = Promise.resolve().then(() => old.terminate());
       terminations.add(terminated);
@@ -161,6 +162,7 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
         current.on('exit', code => { if (worker === current) fail(new Error(`projects worker exited ${code}`)); });
       }
       const state = snapshot();
+      if (!canReconcile()) job.options = { ...job.options, reconcile: false, readOnly: true };
       active = { ...job, id: ++nextId, version: state.version, liveVersion: state.liveVersion, stale: false, conflict: undefined };
       if (job.options.reconcile || active.hardDeadline) {
         active.hardDeadline ||= Date.now() + reconcileTimeoutMs;
@@ -178,7 +180,7 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
       waiter.timer = setTimeout(() => {
         settle(waiter, Object.assign(new Error('projects worker timed out'), { code: 'PROJECTS_WORKER_TIMEOUT', timeoutMs,
           ...(active ? { reconcile: !!active.options.reconcile, dispatches: active.discards + 1 } : {}) }));
-        if (active && !active.options.reconcile && !active.waiters.some(w => waiters.has(w))) {
+        if (active && !active.waiters.some(w => waiters.has(w))) {
           resetWorker();
           dispatchPending();
         }

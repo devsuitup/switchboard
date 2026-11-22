@@ -658,6 +658,7 @@ function projectsSnapshot() {
     writerRevision: typeof getSetting === 'function' ? getSetting('_writer_revision', { fresh: true }) || 0 : undefined };
 }
 const projectsClient = createProjectsWorkerClient({
+  canReconcile: isIndexingFinished,
   workerFactory: () => new Worker(path.join(__dirname, 'workers', 'projects-query.js'), { workerData: { dbPath: DB_PATH, projectsDir: PROJECTS_DIR } }),
   snapshot: projectsSnapshot,
   apply: async result => {
@@ -1450,7 +1451,19 @@ async function getProjectsSnapshot(showArchived) {
     if (needsPopulate) Promise.resolve(populateCacheViaWorker()).then(result => { if (result?.ok && isInitialScanComplete()) projectsReconciledAt = Date.now(); }, () => {});
     backfillEntrypoints();
     backfillCustomTitles();
-    const result = await projectsClient.request({ reconcile: !needsPopulate && Date.now() - projectsReconciledAt >= 5000, measureBytes: TRACE.on });
+    const populating = !isIndexingFinished();
+    if (populating) getProjectsSnapshot.reconcileAfterPopulate = true;
+    const reconcile = !needsPopulate && !populating && !getProjectsSnapshot.reconciling
+      && (getProjectsSnapshot.reconcileAfterPopulate || Date.now() - projectsReconciledAt >= 5000);
+    if (reconcile) getProjectsSnapshot.reconciling = true;
+    let result;
+    try {
+      result = await projectsClient.request({ reconcile: !!reconcile, measureBytes: TRACE.on });
+      if (reconcile && result.reconciled) {
+        getProjectsSnapshot.reconcileAfterPopulate = false;
+        projectsReconciledAt = Date.now();
+      }
+    } finally { if (reconcile) getProjectsSnapshot.reconciling = false; }
     const projection = result.projection
       ? { ...result.projection, removedInputs: structuredClone(result.projection.removedInputs) }
       : undefined;

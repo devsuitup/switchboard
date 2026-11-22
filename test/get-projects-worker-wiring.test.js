@@ -136,6 +136,30 @@ test('projects snapshot carries cached background state and attach identity in i
 // #1125: the reconcile throttle after a cold scan, undelivered reconciles, stale deliveries and conflict diagnostics.
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+test('warm startup reads during populate and reconciles once after it settles', async () => {
+  let finished = false;
+  const requests = [];
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const invoke = handler({
+    Date: { now: () => 100000 },
+    isIndexingFinished: () => finished,
+    projectsClient: { request: async options => {
+      requests.push(options);
+      if (options.reconcile && finished) await gate;
+      return { defaultProjects: [], allProjects: [], reconciled: options.reconcile };
+    } },
+  });
+  for (let i = 0; i < 20; i++) await invoke(null, 'both');
+  assert.equal(requests.filter(options => options.reconcile).length, 0, 'populate must serve cache reads without filesystem reconciliation');
+  finished = true;
+  const first = invoke(null, 'both');
+  const second = invoke(null, 'both');
+  release();
+  await Promise.all([first, second]);
+  assert.equal(requests.filter(options => options.reconcile).length, 1, 'one post-populate reconcile even with overlapping loads');
+});
+
 test('a completed cold scan advances the reconcile throttle', async () => {
   let now = 100000, scanDone = false, finishScan;
   const requests = [];

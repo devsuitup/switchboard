@@ -58,7 +58,7 @@ function scenario(name, body) {
               console, TRACE: { on: false }, performance, projectsReconciledAt: Date.now(),
               getSetting: db.getSetting, normalizeHosts: () => [],
               parseFolderKey: require('./src/main/remote/remote-hosts').parseFolderKey,
-              isInitialScanComplete: () => true, isCachePopulated: () => true,
+              isInitialScanComplete: () => true, isCachePopulated: () => true, isIndexingFinished: () => true,
               isSearchIndexPopulated: () => true,
               populateCacheViaWorker: () => assert.fail('warm cache populated'),
               backfillEntrypoints() {}, backfillCustomTitles() {}, writer,

@@ -11,6 +11,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - After a restart, Switchboard re-reads only the Codex sessions changed since the previous run, as it already does for Claude Code transcripts. Warm startup now finishes with "Indexed session changes" for both CLIs; a full rebuild still reports the indexing totals. (#1152)
 
 ### Fixed
+- While the session index is being built at startup, the sidebar no longer reloads over and over with "Projects changed while loading" and timeouts. (#1182)
+- The sidebar from your previous run is shown at startup on large histories too, instead of being dropped when it grew past 8 MB. (#1183)
 - Closing an archived project's Delete dialog returns keyboard focus to its row after the list refreshes, or to the filter if the row is gone. (#1162)
 
 ## v0.0.108 — 2026-11-21

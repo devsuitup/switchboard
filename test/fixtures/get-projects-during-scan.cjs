@@ -85,7 +85,7 @@ async function run() {
     Object.assign(context, {
       ipcMain: { handle: (_name, fn) => { invoke = fn; } }, console, performance, TRACE: { on: false },
       getSetting: db.getSetting, isInitialScanComplete: db.isInitialScanComplete,
-      isCachePopulated: db.isCachePopulated, isSearchIndexPopulated: db.isSearchIndexPopulated,
+      isCachePopulated: db.isCachePopulated, isSearchIndexPopulated: db.isSearchIndexPopulated, isIndexingFinished: () => false,
       populateCacheViaWorker() {}, backfillEntrypoints() {}, backfillCustomTitles() {}, projectsClient,
       mergePlaceholderSessions: projects => projects, annotateRemoteAttachable: projects => projects,
       cliSessionState: require('../../cli-session-state'),

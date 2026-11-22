@@ -202,9 +202,10 @@ test('T5.5 repeated conflict notifications coalesce under the shipped throttle a
   const start = source.indexOf('const NOTIFY_THROTTLE_MS ='), end = source.indexOf('\nfunction sendStatus', start);
   let now = 0, next = 0; const timers = new Map(), deliveries = [];
   const notify = vm.runInNewContext(source.slice(start, end) + '\nnotifyRendererProjectsChanged;', {
-    stopping: false, TRACE: { on: false },
+    stopping: false, populatePromise: null, TRACE: { on: false },
     getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: (_channel, payload) => deliveries.push({ at: now, cause: payload.cause }) } }),
-    setTimeout: (fn, delay) => { const id = ++next; timers.set(id, { fn, at: now + delay }); return id; }, clearTimeout: id => timers.delete(id) });
+    setTimeout: (fn, delay) => { const id = ++next; timers.set(id, { fn, at: now + delay }); return id; }, clearTimeout: id => timers.delete(id) },
+  { filename: path.join(__dirname, '../session-cache.js'), lineOffset: source.slice(0, start).split('\n').length - 1 });
   const advance = time => { now = time; for (const [id, timer] of timers) if (timer.at <= now) { timers.delete(id); timer.fn(); } };
   notify('conflict');
   for (now = 100; now < 1500; now += 100) notify('conflict');

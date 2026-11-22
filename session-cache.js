@@ -18,6 +18,9 @@ async function shutdownProducers() {
   populateRetryTimer = null;
   clearTimeout(_activityTimer);
   clearTimeout(_notifyTimer);
+  clearTimeout(_populateNotifyTimer);
+  _populateNotifyTimer = null;
+  _populateNotifyCauses.clear();
   _activityTimer = null;
   _notifyTimer = null;
   _notifyCooldown = false;
@@ -1384,12 +1387,50 @@ function buildProjectsFromCache(showArchived) {
 // see .ai/contexts/session-cache.md ("Watcher notification rules")
 const NOTIFY_THROTTLE_MS = 1500;
 const ACTIVITY_NOTIFY_MIN_MS = 30000;
+const POPULATE_NOTIFY_MIN_MS = 10000;
+let _populateNotifyPromise = null;
+let _populateNotifyTimer = null;
+const _populateNotifyCauses = new Set();
 let _notifyCooldown = false;
 let _notifyTimer = null;
 let _activityTimer = null;
 const _notifyCauses = new Set();
 function notifyRendererProjectsChanged(cause) {
   if (stopping) return;
+  if (populatePromise && (cause === 'scan' || cause === 'conflict')) {
+    _populateNotifyCauses.add(cause);
+    if (_populateNotifyTimer === null) {
+      _populateNotifyTimer = setTimeout(() => {
+        _populateNotifyTimer = null;
+        for (const pendingCause of _populateNotifyCauses) _notifyCauses.add(pendingCause);
+        _populateNotifyCauses.clear();
+        clearTimeout(_notifyTimer);
+        _notifyTimer = null;
+        _notifyCooldown = false;
+        if (_notifyCauses.size) sendProjectsChanged();
+      }, POPULATE_NOTIFY_MIN_MS);
+      _populateNotifyTimer.unref?.();
+    }
+    if (_populateNotifyPromise !== populatePromise) {
+      const observed = _populateNotifyPromise = populatePromise;
+      const settled = () => {
+        if (stopping || _populateNotifyPromise !== observed) return;
+        if (populatePromise) { notifyRendererProjectsChanged('scan'); return; }
+        _populateNotifyPromise = null;
+        clearTimeout(_populateNotifyTimer);
+        _populateNotifyTimer = null;
+        for (const pendingCause of _populateNotifyCauses) _notifyCauses.add(pendingCause);
+        _populateNotifyCauses.clear();
+        _notifyCauses.add('scan');
+        clearTimeout(_notifyTimer);
+        _notifyTimer = null;
+        _notifyCooldown = false;
+        sendProjectsChanged();
+      };
+      populatePromise.then(settled, settled);
+    }
+    return;
+  }
   if (cause === 'activity') {
     if (_activityTimer === null) {
       _activityTimer = setTimeout(() => {
@@ -1453,10 +1494,11 @@ function sendIndexingProgress(payload) {
 }
 
 let indexingFinished = false;
-function isIndexingFinished() { return indexingFinished; }
+function isIndexingFinished() { return indexingFinished && !populatePromise; }
 
 function sendIndexingFinished() {
   indexingFinished = true;
+  notifyRendererProjectsChanged('scan');
   const mw = getMainWindow();
   if (mw && !mw.isDestroyed()) {
     mw.webContents.send('indexing-finished');

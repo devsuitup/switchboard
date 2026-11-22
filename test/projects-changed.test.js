@@ -91,10 +91,60 @@ function fixture(t) {
     return file;
   }
   return { cache, rows, meta, folders, folder, directory, write, sent, traced, timers, traceState, clock,
+    setPopulate: promise => { context.scanForTest = promise; vm.runInNewContext('populatePromise = scanForTest;', context, { filename }); },
+    finishIndexing: () => vm.runInNewContext('sendIndexingFinished();', context, { filename }),
     async event(relative = 'one.jsonl') { watched('change', path.join(folder, relative)); await watcher.flushProjectsBeforeExit(); },
     async folderEvent() { watched('rename', folder); await watcher.flushProjectsBeforeExit(); },
   };
 }
+
+test('twenty folder publications and conflicts reload at most once per ten seconds plus the final flush', async t => {
+  const f = fixture(t);
+  let release;
+  const scan = new Promise(resolve => { release = resolve; });
+  f.setPopulate(scan);
+  for (let i = 0; i < 20; i++) {
+    f.cache.notifyRendererProjectsChanged('scan');
+    f.cache.notifyRendererProjectsChanged('conflict');
+    f.clock.advance(1000);
+  }
+  assert.ok(f.sent.length <= 3, `20 folder publications caused ${f.sent.length} reloads`);
+  const during = f.sent.length;
+  f.setPopulate(null);
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.sent.length, during + 1, 'settlement must flush exactly once');
+  f.clock.advance(30000);
+  assert.equal(f.sent.length, during + 1, 'no trailing duplicate after settlement');
+});
+
+test('a failed populate with no folder publications still sends its final reload', async t => {
+  const f = fixture(t);
+  let release;
+  f.setPopulate(new Promise(resolve => { release = resolve; }));
+  f.finishIndexing();
+  assert.equal(f.cache.isIndexingFinished(), false, 'completion notification precedes the actual promise settlement');
+  f.setPopulate(null);
+  release({ ok: false });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.sent.filter(([event]) => event === 'projects-changed').length, 1, 'failed populate must trigger one final cache read');
+});
+
+test('a forced follow-up populate flushes once even when both shared promises settle', async t => {
+  const f = fixture(t);
+  let finishFirst, finishSecond;
+  const first = new Promise(resolve => { finishFirst = resolve; });
+  const second = new Promise(resolve => { finishSecond = resolve; });
+  f.setPopulate(first);
+  f.cache.notifyRendererProjectsChanged('scan');
+  f.setPopulate(second);
+  f.cache.notifyRendererProjectsChanged('scan');
+  finishFirst(second);
+  f.setPopulate(null);
+  finishSecond();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.sent.length, 1, 'the superseded populate must not duplicate the final reload');
+});
 
 test('watcher skips unchanged rows and continuation bookkeeping with the same display fields', async t => {
   const f = fixture(t);
