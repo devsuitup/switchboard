@@ -44,7 +44,10 @@ token. A refusal disables Delete and writes its reason into the row;
 summary. Every refusal except the grouped-worktree hint, including thrown IPC
 errors, explains how to reopen the menu and click Delete again unless the refusal
 already explicitly says to reopen Delete. Stop, Check or Reload advice alone
-keeps the menu retry sentence; reopening only
+keeps the menu retry sentence. Check for existing reopen advice after stripping
+dialog-specific retry wording, so generic `SNAPSHOT_STALE`, `TOKEN_LIMIT` and
+`UNAUTHORIZED` replies without an `error` field retain the menu retry sentence.
+Reopening only
 re-enables that explicit action, with no preview. Detached rows ignore refusal
 updates. The shared flow's `onDialogOpen` callback clears the row's checking
 message when the dialog opens.

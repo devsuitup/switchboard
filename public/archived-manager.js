@@ -163,9 +163,9 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, fo
         const grouped = reply?.code === 'IDENTITY_UNAVAILABLE' && reply.error === 'Folder and path hints conflict.'
           && project.remoteAlias === null && worktreeGroupingPath(project.projectPath) !== project.projectPath;
         const retryable = !grouped;
+        const base = message.replace(/\s*(?:Close and reopen Delete to retry\.|Retry preview, or cancel\.)/g, '');
         reason.textContent = grouped ? 'This worktree is grouped under its repository. To remove it from Switchboard, delete its repository instead.'
-          : message.replace(/\s*(?:Close and reopen Delete to retry\.|Retry preview, or cancel\.)/g, '')
-            + (retryable && !/\breopen Delete\b/i.test(message) ? ' Reopen the menu and click Delete project to try again.' : '');
+          : base + (retryable && !/\breopen Delete\b/i.test(base) ? ' Reopen the menu and click Delete project to try again.' : '');
         button.dataset.unavailable = 'true'; button.dataset.retryable = String(retryable); button.disabled = true;
       } })) {
         projectEntries.delete(entry); delete folders[entry];

@@ -510,12 +510,15 @@ for (const refusal of [
   { code: 'SNAPSHOT_STALE', error: 'Snapshot changed.', refresh: true, retry: true },
   { code: 'TOKEN_LIMIT', error: 'Too many previews.', retry: true },
   { code: 'UNAUTHORIZED', error: 'Sender unavailable.', retry: true },
+  { code: 'SNAPSHOT_STALE', retry: true },
+  { code: 'TOKEN_LIMIT', retry: true },
+  { code: 'UNAUTHORIZED', retry: true },
   { error: 'IPC rejected', thrown: true, retry: true },
   { code: 'NOT_READY', error: 'Recovery pending', retry: true },
   { code: 'DISCOVERY_TIMEOUT', port: 'readJobs', retry: true },
   { code: 'DISCOVERY_UNAVAILABLE', error: 'Index unavailable', retry: true },
   { error: 'Index unavailable', retry: true },
-]) test(`click-time refusal stays accessible with appropriate advice: ${refusal.code || refusal.error}`, async t => {
+]) test(`click-time refusal stays accessible with appropriate advice: ${refusal.code || refusal.error}${refusal.code && !refusal.error ? ' (no error field)' : ''}`, async t => {
   const h = await setup(t), row = h.rows()[1], button = row.querySelector('.archived-delete');
   h.w.api.previewProjectDelete = async input => {
     h.calls.preview.push(input);
