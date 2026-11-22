@@ -1710,14 +1710,9 @@ What Switchboard sets *after* cleaning stays: the plain terminal's `CLAUDECODE=1
 ## Projects conflicts and projection diagnostics (#719)
 
 During a populate (#1182), `isIndexingFinished()` stays false until the populate
-promise settles, including warm starts with an inherited completeness marker.
-`getProjectsSnapshot` serves the cached view, remembers a deferred reconcile,
-and allows one reconcile request after settlement; overlapping loads stay cache
-reads while it is pending. The worker client rechecks `canReconcile` at dispatch
-(including retries and queued requests), downgrading to a read-only build while
-indexing. A completed cold scan still advances the normal five-second throttle;
-a deferred reconcile takes precedence on the next load. The existing final
-projects notification causes that load when the sidebar is visible.
+promise settles, including warm starts with an inherited completeness marker,
+and get-projects serves read-only builds. Which load reconciles after the
+populate settles is described in session-cache.md, Projects query worker.
 
 `session-cache` collects `scan` and `conflict` causes separately during a
 populate and emits them at most once per ten seconds. On settlement it cancels
@@ -1728,14 +1723,10 @@ existing 1.5-second throttle and activity retains its 30-second delay. Producer
 shutdown clears the additional timer. The renderer's existing 900 ms debounce
 is unchanged.
 
-When a job's last waiter times out, the worker client cancels the job and
-terminates its worker, even for reconciliation. Late messages cannot apply or
-retry that job; pending callers can start on a new worker without waiting for
-an abandoned effect acknowledgment. Effects already submitted to the writer
-are not rolled back. The five-minute reconcile deadline remains a hard bound
-for jobs that still have callers. Tests cover request-time and dispatch-time
-gating, twenty publications with conflicts, failed settlement, and cancellation
-in `get-projects-worker-wiring`, `projects-worker-client` and `projects-changed`.
+Caller deadlines, abandoned reconciles and shutdown: see session-cache.md,
+Projects query worker. Tests cover request-time and dispatch-time gating,
+twenty publications with conflicts, failed settlement, and deadlines in
+`get-projects-worker-wiring`, `projects-worker-client` and `projects-changed`.
 
 On terminal PROJECTS_SNAPSHOT_CONFLICT, get-projects schedules the existing
 throttled projects-changed notification with cause conflict, then returns only
