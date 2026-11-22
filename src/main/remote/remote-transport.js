@@ -239,7 +239,7 @@ function createSshTransport(opts = {}) {
         stopping = true;
         const killChild = () => { try { child.kill('SIGKILL'); } catch {} };
         if (killTree && Number.isSafeInteger(child.pid)) {
-          const isCurrent = () => child.exitCode == null && child.signalCode == null;
+          const isCurrent = () => process.platform !== 'win32' || (child.exitCode == null && child.signalCode == null);
           void stopProcessTree(child.pid, { isCurrent }).then(stopped => {
             if (!stopped && isCurrent()) killChild();
           });
@@ -377,13 +377,19 @@ function createSshTransport(opts = {}) {
         killTree: true,
       });
       if (res.code === 0 && !res.timedOut) {
-        if (legacy) legacyHosts.add(alias);
+        if (legacy) {
+          legacyHosts.add(alias);
+          legacyTimedOut.delete(alias);
+        }
         break;
       }
       if (legacy) {
+        if (res.timedOut) {
+          if (!legacyHosts.has(alias)) legacyTimedOut.add(alias);
+          break;
+        }
         legacyHosts.delete(alias);
-        if (res.timedOut) legacyTimedOut.add(alias);
-        if (!res.timedOut && /\b(?:unknown|illegal|invalid) option[^\r\n]*\bO\b|^\s*usage:/im.test(res.stderr)) {
+        if (/\b(?:unknown|illegal|invalid) option[^\r\n]*\bO\b|^\s*usage:/im.test(res.stderr)) {
           legacyUnsupported.add(scpPath);
         }
       }

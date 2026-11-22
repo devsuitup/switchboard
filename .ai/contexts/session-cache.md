@@ -995,18 +995,25 @@ Both attempts use the resolved scp/ssh pair, BatchMode and `fetchTimeoutMs`.
 Timeout and cancellation kill the scp process tree: a detached process group
 on POSIX, `stopProcessTree` (`taskkill /T /F`) on Windows. A stopped child's
 `exit` settles the attempt and destroys its stdout/stderr pipes without waiting
-for descendants to release them. If it already exited, stopping settles it
-directly. Its `.part` must be removed before retrying; only exit zero without
+for descendants to release them. If it already exited, stopping still signals
+its POSIX process group (a missing group is harmless) and settles it directly.
+Windows retains the live-leader guard for PID-based tree termination.
+Its `.part` must be removed before retrying; only exit zero without
 timeout can reach the atomic rename.
 Ordinary SFTP errors and cancellation do not trigger fallback. A failed retry
 leaves any existing mirror intact.
 
 A successful legacy transfer records the SSH alias in `legacyHosts` within
 the transport. Main creates one transport for its lifetime, so later files,
-queued work and later pulls use legacy mode. A failed copy that started in
+queued work and later pulls use legacy mode. Only a non-timeout failure in
 remembered legacy mode forgets the alias and tries SFTP once. A legacy timeout
-is also remembered per alias, suppressing further SFTP-to-legacy retries for
-the lifetime of the transport. Cancellation increments an epoch checked before
+fails that copy without removing the learned mode or retrying SFTP. Timeouts
+are recorded in `legacyTimedOut` only while the alias has no learned legacy mode;
+every legacy success clears that suppression. This also handles concurrent first
+copies in either completion order: a timeout cannot erase a sibling's success,
+and a later sibling success clears an earlier timeout. Without such a success,
+further SFTP-to-legacy retries stay suppressed until the transport restarts.
+Cancellation increments an epoch checked before
 any retry and kills the trees of copies already in flight. The host profile only
 normalizes alias, label and enabled, so this learned capability is not
 persisted. Incremental SSH range fetches are unchanged.
