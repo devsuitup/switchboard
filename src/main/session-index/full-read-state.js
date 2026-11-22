@@ -41,7 +41,7 @@ function rowWitness(row) {
       : key === 'entrypoint' || key === 'customTitle' || key === 'fileSize' ? row[key] ?? null : row[key] || null));
 }
 
-function matchesFullRead(file, serialized, runtime = 'claude', relativePath) {
+function matchesFullRead(file, serialized, runtime = 'claude', relativePath, titleSnapshot) {
   let stamp;
   try { stamp = JSON.parse(serialized); } catch { return false; }
   if (stamp?.format !== 1 || stamp.runtime !== runtime || stamp.relativePath !== relativePath) return false;
@@ -49,6 +49,13 @@ function matchesFullRead(file, serialized, runtime = 'claude', relativePath) {
   if (!current || fields.some(key => current[key] !== stamp[key])) return false;
   const dependencies = stamp.dependencies;
   if (!dependencies || typeof dependencies !== 'object') return false;
+  if (runtime === 'codex') {
+    const codex = require('../../../harnesses/codex');
+    const snapshot = titleSnapshot === undefined ? codex.readTitleSnapshot() : titleSnapshot;
+    if (!snapshot || !Object.hasOwn(dependencies, 'title')
+      || (dependencies.title !== null && typeof dependencies.title !== 'string')
+      || dependencies.title !== (snapshot.titles.get(codex.sessionIdFromPath(file)) || null)) return false;
+  }
   if (relativePath.includes('/') && !Object.hasOwn(dependencies, 'meta')) return false;
   if (Object.hasOwn(dependencies, 'meta')) {
     const meta = observation(file.replace(/\.jsonl$/, '.meta.json'));
@@ -60,9 +67,29 @@ function matchesFullRead(file, serialized, runtime = 'claude', relativePath) {
 function sourceRelativePath(row) {
   try {
     const stamp = JSON.parse(row.fullReadStamp);
-    if (stamp?.format === 1 && stamp.runtime === 'claude' && safeRelativePath(stamp.relativePath)) return stamp.relativePath;
+    if (stamp?.format === 1 && stamp.runtime === 'claude' && (row.runtime || 'claude') === 'claude' && safeRelativePath(stamp.relativePath)) return stamp.relativePath;
+    if (stamp?.format === 1 && stamp.runtime === 'codex' && row.runtime === 'codex') {
+      const file = startupSourcePath('', row.folder, stamp.relativePath);
+      const codex = require('../../../harnesses/codex');
+      if (file && row.sessionFile && path.resolve(row.sessionFile) === file && codex.sessionIdFromPath(file) === row.sessionId) return stamp.relativePath;
+    }
   } catch {}
   return null;
+}
+
+function startupFolderPath(projectsDir, folder) {
+  if (typeof folder !== 'string') return null;
+  const harness = require('../../../harnesses').harnessForFolder(folder);
+  if (harness.folderPrefix && folder.startsWith(harness.folderPrefix)) return harness.folderPath(folder);
+  return folder && folder !== '.' && folder !== '..' && !/[\\/:]/.test(folder) ? path.join(projectsDir, folder) : null;
+}
+
+function startupSourcePath(projectsDir, folder, relativePath) {
+  const dir = startupFolderPath(projectsDir, folder);
+  if (!dir || !safeRelativePath(relativePath)) return null;
+  const harness = require('../../../harnesses').harnessForFolder(folder);
+  if (harness.folderPrefix && folder.startsWith(harness.folderPrefix) && (relativePath.includes('/') || !harness.sessionIdFromPath(relativePath))) return null;
+  return path.join(dir, relativePath);
 }
 
 function safeRelativePath(relativePath) {
@@ -95,6 +122,8 @@ function deferStartupSources(result, paths) {
   const rows = [...result.inventory.rows, ...result.sessions];
   const deferred = new Set([...(result.deferred || []), ...paths]);
   const rejected = new Set([...deferred].map(relativePath => {
+    const harness = require('../../../harnesses').harnessForFolder(result.folder);
+    if (harness.folderPrefix && result.folder.startsWith(harness.folderPrefix)) return harness.sessionIdFromPath(relativePath);
     const known = rows.find(row => sourceRelativePath(row) === relativePath);
     if (known) return known.sessionId;
     const parsed = classifyTranscriptPath(relativePath);
@@ -128,4 +157,4 @@ function folderReadWitness(db, folder, sessionIds = null) {
 }
 
 module.exports = { SESSION_CONTENT_INDEX_VERSION, CONTENT_GOLDEN_DIGESTS, observation, relativeSource, fullReadStamp, fullIndexConfig, rowWitness,
-  matchesFullRead, sourceRelativePath, safeRelativePath, nameDerivationWitness, folderReadWitness, startupTouchedIds, startupInventoryMatches, deferStartupSources };
+  matchesFullRead, sourceRelativePath, safeRelativePath, startupFolderPath, startupSourcePath, nameDerivationWitness, folderReadWitness, startupTouchedIds, startupInventoryMatches, deferStartupSources };

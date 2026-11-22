@@ -45,7 +45,7 @@ function readSessionTitles() {
   const filePath = titleIndexPath();
   let stat;
   try { stat = fs.statSync(filePath); } catch (err) {
-    return err?.code === 'ENOENT' ? new Map() : null;
+    return ['ENOENT', 'ENOTDIR'].includes(err?.code) ? new Map() : null;
   }
   const cached = cachedTitleIndex;
   if (cached && cached.filePath === filePath && cached.mtimeMs === stat.mtimeMs && cached.ctimeMs === stat.ctimeMs
@@ -71,24 +71,42 @@ function titleIndexMtimeMs() {
   try { return fs.statSync(titleIndexPath()).mtimeMs; } catch { return 0; }
 }
 
+function readTitleSnapshot() {
+  const file = titleIndexPath(), before = observation(file);
+  const titles = readSessionTitles();
+  if (!titles || before === undefined || JSON.stringify(before) !== JSON.stringify(observation(file))
+    || (before !== null && (cachedTitleIndex?.titles !== titles
+      || JSON.stringify(cachedTitleIndex.fullObservation) !== JSON.stringify(before)))) return null;
+  return { file, observation: before, titles };
+}
+
+function matchesTitleSnapshot(snapshot) {
+  if (!snapshot || snapshot.file !== titleIndexPath() || snapshot.observation === undefined) return false;
+  const current = observation(snapshot.file);
+  return current !== undefined && JSON.stringify(current) === JSON.stringify(snapshot.observation);
+}
+
 function available() {
   return fs.existsSync(sessionsRoot());
 }
 
-function subdirs(dir) {
+function subdirs(dir, opts) {
   try {
     return fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name);
-  } catch { return []; }
+  } catch (error) {
+    if (opts?.strict && !['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+    return [];
+  }
 }
 
-function listFolders() {
+function listFolders(opts) {
   const root = sessionsRoot();
   const folders = [];
-  for (const y of subdirs(root)) {
+  for (const y of subdirs(root, opts)) {
     if (!/^\d{4}$/.test(y)) continue;
-    for (const m of subdirs(path.join(root, y))) {
+    for (const m of subdirs(path.join(root, y), opts)) {
       if (!/^\d{2}$/.test(m)) continue;
-      for (const d of subdirs(path.join(root, y, m))) {
+      for (const d of subdirs(path.join(root, y, m), opts)) {
         if (/^\d{2}$/.test(d)) folders.push(`${folderPrefix}${y}/${m}/${d}`);
       }
     }
@@ -113,10 +131,13 @@ function folderForProject() { return null; }
 function deriveProjectPath() { return null; }
 function resolveWorktreePath(projectPath) { return projectPath; }
 
-function listTranscripts(dir) {
+function listTranscripts(dir, opts) {
   try {
     return fs.readdirSync(dir).filter(f => ROLLOUT_RE.test(f)).map(f => path.join(dir, f));
-  } catch { return []; }
+  } catch (error) {
+    if (opts?.strict && !['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+    return [];
+  }
 }
 
 function sessionIdFromPath(filePath) {
@@ -153,7 +174,7 @@ function metricsBucket(buckets, date, model) {
   return bucket;
 }
 
-function readSessionFile(filePath, folder) {
+function readSessionFile(filePath, folder, opts) {
   try {
     const before = observation(filePath);
     const titleBefore = observation(titleIndexPath());
@@ -175,7 +196,7 @@ function readSessionFile(filePath, folder) {
       const payload = entry.payload;
       if (!payload) return;
       if (entry.type === 'session_meta') {
-        if (isSubagentMeta(payload)) { subagent = true; return false; }
+        if (isSubagentMeta(payload)) { subagent = true; return opts?.startup && !opts.allowSubagentEarlyStop ? undefined : false; }
         projectPath = projectPath || payload.cwd || null;
         if (HEADLESS_ORIGINATORS.has(payload.originator)) entrypoint = HEADLESS_ENTRYPOINT;
         return;
@@ -209,15 +230,25 @@ function readSessionFile(filePath, folder) {
     };
     const scan = bodyRead(filePath, () => scanLines(filePath, 0, onLine, stat.size));
     if (scan.tail && !scan.stopped) onLine(scan.tail);
+    if (opts?.startup && subagent && scan.stopped && opts.allowSubagentEarlyStop) {
+      opts.outcome.status = 'excluded-early';
+      return null;
+    }
+    if (opts?.startup) {
+      opts.outcome.stamp = fullReadStamp(filePath, id, path.basename(filePath), before, scan.read,
+        { title: opts.titleSnapshot.titles.get(sessionId) || null });
+      opts.outcome.status = opts.outcome.stamp ? 'excluded' : 'deferred';
+    }
     if (subagent || !projectPath || !summary || messageCount < 1) return null;
 
     const created = firstTimestamp || stat.birthtime.toISOString();
-    const titles = readSessionTitles();
+    const titles = opts?.startup ? opts.titleSnapshot.titles : readSessionTitles();
     const aiTitle = titles?.get(sessionId) || null;
     const titleAfter = observation(titleIndexPath());
+    if (opts?.startup && opts.outcome.stamp) opts.outcome.status = 'row';
     return {
       sessionId, folder, projectPath, runtime: id, sessionFile: filePath,
-      fullReadStamp: titles && JSON.stringify(titleBefore) === JSON.stringify(titleAfter) && titleBefore !== undefined
+      fullReadStamp: opts?.startup ? opts.outcome.stamp : titles && JSON.stringify(titleBefore) === JSON.stringify(titleAfter) && titleBefore !== undefined
         && (titleBefore === null || (cachedTitleIndex?.titles === titles && JSON.stringify(cachedTitleIndex.fullObservation) === JSON.stringify(titleBefore)))
         ? fullReadStamp(filePath, id, path.basename(filePath), before, scan.read, { title: aiTitle }) : null,
       summary, firstPrompt: summary, created,
@@ -228,8 +259,12 @@ function readSessionFile(filePath, folder) {
       slug: null, customTitle: '', entrypoint,
       aiTitle,
     };
-  } catch {
+  } catch (error) {
     require('../src/main/session-index/read-counters').failedRead(filePath);
+    if (opts?.startup) {
+      opts.outcome.status = ['ENOENT', 'ENOTDIR'].includes(error.code) ? 'absent' : 'failed';
+      opts.outcome.error = error.message;
+    }
     return null;
   }
 }
@@ -401,7 +436,7 @@ module.exports = {
     ideBridge: false, sandbox: false, schedule: false, remote: false, deleteTranscript: false }),
   codexHome, sessionsRoot, available, listFolders, folderPath, watchFolderKey, folderForProject, deriveProjectPath, resolveWorktreePath,
   listTranscripts, sessionIdFromPath, transcriptPath, isSubagentMeta, readSessionFile,
-  titleIndexPath, readSessionTitles, titleIndexMtimeMs,
+  titleIndexPath, readSessionTitles, titleIndexMtimeMs, readTitleSnapshot, matchesTitleSnapshot,
   toViewerEntry, toViewerEntries,
   parseTitleState, classifyTitleActivity, classifyNotification,
   buildLaunchArgs, needsIdDetection, readModelCatalog,

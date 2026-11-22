@@ -44,7 +44,7 @@ const { conversationMeta } = require('./conversation-meta');
 const { cleanDisplayName } = require('./public/utils');
 const { isHostedJob } = require('./src/main/bg-agents/bg-agents-roster');
 const { state: TRACE, trace } = require('./src/main/shared/activity-trace');
-const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, matchesFullRead, observation, nameDerivationWitness, sourceRelativePath, startupInventoryMatches, deferStartupSources } = require('./src/main/session-index/full-read-state');
+const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, matchesFullRead, observation, nameDerivationWitness, sourceRelativePath, startupSourcePath, startupInventoryMatches, deferStartupSources } = require('./src/main/session-index/full-read-state');
 
 /**
  * Session cache module.
@@ -1549,12 +1549,17 @@ async function publishScannedFolder(msg) {
   const started = performance.now();
   let ok = false;
   try {
+    if (msg.replan) throw Object.assign(new Error('Startup title snapshot changed'), { code: 'WRITER_STALE' });
     if (msg.error) throw new Error(msg.error);
     if (result?.startup) {
+      if (result.fullIndexConfig !== startupConfig()
+        || (result.runtime === 'codex' && !harnessForFolder(result.folder).matchesTitleSnapshot(result.titleSnapshot))) {
+        throw Object.assign(new Error('Startup source configuration or titles changed before publication'), { code: 'WRITER_STALE' });
+      }
       const raced = [];
       for (const [relativePath, stamp] of result.checks) {
-        const file = path.join(PROJECTS_DIR, result.folder, relativePath);
-        if (stamp === null ? observation(file) !== null : !matchesFullRead(file, stamp, 'claude', relativePath)) {
+        const file = startupSourcePath(PROJECTS_DIR, result.folder, relativePath);
+        if (!file || (stamp === null ? observation(file) !== null : !matchesFullRead(file, stamp, result.runtime || 'claude', relativePath, result.titleSnapshot))) {
           raced.push(relativePath);
         }
       }
@@ -1588,7 +1593,8 @@ async function publishScannedFolder(msg) {
         const collision = hasCollisionName(row.sessionId);
         const witness = nameDerivationWitness(getMeta(row.sessionId, true), collision);
         if (!collision && cacheBackend.getNameDerivation?.(row.sessionId) === witness) continue;
-        if (!matchesFullRead(path.join(PROJECTS_DIR, row.folder, relativePath), row.fullReadStamp, 'claude', relativePath)) continue;
+        const file = startupSourcePath(PROJECTS_DIR, row.folder, relativePath);
+        if (!file || !matchesFullRead(file, row.fullReadStamp, row.runtime || 'claude', relativePath, result.titleSnapshot)) continue;
         names.push({ sessionId: row.sessionId, stamp: row.fullReadStamp, witness, collision });
       }
       if (names.length && !await writer.deriveCachedNames(names)) {
@@ -1638,7 +1644,8 @@ function scanFoldersViaWorker(options) {
   promise.finally(() => subsetScans.delete(promise)).catch(() => {});
   return promise;
 }
-function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, fileSubsets, startup, onFolder }) {
+function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, fileSubsets, startup, onFolder,
+  sessionCounts = { folders: new Map(), total: 0 } }) {
   if (stopping) return Promise.resolve({ ok: false, error: 'indexer shutting down' });
   return new Promise((resolve) => {
     const hasFolders = Array.isArray(folders) && folders.length > 0;
@@ -1662,11 +1669,10 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
     }
 
     let settled = false;
-    let sessions = 0;
     let scanned = 0;
     let writeError;
     let unknownFailure = false;
-    const failedFolders = new Set();
+    const failedFolders = new Set(), replanFolders = new Set();
     let worker;
     let workerExited = false;
     const settle = (value) => {
@@ -1677,7 +1683,7 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
       resolve(value);
     };
     const timer = startup ? null : setTimeout(() => {
-      settle({ ok: false, error: 'folder scan timed out', folders: scanned, sessions });
+      settle({ ok: false, error: 'folder scan timed out', folders: scanned, sessions: sessionCounts.total });
     }, SUBSET_SCAN_TIMEOUT_MS);
 
     try {
@@ -1696,33 +1702,52 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
         if (msg.type === 'folder') {
           scanned++;
           try {
-            sessions += await publishScannedFolder(msg);
+            const written = await publishScannedFolder(msg);
+            const folder = msg.folder || msg.result?.folder;
+            sessionCounts.total += written - (sessionCounts.folders.get(folder) || 0);
+            sessionCounts.folders.set(folder, written);
           } catch (err) {
             const folder = msg.folder || msg.result?.folder;
-            try {
-              if (!stopping && startup && folder && (startup.attempt || 0) < 2 && err.code === 'WRITER_STALE' && startup.config === startupConfig()) {
-                const retry = await scanFoldersViaWorker({ projectsDir, folderPrefix, folders: [],
-                  startup: { ...startupSnapshot(startup.force, [folder]), attempt: (startup.attempt || 0) + 1 },
-                  onFolder: retryMsg => { msg = { ...retryMsg, current: msg.current, total: msg.total }; } });
-                if (retry.ok) { sessions += retry.sessions; onFolder?.(msg, sessions); return; }
-                err = new Error(retry.error);
-              }
-            } catch (retryError) { err = retryError; }
+            if (!stopping && startup && folder && err.code === 'WRITER_STALE' && startup.config === startupConfig()) {
+              replanFolders.add(folder);
+              return;
+            }
             if (!writeError || (folder && !failedFolders.size)) writeError = err.message;
             if (folder) failedFolders.add(folder);
             else unknownFailure = true;
             if (startup) log?.error(`[session-cache] folder write failed: ${err.message}`);
             else log?.warn(`[remote] folder write failed: ${err.message}`);
           }
-          onFolder?.(msg, sessions);
+          onFolder?.(msg, sessionCounts.total);
           return;
         }
         for (const folder of msg.failedFolders || []) failedFolders.add(folder);
-        settle({ ok: !!msg.ok && !writeError, error: writeError || msg.error, unknownFailure, failedFolders: [...failedFolders], folders: scanned, sessions });
-      }).catch(err => { writeError = err.message; settle({ ok: false, error: writeError, folders: scanned, sessions }); });
+        for (const folder of msg.replanFolders || []) replanFolders.add(folder);
+        if (replanFolders.size) {
+          if (!stopping && startup && (startup.attempt || 0) < 2 && startup.config === startupConfig()) {
+            try {
+              const retry = await scanFoldersViaWorker({ projectsDir, folderPrefix, folders: [],
+                startup: { ...startupSnapshot(startup.force, [...replanFolders]), attempt: (startup.attempt || 0) + 1 },
+                onFolder, sessionCounts });
+              if (!retry.ok) {
+                writeError ||= retry.error || 'Startup replan failed';
+                unknownFailure ||= retry.unknownFailure;
+                for (const folder of retry.failedFolders?.length ? retry.failedFolders : replanFolders) failedFolders.add(folder);
+              }
+            } catch (error) {
+              writeError ||= error.message;
+              for (const folder of replanFolders) failedFolders.add(folder);
+            }
+          } else {
+            writeError ||= 'Startup replan limit reached';
+            for (const folder of replanFolders) failedFolders.add(folder);
+          }
+        }
+        settle({ ok: !!msg.ok && !writeError, error: writeError || msg.error, unknownFailure, failedFolders: [...failedFolders], folders: scanned, sessions: sessionCounts.total });
+      }).catch(err => { writeError = err.message; settle({ ok: false, error: writeError, folders: scanned, sessions: sessionCounts.total }); });
     });
-    worker.on('error', err => { writes.then(() => settle({ ok: false, error: err.message, folders: scanned, sessions })); });
-    worker.on('exit', code => { workerExited = true; writes.then(() => settle({ ok: false, error: writeError || `worker exited ${code} without completion`, folders: scanned, sessions })); });
+    worker.on('error', err => { writes.then(() => settle({ ok: false, error: err.message, folders: scanned, sessions: sessionCounts.total })); });
+    worker.on('exit', code => { workerExited = true; writes.then(() => settle({ ok: false, error: writeError || `worker exited ${code} without completion`, folders: scanned, sessions: sessionCounts.total })); });
   });
 }
 
@@ -1747,7 +1772,8 @@ function startupSnapshot(force, scope) {
     const metas = getAllFolderMeta();
     const metadata = getAllMeta(true);
     const keys = new Set([...metas.keys(), ...rows.map(row => row.folder)]);
-    const inventory = [...keys].filter(folder => parseFolderKey(folder).alias === null && !harnessForFolder(folder)?.folderPrefix)
+    const inventory = [...keys].filter(folder => parseFolderKey(folder).alias === null
+      && !disabledHarnessIds().includes(harnessForFolder(folder).id))
       .map(folder => ({ folder, meta: metas.get(folder) || null, rows: rows.filter(row => row.folder === folder),
         metadata: rows.filter(row => row.folder === folder).map(row => [row.sessionId, metadata.get(row.sessionId) || null]),
         deferralVersions: [...(deferredContinuationFiles.get(folder) || [])].map(file => [file, deferredContinuationVersions.get(folder + '\0' + file)]),
@@ -1820,7 +1846,7 @@ function populateCacheViaWorker({ force = false } = {}, retryTimerFired = false)
       if (result.ok) {
         if (setInitialScanComplete) await writer.setInitialScanComplete();
         populateRetry = null;
-        sendStatus(`Indexed ${sessions} sessions across ${indexedProjects} projects`, 'done');
+        sendStatus(populateFull ? `Indexed ${sessions} sessions across ${indexedProjects} projects` : 'Indexed session changes', 'done');
         setTimeout(() => sendStatus(''), 5000).unref?.();
         progress(true);
         notifyRendererProjectsChanged('scan');

@@ -1,5 +1,23 @@
 # CLI harness port
 
+## Codex startup observations (#1152)
+
+`listFolders({ strict: true })` and `listTranscripts(dir, { strict: true })`
+retain ENOENT/ENOTDIR as absence and propagate other enumeration failures.
+Ordinary callers keep their permissive behavior. `readTitleSnapshot()` returns
+the effective title Map with its source observation only after a complete,
+stable read; an unknown observation returns null. `matchesTitleSnapshot()`
+checks both the current home and the full source observation. Last valid title
+entries and blank-to-null semantics are unchanged.
+
+`readSessionFile(file, folder, { startup: true, outcome, titleSnapshot })`
+finishes the selected rollout and supplies an outcome of row, excluded,
+deferred, absent or failed. Stable exclusions carry a complete-read witness
+without a persisted negative row. Non-startup parser output is unchanged.
+Startup body selection does not restrict watcher/adoption candidates or change
+launch tags, fork ownership or resume UUIDs. See session-cache.md for the
+day selector, metadata-only name repair and root relocation contracts.
+
 Issue #820 adds `harnesses/index.js`, `harnesses/claude.js` and
 `harnesses/contract.js` at the upstream paths, before ADR 0005's context move.
 The design follows Ali Basiri's upstream commits `ac72985f` and `f5e38a75`;

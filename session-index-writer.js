@@ -15,7 +15,7 @@ const { createCacheEffects } = require('./cache-effects');
 const { projectArchiveWorkflows, archiveProjectIdentity } = require('./src/main/projects/project-archive-workflow');
 const { worktreeParentPath } = require('./public/worktree-nesting');
 const { stable } = require('./src/main/projects/project-delete-identity');
-const { SESSION_CONTENT_INDEX_VERSION, fullIndexConfig, rowWitness, folderReadWitness, observation, startupTouchedIds, startupInventoryMatches } = require('./src/main/session-index/full-read-state');
+const { SESSION_CONTENT_INDEX_VERSION, fullIndexConfig, rowWitness, folderReadWitness, observation, startupFolderPath, startupTouchedIds, startupInventoryMatches } = require('./src/main/session-index/full-read-state');
 const { randomUUID } = require('node:crypto');
 
 // see .ai/contexts/session-index-writer.md
@@ -336,7 +336,8 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     async writeScannedFolder(result, unverified) { return compute('writeScannedFolder', result, unverified); },
     async writeScannedFolderPartial(result) { return compute('writeScannedFolderPartial', result); },
     async completeGoneFolder(folder) {
-      if (observation(path.join(projectsDir, folder)) !== null) throw new Error('Gone folder reappeared or cannot be inspected');
+      const dir = startupFolderPath(projectsDir, folder);
+      if (!dir || observation(dir) !== null) throw new Error('Gone folder reappeared or cannot be inspected');
       if (backend.getCachedByFolder(folder).length) return false;
       return compute('dropFolderRows', folder, { search: true });
     },

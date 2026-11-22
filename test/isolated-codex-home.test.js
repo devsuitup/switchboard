@@ -56,7 +56,7 @@ const scanTokens = /populateCacheViaWorker|scan-projects|readHarnessFolder|harne
 
 function hasIsolation(source, shared = false, script = false) {
   const ast = require('espree').parse(source, { ecmaVersion: 'latest', sourceType: 'commonjs', range: true });
-  const functions = new Map(), fixtures = new Set(), isolates = new Set(), callbacks = [];
+  const functions = new Map(), fixtures = new Set(), isolates = new Set(), callbacks = [], functionNodes = [];
   const isFunction = node => /^(?:FunctionDeclaration|FunctionExpression|ArrowFunctionExpression)$/.test(node?.type);
   const required = node => node?.type === 'CallExpression' && node.callee.name === 'require' ? node.arguments[0]?.value : null;
   const sharedPath = value => /(?:warm-start-1144|continuation-718)\.cjs$/.test(value || '');
@@ -70,6 +70,7 @@ function hasIsolation(source, shared = false, script = false) {
     }
   }
   walk(ast, node => {
+    if (isFunction(node)) functionNodes.push(node);
     if (node.type === 'FunctionDeclaration') functions.set(node.id.name, node);
     if (node.type === 'VariableDeclarator') {
       if (isFunction(node.init)) functions.set(node.id.name, node.init);
@@ -113,18 +114,37 @@ function hasIsolation(source, shared = false, script = false) {
     return { scan, isolated };
   }
   if (shared) return functions.has('fixture') && inspect(functions.get('fixture')).isolated;
+  if (script) {
+    let outside = '', end = 0;
+    for (const node of functionNodes) {
+      if (node.range[0] < end) continue;
+      outside += source.slice(end, node.range[0]);
+      end = node.range[1];
+    }
+    if (scanTokens.test(outside + source.slice(end))) return false;
+    const scanners = functionNodes.map(node => inspect(node)).filter(result => result.scan);
+    if (scanners.length) return scanners.every(result => result.isolated);
+  }
   const results = callbacks.map(callback => inspect(callback));
   const scans = results.filter(result => result.scan);
   return scans.length > 0 ? scans.every(result => result.isolated) : results.length > 0 && results.every(result => result.isolated);
 }
 
-test('guard rejects unused imports and isolation belonging to a different test', () => {
+test('guard rejects unused imports and isolation belonging to a different test', async t => {
   for (const source of [
     "const isolate = require('./fixtures/isolated-codex-home.cjs'); test('scan', () => cache.populateCacheViaWorker());",
     "const { OLD } = require('./fixtures/continuation-718.cjs'); test('scan', () => cache.reconcileCacheFromFilesystem());",
     "test('isolated', t => { require('./fixtures/isolated-codex-home.cjs')(t); cache.populateCacheViaWorker(); }); test('unsafe', () => cache.populateCacheViaWorker());",
     "function unused() { require('./fixtures/isolated-codex-home.cjs')(test); } test('scan', () => cache.populateCacheViaWorker());",
   ]) assert.equal(hasIsolation(source), false, `unprotected scan: ${source}`);
+  const scripts = {
+    'A exported arrow scanner': "const cache = require('../../session-cache'); function safe(){ require('./isolated-codex-home.cjs')(null); return require('../../workers/scan-projects'); } module.exports.run = () => cache.populateCacheViaWorker(); module.exports.safe = safe;",
+    'B top-level scan import': "const worker = require('../../workers/scan-projects'); function safe(){ require('./isolated-codex-home.cjs')(null); return require('../../harnesses/codex'); } function go(){ return worker.run(); } module.exports = { go, safe };",
+    'C object-method scanner': "const cache = require('../../session-cache'); function safe(){ require('./isolated-codex-home.cjs')(null); return readHarnessFolder(); } module.exports = { run() { return cache.populateCacheViaWorker(); }, safe };",
+  };
+  for (const [name, source] of Object.entries(scripts)) await t.test(name, () => {
+    assert.equal(hasIsolation(source, false, true), false, `unprotected script: ${name}`);
+  });
 });
 
 test('guard accepts file isolation and actually invoked scoped fixtures', () => {
