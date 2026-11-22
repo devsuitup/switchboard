@@ -9,7 +9,7 @@ const FILENAME = 'last-known-projects.json';
 const MAX_BYTES = 8 * 1024 * 1024;
 const WRITE_DELAY_MS = 2000;
 const PROJECT_FIELDS = ['projectPath', 'name', 'folder', 'missing', 'remoteAlias', 'remoteHostProfile', 'remoteHostError',
-  'remoteHostAt', 'remoteHostNextAttemptAt', 'hiddenRepository'];
+  'remoteHostAt', 'remoteHostNextAttemptAt', 'hiddenRepository', 'reenableOffer'];
 const SESSION_FIELDS = ['name', 'aiTitle', 'archived', 'starred', 'runtime', 'runtimeLabel', 'canLaunch', 'type', 'placeholder',
   'projectPath', 'cwd', 'recordedCwd', 'sourceFolder', 'scheduleSlug', 'parentSessionId', 'workflowRunId', 'workflowName',
   'agentId', 'subagentType', 'description', 'headSessionId', 'mergedMemberIds', 'mergedMemberStatuses',
@@ -22,7 +22,7 @@ const scope = project => JSON.stringify([project.remoteAlias || null, project.pr
 
 function compactProjects({ defaultProjects, allProjects }) {
   const defaults = new Map(defaultProjects.map((project, index) => [scope(project), { project, index }]));
-  return allProjects.map(project => {
+  const projects = allProjects.map(project => {
     const first = project.sessions[0] || {};
     const common = pick(first, COMMON_FIELDS.filter(key => project.sessions.every(row => row[key] === first[key])));
     const saved = { ...pick(project, PROJECT_FIELDS), common, sessions: project.sessions.map(row => {
@@ -45,6 +45,8 @@ function compactProjects({ defaultProjects, allProjects }) {
     }
     return saved;
   });
+  if (defaults.size) throw new Error('default project missing from all projects');
+  return projects;
 }
 
 function restoreProjects(projects) {

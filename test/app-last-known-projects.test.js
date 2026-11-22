@@ -24,7 +24,8 @@ test('compact disk snapshots retain the rendered sidebar for local, archived, sc
     name: 'Named conversation', aiTitle: 'Generated title', modified: '2026-11-22T10:20:30.000Z', messageCount: 42,
     starred: 1, runtime: 'claude', projectPath: '/fixture', cwd: '/fixture', sourceFolder: '-fixture', canLaunch: true };
   const allProjects = [
-    { projectPath: '/fixture', folder: '-fixture', sessions: [row,
+    { projectPath: '/fixture', folder: '-fixture', reenableOffer: { names: ['nightly'],
+      failed: [{ name: 'nightly', error: 'schedule unavailable' }] }, sessions: [row,
       { ...row, sessionId: 'scheduled-123', name: 'Scheduled audit', scheduleSlug: 'nightly' },
       { ...row, sessionId: 'child-123', parentSessionId: row.sessionId, agentId: 'agent-one', subagentType: 'explorer', description: 'Read source' },
       { ...row, sessionId: 'child-456', parentSessionId: row.sessionId, agentId: 'agent-two', subagentType: 'explorer' },
@@ -51,7 +52,10 @@ test('compact disk snapshots retain the rendered sidebar for local, archived, sc
       return h.window.sidebarContent.innerHTML;
     } finally { h.destroy(); }
   }
-  assert.equal(paint(loaded.defaultProjects, false), paint(structuredClone(defaultProjects), false));
+  const expected = paint(structuredClone(defaultProjects), false);
+  assert.match(expected, /schedule-reenable-notice/);
+  assert.match(expected, /Could not turn back on: nightly: schedule unavailable/);
+  assert.equal(paint(loaded.defaultProjects, false), expected);
   assert.equal(paint(loaded.allProjects, true), paint(structuredClone(allProjects), true));
 });
 

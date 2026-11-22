@@ -1820,11 +1820,18 @@ and visibility checks in `public/worktree-nesting.js`. On load the store rebuild
 the existing paired IPC shape; the renderer does not know about the disk format.
 Older disk formats are discarded by the existing version guard.
 
+Project fields include `reenableOffer`, preserving the schedule notice, failed
+re-enables and the header's no-auto-collapse behavior in the provisional paint.
+If a default project (including its remote-host scope) or row has no match in
+`allProjects`, compaction rejects the payload and the store keeps the previous
+file, as it does for serialization failures.
+
 The synthetic 20-project, 1,500-session-per-project fixture measures 57,054,142
 bytes in the former paired shape and 7,849,001 bytes in format 2, below 8,388,608.
 `test/app-last-known-projects.test.js` also compares the actual sidebar HTML
 before and after a real disk round trip for local, archived, scheduled, remote
-and subagent rows, alongside the provisional paint and handover tests.
+and subagent rows with re-enable notices, alongside the provisional paint and
+handover tests.
 
 Renderer side, `paintLastKnownProjects` (app.js) runs from
 `loadStartupProjects` without being awaited. It gives up when the reply is not

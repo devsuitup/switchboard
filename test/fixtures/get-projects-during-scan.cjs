@@ -85,7 +85,7 @@ async function run() {
     Object.assign(context, {
       ipcMain: { handle: (_name, fn) => { invoke = fn; } }, console, performance, TRACE: { on: false },
       getSetting: db.getSetting, isInitialScanComplete: db.isInitialScanComplete,
-      isCachePopulated: db.isCachePopulated, isSearchIndexPopulated: db.isSearchIndexPopulated, isIndexingFinished: () => false,
+      isCachePopulated: db.isCachePopulated, isSearchIndexPopulated: db.isSearchIndexPopulated, isIndexingFinished: () => warm,
       populateCacheViaWorker() {}, backfillEntrypoints() {}, backfillCustomTitles() {}, projectsClient,
       mergePlaceholderSessions: projects => projects, annotateRemoteAttachable: projects => projects,
       cliSessionState: require('../../cli-session-state'),
@@ -95,7 +95,7 @@ async function run() {
     const start = source.indexOf("ipcMain.handle('get-projects'");
     const end = source.indexOf('\n});', start) + 4;
     assert.ok(start >= 0 && end > start, 'shipped get-projects registration must exist');
-    const helperStart = source.indexOf('async function getProjectsSnapshot(');
+    const helperStart = source.indexOf('let projectsReconcileAfterPopulate = false;');
     const helperEnd = source.indexOf('\n}', helperStart) + 2;
     assert.ok(helperStart >= 0 && helperEnd > helperStart, 'shipped snapshot helper must exist');
     vm.runInContext(source.slice(helperStart, end), context, {

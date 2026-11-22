@@ -1432,6 +1432,9 @@ ipcMain.handle('rebuild-cache', async () => {
 ipcMain.handle('get-indexing-state', () => ({ finished: isIndexingFinished() }));
 ipcMain.handle('get-last-known-projects', () => lastKnownProjects.load());
 
+let projectsReconcileAfterPopulate = false;
+let projectsReconciling = false;
+
 async function getProjectsSnapshot(showArchived) {
   const started = TRACE.on ? performance.now() : null;
   try {
@@ -1448,22 +1451,27 @@ async function getProjectsSnapshot(showArchived) {
     }
     const needsPopulate = !isInitialScanComplete() || (!repairPending && (!isCachePopulated() || !isSearchIndexPopulated()));
 
-    if (needsPopulate) Promise.resolve(populateCacheViaWorker()).then(result => { if (result?.ok && isInitialScanComplete()) projectsReconciledAt = Date.now(); }, () => {});
+    if (needsPopulate || !isIndexingFinished()) Promise.resolve(populateCacheViaWorker()).then(result => {
+      if (result?.ok && isInitialScanComplete()) {
+        projectsReconciledAt = Date.now();
+        projectsReconcileAfterPopulate = false;
+      }
+    }, () => {});
     backfillEntrypoints();
     backfillCustomTitles();
     const populating = !isIndexingFinished();
-    if (populating) getProjectsSnapshot.reconcileAfterPopulate = true;
-    const reconcile = !needsPopulate && !populating && !getProjectsSnapshot.reconciling
-      && (getProjectsSnapshot.reconcileAfterPopulate || Date.now() - projectsReconciledAt >= 5000);
-    if (reconcile) getProjectsSnapshot.reconciling = true;
+    if (populating) projectsReconcileAfterPopulate = true;
+    const reconcile = !needsPopulate && !populating && !projectsReconciling
+      && (projectsReconcileAfterPopulate || Date.now() - projectsReconciledAt >= 5000);
+    if (reconcile) projectsReconciling = true;
     let result;
     try {
       result = await projectsClient.request({ reconcile: !!reconcile, measureBytes: TRACE.on });
       if (reconcile && result.reconciled) {
-        getProjectsSnapshot.reconcileAfterPopulate = false;
+        projectsReconcileAfterPopulate = false;
         projectsReconciledAt = Date.now();
       }
-    } finally { if (reconcile) getProjectsSnapshot.reconciling = false; }
+    } finally { if (reconcile) projectsReconciling = false; }
     const projection = result.projection
       ? { ...result.projection, removedInputs: structuredClone(result.projection.removedInputs) }
       : undefined;

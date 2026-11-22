@@ -13,7 +13,7 @@ const filename = path.join(__dirname, 'get-projects-archive-writer.test.js');
 
 function assertMainSlice(source, options) {
   const mainSource = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
-  const start = mainSource.indexOf('async function getProjectsSnapshot(');
+  const start = mainSource.indexOf('let projectsReconcileAfterPopulate = false;');
   const handler = mainSource.indexOf("ipcMain.handle('get-projects'");
   const end = mainSource.indexOf('\n});', handler) + 4;
   assert.ok(start >= 0 && handler > start && end > handler);
@@ -95,7 +95,7 @@ test('scan fixture extracts a callable get-projects handler with its snapshot de
     assertMainSlice(source, options);
     return vm.runInContext(source, context, options);
   } }, console, performance, assert,
-    source: fs.readFileSync(mainFilename, 'utf8'),
+    source: fs.readFileSync(mainFilename, 'utf8'), warm: false,
     require: createRequire(fixture),
     db: { getSetting() {}, isInitialScanComplete: () => true,
       isCachePopulated: () => true, isSearchIndexPopulated: () => true },

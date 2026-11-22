@@ -104,6 +104,24 @@ test('a payload that cannot be serialized is skipped and the previous file kept'
   assert.equal(s.warnings.length, 1);
 });
 
+for (const missing of ['project', 'row', 'host scope']) {
+  test(`a default ${missing} absent from all projects preserves the previous snapshot`, async t => {
+    const s = setup(t);
+    s.store.remember(payload);
+    await s.store.flush();
+    const previous = fs.readFileSync(s.file);
+    const absent = missing === 'project' ? { projectPath: '/absent', sessions: [] }
+      : { ...projects[0], ...(missing === 'host scope' ? { remoteAlias: 'other-host' }
+        : { sessions: [{ sessionId: 'absent' }] }) };
+    s.store.remember({ defaultProjects: [absent], allProjects: projects });
+    await s.store.flush();
+    assert.deepEqual(fs.readFileSync(s.file), previous, `an unmatched default ${missing} must not replace the previous file`);
+    assert.equal(s.warnings.length, 1);
+    assert.match(s.warnings[0], /default (project|row) missing from all projects/);
+    assert.deepEqual((await s.store.load()).defaultProjects, payload.defaultProjects);
+  });
+}
+
 test('a 30000 session install stores one compact list under 8 MiB and restores both views', async t => {
   const s = setup(t);
   const allProjects = Array.from({ length: 20 }, (_, p) => ({ projectPath: `/workspace/customer-${p}/long-project-directory`,
