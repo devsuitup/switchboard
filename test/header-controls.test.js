@@ -3,6 +3,7 @@
 'use strict';
 
 const test = require('node:test');
+const { resolveCssVars } = require('./css-vars');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -216,7 +217,8 @@ test('the activity slot sits before the session name, with its words in the tool
 // jsdom cascades the real stylesheet with specificity, so a later, more
 // specific rule for one toggle shows up here as a difference.
 function cascadedRow() {
-  const dom = new JSDOM(`<!DOCTYPE html><head><style>${RAW_CSS}</style></head><body class="window-frameless platform-linux">
+  const resolvedCss = resolveCssVars(RAW_CSS);
+  const dom = new JSDOM(`<!DOCTYPE html><head><style>${resolvedCss}</style></head><body class="window-frameless platform-linux">
     <div id="terminal-header"><div id="terminal-header-info"><span id="terminal-header-status"></span><span id="terminal-header-name">n</span></div>
     <div id="terminal-header-session">
       <button id="panel-terminal-toggle-btn" class="icon-btn active"></button>

@@ -1,5 +1,7 @@
 # Personnaliser les couleurs de Switchboard (fond + thème clair « Cowork »)
 
+> Switchboard propose maintenant un thème clair intégré : **Settings → General → Appearance → Theme**, puis **Dark**, **Light** ou **System**. Le choix est conservé lors des mises à jour et s’applique aux fenêtres, éditeurs et terminaux ouverts. Le guide de modification manuelle ci-dessous reste destiné aux personnalisations supplémentaires.
+
 > Guide pratique pour installer Switchboard, changer la couleur de fond, et appliquer un thème clair façon Claude / Cowork (fond crème, texte foncé, accent corail).
 >
 > Auteur : Jean-Luc PIETRI — 23/05/2026 — testé sur Switchboard v0.0.30 (Windows).

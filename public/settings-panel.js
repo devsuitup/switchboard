@@ -86,6 +86,7 @@
     let appliedHideSdk = hideSdkValue;
     let appliedCodexUsage = fieldValue('showCodexUsage') === true;
     const themeValue = fieldValue('terminalTheme');
+    const appThemeValue = fieldValue('theme');
     const rightClickValue = fieldValue('terminalRightClick');
     const restoreStartupValue = fieldValue('restoreOnStartup');
     const mcpEmulationValue = fieldValue('mcpEmulation');
@@ -284,8 +285,21 @@
 
         <div class="settings-field">
           <div class="settings-field-info">
+            <label class="settings-label" for="sv-theme">Theme</label>
+            <div class="settings-description">App and terminal colors. System follows your device's appearance live.</div>
+          </div>
+          <div class="settings-field-control">
+            <select class="settings-select control-select" id="sv-theme">
+              ${THEME_CHOICES.map(([value, label]) =>
+                `<option value="${value}" ${appThemeValue === value ? 'selected' : ''}>${label}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
             <span class="settings-label">Terminal Theme</span>
-            <div class="settings-description">Color theme for terminal sessions</div>
+            <div class="settings-description">Terminal palette when the app uses Dark. Light uses a matching light palette.</div>
           </div>
           <div class="settings-field-control">
             <select class="settings-select control-select" id="sv-terminal-theme">
@@ -597,6 +611,7 @@
     } else {
       moveGroup('general', 'Startup', ['sv-restore-startup']);
       moveGroup('general', 'Shell', ['sv-shell-profile']);
+      moveGroup('general', 'Appearance', ['sv-theme']);
       moveGroup('general', 'Terminal', ['sv-terminal-theme', 'sv-right-click']);
       moveGroup('general', 'IDE', ['sv-mcp-emulation']);
       const harnessGroup = form.querySelector('.sv-harness-toggle')?.closest('.settings-section');
@@ -957,6 +972,7 @@
         settings.visibleSessionCount = parseInt(settingsViewerBody.querySelector('#sv-visible-count').value) || SETTING_DEFAULTS.visibleSessionCount;
         settings.sessionMaxAgeDays = parseInt(settingsViewerBody.querySelector('#sv-max-age').value) || SETTING_DEFAULTS.sessionMaxAgeDays;
         settings.terminalTheme = settingsViewerBody.querySelector('#sv-terminal-theme').value || SETTING_DEFAULTS.terminalTheme;
+        settings.theme = settingsViewerBody.querySelector('#sv-theme').value || SETTING_DEFAULTS.theme;
         settings.terminalRightClick = settingsViewerBody.querySelector('#sv-right-click').value || SETTING_DEFAULTS.terminalRightClick;
         settings.restoreOnStartup = settingsViewerBody.querySelector('#sv-restore-startup').value || SETTING_DEFAULTS.restoreOnStartup;
         settings.hideSdkSessions = settingsViewerBody.querySelector('#sv-hide-sdk').checked;
@@ -1016,6 +1032,7 @@
         if (settings.sessionMaxAgeDays && typeof window._setSessionMaxAge === 'function') {
           window._setSessionMaxAge(settings.sessionMaxAgeDays);
         }
+        window.appTheme?.apply(settings.theme);
         if (settings.terminalTheme && typeof window._applyTerminalTheme === 'function') {
           window._applyTerminalTheme(settings.terminalTheme);
         }

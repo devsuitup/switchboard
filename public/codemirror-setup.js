@@ -6,6 +6,7 @@ import { languages } from '@codemirror/language-data';
 import { syntaxHighlighting, HighlightStyle, indentOnInput, bracketMatching, foldGutter, foldKeymap } from '@codemirror/language';
 import { highlightSelectionMatches } from '@codemirror/search';
 import { dracula } from '@ddietr/codemirror-themes/theme/dracula';
+import { githubLight } from '@ddietr/codemirror-themes/theme/github-light';
 import { tags } from '@lezer/highlight';
 import { MergeView, unifiedMergeView } from '@codemirror/merge';
 import { javascript } from '@codemirror/lang-javascript';
@@ -23,13 +24,29 @@ import { sql } from '@codemirror/lang-sql';
 import { cpp } from '@codemirror/lang-cpp';
 
 const markdownExtras = HighlightStyle.define([
-  { tag: tags.monospace, color: '#8BE9FD' },
+  { tag: tags.monospace, color: 'var(--syntax-code, #8BE9FD)' },
 ]);
 
 const appThemePatch = EditorView.theme({
   '&': { height: '100%', fontSize: '12.5px' },
   '.cm-content': { padding: '20px 8px' },
-}, { dark: true });
+});
+
+const editorTheme = new Compartment();
+const selectedEditorTheme = () => document.documentElement.dataset.theme === 'light' ? githubLight : dracula;
+const liveEditorTheme = ViewPlugin.fromClass(class {
+  constructor(view) {
+    this.apply = () => view.dispatch({ effects: editorTheme.reconfigure(selectedEditorTheme()) });
+    window.addEventListener('app-theme-changed', this.apply);
+  }
+  destroy() {
+    window.removeEventListener('app-theme-changed', this.apply);
+  }
+});
+
+function appEditorTheme() {
+  return [editorTheme.of(selectedEditorTheme()), liveEditorTheme];
+}
 
 // ── Custom floating search bar (matches xterm search bar style) ──────
 
@@ -332,7 +349,7 @@ function createPlanEditor(parent) {
       cmSaveKeymap,
       cmFloatingSearch(),
       markdown({ base: markdownLanguage, codeLanguages: languages }),
-      dracula,
+      appEditorTheme(),
       syntaxHighlighting(markdownExtras),
       appThemePatch,
       wrapCompartment.of(EditorView.lineWrapping),
@@ -404,7 +421,7 @@ function createReadOnlyViewer(parent, content, filename) {
       cmSaveDomHandler,
       cmFloatingSearch(),
       langExt,
-      dracula,
+      appEditorTheme(),
       syntaxHighlighting(markdownExtras),
       appThemePatch,
     ],
@@ -450,7 +467,7 @@ function createEditableViewer(parent, content, filename, { wrap = false, onChang
       cmSaveKeymap,
       cmFloatingSearch(),
       langExt,
-      dracula,
+      appEditorTheme(),
       syntaxHighlighting(markdownExtras),
       appThemePatch,
       wrapCompartment.of(wrap ? EditorView.lineWrapping : []),
@@ -486,7 +503,7 @@ function createMergeViewer(parent, originalContent, modifiedContent, filename, {
     cmFindDomHandler,
     cmFloatingSearch(),
     langExt,
-    dracula,
+    appEditorTheme(),
     syntaxHighlighting(markdownExtras),
     appThemePatch,
   ];
@@ -546,7 +563,7 @@ function createUnifiedMergeViewer(parent, originalContent, modifiedContent, file
       cmSaveDomHandler,
       cmFloatingSearch(),
       langExt,
-      dracula,
+      appEditorTheme(),
       syntaxHighlighting(markdownExtras),
       appThemePatch,
       docChangeListener(onChange),
