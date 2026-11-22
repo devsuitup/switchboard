@@ -55,7 +55,7 @@ function measureReads(t, files) {
   const totals = { bytes: 0, full: 0 };
   t.mock.method(fs, 'openSync', function (target, ...args) {
     const fd = open.call(this, target, ...args);
-    if (files.has(target)) descriptors.add(fd);
+    if (files.has(target)) { descriptors.add(fd); if (/scanLines/.test(new Error().stack)) totals.full++; }
     return fd;
   });
   t.mock.method(fs, 'readSync', function (fd, ...args) {
@@ -195,10 +195,10 @@ for (const header of [true, false]) {
     if (header) fs.appendFileSync(file, line({ type: 'custom-title', customTitle: 'Updated title' }));
     else fs.writeFileSync(file, line({ type: 'system', content: 'No display header' }));
     fs.utimesSync(file, new Date('2030-01-01'), new Date('2030-01-01'));
-    const readFile = fs.readFileSync;
+    const readFile = fs.openSync;
     let fullReads = 0;
-    t.mock.method(fs, 'readFileSync', function (target, ...args) {
-      if (target === file) { fullReads++; throw new Error('synthetic full-read failure'); }
+    t.mock.method(fs, 'openSync', function (target, ...args) {
+      if (target === file && /scanLines/.test(new Error().stack)) { fullReads++; throw new Error('synthetic full-read failure'); }
       return readFile.call(this, target, ...args);
     });
     await h.writer.refreshFolder(h.folder, { files: new Set(['member.jsonl']) });
@@ -217,11 +217,13 @@ for (const header of [true, false]) {
 test('full reader shares one final stamp observation for both indexes', storeOptions, async t => {
   const h = await fixture(t);
   const file = h.write('member.jsonl', [h.user('own', '03')]);
-  const stat = fs.statSync, read = fs.readFileSync;
+  const stat = fs.statSync, read = fs.readSync, open = fs.openSync;
+  let bodyFd;
+  t.mock.method(fs, 'openSync', function (target, ...args) { const fd = open.call(this, target, ...args); if (target === file) bodyFd = fd; return fd; });
   let readBody = false, finalStats = 0;
-  t.mock.method(fs, 'readFileSync', function (target, ...args) {
+  t.mock.method(fs, 'readSync', function (target, ...args) {
     const result = read.call(this, target, ...args);
-    if (target === file) readBody = true;
+    if (target === bodyFd) readBody = true;
     return result;
   });
   t.mock.method(fs, 'statSync', function (target, ...args) {

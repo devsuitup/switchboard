@@ -33,11 +33,13 @@ for (const phase of ['cold', 'warm']) {
     assert.equal(result.ok, true, phase + ' population completes while a transcript changes');
     assert.equal(f.db.isInitialScanComplete(), true, 'raced folder counts towards initial population');
     const meta = f.db.getFolderMeta(f.folder);
-    assert.ok(meta.fullIndexPending || meta.fullIndexVersion == null, 'raced folder stays unsealed');
+    assert.equal(meta.fullIndexPending, null, 'raced folder seals stable neighbors');
+    assert.equal(meta.fullIndexVersion, 1);
+    assert.equal(f.db.getCachedSession('live').fullReadStamp, null);
     assert.ok(f.db.getCachedSession('live'), 'raced transcript remains visible');
     assert.equal(f.db.getCachedByFolder(f.folder).length, timing === 50 ? 121 : 31, 'stable neighbors are published');
     assert.equal((await f.restart()).ok, true, 'quiescent warm restart completes');
-    assert.ok(f.scans()[0].filesRead > 0, 'warm restart rereads the unsealed folder');
+    assert.equal(f.scans()[0].filesRead, 1, 'warm restart rereads only the live file');
     await assertRebuildOracle(t, f);
   });
 }

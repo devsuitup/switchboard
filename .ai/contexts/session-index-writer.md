@@ -750,12 +750,21 @@ The main-side source check resolves Codex basenames under the configured date
 directory and validates the external-title snapshot before admission. Deferred
 paths map to filename UUIDs. Gone-folder finalization resolves the adapter's
 current root, rechecks absence and keeps metadata while live rows remain.
-No additional schema, writer, publication token or certificate format is added.
-Deferred publication leaves the folder pending and unsealed while population completes successfully.
+#1180 adds nullable `cache_meta.readFailures` for negative source observations.
+The existing setFolderMeta effect atomically replaces these witnesses with folder
+metadata; ordinary three-argument callers preserve them. The folder read witness
+includes this state, so stale startup results cannot overwrite newer failures.
+No additional writer, publication token or content-certificate format is added.
+#1181 seals acknowledged startup publications with the current content version
+and configuration even after a full scan becomes a deferred partial result.
+Failed-read counters alone do not veto this seal. Stable failures preserve old
+rows without certifying them; only changed sources are selected again.
 Watcher publication of a marked repair also leaves it unsealed. Deferred
 generations clear after ACK only for the accepted paths, even when neighboring
 paths remain deferred. Name derivation also runs for non-deferred rows after
-that ACK; neither operation certifies a deferred source or seals its folder.
+that ACK. Neither operation certifies a deferred source. Publication invalidates
+all deferred row IDs before certification, including retained rows with no upsert,
+and seals the folder only after the effects and certificate ACKs.
 
 `deriveCachedName` checks the expected body stamp and metadata witness, applies
 existing transcript-name rules and repairs only a changed search title. After
@@ -820,7 +829,7 @@ explicit forced scan or a later startup. Unknown certificate outcomes leave
 the folder pending/unsealed and initial completion false on a cold failure.
 Seal remains last; an unknown seal outcome is logged without compensation.
 A2's successfully published deferred sources still count as complete for
-population while their folder remains pending.
+population while only their row stamps remain null; the folder seals after ACK.
 
 The regression uses real disposable SQLite, the production scan worker,
 facade and writer, with a virtual slow transport to exercise command expiry.

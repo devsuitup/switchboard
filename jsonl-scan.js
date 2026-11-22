@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const CHUNK_BYTES = 256 * 1024;
 
 // see .ai/contexts/cli-harnesses.md ("Streaming transcript scan")
-function scanLines(filePath, startByte, onLine, endByte) {
+function scanLines(filePath, startByte, onLine, endByte, witness) {
   const ownsFd = typeof filePath !== 'number';
   const fd = ownsFd ? fs.openSync(filePath, 'r') : filePath;
   let consumed = startByte;
@@ -21,6 +21,10 @@ function scanLines(filePath, startByte, onLine, endByte) {
       require('./src/main/session-index/read-counters').countBytes(n);
       if (n === 0) throw new Error('JSONL file truncated during scan');
       read += n;
+      if (witness) {
+        if (!witness.head || witness.head.length < 64) witness.head = witness.head ? Buffer.concat([witness.head, buf.subarray(0, n)]).subarray(0, 64) : Buffer.from(buf.subarray(0, Math.min(64, n)));
+        witness.tail = Buffer.from(n >= 64 ? buf.subarray(n - 64, n) : Buffer.concat([witness.tail || Buffer.alloc(0), buf.subarray(0, n)]).subarray(-64));
+      }
       let from = 0;
       let nl;
       const data = buf.subarray(0, n);
@@ -41,7 +45,9 @@ function scanLines(filePath, startByte, onLine, endByte) {
       }
       pos += n;
     }
-    const tail = pendingBytes ? Buffer.concat(pending, pendingBytes).toString('utf8') : '';
+    const pendingBuffer = pendingBytes ? Buffer.concat(pending, pendingBytes) : Buffer.alloc(0);
+    if (witness) witness.pending = pendingBuffer;
+    const tail = pendingBuffer.toString('utf8');
     return { consumed, read, tail, stopped: false };
   } finally {
     if (ownsFd) fs.closeSync(fd);

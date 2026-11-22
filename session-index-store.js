@@ -369,7 +369,7 @@ if (migrations.length > currentDbVersion) {
   db.exec('CREATE TABLE IF NOT EXISTS session_name_derivation (sessionId TEXT PRIMARY KEY, witness TEXT)');
   db.exec('CREATE TRIGGER IF NOT EXISTS session_name_derivation_delete AFTER DELETE ON session_cache BEGIN DELETE FROM session_name_derivation WHERE sessionId = OLD.sessionId; END');
   const folderColumns = new Set(db.prepare('PRAGMA table_info(cache_meta)').all().map(row => row.name));
-  for (const [name, type] of [['fullIndexVersion', 'INTEGER'], ['fullIndexConfig', 'TEXT'], ['fullIndexPending', 'TEXT']]) {
+  for (const [name, type] of [['fullIndexVersion', 'INTEGER'], ['fullIndexConfig', 'TEXT'], ['fullIndexPending', 'TEXT'], ['readFailures', 'TEXT']]) {
     if (!folderColumns.has(name)) db.exec(`ALTER TABLE cache_meta ADD COLUMN ${name} ${type}`);
   }
   if (mustReindex) {
@@ -719,8 +719,13 @@ function getAllFolderMeta() {
   return map;
 }
 
-function setFolderMeta(folder, projectPath, indexMtimeMs) {
+let folderFailuresStatement;
+function setFolderMeta(folder, projectPath, indexMtimeMs, failures) {
   stmts.metaUpsert.run(folder, projectPath, indexMtimeMs);
+  if (failures !== undefined) {
+    folderFailuresStatement ||= db.prepare('UPDATE cache_meta SET readFailures = ? WHERE folder = ?');
+    folderFailuresStatement.run(failures.length ? JSON.stringify(failures) : null, folder);
+  }
 }
 
 function beginFullIndex(folder, token) {

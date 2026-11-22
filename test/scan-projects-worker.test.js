@@ -101,9 +101,10 @@ for (const kind of ['subagent', 'empty', 'EACCES', 'short', 'race']) {
         assert.equal(messages.at(-1).ok, true, 'source races publish a deferred result');
         assert.ok(result.deferred.includes(path.basename(f.file)));
       } else {
-        assert.equal(messages.at(-1).ok, false, 'I/O and short reads fail the day');
-        assert.deepEqual(Array.from(messages.at(-1).failedFolders), [f.folder]);
-        assert.equal(result, undefined);
+        assert.equal(messages.at(-1).ok, true, 'stable I/O and short-read failures do not fail the day');
+        assert.deepEqual(Array.from(messages.at(-1).failedFolders), []);
+        assert.equal(result.readFailures.length, 1);
+        assert.equal(result.readFailures[0][0], path.basename(f.file));
       }
       assert.ok(!result?.toDelete?.includes(f.row.sessionId), 'failed parse cannot delete the prior row');
       if (result) assert.deepEqual(Array.from(result.deferredIds || []), [f.row.sessionId], 'deferral uses the filename UUID');
@@ -253,11 +254,13 @@ test('M23 a null subagent with a sidecar race retains its cached row', t => {
     Object.assign(row, readSessionFile(file, row.folder, row.projectPath, { parentSessionId: 'parent' }));
     delete entry.isSidechain;
     fs.writeFileSync(file, JSON.stringify(entry) + '\n');
-    const read = fs.readFileSync;
-    t.mock.method(fs, 'readFileSync', (target, ...args) => {
-      const bytes = read(target, ...args);
-      if (target === file) fs.writeFileSync(file.replace('.jsonl', '.meta.json'), '{"description":"raced"}');
-      return bytes;
+    const read = fs.readSync, open = fs.openSync;
+    let targetFd;
+    t.mock.method(fs, 'openSync', function (target, ...args) { const fd = open.call(this, target, ...args); if (target === file) targetFd = fd; return fd; });
+    t.mock.method(fs, 'readSync', (fd, ...args) => {
+      const n = read(fd, ...args);
+      if (fd === targetFd) fs.writeFileSync(file.replace('.jsonl', '.meta.json'), '{"description":"raced"}');
+      return n;
     });
   });
   const result = messages.find(message => message.type === 'folder')?.result;
@@ -265,19 +268,20 @@ test('M23 a null subagent with a sidecar race retains its cached row', t => {
   assert.ok(!result.toDelete.includes('sub:parent:race'), 'raced null parse cannot delete the prior row');
 });
 
-test('A2 whole missing root plans deletion while failed body reads defer', t => {
+test('A2 whole missing root plans deletion while stable failed body reads retain witnesses', t => {
   const gone = startupScan(t, ({ root }) => fs.rmSync(root, { recursive: true }));
   assert.ok(gone.messages.find(message => message.type === 'folder').result.toDelete.includes('source'));
   const failed = startupScan(t, ({ file }) => {
     fs.appendFileSync(file, '\n');
-    const read = fs.readFileSync;
-    t.mock.method(fs, 'readFileSync', function (name, ...args) {
-      if (name === file) throw Object.assign(new Error('unreadable body'), { code: 'EIO' });
-      return read.call(this, name, ...args);
+    const open = fs.openSync;
+    t.mock.method(fs, 'openSync', function (name, ...args) {
+      if (name === file && /at (?:Object\.)?readSessionFile /.test(new Error().stack)) throw Object.assign(new Error('unreadable body'), { code: 'EIO' });
+      return open.call(this, name, ...args);
     });
   });
   const result = failed.messages.find(message => message.type === 'folder').result;
-  assert.ok(result.deferred.includes('source.jsonl'));
+  assert.equal(result.readFailures[0][0], 'source.jsonl');
+  assert.equal(result.deferred.length, 0);
   assert.ok(!result.toDelete.includes('source'));
 });
 

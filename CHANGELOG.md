@@ -11,6 +11,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - After a restart, Switchboard re-reads only the Codex sessions changed since the previous run, as it already does for Claude Code transcripts. Warm startup now finishes with "Indexed session changes" for both CLIs; a full rebuild still reports the indexing totals. (#1152)
 
 ### Fixed
+- Startup no longer re-reads whole project folders at every launch when one transcript cannot be read or is being written during the scan, and transcripts larger than about 500 MB are indexed again. (#1180, #1181)
 - Closing an archived project's Delete dialog returns keyboard focus to its row after the list refreshes, or to the filter if the row is gone. (#1162)
 
 ## v0.0.108 — 2026-11-21

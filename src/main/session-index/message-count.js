@@ -9,11 +9,12 @@ function isCountedMessage(entry) {
 }
 
 function messageCountIndex(buffer, stat, count, tailCount, filtered = false) {
+  const bytes = Buffer.isBuffer(buffer) ? buffer.lastIndexOf(10) + 1 : buffer.bytes;
+  const head = Buffer.isBuffer(buffer) ? buffer.subarray(0, 64) : buffer.head;
+  const tail = Buffer.isBuffer(buffer) ? buffer.subarray(Math.max(0, buffer.length - 64)) : buffer.tail;
   return JSON.stringify({ version: 1, stamp: continuationStamp(stat), count,
-    filtered,
-    sealedCount: count - tailCount, bytes: buffer.lastIndexOf(10) + 1,
-    head: buffer.subarray(0, 64).toString('hex'),
-    tail: buffer.subarray(Math.max(0, buffer.length - 64)).toString('hex') });
+    filtered, sealedCount: count - tailCount, bytes,
+    head: head.toString('hex'), tail: tail.toString('hex') });
 }
 
 // see .ai/contexts/session-cache.md ("Incremental message counts")

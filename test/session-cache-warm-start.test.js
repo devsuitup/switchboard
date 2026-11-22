@@ -214,7 +214,8 @@ test('Codex actual body and auxiliary bytes are accounted', t => {
     if (delta === 'title') fs.appendFileSync(f.titleFile, JSON.stringify({ id: f.row.sessionId, thread_name: 'changed' }) + '\n');
     bytes = 0; aux = 0;
     const messages = f.scan(), msg = messages.find(msg => msg.folder === f.folder);
-    assert.equal(messages.at(-1).ok, !failRead);
+    assert.equal(messages.at(-1).ok, true);
+    if (failRead) assert.equal(msg.result.readFailures.length, 1, 'stable failed read has a witness');
     assert.equal(msg.counters.bytesRead, bytes, 'actual returned rollout bytes equal instrumentation');
     assert.equal(msg.counters.auxiliaryBytesRead, aux, 'actual title bytes are counted exactly once');
     if (delta === 'skip') assert.equal(bytes, 0, 'empty subset has zero actual body bytes');
@@ -410,15 +411,19 @@ test('whole Claude readers certify ordinary, nested, legacy and workflow source 
 test('whole Claude reads refuse a same-size rewrite with restored mtime and sidecar races', t => {
   const root = fixture(t), file = path.join(root, 'ordinary.jsonl');
   fs.writeFileSync(file, JSON.stringify({ type: 'user', message: { role: 'user', content: 'first' } }) + '\n');
-  const before = fs.statSync(file), original = fs.readFileSync;
-  t.after(() => { fs.readFileSync = original; });
-  fs.readFileSync = function (target, ...args) {
-    const bytes = original.call(this, target, ...args);
-    if (target === file) {
+  const before = fs.statSync(file), original = fs.readSync;
+  const bytes = fs.readFileSync(file);
+  const open = fs.openSync;
+  let targetFd;
+  t.mock.method(fs, 'openSync', function (target, ...args) { const fd = open.call(this, target, ...args); if (target === file) targetFd = fd; return fd; });
+  t.after(() => { fs.readSync = original; });
+  fs.readSync = function (target, ...args) {
+    const n = original.call(this, target, ...args);
+    if (target === targetFd) {
       fs.writeFileSync(file, bytes.toString().replace('first', 'other'));
       fs.utimesSync(file, before.atime, before.mtime);
     }
-    return bytes;
+    return n;
   };
   const row = readSessionFile(file, 'folder', root);
   assert.equal(row.fullReadStamp, null, 'raced content cannot be certified');
@@ -560,11 +565,17 @@ test('scan full, filtered subset and deletion-driven bridge readers all propose 
   }
   const filename = path.join(__dirname, '../workers/scan-projects.js'), native = require('node:module').createRequire(filename);
   let bytesRead = 0;
-  const originalRead = fs.readFileSync;
-  t.mock.method(fs, 'readFileSync', function (file, ...args) {
-    const value = originalRead.call(this, file, ...args);
-    if (path.dirname(file) === dir && file.endsWith('.jsonl')) bytesRead += Buffer.isBuffer(value) ? value.length : Buffer.byteLength(value);
-    return value;
+  const originalRead = fs.readSync, open = fs.openSync;
+  const bodyFds = new Set();
+  t.mock.method(fs, 'openSync', function (file, ...args) {
+    const fd = open.call(this, file, ...args);
+    if (path.dirname(file) === dir && file.endsWith('.jsonl')) bodyFds.add(fd); else bodyFds.delete(fd);
+    return fd;
+  });
+  t.mock.method(fs, 'readSync', function (fd, ...args) {
+    const n = originalRead.call(this, fd, ...args);
+    if (bodyFds.has(fd) && /scanLines/.test(new Error().stack)) bytesRead += n;
+    return n;
   });
   const scan = data => {
     const messages = [];
@@ -971,7 +982,8 @@ test('A2 a deleted source recreated before publication is retained and reselecte
     });
     assert.equal((await f.restart()).ok, true, 'reappeared source is deferred without failing population');
     assert.ok(f.db.getCachedSession('ordinary'), 'stale deletion cannot remove its row');
-    assert.ok(f.db.getFolderMeta(f.folder).fullIndexPending, 'reappeared source leaves the folder pending');
+    assert.equal(f.db.getFolderMeta(f.folder).fullIndexPending, null, 'reappeared source leaves only its row uncertified');
+    assert.equal(f.db.getCachedSession('ordinary').fullReadStamp, null);
     assert.equal((await f.restart()).ok, true);
     assert.equal(f.db.connection.prepare("SELECT count(*) AS n FROM search_fts WHERE search_fts MATCH 'recreatedunique'").get().n, 1);
   });

@@ -44,7 +44,7 @@ const { conversationMeta } = require('./conversation-meta');
 const { cleanDisplayName } = require('./public/utils');
 const { isHostedJob } = require('./src/main/bg-agents/bg-agents-roster');
 const { state: TRACE, trace } = require('./src/main/shared/activity-trace');
-const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, matchesFullRead, observation, nameDerivationWitness, sourceRelativePath, startupSourcePath, startupInventoryMatches, deferStartupSources } = require('./src/main/session-index/full-read-state');
+const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, matchesFullRead, observation, nameDerivationWitness, sourceRelativePath, startupSourcePath, startupInventoryMatches, deferStartupSources, readFailures } = require('./src/main/session-index/full-read-state');
 
 /**
  * Session cache module.
@@ -420,6 +420,7 @@ function refreshHarnessFolder(harness, folder) {
   const dir = harness.folderPath(folder);
   if (!dir || !fs.existsSync(dir)) return dropFolderRows(folder, { search: true });
   const cached = new Map(getCachedByFolder(folder).map(row => [row.sessionId, row]));
+  const failures = readFailures(getFolderMeta?.(folder));
   const titles = harness.readSessionTitles ? harness.readSessionTitles() : null;
   const files = harness.listTranscripts(dir);
   const current = new Set();
@@ -429,6 +430,8 @@ function refreshHarnessFolder(harness, folder) {
     const sessionId = harness.sessionIdFromPath(file);
     if (!sessionId) continue;
     current.add(sessionId);
+    const failure = failures.get(path.basename(file));
+    if (failure && matchesFullRead(file, failure.stamp, harness.id, path.basename(file))) continue;
     let stat;
     try { stat = fs.statSync(file); } catch { continue; }
     const row = cached.get(sessionId);
@@ -505,6 +508,7 @@ function refreshFolder(folder, opts = {}) {
   // A vanished directory falls through to a fresh derive so the missing-
   // project remap detection keeps working.
   const knownMeta = getFolderMeta ? getFolderMeta(folder) : null;
+  const failures = readFailures(knownMeta);
   let projectPath = knownMeta && knownMeta.projectPath && fs.existsSync(knownMeta.projectPath)
     && (parseFolderKey(folder).alias !== null || (storedProjectPathMatchesFolder(knownMeta.projectPath, folder)
       && resolveWorktreePath(knownMeta.projectPath) === knownMeta.projectPath))
@@ -613,6 +617,12 @@ function refreshFolder(folder, opts = {}) {
 
     if (cachedDbId !== null) currentIds.add(cachedDbId);
     const relativeFile = path.relative(folderPath, filePath);
+    const relativeSource = relativeFile.split(path.sep).join('/');
+    const failure = failures.get(relativeSource);
+    if (failure && matchesFullRead(filePath, failure.stamp, 'claude', relativeSource)) {
+      collector.accounted.add(relativeFile);
+      continue;
+    }
     const linked = cachedEntry && !parentSessionId && linkedContinuation(cachedEntry);
     const changedLinked = linked && changedContinuation(cachedEntry, filePath, stat);
     const plan = opts.preparedContinuations?.get(cachedDbId);
@@ -1494,7 +1504,7 @@ function writeScannedFolder(r, unverifiedLocalFolder = null) {
       };
     }));
   }
-  setFolderMeta(folder, projectPath, indexMtimeMs);
+  setFolderMeta(folder, projectPath, indexMtimeMs, r.readFailures);
   if (!r.startup && setSetting && pendingRepairFolders().includes(folder)) {
     setSetting('bridge_uuid_reindex_folders', pendingRepairFolders().filter(key => key !== folder));
   }
@@ -1529,7 +1539,7 @@ function writeScannedFolderPartial(r) {
     deleteCachedSession(sessionId);
     deleteSearchSession(sessionId);
   }
-  setFolderMeta(folder, projectPath, indexMtimeMs);
+  setFolderMeta(folder, projectPath, indexMtimeMs, r.readFailures);
   return sessions.length;
 }
 
@@ -1583,7 +1593,14 @@ async function publishScannedFolder(msg) {
     }
     const written = result?.partial ? await writer.writeScannedFolderPartial(result)
       : await writer.writeScannedFolder(result, msg.unverifiedLocalFolder);
-    ok = result?.fullIndexOutcome !== false && !(result?.counters || msg.counters)?.filesFailed;
+    ok = result?.fullIndexOutcome !== false && (result?.startup || !(result?.counters || msg.counters)?.filesFailed);
+    if (result?.startup && ok) {
+      const previous = readFailures(result.inventory.meta);
+      for (const [relativePath, failure] of result.readFailures || []) {
+        if (previous.get(relativePath)?.stamp === failure.stamp) continue;
+        log?.info('[session-cache] transcript-read-failed ' + JSON.stringify({ path: startupSourcePath(PROJECTS_DIR, result.folder, relativePath), error: failure.error }));
+      }
+    }
     if (result?.startup && (result.fullIndexOutcome !== false || result.fullIndexDeferred)) {
       const names = [];
       for (const row of getCachedByFolder(result.folder)) {
