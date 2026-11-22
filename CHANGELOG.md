@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- Settings → General → Appearance offers Dark, Light and System themes, with live updates for the app, file editors and open terminals. (#1176)
+
 ### Fixed
 - Closing an archived project's Delete dialog returns keyboard focus to its row after the list refreshes, or to the filter if the row is gone. (#1162)
 

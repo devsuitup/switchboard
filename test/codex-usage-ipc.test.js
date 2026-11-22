@@ -45,6 +45,7 @@ test('main IPC enforces opt-in from saved settings and invalidates a request on 
     getSetting: () => settings,
     setSetting: async (_key, value) => { settings = value; },
     applyUpdateChannel() {}, restartHarnessWatchers() {}, notifyRendererProjectsChanged() {},
+    windowTheme: { refresh() {} },
   });
   vm.runInContext(registration, context, { filename });
   t.after(() => vm.runInContext('codexUsage.settingsChanged()', context));

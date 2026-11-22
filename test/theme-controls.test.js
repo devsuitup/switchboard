@@ -102,7 +102,7 @@ test('shared selects preserve the Settings look, themed menu and interaction sta
   assert.match(shared.declarations, /background:\s*var\(--control-surface\)/);
   assert.match(shared.declarations, /padding:\s*7px 32px 7px 12px/);
   assert.match(shared.declarations, /border-radius:\s*8px/);
-  assert.match(rule('.control-select'), /color-scheme:\s*dark/);
+  assert.match(rule('.control-select'), /color-scheme:\s*var\(--control-color-scheme\)/);
   assert.match(rule('.control-select:enabled:hover'), /border-color:\s*var\(--accent-border\)/);
   assert.match(rule('.control-select:focus-visible'), /outline:\s*2px solid var\(--accent\)/);
   assert.match(rules.find(r => r.selector.includes('.control-select:disabled')).declarations, /opacity:\s*0\.4/);

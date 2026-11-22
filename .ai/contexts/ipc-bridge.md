@@ -1,5 +1,8 @@
 # Context: ipc-bridge
 
+For the synchronous appearance bootstrap (`get-initial-theme`), shared default,
+and live window/renderer updates, see [theme.md](theme.md).
+
 ## Archived projects manager (#863 slices 2–4, #1167, #1171)
 
 `settings-panel.js` mounts `renderArchivedProjects` from `archived-manager.js`

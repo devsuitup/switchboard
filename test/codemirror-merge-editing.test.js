@@ -19,6 +19,36 @@ const { JSDOM, VirtualConsole } = require('jsdom');
 
 const SETUP = path.join(__dirname, '..', 'public', 'codemirror-setup.js');
 
+test('real CodeMirror: all open editors follow Light and Dark without losing content', async () => {
+  const window = await loadCodeMirror();
+  const factories = [
+    host => window.createEditableViewer(host, 'const a = 1;', 'a.js'),
+    host => window.createReadOnlyViewer(host, 'const a = 1;', 'a.js'),
+    host => window.createUnifiedMergeViewer(host, 'old', 'new', 'a.js'),
+    host => window.createMergeViewer(host, 'old', 'new', 'a.js'),
+    host => window.createPlanEditor(host),
+  ];
+  for (const create of factories) {
+    const host = window.document.createElement('div');
+    window.document.body.appendChild(host);
+    const view = create(host);
+    const editors = view.b ? [view.a, view.b] : [view];
+    const contents = editors.map(e => e.state.doc.toString());
+    try {
+      for (const theme of ['light', 'dark', 'light']) {
+        window.document.documentElement.dataset.theme = theme;
+        window.dispatchEvent(new window.CustomEvent('app-theme-changed'));
+        for (const [i, editor] of editors.entries()) {
+          assert.equal(editor.state.facet(window.CMEditorView.darkTheme), theme === 'dark', 'editor follows the app theme');
+          assert.equal(editor.state.doc.toString(), contents[i]);
+        }
+      }
+    } finally { view.destroy(); host.remove(); }
+  }
+  delete window.document.documentElement.dataset.theme;
+  assertOnlyLayoutNoise();
+});
+
 for (const mode of ['inline', 'side-by-side']) {
   test('real CodeMirror: a remote Touched ' + mode + ' diff keeps HEAD and disables editing', async () => {
     const window = await loadCodeMirror();

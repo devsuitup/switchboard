@@ -77,6 +77,8 @@ function setupSidebarDom({ loadTaskRegistry = true, indexOrder = false } = {}) {
   });
 
   if (indexOrder) {
+    window.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
+    apiTarget.getInitialTheme = () => require('../public/setting-defaults').SETTING_DEFAULTS.theme;
     try {
       for (const script of window.document.querySelectorAll('script[src]')) {
         const src = script.getAttribute('src');
