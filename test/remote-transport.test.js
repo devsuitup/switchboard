@@ -18,6 +18,7 @@ const {
   LIST_COMMAND, ALIVE_MARKER_PREFIX, SESSIONS_MARKER, MAX_SESSION_DESCRIPTORS, MAX_SESSION_DESCRIPTOR_BYTES,
 } = require('../src/main/remote/remote-transport');
 const { resolveSshPath, resolveScpPath } = require('../src/main/remote/remote-ssh-binary');
+const { syncMirror, readManifest } = require('../src/main/remote/remote-mirror');
 
 function fakeChild() {
   const child = new EventEmitter();
@@ -493,4 +494,108 @@ test('an unsafe rel path never reaches scp', async () => {
     assert.equal(spawn.calls.length, 0, 'no process may be spawned for those');
     assert.deepEqual(r.fetched, []);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a hanging SFTP copy is retried with legacy SCP and enters the mirror inventory', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-scp-fallback-'));
+  const rel = '-srv-a/a.jsonl';
+  const projectsDir = path.join(dir, 'projects');
+  const dest = path.join(projectsDir, rel);
+  const manifestPath = path.join(dir, 'inventory.json');
+  const spawn = spawnRecorder((child, cmd, args) => {
+    if (cmd === 'fake-ssh') {
+      child.stdout.push(`1757200000.0\t8\t${rel}\n`);
+      child.emit('close', 0);
+      return;
+    }
+    assert.equal(fs.existsSync(dest), false, 'the timed-out SFTP copy must never be published');
+    assert.equal(fs.existsSync(dest + '.part'), false, 'each attempt starts without stale bytes');
+    fs.writeFileSync(args.at(-1), args.includes('-O') ? 'complete' : 'untrusted-complete-looking-copy');
+    if (args.includes('-O')) child.emit('close', 0);
+  });
+  const transport = createSshTransport({ spawn, fetchTimeoutMs: 30,
+    resolveSshPath: () => 'fake-ssh', resolveScpPath: () => 'fake-scp' });
+  t.after(() => { transport.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+  await syncMirror({ alias: 'openshell', transport, projectsDir, manifestPath });
+
+  assert.deepEqual(Object.keys(readManifest(manifestPath)), [rel], 'the successful retry must enter inventory');
+  assert.equal(fs.readFileSync(dest, 'utf8'), 'complete');
+  assert.equal(fs.existsSync(dest + '.part'), false);
+  const copies = spawn.calls.filter(c => c.cmd === 'fake-scp');
+  assert.equal(copies.length, 2);
+  assert.equal(copies[0].args.includes('-O'), false);
+  assert.equal(copies[0].child.killed, 1);
+  assert.equal(copies[1].args.includes('-O'), true);
+  assert.equal(copies[1].args[copies[1].args.indexOf('-S') + 1], 'fake-ssh');
+  assert.ok(copies[1].args.includes('BatchMode=yes'));
+  assert.equal(transport.liveCount(), 0);
+});
+
+test('a successful legacy retry makes the next file use legacy directly only for that host', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-scp-remember-'));
+  const spawn = spawnRecorder((child, cmd, args) => {
+    fs.writeFileSync(args.at(-1), 'complete');
+    if (args.includes('-O') || args.at(-2).startsWith('other:')) child.emit('close', 0);
+  });
+  const transport = createSshTransport({ spawn, fetchTimeoutMs: 30, concurrency: 1 });
+  t.after(() => { transport.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+  await transport.fetchFiles('openshell', ['-srv-a/a.jsonl'], dir);
+  const second = await transport.fetchFiles('openshell', ['-srv-a/b.jsonl', '-srv-a/c.jsonl'], dir);
+
+  assert.deepEqual(second.fetched, ['-srv-a/b.jsonl', '-srv-a/c.jsonl'], 'later files must mirror without another SFTP timeout');
+  assert.deepEqual(spawn.calls.map(c => c.args.includes('-O')), [false, true, true, true]);
+  assert.equal(fs.readFileSync(path.join(dir, '-srv-a/b.jsonl'), 'utf8'), 'complete');
+  await transport.fetchFiles('other', ['-srv-a/d.jsonl'], dir);
+  assert.equal(spawn.calls.at(-1).args.includes('-O'), false, 'another host keeps its default protocol');
+});
+
+test('an scp that rejects -O keeps the original timeout and is not retried again', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-scp-old-'));
+  const warnings = [];
+  const spawn = spawnRecorder((child, cmd, args) => {
+    if (args.includes('-O')) {
+      child.stderr.emit('data', 'scp: unknown option -- O\n');
+      child.emit('close', 1);
+    } else {
+      fs.writeFileSync(args.at(-1), 'untrusted');
+    }
+  });
+  const transport = createSshTransport({ spawn, fetchTimeoutMs: 30, concurrency: 1,
+    log: { warn: message => warnings.push(message) } });
+  t.after(() => { transport.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+  const result = await transport.fetchFiles('openshell', ['-srv-a/a.jsonl', '-srv-a/b.jsonl'], dir);
+
+  assert.deepEqual(spawn.calls.map(c => c.args.includes('-O')), [false, true, false], 'unsupported -O is attempted just once');
+  assert.deepEqual(result, { fetched: [], failed: ['-srv-a/a.jsonl', '-srv-a/b.jsonl'] });
+  assert.equal(warnings.filter(message => /failed.*timed out/.test(message)).length, 2, 'the original timeout remains the failure');
+  assert.deepEqual(fs.readdirSync(path.join(dir, '-srv-a')), []);
+  assert.equal(transport.liveCount(), 0);
+});
+
+test('neither timed-out protocol can replace an existing transcript even with a zero close code', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-scp-timeout-'));
+  const rel = '-srv-a/a.jsonl';
+  const dest = path.join(dir, rel);
+  fs.mkdirSync(path.dirname(dest));
+  fs.writeFileSync(dest, 'previous-mirror');
+  const spawn = spawnRecorder((child, cmd, args) => {
+    assert.equal(fs.readFileSync(dest, 'utf8'), 'previous-mirror');
+    assert.equal(fs.existsSync(dest + '.part'), false);
+    fs.writeFileSync(args.at(-1), 'complete-looking-but-unconfirmed');
+    child.kill = () => { child.killed++; child.emit('close', 0); };
+  });
+  const transport = createSshTransport({ spawn, fetchTimeoutMs: 30 });
+  t.after(() => { transport.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+  const result = await transport.fetchFiles('openshell', [rel], dir);
+
+  assert.equal(spawn.calls.length, 2, 'one bounded legacy retry follows the SFTP timeout');
+  assert.deepEqual(result, { fetched: [], failed: [rel] });
+  assert.equal(fs.readFileSync(dest, 'utf8'), 'previous-mirror', 'a timeout never publishes bytes');
+  assert.equal(fs.existsSync(dest + '.part'), false);
+  assert.ok(spawn.calls.every(c => c.child.killed === 1));
+  assert.equal(transport.liveCount(), 0);
 });

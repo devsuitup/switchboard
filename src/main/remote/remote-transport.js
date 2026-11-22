@@ -200,6 +200,8 @@ function createSshTransport(opts = {}) {
   const enrolTimeoutMs = opts.enrolTimeoutMs || DEFAULT_ENROL_TIMEOUT_MS;
   const fetchTimeoutMs = opts.fetchTimeoutMs || DEFAULT_FETCH_TIMEOUT_MS;
   const concurrency = Math.max(1, Math.min(8, opts.concurrency || DEFAULT_CONCURRENCY));
+  const legacyHosts = new Set();
+  const legacyUnsupported = new Set();
 
   // Every child stays registered until it settles; dispose() kills the set.
   const live = new Set();
@@ -346,9 +348,27 @@ function createSshTransport(opts = {}) {
     const tmpPath = destPath + '.part';
     // Deliberately unquoted; isSafeMirrorRelPath is the guard. see .ai/contexts/session-cache.md ("Remote SSH hosts")
     const remote = `${alias}:${REMOTE_PROJECTS_REL}/${rel}`;
-    const res = await run(resolveScpPath(), ['-S', resolveSshPath(), ...SSH_BASE_OPTS, '-p', '-q', remote, tmpPath], {
-      timeoutMs: fetchTimeoutMs,
-    });
+    const scpPath = resolveScpPath();
+    let legacy = legacyHosts.has(alias) && !legacyUnsupported.has(scpPath);
+    let originalTimeout;
+    let res;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      res = await run(scpPath, [...(legacy ? ['-O'] : []), '-S', resolveSshPath(), ...SSH_BASE_OPTS, '-p', '-q', remote, tmpPath], {
+        timeoutMs: fetchTimeoutMs,
+      });
+      if (res.code === 0 && !res.timedOut) {
+        if (legacy) legacyHosts.add(alias);
+        break;
+      }
+      if (legacy && /\b(?:unknown|illegal|invalid) option[^\r\n]*\bO\b/i.test(res.stderr)) {
+        legacyUnsupported.add(scpPath);
+        if (originalTimeout) res = originalTimeout;
+      }
+      if (legacy || !res.timedOut || disposed || legacyUnsupported.has(scpPath)) break;
+      try { fs.rmSync(tmpPath, { force: true }); } catch { break; }
+      originalTimeout = res;
+      legacy = true;
+    }
     if (res.code !== 0 || res.timedOut) {
       try { fs.rmSync(tmpPath, { force: true }); } catch {}
       const why = res.timedOut ? 'timed out' : `exit ${res.code}: ${res.stderr.trim()}`;

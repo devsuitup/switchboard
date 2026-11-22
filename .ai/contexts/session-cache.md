@@ -988,6 +988,33 @@ with espree and eslint-scope and follows the values that reach a spawn:
   so a new one is noticed. The scanner is itself tested on fixtures that
   reproduce each known evasion.
 
+### Remote hosts — legacy SCP fallback (issue #1108)
+
+`fetchOne` retries a timed-out default-protocol copy once with `scp -O`.
+Both attempts use the resolved scp/ssh pair, BatchMode and `fetchTimeoutMs`.
+The first child must close after being killed and its `.part` must be removed
+before retrying; only exit zero without timeout can reach the atomic rename.
+Ordinary errors and cancellation do not trigger fallback. A failed retry
+leaves any existing mirror intact.
+
+A successful legacy transfer records the SSH alias in `legacyHosts` within
+the transport. Main creates one transport for its lifetime, so later files,
+queued work and later pulls use legacy mode until app restart; transfers
+already in flight finish their own bounded attempts. The host profile only
+normalizes alias, label and enabled, so this learned capability is not
+persisted. Incremental SSH range fetches are unchanged.
+
+An unknown/illegal/invalid-option diagnostic naming `O` disables legacy
+retries for that resolved scp executable within the transport. On the initial
+fallback this preserves the original timeout failure. There is no retry loop;
+an unsupported client continues using its default protocol on later fetches.
+
+`test/remote-transport.test.js` injects the external child-process boundary
+while using real disposable files. Its fallback case calls production
+`syncMirror` and reads the resulting inventory; further cases check host-local
+reuse, unsupported options, and preservation of a previous mirror when both
+attempts time out, including a zero close code after the timeout.
+
 ### Remote hosts — watch channel (issue #240)
 
 `remote-watch.js` keeps one long-lived `ssh -tt … inotifywait` child per
