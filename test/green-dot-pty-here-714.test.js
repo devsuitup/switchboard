@@ -1,6 +1,7 @@
 'use strict';
 
 const test = require('node:test');
+const { resolveCssVars } = require('./css-vars');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -15,7 +16,7 @@ function row(t, { pty = true, extra = {}, focused = true } = {}) {
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
   const style = ctx.document.createElement('style');
-  style.textContent = css;
+  style.textContent = resolveCssVars(css);
   ctx.document.head.appendChild(style);
   const session = { sessionId: 'root', status: 'idle', statusUpdatedAt: Date.now(), modified: new Date().toISOString(), ...extra };
   ctx.window.sessionMap.set('root', session);

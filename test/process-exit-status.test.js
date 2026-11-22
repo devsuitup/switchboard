@@ -7,6 +7,7 @@
 'use strict';
 
 const test = require('node:test');
+const { resolveCssVars } = require('./css-vars');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -447,7 +448,7 @@ test('#563 the header keeps the shared busy-subagent tint and clears it with the
   h.read("applyHeadTurnSnapshot({ sessionId: 's1', state: 'open', revision: 1 })");
   const css = fs.readFileSync(path.join(ROOT, 'public/style.css'), 'utf8');
   const style = h.window.document.createElement('style');
-  style.textContent = css;
+  style.textContent = resolveCssVars(css);
   h.window.document.head.append(style);
   const tint = () => {
     const el = h.read('terminalHeaderStatus');
@@ -456,7 +457,7 @@ test('#563 the header keeps the shared busy-subagent tint and clears it with the
       .map(rule => rule.style.color).filter(Boolean).at(-1);
   };
   h.read("applyStateClasses('s1', { liveness: 'alive', agentsBusy: true })");
-  assert.equal(tint(), 'var(--accent)');
+  assert.equal(tint(), 'rgb(128, 136, 255)');
   assert.equal(h.read("terminalHeaderStatus.classList.contains('session-icon--busy')"), true);
   h.read("applyStateClasses('s1', { liveness: 'alive', agentsBusy: false })");
   assert.equal(tint(), 'rgb(79, 195, 247)');

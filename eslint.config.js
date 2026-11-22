@@ -443,6 +443,7 @@ const rendererCrossFileGlobals = {
 
   // The one table of setting defaults (public/setting-defaults.js)
   SETTING_DEFAULTS: 'readonly',
+  THEME_CHOICES: 'readonly',
   BROWSER_MODES: 'readonly',
   normalizeBrowserSettings: 'readonly',
 
@@ -667,6 +668,7 @@ module.exports = [
       globals: {
         module: 'writable',
         SETTING_DEFAULTS: 'off',
+        THEME_CHOICES: 'off',
         BROWSER_MODES: 'off',
         normalizeBrowserSettings: 'off',
       },

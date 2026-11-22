@@ -33,6 +33,14 @@ test('General Appearance offers and saves Theme only globally', async t => {
   assert.equal(h.q('#sv-theme'), null);
 });
 
+test('Appearance options come from the shared theme choices', async t => {
+  const h = setup(t);
+  assert.equal(vm.runInContext('typeof THEME_CHOICES', h.ctx, { filename: __filename }), 'object', 'shared theme choices exist');
+  vm.runInContext("THEME_CHOICES.push(['test-theme', 'Test theme'])", h.ctx, { filename: __filename });
+  await h.open();
+  assert.ok([...h.q('#sv-theme').options].some(option => option.value === 'test-theme' && option.textContent === 'Test theme'));
+});
+
 test('settings filter is labelled and keyboard reachable above navigation in both scopes', async t => {
   const h = setup(t);
   for (const scope of ['global', 'project']) {

@@ -4,10 +4,12 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- Settings → General → Appearance offers Dark, Light and System themes, with live updates for the app, file editors and open terminals. (#1176)
+
 ## v0.0.108 — 2026-11-21
 
 ### New
-- Settings → General → Appearance offers Dark, Light and System themes, with live updates for the app, file editors and open terminals. (#1176)
 - Settings has a filter field: type part of a setting's name or description to see matching settings from every page, then press Escape to go back to the page you were on. (#1173)
 - Settings → Sessions → CLI Agents offers **Show Codex usage**, off by default. Turn it on to show your Codex limits in the status bar and Stats; usage hides quietly when unavailable. (#1139)
 - Codex CLI sessions found under `~/.codex/sessions` (or `$CODEX_HOME`) now appear in the sidebar under their project, with a "Codex" badge, and can be searched and read in the message viewer; they count in the heatmap and stats. Codex thread names are shown as titles. Deleting a Codex session from Switchboard is refused; new rollouts are picked up as Codex writes them, and sessions whose transcripts are gone leave the sidebar, even when the whole Codex sessions folder was removed. (#821)

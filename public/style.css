@@ -2,6 +2,18 @@
    draw from the same set rather than repeating the values.
    see .ai/contexts/changes-view.md ("The list and the editor") */
 :root {
+  --control-color-scheme: dark;
+  --action-positive: #4a9;
+  --action-stop: #9b4058;
+  --action-resume: #5a7a6a;
+  --action-edit: #6068b0;
+  --action-delete: #7a5a5a;
+  --usage-limited: #997a33;
+  --action-remote: #4a8a8a;
+  --action-bridge: #8a7ab8;
+  --badge-blue-border: #3b5a7a;
+  --badge-purple-border: #5a4a7a;
+  --badge-green-border: #3f6b5a;
   --tool-bar-width: 34px;
   --tool-panel-floor: 280px;
   --tool-main-floor: 214px;
@@ -234,6 +246,18 @@
 }
 
 :root[data-theme="light"] {
+  --control-color-scheme: light;
+  --action-positive: #23765a;
+  --action-stop: #96354f;
+  --action-resume: #35634c;
+  --action-edit: #5159a0;
+  --action-delete: #795050;
+  --usage-limited: #80601e;
+  --action-remote: #286e6e;
+  --action-bridge: #695297;
+  --badge-blue-border: #557a9c;
+  --badge-purple-border: #80649f;
+  --badge-green-border: #4d806b;
   color-scheme: light;
   --surface-chrome: #f3f3f7;
   --surface-sunken: #ffffff;
@@ -683,7 +707,7 @@ body { display: flex; flex-direction: column; }
 }
 
 #status-bar-activity.status-done {
-  color: #4a9;
+  color: var(--action-positive);
 }
 
 #status-bar-updater {
@@ -1825,11 +1849,11 @@ body { display: flex; flex-direction: column; }
 }
 
 .session-stop-btn {
-  color: #9b4058;
+  color: var(--action-stop);
 }
 
 .session-send-btn {
-  color: #5a7a6a;
+  color: var(--action-resume);
 }
 
 .session-send-btn:hover {
@@ -1839,26 +1863,26 @@ body { display: flex; flex-direction: column; }
 
 .session-send-btn:disabled,
 .session-send-btn:disabled:hover {
-  color: #5a7a6a;
+  color: var(--action-resume);
   background: none;
   opacity: 0.4;
   cursor: not-allowed;
 }
 
 .session-launch-config-btn {
-  color: #5a7a6a;
+  color: var(--action-resume);
 }
 
 .session-fork-btn {
-  color: #5a7a6a;
+  color: var(--action-resume);
 }
 
 .session-archive-btn {
-  color: #6068b0;
+  color: var(--action-edit);
 }
 
 .session-unread-btn {
-  color: #6068b0;
+  color: var(--action-edit);
 }
 
 .session-unread-btn:hover {
@@ -1901,7 +1925,7 @@ body { display: flex; flex-direction: column; }
 }
 
 .session-delete-btn {
-  color: #7a5a5a;
+  color: var(--action-delete);
 }
 
 .session-stop-btn:hover {
@@ -2234,7 +2258,7 @@ body { display: flex; flex-direction: column; }
   width: 26px;
   height: 26px;
   line-height: 1;
-  color: #9b4058;
+  color: var(--action-stop);
   border-radius: 6px;
   display: flex;
   align-items: center;
@@ -2552,7 +2576,7 @@ body { display: flex; flex-direction: column; }
   border: none;
   padding: 3px;
   line-height: 1;
-  color: #9b4058;
+  color: var(--action-stop);
   border-radius: 4px;
   display: flex;
   align-items: center;
@@ -2938,7 +2962,7 @@ body { display: flex; flex-direction: column; }
 }
 .schedule-reenable-actions button:hover { border-color: var(--accent-border); color: var(--accent); }
 
-.control-select { color-scheme: dark; }
+.control-select { color-scheme: var(--control-color-scheme); }
 .control-select:enabled:hover { border-color: var(--accent-border); }
 .control-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .info-btn { border-radius: 50%; font-style: italic; flex-shrink: 0; }
@@ -3359,7 +3383,7 @@ body { display: flex; flex-direction: column; }
 }
 .usage-rate-limited {
   font-size: 11px;
-  color: #997a33;
+  color: var(--usage-limited);
   background: var(--tint-255-200-50-alpha-006);
   border: 1px solid var(--tint-255-200-50-alpha-012);
   border-radius: 6px;
@@ -3997,7 +4021,7 @@ body { display: flex; flex-direction: column; }
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #4a8a8a;
+  color: var(--action-remote);
 }
 
 .session-jsonl-btn:hover {
@@ -4006,7 +4030,7 @@ body { display: flex; flex-direction: column; }
 }
 
 .session-bridge-btn {
-  color: #8a7ab8;
+  color: var(--action-bridge);
 }
 
 .session-bridge-btn:hover {
@@ -5502,7 +5526,7 @@ body { display: flex; flex-direction: column; }
   display: inline-block;
   margin-right: 5px;
   padding: 0 5px;
-  border: 1px solid #3b5a7a;
+  border: 1px solid var(--badge-blue-border);
   border-radius: 3px;
   color: var(--badge-blue);
   font-size: 10px;
@@ -5516,14 +5540,14 @@ body { display: flex; flex-direction: column; }
 
 .bg-badge {
   display: inline-block; margin-right: 5px; padding: 0 5px;
-  border: 1px solid #5a4a7a; border-radius: 3px; color: var(--badge-purple);
+  border: 1px solid var(--badge-purple-border); border-radius: 3px; color: var(--badge-purple);
   font-size: 10px; line-height: 15px; vertical-align: middle;
 }
 
 /* The CLI that wrote a session, when it is not the default one — see .ai/contexts/cli-harnesses.md */
 .runtime-badge {
   display: inline-block; margin-right: 5px; padding: 0 5px;
-  border: 1px solid #3f6b5a; border-radius: 3px; color: var(--badge-green);
+  border: 1px solid var(--badge-green-border); border-radius: 3px; color: var(--badge-green);
   font-size: 10px; line-height: 15px; vertical-align: middle; white-space: nowrap;
 }
 .grid-card-header .runtime-badge { margin: 0 6px 0 0; }
@@ -6596,7 +6620,7 @@ body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-ses
 .schedule-form-field input, .schedule-form-field select, .schedule-form-field textarea { box-sizing: border-box; width: 100%; }
 .schedule-form-field input[type="checkbox"] { width: auto; align-self: flex-start; }
 .schedule-form-field textarea { min-height: 90px; resize: vertical; }
-.schedule-field-error { color: var(--danger, var(--state-error)); font-size: 12px; }
+.schedule-field-error { color: var(--state-error); font-size: 12px; }
 #changes-diff-host.panel-image-host { overflow: auto; }
 .panel-image { align-self: flex-start; flex-shrink: 0; max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; }
 .panel-image.panel-image-actual { max-width: none; max-height: none; cursor: zoom-out; }

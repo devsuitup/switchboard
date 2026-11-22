@@ -1,6 +1,7 @@
 'use strict';
 
 const test = require('node:test');
+const { resolveCssVars } = require('./css-vars');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -29,7 +30,7 @@ for (const ptyId of ['a', 'b', 'c']) {
     const ctx = setupSidebarDom();
     t.after(() => ctx.destroy());
     const style = ctx.document.createElement('style');
-    style.textContent = fs.readFileSync(path.join(__dirname, '../public/style.css'), 'utf8');
+    style.textContent = resolveCssVars(fs.readFileSync(path.join(__dirname, '../public/style.css'), 'utf8'));
     ctx.document.head.appendChild(style);
     ctx.window.sessionMap.set('a', session);
     ctx.window.activePtyIds.add(ptyId);

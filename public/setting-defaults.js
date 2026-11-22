@@ -54,6 +54,8 @@ const PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS = 15000;
 const PROJECT_DELETE_WORKTREE_REMOVE_TIMEOUT_MS = 120000;
 const DIRECTORY_SCAN_MS = 5000;
 
+const THEME_CHOICES = [['dark', 'Dark'], ['light', 'Light'], ['system', 'System']];
+
 const BROWSER_MODES = Object.freeze([
   Object.freeze({ value: 'off', label: 'Off' }),
   Object.freeze({ value: 'claude-in-chrome', label: 'Claude in Chrome' }),
@@ -75,7 +77,7 @@ function normalizeBrowserSettings(settings, diagnostic = message => console.warn
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { SETTING_DEFAULTS, BROWSER_MODES, normalizeBrowserSettings,
+  module.exports = { SETTING_DEFAULTS, THEME_CHOICES, BROWSER_MODES, normalizeBrowserSettings,
     PROJECT_DELETE_PREVIEW_TIMEOUT_MS, PROJECT_DELETE_DIALOG_TIMEOUT_MS, PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS,
     PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS, PROJECT_DELETE_WORKTREE_REMOVE_TIMEOUT_MS, DIRECTORY_SCAN_MS };
 }

@@ -8,6 +8,7 @@ const vm = require('node:vm');
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const { JSDOM } = require('jsdom');
+const { rootTokens, resolveCssVars } = require('./css-vars');
 const baseline = require('./fixtures/theme-dark.json');
 const root = path.join(__dirname, '..');
 const source = file => fs.readFileSync(path.join(root, file), 'utf8');
@@ -31,6 +32,67 @@ function setup(t, choice, osDark = false) {
 
 test('Theme defaults to Dark in the shared settings table', () => {
   assert.equal(require('../public/setting-defaults').SETTING_DEFAULTS.theme, 'dark');
+});
+
+test('CSS resolution uses dark root tokens and resolves absent-token fallbacks', () => {
+  const css = ':root { --link: #4fc3f7; } :root[data-theme="light"] { --link: #005a80; }';
+  assert.equal(resolveCssVars('var(--link) var(--link, red) var(--absent, rgba(1, 2, 3, 0.5)) var(--unknown)', rootTokens(css)),
+    '#4fc3f7 #4fc3f7 rgba(1, 2, 3, 0.5) var(--unknown)');
+});
+
+test('theme normalization reads the shared choices', t => {
+  const h = setup(t, 'dark');
+  assert.equal(vm.runInContext('typeof THEME_CHOICES', h.context, { filename: __filename }), 'object', 'shared theme choices exist');
+  vm.runInContext("THEME_CHOICES.push(['test-theme', 'Test theme'])", h.context, { filename: __filename });
+  h.w.appTheme.apply('test-theme');
+  assert.equal(h.w.document.documentElement.dataset.theme, 'test-theme');
+});
+
+test('native select controls follow the effective palette', t => {
+  const css = source('public/style.css');
+  const light = rootTokens(css.replace(':root[data-theme="light"]', ':root'));
+  for (const [theme, tokens] of [['dark', rootTokens(css)], ['light', light]]) {
+    const dom = new JSDOM(`<html data-theme="${theme}"><head><style>${resolveCssVars(css, tokens)}</style></head><body><select class="control-select"></select></body></html>`);
+    t.after(() => dom.window.close());
+    assert.equal(dom.window.getComputedStyle(dom.window.document.querySelector('select')).colorScheme, theme);
+  }
+});
+
+for (const color of ['#4a9', '#9b4058', '#5a7a6a', '#6068b0', '#7a5a5a', '#997a33', '#4a8a8a', '#8a7ab8', '#3b5a7a', '#5a4a7a', '#3f6b5a']) {
+  test(`remaining action and badge color ${color} has a distinct light token`, () => {
+    const css = source('public/style.css');
+    const dark = rootTokens(css);
+    const light = rootTokens(css.replace(':root[data-theme="light"]', ':root'));
+    const keys = Object.keys(dark).filter(key => dark[key] === color);
+    assert.ok(keys.length, `${color} has a dark token`);
+    for (const key of keys) assert.notEqual(light[key], color, `${key} swaps in Light`);
+    const rules = css.replace(/:root(?:\[data-theme="light"\])?\s*\{[^}]+\}/g, '');
+    assert.ok(!rules.includes(color), `${color} is no longer literal in a rule`);
+  });
+}
+
+test('saving global appearance refreshes the native window after persistence', async () => {
+  const filename = path.join(root, 'main.js');
+  const main = source('main.js');
+  const start = main.indexOf("ipcMain.handle('set-setting',");
+  const end = main.indexOf('\n});', start) + '\n});'.length;
+  assert.ok(start >= 0 && end > start);
+  let handler;
+  const calls = [];
+  const context = vm.createContext({
+    ipcMain: { handle: (_, fn) => { handler = fn; } },
+    getSetting: () => ({}),
+    setSetting: async () => { await Promise.resolve(); calls.push('persisted'); },
+    windowTheme: { refresh: () => calls.push('refresh') },
+    codexUsage: { settingsChanged() {} }, applyUpdateChannel() {},
+    restartHarnessWatchers() {}, notifyRendererProjectsChanged() {},
+  });
+  vm.runInContext(main.slice(start, end), context, { filename });
+  await handler({}, 'global', { theme: 'light' });
+  assert.deepEqual(calls, ['persisted', 'refresh']);
+  calls.length = 0;
+  await handler({}, 'project', { theme: 'dark' });
+  assert.deepEqual(calls, ['persisted']);
 });
 
 test('Dark and Light apply synchronously and ignore OS changes', t => {
@@ -101,14 +163,13 @@ test('light tokens cover chrome and dark token expansion preserves every origina
   for (const [key, value] of Object.entries({ '--surface-chrome': '#f3f3f7', '--surface-sunken': '#ffffff', '--text': '#1c1c28', '--accent': '#5a63e6' })) {
     assert.equal(light[key], value, key + ' uses the light palette');
   }
-  for (const [key, value] of Object.entries(light)) assert.match(value, /^(#[\da-f]{3,6}|rgba?\([\d., ]+\))$/i, key + ' has a valid light color');
-  const roots = [...css.matchAll(/:root\s*\{([^}]+)\}/g)];
-  const tokens = Object.fromEntries(roots.flatMap(m => [...m[1].matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(v => [v[1],v[2].trim()])));
+  for (const [key, value] of Object.entries(light).filter(([key]) => key !== '--control-color-scheme')) assert.match(value, /^(#[\da-f]{3,6}|rgba?\([\d., ]+\))$/i, key + ' has a valid light color');
+  const tokens = rootTokens(css);
   for (const [key, value] of Object.entries(baseline.tokens)) assert.equal(tokens[key], value, key);
-  const expanded = css.replace(/:root(?:\[data-theme="light"\])?\s*\{[^}]+\}/g, '').replace(/var\((--[\w-]+)\)/g, (m,k) => tokens[k] || m).replace(/\s+/g, '').replace(/0\.10\)/g, '0.1)');
+  const expanded = resolveCssVars(css.replace(/:root(?:\[data-theme="light"\])?\s*\{[^}]+\}/g, ''), tokens).replace(/\s+/g, '').replace(/0\.10\)/g, '0.1)');
   assert.equal(crypto.createHash('sha256').update(expanded).digest('hex'), baseline.cssHash, 'all dark declarations retain their exact resolved values');
   for (const [file, expected] of Object.entries(baseline.inline)) {
-    const resolved = source('public/' + file).replace(/var\((--[\w-]+)\)/g, (m,k) => tokens[k] || m)
+    const resolved = resolveCssVars(source('public/' + file), tokens)
       .replace(/\s+/g, '').replace(/(0\.\d*?[1-9])0+\)/g, '$1)');
     assert.equal(crypto.createHash('sha256').update(resolved).digest('hex'), expected, file + ' retains its dark inline colors');
   }

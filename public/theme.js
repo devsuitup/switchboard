@@ -3,7 +3,9 @@
 (() => {
   const defaults = typeof module !== 'undefined' && module.exports
     ? require('./setting-defaults').SETTING_DEFAULTS : SETTING_DEFAULTS;
-  const normalize = value => ['dark', 'light', 'system'].includes(value) ? value : defaults.theme;
+  const choices = typeof module !== 'undefined' && module.exports
+    ? require('./setting-defaults').THEME_CHOICES : THEME_CHOICES;
+  const normalize = value => choices.some(([key]) => key === value) ? value : defaults.theme;
   const resolve = (value, osDark) => normalize(value) === 'system' ? (osDark ? 'dark' : 'light') : normalize(value);
   const colors = theme => theme === 'light'
     ? { background: '#ffffff', color: '#f3f3f7', symbolColor: '#5f5f74' }

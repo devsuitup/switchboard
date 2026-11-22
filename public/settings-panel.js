@@ -290,7 +290,7 @@
           </div>
           <div class="settings-field-control">
             <select class="settings-select control-select" id="sv-theme">
-              ${[['dark', 'Dark'], ['light', 'Light'], ['system', 'System']].map(([value, label]) =>
+              ${THEME_CHOICES.map(([value, label]) =>
                 `<option value="${value}" ${appThemeValue === value ? 'selected' : ''}>${label}</option>`).join('')}
             </select>
           </div>
