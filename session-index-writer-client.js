@@ -13,6 +13,7 @@ function commandTimeoutMs(command, args, timeoutMs) {
           ? effect.args[0].length : 1;
       }
     } else rows = args[command === 'certifyFullReads' ? 2 : 0].length;
+    if (!Number.isFinite(rows) || rows < 0) return MAX_WORK_COMMAND_TIMEOUT_MS;
     const pending = [args], seen = new WeakSet();
     while (pending.length) {
       const value = pending.pop();
