@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { renameWithRetry } = require('../shared/atomic-write');
 const { isSafeMirrorRelPath } = require('./remote-hosts');
+const { stopProcessTree } = require('../terminals/stop-process-tree');
 const {
   resolveSshPath: defaultResolveSshPath,
   resolveScpPath: defaultResolveScpPath,
@@ -202,13 +203,14 @@ function createSshTransport(opts = {}) {
   const concurrency = Math.max(1, Math.min(8, opts.concurrency || DEFAULT_CONCURRENCY));
   const legacyHosts = new Set();
   const legacyUnsupported = new Set();
+  const legacyTimedOut = new Set();
 
-  // Every child stays registered until it settles; dispose() kills the set.
-  const live = new Set();
+  const live = new Map();
   let disposed = false;
+  let cancelEpoch = 0;
 
   // `binary: true` captures stdout as a raw Buffer. see .ai/contexts/session-cache.md ("Remote hosts — incremental fetch")
-  function run(command, args, { timeoutMs, maxBytes, binary }) {
+  function run(command, args, { timeoutMs, maxBytes, binary, killTree = false }) {
     return new Promise((resolve) => {
       if (disposed) {
         resolve({ code: -1, stdout: '', stdoutBuffer: Buffer.alloc(0), stderr: 'transport disposed', timedOut: false });
@@ -216,12 +218,12 @@ function createSshTransport(opts = {}) {
       }
       let child;
       try {
-        child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+          detached: killTree && process.platform !== 'win32' });
       } catch (err) {
         resolve({ code: -1, stdout: '', stdoutBuffer: Buffer.alloc(0), stderr: err.message, timedOut: false });
         return;
       }
-      live.add(child);
 
       let stdout = '';
       const chunks = [];
@@ -230,10 +232,21 @@ function createSshTransport(opts = {}) {
       let truncated = false;
       let timedOut = false;
       let settled = false;
+      let stopping = false;
 
       const kill = () => {
-        try { child.kill('SIGKILL'); } catch {}
+        if (stopping) return;
+        stopping = true;
+        const killChild = () => { try { child.kill('SIGKILL'); } catch {} };
+        if (killTree && Number.isSafeInteger(child.pid)) {
+          const isCurrent = () => child.exitCode == null && child.signalCode == null;
+          void stopProcessTree(child.pid, { isCurrent }).then(stopped => {
+            if (!stopped && isCurrent()) killChild();
+          });
+        } else killChild();
+        if (child.exitCode != null || child.signalCode != null) finish(-1);
       };
+      live.set(child, kill);
       // Never unref'd: this timer IS the bound on the child. Unref'd, an
       // otherwise-idle loop exits before it fires and the promise never
       // settles. see .ai/contexts/session-cache.md ("Remote SSH hosts")
@@ -244,6 +257,10 @@ function createSshTransport(opts = {}) {
         settled = true;
         clearTimeout(timer);
         live.delete(child);
+        if (stopping) {
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+        }
         resolve({
           code,
           stdout,
@@ -282,6 +299,7 @@ function createSshTransport(opts = {}) {
         child.stderr.on('data', (chunk) => { if (stderr.length < 4096) stderr += chunk; });
       }
       child.on('error', (err) => { stderr += err.message; finish(-1); });
+      child.on('exit', (code) => { if (stopping) finish(code == null ? -1 : code); });
       child.on('close', (code) => finish(code == null ? -1 : code));
     });
   }
@@ -349,25 +367,32 @@ function createSshTransport(opts = {}) {
     // Deliberately unquoted; isSafeMirrorRelPath is the guard. see .ai/contexts/session-cache.md ("Remote SSH hosts")
     const remote = `${alias}:${REMOTE_PROJECTS_REL}/${rel}`;
     const scpPath = resolveScpPath();
+    const epoch = cancelEpoch;
     let legacy = legacyHosts.has(alias) && !legacyUnsupported.has(scpPath);
     let originalTimeout;
     let res;
     for (let attempt = 0; attempt < 2; attempt++) {
       res = await run(scpPath, [...(legacy ? ['-O'] : []), '-S', resolveSshPath(), ...SSH_BASE_OPTS, '-p', '-q', remote, tmpPath], {
         timeoutMs: fetchTimeoutMs,
+        killTree: true,
       });
       if (res.code === 0 && !res.timedOut) {
         if (legacy) legacyHosts.add(alias);
         break;
       }
-      if (legacy && /\b(?:unknown|illegal|invalid) option[^\r\n]*\bO\b/i.test(res.stderr)) {
-        legacyUnsupported.add(scpPath);
-        if (originalTimeout) res = originalTimeout;
+      if (legacy) {
+        legacyHosts.delete(alias);
+        if (res.timedOut) legacyTimedOut.add(alias);
+        if (!res.timedOut && /\b(?:unknown|illegal|invalid) option[^\r\n]*\bO\b|^\s*usage:/im.test(res.stderr)) {
+          legacyUnsupported.add(scpPath);
+        }
       }
-      if (legacy || !res.timedOut || disposed || legacyUnsupported.has(scpPath)) break;
+      if (originalTimeout) { res = originalTimeout; break; }
+      if (attempt === 1 || disposed || epoch !== cancelEpoch) break;
+      if (!legacy && (!res.timedOut || legacyUnsupported.has(scpPath) || legacyTimedOut.has(alias))) break;
       try { fs.rmSync(tmpPath, { force: true }); } catch { break; }
-      originalTimeout = res;
-      legacy = true;
+      if (!legacy) originalTimeout = res;
+      legacy = !legacy;
     }
     if (res.code !== 0 || res.timedOut) {
       try { fs.rmSync(tmpPath, { force: true }); } catch {}
@@ -492,9 +517,8 @@ function createSshTransport(opts = {}) {
   // Kill what is running without ending the transport -- see
   // .ai/contexts/session-cache.md, "Remote hosts".
   function cancelInFlight() {
-    for (const child of live) {
-      try { child.kill('SIGKILL'); } catch {}
-    }
+    cancelEpoch++;
+    for (const kill of live.values()) kill();
     live.clear();
   }
 

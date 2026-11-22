@@ -992,28 +992,30 @@ with espree and eslint-scope and follows the values that reach a spawn:
 
 `fetchOne` retries a timed-out default-protocol copy once with `scp -O`.
 Both attempts use the resolved scp/ssh pair, BatchMode and `fetchTimeoutMs`.
-The first child must close after being killed and its `.part` must be removed
-before retrying; only exit zero without timeout can reach the atomic rename.
-Ordinary errors and cancellation do not trigger fallback. A failed retry
+Timeout and cancellation kill the scp process tree: a detached process group
+on POSIX, `stopProcessTree` (`taskkill /T /F`) on Windows. A stopped child's
+`exit` settles the attempt and destroys its stdout/stderr pipes without waiting
+for descendants to release them. If it already exited, stopping settles it
+directly. Its `.part` must be removed before retrying; only exit zero without
+timeout can reach the atomic rename.
+Ordinary SFTP errors and cancellation do not trigger fallback. A failed retry
 leaves any existing mirror intact.
 
 A successful legacy transfer records the SSH alias in `legacyHosts` within
 the transport. Main creates one transport for its lifetime, so later files,
-queued work and later pulls use legacy mode until app restart; transfers
-already in flight finish their own bounded attempts. The host profile only
+queued work and later pulls use legacy mode. A failed copy that started in
+remembered legacy mode forgets the alias and tries SFTP once. A legacy timeout
+is also remembered per alias, suppressing further SFTP-to-legacy retries for
+the lifetime of the transport. Cancellation increments an epoch checked before
+any retry and kills the trees of copies already in flight. The host profile only
 normalizes alias, label and enabled, so this learned capability is not
 persisted. Incremental SSH range fetches are unchanged.
 
-An unknown/illegal/invalid-option diagnostic naming `O` disables legacy
-retries for that resolved scp executable within the transport. On the initial
-fallback this preserves the original timeout failure. There is no retry loop;
+An unknown/illegal/invalid-option diagnostic naming `O`, or a non-timeout
+failure with a `usage:` line (including localized getopt diagnostics), disables
+legacy retries for that resolved scp executable within the transport. Any
+failed legacy retry preserves the original timeout failure. There is no retry loop;
 an unsupported client continues using its default protocol on later fetches.
-
-`test/remote-transport.test.js` injects the external child-process boundary
-while using real disposable files. Its fallback case calls production
-`syncMirror` and reads the resulting inventory; further cases check host-local
-reuse, unsupported options, and preservation of a previous mirror when both
-attempts time out, including a zero close code after the timeout.
 
 ### Remote hosts — watch channel (issue #240)
 

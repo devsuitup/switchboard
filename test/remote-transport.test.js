@@ -532,6 +532,109 @@ test('a hanging SFTP copy is retried with legacy SCP and enters the mirror inven
   assert.equal(transport.liveCount(), 0);
 });
 
+test('a legacy timeout is remembered per alias across later fetch cycles', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scp-timeout-memory-'));
+  const spawn = spawnRecorder(null);
+  const transport = createSshTransport({ spawn, fetchTimeoutMs: 30 });
+  t.after(() => { transport.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+  await transport.fetchFiles('host', ['-p/a.jsonl'], dir);
+  await transport.fetchFiles('host', ['-p/b.jsonl'], dir);
+  await transport.fetchFiles('other', ['-p/c.jsonl'], dir);
+  assert.deepEqual(spawn.calls.map(c => c.args.includes('-O')), [false, true, false, false, true],
+    'a failed legacy timeout must not cost a second timeout on each cycle');
+});
+
+test('a failed remembered legacy copy forgets the alias and retries SFTP once', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scp-forget-'));
+  let phase = 'learn';
+  const spawn = spawnRecorder((child, cmd, args) => {
+    fs.writeFileSync(args.at(-1), 'complete');
+    if (phase === 'learn') {
+      if (args.includes('-O')) child.emit('close', 0);
+    } else child.emit('close', args.includes('-O') ? 1 : 0);
+  });
+  const transport = createSshTransport({ spawn, fetchTimeoutMs: 30 });
+  t.after(() => { transport.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+  await transport.fetchFiles('host', ['-p/a.jsonl'], dir);
+  phase = 'recover';
+  const result = await transport.fetchFiles('host', ['-p/b.jsonl'], dir);
+  await transport.fetchFiles('host', ['-p/c.jsonl'], dir);
+  assert.deepEqual(result.fetched, ['-p/b.jsonl'], 'SFTP must recover a failed remembered legacy copy');
+  assert.deepEqual(spawn.calls.map(c => c.args.includes('-O')), [false, true, true, false, false]);
+});
+
+test('a localized option rejection with usage disables legacy for the executable', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scp-localized-'));
+  const spawn = spawnRecorder((child, cmd, args) => {
+    if (args.includes('-O')) {
+      child.stderr.emit('data', "scp: option invalide -- 'O'\nusage: scp [-options] source target\n");
+      child.emit('close', 1);
+    }
+  });
+  const transport = createSshTransport({ spawn, fetchTimeoutMs: 30 });
+  t.after(() => { transport.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+  await transport.fetchFiles('host', ['-p/a.jsonl'], dir);
+  await transport.fetchFiles('other', ['-p/b.jsonl'], dir);
+  assert.deepEqual(spawn.calls.map(c => c.args.includes('-O')), [false, true, false],
+    'a usage diagnostic must disable unsupported -O even when getopt is localized');
+});
+
+test('any failed legacy retry preserves the original timeout diagnostic', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scp-diagnostic-'));
+  const warnings = [];
+  const spawn = spawnRecorder((child, cmd, args) => {
+    if (args.includes('-O')) {
+      child.stderr.emit('data', 'connection lost');
+      child.emit('close', 1);
+    }
+  });
+  const transport = createSshTransport({ spawn, fetchTimeoutMs: 30, log: { warn: m => warnings.push(m) } });
+  t.after(() => { transport.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+  await transport.fetchFiles('host', ['-p/a.jsonl'], dir);
+  assert.match(warnings[0], /failed.*timed out/, 'all failed legacy retries retain the initial timeout reason');
+});
+
+test('cancelInFlight between timeout and retry prevents fallback but allows later work', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scp-cancel-'));
+  let cancel = true;
+  const spawn = spawnRecorder(child => {
+    if (cancel) child.kill = () => {
+      child.killed++;
+      child.emit('close', null);
+      transport.cancelInFlight();
+    };
+    else child.emit('close', 1);
+  });
+  const transport = createSshTransport({ spawn, fetchTimeoutMs: 30 });
+  t.after(() => { transport.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+  await transport.fetchFiles('host', ['-p/a.jsonl'], dir);
+  assert.equal(spawn.calls.length, 1, 'cancellation must suppress a timeout retry');
+  cancel = false;
+  await transport.fetchFiles('host', ['-p/b.jsonl'], dir);
+  assert.equal(spawn.calls.length, 2, 'cancellation does not dispose the transport');
+});
+
+test('timeout settles on exit and destroys inherited pipes without waiting for close', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scp-exit-'));
+  let closed = false;
+  const spawn = spawnRecorder((child, cmd, args) => {
+    if (args.includes('-O')) {
+      fs.writeFileSync(args.at(-1), 'complete');
+      child.emit('close', 0);
+    } else child.kill = () => {
+      child.killed++;
+      child.emit('exit', null, 'SIGKILL');
+      setTimeout(() => { closed = true; child.emit('close', null); }, 200);
+    };
+  });
+  const transport = createSshTransport({ spawn, fetchTimeoutMs: 30 });
+  t.after(() => { transport.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+  await transport.fetchFiles('host', ['-p/a.jsonl'], dir);
+  assert.equal(closed, false, 'the retry must finish before the delayed close event');
+  assert.equal(spawn.calls[0].child.stderr.destroyed, true, 'timeout must destroy the inherited stderr pipe');
+  assert.equal(spawn.calls[0].child.stdout.destroyed, true, 'timeout must destroy stdout too');
+});
+
 test('a successful legacy retry makes the next file use legacy directly only for that host', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-scp-remember-'));
   const spawn = spawnRecorder((child, cmd, args) => {
