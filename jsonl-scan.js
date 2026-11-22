@@ -3,9 +3,10 @@
 const fs = require('node:fs');
 
 const CHUNK_BYTES = 256 * 1024;
+const MAX_LINE_BYTES = 64 * 1024 * 1024;
 
 // see .ai/contexts/cli-harnesses.md ("Streaming transcript scan")
-function scanLines(filePath, startByte, onLine, endByte) {
+function scanLines(filePath, startByte, onLine, endByte, witness) {
   const ownsFd = typeof filePath !== 'number';
   const fd = ownsFd ? fs.openSync(filePath, 'r') : filePath;
   let consumed = startByte;
@@ -14,34 +15,49 @@ function scanLines(filePath, startByte, onLine, endByte) {
     if (endByte === undefined) endByte = fs.fstatSync(fd).size;
     let pending = [];
     let pendingBytes = 0;
+    let discarded = false;
+    const maxLineBytes = module.exports.MAX_LINE_BYTES;
     let pos = startByte;
     while (pos < endByte) {
       const buf = Buffer.allocUnsafe(Math.min(CHUNK_BYTES, endByte - pos));
       const n = fs.readSync(fd, buf, 0, buf.length, pos);
       require('./src/main/session-index/read-counters').countBytes(n);
-      if (n === 0) throw new Error('JSONL file truncated during scan');
+      if (n === 0) throw Object.assign(new Error('JSONL file truncated during scan'), { code: 'ERR_JSONL_SHORT_READ' });
       read += n;
+      if (witness) {
+        if (!witness.head || witness.head.length < 64) witness.head = witness.head ? Buffer.concat([witness.head, buf.subarray(0, n)]).subarray(0, 64) : Buffer.from(buf.subarray(0, Math.min(64, n)));
+        witness.tail = Buffer.from(n >= 64 ? buf.subarray(n - 64, n) : Buffer.concat([witness.tail || Buffer.alloc(0), buf.subarray(0, n)]).subarray(-64));
+      }
       let from = 0;
       let nl;
       const data = buf.subarray(0, n);
       while ((nl = data.indexOf(0x0A, from)) !== -1) {
         const piece = data.subarray(from, nl);
-        const line = pendingBytes
+        const line = discarded || pendingBytes + piece.length > maxLineBytes ? '' : pendingBytes
           ? Buffer.concat([...pending, piece], pendingBytes + piece.length).toString('utf8')
           : piece.toString('utf8');
         pending = [];
         pendingBytes = 0;
+        discarded = false;
         consumed = pos + nl + 1;
         if (line && onLine(line) === false) return { consumed, read, tail: '', stopped: true };
         from = nl + 1;
       }
       if (from < n) {
-        pending.push(data.subarray(from));
-        pendingBytes += n - from;
+        if (discarded || pendingBytes + n - from > maxLineBytes) {
+          discarded = true;
+          pending = [];
+          pendingBytes = 0;
+        } else {
+          pending.push(data.subarray(from));
+          pendingBytes += n - from;
+        }
       }
       pos += n;
     }
-    const tail = pendingBytes ? Buffer.concat(pending, pendingBytes).toString('utf8') : '';
+    const pendingBuffer = pendingBytes ? Buffer.concat(pending, pendingBytes) : Buffer.alloc(0);
+    if (witness) { witness.pending = pendingBuffer; witness.skipLine = discarded; }
+    const tail = pendingBuffer.toString('utf8');
     return { consumed, read, tail, stopped: false };
   } finally {
     if (ownsFd) fs.closeSync(fd);
@@ -62,4 +78,4 @@ function readHead(filePath, maxBytes) {
   }
 }
 
-module.exports = { scanLines, readHead, CHUNK_BYTES };
+module.exports = { scanLines, readHead, CHUNK_BYTES, MAX_LINE_BYTES };

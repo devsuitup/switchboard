@@ -27,6 +27,18 @@ function fullReadStamp(file, runtime, relativePath, before, bytes, dependencies 
   return JSON.stringify({ format: 1, runtime, relativePath, ...before, dependencies });
 }
 
+function readFailures(meta) {
+  try { return new Map(JSON.parse(meta?.readFailures || '[]').filter(([, failure]) => deterministicReadFailure(failure.error))); } catch { return new Map(); }
+}
+
+function deterministicReadFailure(error) {
+  return ['ERR_STRING_TOO_LONG', 'RangeError', 'TypeError', 'SyntaxError'].includes(error);
+}
+
+function failureStamp(file, runtime, relativePath, before, dependencies = {}) {
+  return before ? fullReadStamp(file, runtime, relativePath, before, before.size, dependencies) : null;
+}
+
 function fullIndexConfig(settings, projectsDir) {
   return JSON.stringify({ remaps: Object.entries(settings.remappedProjects || {}).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
     disabledHarnesses: [...new Set(settings.disabledHarnesses || [])].sort(),
@@ -142,6 +154,7 @@ function deferStartupSources(result, paths) {
   result.sessions = result.sessions.filter(row => !rejected.has(row.sessionId) || !existing.has(row.sessionId) || !groups.has(row.bridgeSessionId));
   result.toDelete = toDelete.filter(id => !rejected.has(id));
   result.checks = result.checks.filter(([relativePath]) => !deferred.has(relativePath));
+  result.readFailures = (result.readFailures || []).filter(([relativePath]) => !paths.includes(relativePath));
   result.deferred = [...deferred];
   result.deferredIds = [...rejected];
   result.partial = true;
@@ -156,5 +169,5 @@ function folderReadWitness(db, folder, sessionIds = null) {
     metadata: rows.map(row => [row.sessionId, db.getMeta(row.sessionId, true) || null]) });
 }
 
-module.exports = { SESSION_CONTENT_INDEX_VERSION, CONTENT_GOLDEN_DIGESTS, observation, relativeSource, fullReadStamp, fullIndexConfig, rowWitness,
+module.exports = { SESSION_CONTENT_INDEX_VERSION, CONTENT_GOLDEN_DIGESTS, deterministicReadFailure, readFailures, failureStamp, observation, relativeSource, fullReadStamp, fullIndexConfig, rowWitness,
   matchesFullRead, sourceRelativePath, safeRelativePath, startupFolderPath, startupSourcePath, nameDerivationWitness, folderReadWitness, startupTouchedIds, startupInventoryMatches, deferStartupSources };

@@ -9,11 +9,12 @@ function isCountedMessage(entry) {
 }
 
 function messageCountIndex(buffer, stat, count, tailCount, filtered = false) {
+  const bytes = Buffer.isBuffer(buffer) ? buffer.lastIndexOf(10) + 1 : buffer.bytes;
+  const head = Buffer.isBuffer(buffer) ? buffer.subarray(0, 64) : buffer.head;
+  const tail = Buffer.isBuffer(buffer) ? buffer.subarray(Math.max(0, buffer.length - 64)) : buffer.tail;
   return JSON.stringify({ version: 1, stamp: continuationStamp(stat), count,
-    filtered,
-    sealedCount: count - tailCount, bytes: buffer.lastIndexOf(10) + 1,
-    head: buffer.subarray(0, 64).toString('hex'),
-    tail: buffer.subarray(Math.max(0, buffer.length - 64)).toString('hex') });
+    filtered, sealedCount: count - tailCount, bytes,
+    head: head.toString('hex'), tail: tail.toString('hex') });
 }
 
 // see .ai/contexts/session-cache.md ("Incremental message counts")
@@ -40,28 +41,15 @@ function readMessageCount(file, previous, stat, filtered = false, allowReplaceme
       && head.toString('hex').startsWith(index.head)
       && read(Math.max(0, oldSize - 64), Math.min(oldSize, 64)).toString('hex') === index.tail;
     if ((filtered || index?.filtered) && (!reusable || index.bytes !== oldSize)) return { needsFullRead: true };
-    let position = reusable ? index.bytes : 0;
+    const position = reusable ? index.bytes : 0;
     let sealedCount = reusable ? index.sealedCount : 0;
-    let bytes = position;
-    let pending = [];
-    const countLine = buffer => {
-      try { return isCountedMessage(JSON.parse(buffer.toString('utf8'))) ? 1 : 0; }
+    const countLine = line => {
+      try { return isCountedMessage(JSON.parse(line)) ? 1 : 0; }
       catch { return 0; }
     };
-    while (position < size) {
-      const chunk = read(position, Math.min(64 * 1024, size - position));
-      let start = 0;
-      for (let end = chunk.indexOf(10); end !== -1; end = chunk.indexOf(10, start)) {
-        pending.push(chunk.subarray(start, end));
-        sealedCount += countLine(Buffer.concat(pending));
-        pending = [];
-        start = end + 1;
-        bytes = position + start;
-      }
-      if (start < chunk.length) pending.push(chunk.subarray(start));
-      position += chunk.length;
-    }
-    const count = sealedCount + countLine(Buffer.concat(pending));
+    const scan = require('../../../jsonl-scan').scanLines(fd, position, line => { sealedCount += countLine(line); }, size);
+    const bytes = scan.consumed;
+    const count = sealedCount + countLine(scan.tail);
     const tail = read(Math.max(0, size - 64), Math.min(size, 64));
     if (!matchesContinuationStamp(continuationStamp(stat), fs.statSync(file, { bigint: true }))) return null;
     return { messageCount: count, messageCountIndex: JSON.stringify({ version: 1,
