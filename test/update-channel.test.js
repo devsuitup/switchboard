@@ -62,6 +62,7 @@ function setup(stored, { packaged = true, defaults = SETTING_DEFAULTS } = {}) {
     getSetting: key => { assert.equal(key, 'global'); return settings; },
     setSetting: (key, value) => { if (key === 'global') settings = value; },
     ipcMain: { handle: (name, callback) => handlers.set(name, callback) },
+    windowTheme: { refresh() {} },
     log: { info: message => logs.push(message), error: () => {} },
     mainWindow: null, quitAttemptToken: null, updateInstallPromise: null, updateWaitTimer: null,
     updateInstalling: false, activityFlushedForQuit: false, unsavedGuard: { invalidate() {} }, clearTimeout,

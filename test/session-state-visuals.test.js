@@ -1,6 +1,7 @@
 'use strict';
 
 const test = require('node:test');
+const { resolveCssVars } = require('./css-vars');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -9,8 +10,11 @@ const { JSDOM } = require('jsdom');
 const cssTree = require(require.resolve('css-tree', { paths: [path.dirname(require.resolve('jsdom'))] }));
 
 const publicDir = path.join(__dirname, '..', 'public');
-const stateSource = fs.readFileSync(path.join(publicDir, 'session-state.js'), 'utf8');
-const icons = vm.runInNewContext(stateSource + '\nICON_BY_RUNG');
+const stateFilename = path.join(publicDir, 'session-state.js');
+const stateSource = fs.readFileSync(stateFilename, 'utf8');
+const stateContext = vm.createContext({});
+vm.runInContext(stateSource, stateContext, { filename: stateFilename });
+const icons = vm.runInContext('ICON_BY_RUNG', stateContext, { filename: __filename });
 const css = fs.readFileSync(path.join(publicDir, 'style.css'), 'utf8');
 
 function stylesheetRules() {
@@ -43,7 +47,7 @@ for (const [rung, icon] of Object.entries(icons)) {
 }
 
 function styledSlots(rowClass = 'session-item') {
-  const dom = new JSDOM(`<style>${css}</style><div class="${rowClass}">
+  const dom = new JSDOM(`<style>${resolveCssVars(css)}</style><div class="${rowClass}">
     <span id="base" class="session-icon"></span>
     <span id="live" class="session-icon running"></span>
     <span id="idle" class="session-icon session-icon--idle" data-glyph="${icons.idle.glyph}"></span>
@@ -166,7 +170,7 @@ test('the sidebar projection supplies each static glyph without changing the slo
   const dom = new JSDOM('<span class="session-icon running"></span>', { runScripts: 'outside-only' });
   try {
     const context = dom.getInternalVMContext();
-    vm.runInContext(stateSource, context);
+    vm.runInContext(stateSource, context, { filename: stateFilename });
     const projectionFilename = path.join(publicDir, 'session-status-projection.js');
     vm.runInContext(fs.readFileSync(projectionFilename, 'utf8'), context, { filename: projectionFilename });
     const activityFilename = path.join(publicDir, 'session-activity-dom.js');

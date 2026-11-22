@@ -405,12 +405,12 @@ function saveExpandedSubagentRest(set) {
 
 // Subagent type → accent color (background / border)
 const SUBAGENT_TYPE_COLORS = {
-  explore:   { bg: 'rgba(62,207,130,0.18)',  border: '#3ecf82' },
-  plan:      { bg: 'rgba(128,136,255,0.20)', border: '#8088ff' },
-  implement: { bg: 'rgba(255,170,64,0.18)',  border: '#ffaa40' },
-  review:    { bg: 'rgba(96,190,240,0.18)',  border: '#60bef0' },
-  test:      { bg: 'rgba(255,100,100,0.18)', border: '#ff6464' },
-  default:   { bg: 'rgba(160,160,180,0.15)', border: '#a0a0b4' },
+  explore:   { bg: 'var(--explore-alpha-018)',  border: 'var(--state-explore)' },
+  plan:      { bg: 'var(--accent-secondary-alpha-02)', border: 'var(--accent)' },
+  implement: { bg: 'var(--implement-alpha-018)',  border: 'var(--agent-implement)' },
+  review:    { bg: 'var(--review-alpha-018)',  border: 'var(--agent-review)' },
+  test:      { bg: 'var(--error-alpha-018)', border: 'var(--agent-test)' },
+  default:   { bg: 'var(--muted-alpha-015)', border: 'var(--agent-default)' },
 };
 
 function subagentTypeColor(type) {

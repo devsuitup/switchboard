@@ -44,8 +44,30 @@ const TERMINAL_THEMES = {
   },
 };
 
+const LIGHT_TERMINAL_THEME = {
+  background: '#ffffff', foreground: '#1c1c28', cursor: '#5a63e6', cursorAccent: '#ffffff',
+  selectionBackground: '#cdd1fa', selectionForeground: '#1c1c28',
+  black: '#1c1c28', red: '#b42340', green: '#237a36', yellow: '#886400',
+  blue: '#4058c5', magenta: '#8750a0', cyan: '#087b88', white: '#d4d4de',
+  brightBlack: '#5f5f74', brightRed: '#c43a5a', brightGreen: '#1f823b', brightYellow: '#997000',
+  brightBlue: '#5a63e6', brightMagenta: '#9b4db5', brightCyan: '#008493', brightWhite: '#f3f3f7',
+};
+
 let currentThemeName = 'switchboard';
 function getTerminalTheme() {
+  if (document.documentElement.dataset.theme === 'light') return LIGHT_TERMINAL_THEME;
   return TERMINAL_THEMES[currentThemeName] || TERMINAL_THEMES.switchboard;
 }
 let TERMINAL_THEME = getTerminalTheme();
+
+window.bindTerminalThemes = getSessions => {
+  window._applyTerminalTheme = themeName => {
+    currentThemeName = themeName;
+    TERMINAL_THEME = getTerminalTheme();
+    for (const entry of getSessions().values()) {
+      entry.terminal.options.theme = TERMINAL_THEME;
+      entry.element.style.backgroundColor = TERMINAL_THEME.background;
+    }
+  };
+  window.addEventListener('app-theme-changed', () => window._applyTerminalTheme(currentThemeName));
+};

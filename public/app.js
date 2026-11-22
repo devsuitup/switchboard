@@ -115,14 +115,7 @@ const pendingSessions = new Map(); // sessionId → { session, projectPath, fold
 // Bridge functions for settings-panel.js
 window._setVisibleSessionCount = (v) => { visibleSessionCount = v; };
 window._setSessionMaxAge = (v) => { sessionMaxAgeDays = v; };
-window._applyTerminalTheme = (themeName) => {
-  currentThemeName = themeName;
-  TERMINAL_THEME = getTerminalTheme();
-  for (const [, entry] of openSessions) {
-    entry.terminal.options.theme = TERMINAL_THEME;
-    entry.element.style.backgroundColor = TERMINAL_THEME.background;
-  }
-};
+window.bindTerminalThemes(() => openSessions);
 // Live-apply the terminal right-click behavior (terminalRightClickMode lives in
 // terminal-context-menu.js); takes effect on the next right-click, no relaunch.
 window._applyTerminalRightClick = (mode) => { terminalRightClickMode = mode || SETTING_DEFAULTS.terminalRightClick; };

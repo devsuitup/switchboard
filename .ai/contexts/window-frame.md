@@ -21,6 +21,10 @@ the same strip across the rest of the window.
 
 ## The frame options, per platform
 
+Appearance adds a palette override before BrowserWindow construction and refreshes
+the background/caption overlay on saved theme or OS changes. The geometry stays
+in `window-frame.js`; the palette controller is `window-theme.js`. See [theme.md](theme.md).
+
 | Platform | Options | Controls |
 |---|---|---|
 | Windows | `titleBarStyle: 'hidden'`, `titleBarOverlay` | Native caption buttons drawn by Electron over the top-right corner, in the system order (minimise, maximise, close), with Snap Layouts on the maximise button. |

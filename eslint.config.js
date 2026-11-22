@@ -443,6 +443,7 @@ const rendererCrossFileGlobals = {
 
   // The one table of setting defaults (public/setting-defaults.js)
   SETTING_DEFAULTS: 'readonly',
+  THEME_CHOICES: 'readonly',
   BROWSER_MODES: 'readonly',
   normalizeBrowserSettings: 'readonly',
 
@@ -570,7 +571,7 @@ module.exports = [
   // Dual-mode helper: classic <script> in the renderer AND require()-d in tests.
   // Same browser globals as the rest of public/, plus `module` for the CJS footer.
   {
-    files: ['public/shortcuts.js', 'public/terminal-context-menu.js', 'public/terminal-manager.js', 'public/restore-plan.js', 'public/resume-guard.js', 'public/bridge-url.js', 'public/stop-session-ui.js', 'public/window-strip.js', 'public/header-controls.js', 'public/tool-bar.js', 'public/process-exit.js', 'public/whats-new.js', 'public/agents-view.js'],
+    files: ['public/theme.js', 'public/shortcuts.js', 'public/terminal-context-menu.js', 'public/terminal-manager.js', 'public/restore-plan.js', 'public/resume-guard.js', 'public/bridge-url.js', 'public/stop-session-ui.js', 'public/window-strip.js', 'public/header-controls.js', 'public/tool-bar.js', 'public/process-exit.js', 'public/whats-new.js', 'public/agents-view.js'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'script',
@@ -667,6 +668,7 @@ module.exports = [
       globals: {
         module: 'writable',
         SETTING_DEFAULTS: 'off',
+        THEME_CHOICES: 'off',
         BROWSER_MODES: 'off',
         normalizeBrowserSettings: 'off',
       },

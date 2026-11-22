@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  getInitialTheme: () => ipcRenderer.sendSync('get-initial-theme'),
   // Invoke (request-response)
   getStatsFromDb: () => ipcRenderer.invoke('get-stats-from-db'),
   refreshStats: () => ipcRenderer.invoke('refresh-stats'),
