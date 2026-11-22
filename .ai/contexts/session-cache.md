@@ -1055,6 +1055,42 @@ with espree and eslint-scope and follows the values that reach a spawn:
   so a new one is noticed. The scanner is itself tested on fixtures that
   reproduce each known evasion.
 
+### Remote hosts — legacy SCP fallback (issue #1108)
+
+`fetchOne` retries a timed-out default-protocol copy once with `scp -O`.
+Both attempts use the resolved scp/ssh pair, BatchMode and `fetchTimeoutMs`.
+Timeout and cancellation kill the scp process tree: a detached process group
+on POSIX, `stopProcessTree` (`taskkill /T /F`) on Windows. A stopped child's
+`exit` settles the attempt and destroys its stdout/stderr pipes without waiting
+for descendants to release them. If it already exited, stopping still signals
+its POSIX process group (a missing group is harmless) and settles it directly.
+Windows retains the live-leader guard for PID-based tree termination.
+Its `.part` must be removed before retrying; only exit zero without
+timeout can reach the atomic rename.
+Ordinary SFTP errors and cancellation do not trigger fallback. A failed retry
+leaves any existing mirror intact.
+
+A successful legacy transfer records the SSH alias in `legacyHosts` within
+the transport. Main creates one transport for its lifetime, so later files,
+queued work and later pulls use legacy mode. Only a non-timeout failure in
+remembered legacy mode forgets the alias and tries SFTP once. A legacy timeout
+fails that copy without removing the learned mode or retrying SFTP. Timeouts
+are recorded in `legacyTimedOut` only while the alias has no learned legacy mode;
+every legacy success clears that suppression. This also handles concurrent first
+copies in either completion order: a timeout cannot erase a sibling's success,
+and a later sibling success clears an earlier timeout. Without such a success,
+further SFTP-to-legacy retries stay suppressed until the transport restarts.
+Cancellation increments an epoch checked before
+any retry and kills the trees of copies already in flight. The host profile only
+normalizes alias, label and enabled, so this learned capability is not
+persisted. Incremental SSH range fetches are unchanged.
+
+An unknown/illegal/invalid-option diagnostic naming `O`, or a non-timeout
+failure with a `usage:` line (including localized getopt diagnostics), disables
+legacy retries for that resolved scp executable within the transport. Any
+failed legacy retry preserves the original timeout failure. There is no retry loop;
+an unsupported client continues using its default protocol on later fetches.
+
 ### Remote hosts — watch channel (issue #240)
 
 `remote-watch.js` keeps one long-lived `ssh -tt … inotifywait` child per

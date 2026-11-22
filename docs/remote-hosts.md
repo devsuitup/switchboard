@@ -59,6 +59,28 @@ wrapper named by `SWITCHBOARD_SSH_PATH` also carries the copies. A wrapper with
 no `scp` beside it leaves `scp` itself to steps 3 and 4; set
 `SWITCHBOARD_SCP_PATH` when that is not the `scp` to run.
 
+If a full-file copy times out (after 120 seconds by default), Switchboard
+kills the copy's process tree (including SSH and its proxy), discards its
+temporary file and retries once with `scp -O`, the legacy SCP
+protocol. This handles hosts whose SFTP server never closes the session,
+including OpenShell sandboxes. After a successful retry, later full-file
+copies from that host use legacy SCP directly. If a remembered legacy copy
+fails without timing out, Switchboard forgets that preference and tries SFTP once.
+If it times out, the copy fails but later copies still use legacy SCP directly.
+The choice is kept in memory, not saved in the host settings. Each attempt
+has the same timeout; a timed-out copy is never accepted as complete, and an
+existing mirrored transcript is kept until a copy succeeds. If legacy SCP
+times out before it has succeeded for that alias, later copies skip the legacy
+retry until a legacy copy already in flight succeeds or Switchboard restarts.
+Every legacy success clears this timeout memory. Stopping a pull kills its
+in-flight copy trees and prevents a pending protocol retry.
+
+If the selected `scp` rejects `-O` as an unknown option or prints a usage line,
+Switchboard keeps the original timeout failure and stops trying that option
+with that executable for the rest of the run. Every failed legacy retry retains
+the original timeout reason. Ordinary failures in default SFTP mode do not trigger
+a protocol retry.
+
 Both variables:
 
 - must be absolute paths; a relative value is ignored, with a warning in the
