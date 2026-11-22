@@ -1,5 +1,7 @@
 const path = require('path');
 const fs = require('fs');
+const { scanLines } = require('./jsonl-scan');
+const { bodyRead } = require('./src/main/session-index/read-counters');
 const { StringDecoder } = require('string_decoder');
 const { continuationId, continuationStamp, matchesContinuationStamp, continuationMtime } = require('./session-continuations');
 const { classifyTranscriptPath, isWorkflowRunId } = require('./subagent-attribution');
@@ -68,18 +70,22 @@ function messageSignature(entry) {
   return JSON.stringify([entry.type === 'message' ? entry.role : entry.type, entry.message]);
 }
 
-function attachMessageSignatures(row, filePath, lines) {
+function attachMessageSignatures(row, filePath, byteLength) {
   Object.defineProperty(row, 'messageSignatures', {
     configurable: true,
     get() {
       const signatures = [];
-      for (const line of lines || require('./src/main/session-index/read-counters').readBodyFile(filePath).toString('utf8').split('\n')) {
+      const add = line => {
         let entry;
-        try { entry = JSON.parse(line); } catch { continue; }
+        try { entry = JSON.parse(line); } catch { return; }
         if (entry.type !== 'user' && entry.type !== 'assistant' &&
-          !(entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'))) continue;
+          !(entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'))) return;
         signatures.push({ signature: messageSignature(entry), uuid: typeof entry.uuid === 'string' && entry.uuid ? entry.uuid : null });
-      }
+      };
+      try {
+        const scan = bodyRead(filePath, () => scanLines(filePath, 0, add, byteLength));
+        if (scan.tail) add(scan.tail);
+      } catch { signatures.length = 0; }
       Object.defineProperty(row, 'messageSignatures', { value: signatures, configurable: true });
       return signatures;
     },
@@ -93,8 +99,7 @@ function excludedBySignature(entry, exclusions) {
   return signatures?.has(messageSignature(entry)) || false;
 }
 
-function extractDailyMetrics(lines, fallbackDate, sinceTimestampExclusive, excludedMessageUuids, excludedMessageSignatures) {
-  const map = new Map();
+function extractDailyMetrics(lines, fallbackDate, sinceTimestampExclusive, excludedMessageUuids, excludedMessageSignatures, map = new Map()) {
   const bucket = (date, model) => {
     const key = `${date}|${model}`;
     let m = map.get(key);
@@ -215,10 +220,10 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       metaPath ? { meta: observation(metaPath) } : {}, dependencies, observation(filePath, finalStat));
     const stamp = continuationStamp(big);
     const stat = isSubagent ? { size: Number(big.size), mtime: new Date(continuationMtime(big)), birthtime: new Date(Number((big.birthtimeNs + 500000n) / 1000000n)) } : fs.statSync(filePath);
-    const fileBytes = require('./src/main/session-index/read-counters').readBodyFile(filePath);
-    if (opts.readObservation) Object.assign(opts.readObservation, { before, bytes: fileBytes.length, dependencies });
-    const content = fileBytes.toString('utf8');
-    const lines = content.split('\n').filter(Boolean);
+    if (opts.readObservation) Object.assign(opts.readObservation, { before, bytes: 0, dependencies });
+    const witness = { head: Buffer.alloc(0), tail: Buffer.alloc(0) };
+    const metricBuckets = new Map();
+    const fallbackDate = stat.mtime.toISOString().slice(0, 10);
     let summary = '';
     // Fallback title for a session whose only user turn is a slash command.
     let commandSummary = '';
@@ -250,9 +255,8 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     // mtime without any actual activity, so mtime can't be the displayed time.
     let firstTimestamp = null;
     let lastTimestamp = null;
-    for (const [lineNumber, line] of lines.entries()) {
+    const onLine = (line, isTail = false) => {
       const continuationLine = Buffer.byteLength(line) <= 1024 * 1024;
-      const isTail = lineNumber === lines.length - 1 && !content.endsWith('\n');
       if (isTail) {
         sealedContinuationIds = [...continuationIds];
         continuationInvalid = continuationUnresolved;
@@ -265,8 +269,9 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       try { entry = JSON.parse(line); } catch {
         if (isTail) incompleteTail = true;
         if (continuationLine && /"type"\s*:\s*"continued-in"/.test(line)) continuationUnresolved = true;
-        continue;
+        return;
       }
+      extractDailyMetrics([line], fallbackDate, cutoff, excludedMessageUuids, excludedMessageSignatures, metricBuckets);
       const continuation = continuationLine ? continuationId(entry, fileBase) : null;
       if (continuation) continuationIds.add(continuation);
       if (continuationLine && entry.type === 'continued-in' && entry.sessionId === fileBase && !continuation) continuationUnresolved = true;
@@ -308,9 +313,9 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
           messageUuidsComplete = false;
         }
       }
-      if (cutoff && (!entry.timestamp || entry.timestamp <= cutoff)) continue;
-      if (excludedMessageUuids?.has(entry.uuid)) continue;
-      if (isMessage && excludedBySignature(entry, excludedMessageSignatures)) continue;
+      if (cutoff && (!entry.timestamp || entry.timestamp <= cutoff)) return;
+      if (excludedMessageUuids?.has(entry.uuid)) return;
+      if (isMessage && excludedBySignature(entry, excludedMessageSignatures)) return;
       if (isMessage) {
         messageCount++;
         if (isTail) tailMessageCount++;
@@ -326,7 +331,13 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       if (text && textContent.length < 8000) {
         textContent += text.slice(0, 500) + '\n';
       }
-    }
+    };
+    const scan = bodyRead(filePath, () => {
+      const result = scanLines(filePath, 0, onLine, stat.size, witness);
+      if (result.tail) onLine(result.tail, true);
+      return result;
+    });
+    if (opts.readObservation) opts.readObservation.bytes = scan.read;
     // A slash command stands in as the title only when the session went on to
     // do something. Bookkeeping-only transcripts (a bare /clear) have nothing
     // to show and must not be indexed at all.
@@ -336,8 +347,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     }
     if (!summary || messageCount < 1) return null;
 
-    const fallbackDate = stat.mtime.toISOString().slice(0, 10);
-    const dailyMetrics = extractDailyMetrics(lines, fallbackDate, cutoff, excludedMessageUuids, excludedMessageSignatures);
+    const dailyMetrics = Array.from(metricBuckets.values());
     if (isSubagent) {
       if (!sidechainSeen) return null;
       if (!agentId) {
@@ -351,14 +361,14 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     const finalStat = fs.statSync(filePath, { bigint: true });
     const stable = matchesContinuationStamp(stamp, finalStat);
     const countIndex = stable
-      ? messageCountIndex(fileBytes, big, messageCount, tailMessageCount, !!(cutoff || excludedMessageUuids || excludedMessageSignatures)) : null;
+      ? messageCountIndex({ ...witness, bytes: scan.consumed }, big, messageCount, tailMessageCount, !!(cutoff || excludedMessageUuids || excludedMessageSignatures)) : null;
 
     if (isSubagent) {
       const subagentType = meta.agentType || null;
       const description = meta.description || null;
       return {
         sessionId: subagentSessionId(opts.parentSessionId, agentId),
-        fullReadStamp: dependencies.meta && (!metaObservation.read || BigInt(metaObservation.bytes) !== BigInt(dependencies.meta.size)) ? null : certificate(fileBytes.length),
+        fullReadStamp: dependencies.meta && (!metaObservation.read || BigInt(metaObservation.bytes) !== BigInt(dependencies.meta.size)) ? null : certificate(scan.read),
         folder, projectPath,
         summary: description || summary,
         firstPrompt: summary,
@@ -377,8 +387,8 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     }
 
     const fileMtime = continuationMtime({ mtimeNs: BigInt(stamp.mtimeNs) });
-    const pending = fileBytes.subarray(fileBytes.lastIndexOf(10) + 1);
-    const skipLine = pending.length > 1024 * 1024;
+    const pending = witness.pending;
+    const skipLine = witness.skipLine || pending.length > 1024 * 1024;
     const row = {
       sessionId: fileBase, folder, projectPath,
       summary, firstPrompt: summary,
@@ -392,24 +402,25 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       messageCount, messageCountIndex: countIndex, textContent, slug, scheduleSlug, customTitle: customTitle || '', aiTitle,
       continuationIndex: stable
         ? JSON.stringify({ format: 3, version: 3, ids: [...continuationIds], stamp,
-        sealedIds: sealedContinuationIds ?? [...continuationIds], bytes: fileBytes.length,
-        complete: fileBytes.length === stat.size && (!incompleteTail || skipLine), size: fileBytes.length,
+        sealedIds: sealedContinuationIds ?? [...continuationIds], bytes: scan.read,
+        complete: scan.read === stat.size && (!incompleteTail || skipLine), size: scan.read,
         mtime: fileMtime, unresolved: continuationUnresolved,
         invalid: sealedContinuationIds === null ? continuationUnresolved : continuationInvalid,
         skipLine, pending: skipLine ? '' : pending.toString('base64'),
-        tail: fileBytes.subarray(Math.max(0, fileBytes.length - 64)).toString('hex'),
-        head: fileBytes.subarray(0, 64).toString('hex') }) : null,
+        tail: witness.tail.toString('hex'),
+        head: witness.head.toString('hex') }) : null,
       bridgeSessionId,
       ...(bridgeSessionId ? { messageUuids, messageUuidsComplete } : {}),
       entrypoint: typedInTerminal ? 'cli' : (entrypoint ?? ''),
       dailyMetrics,
     };
     if (bridgeSessionId) {
-      attachMessageSignatures(row, filePath, messageUuidsComplete ? null : lines);
+      attachMessageSignatures(row, filePath, scan.read);
     }
-    row.fullReadStamp = certificate(fileBytes.length);
+    row.fullReadStamp = certificate(scan.read);
     return row;
-  } catch {
+  } catch (error) {
+    if (opts.readObservation) opts.readObservation.error = error.code || error.name || 'ReadError';
     require('./src/main/session-index/read-counters').failedRead(filePath);
     return null;
   }

@@ -263,7 +263,7 @@ function readSessionFile(filePath, folder, opts) {
     require('../src/main/session-index/read-counters').failedRead(filePath);
     if (opts?.startup) {
       opts.outcome.status = ['ENOENT', 'ENOTDIR'].includes(error.code) ? 'absent' : 'failed';
-      opts.outcome.error = error.message;
+      opts.outcome.error = error.code || error.name || 'ReadError';
     }
     return null;
   }

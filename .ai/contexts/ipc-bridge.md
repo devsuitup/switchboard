@@ -1709,6 +1709,25 @@ What Switchboard sets *after* cleaning stays: the plain terminal's `CLAUDECODE=1
 
 ## Projects conflicts and projection diagnostics (#719)
 
+During a populate (#1182), `isIndexingFinished()` stays false until the populate
+promise settles, including warm starts with an inherited completeness marker,
+and get-projects serves read-only builds. Which load reconciles after the
+populate settles is described in session-cache.md, Projects query worker.
+
+`session-cache` collects `scan` and `conflict` causes separately during a
+populate and emits them at most once per ten seconds. On settlement it cancels
+the pending timer and emits one final notification, including a failed scan
+with no folder publications. Follow-up populates keep the notifications
+coalesced until the shared work settles. Other structural causes retain the
+existing 1.5-second throttle and activity retains its 30-second delay. Producer
+shutdown clears the additional timer. The renderer's existing 900 ms debounce
+is unchanged.
+
+Caller deadlines, abandoned reconciles and shutdown: see session-cache.md,
+Projects query worker. Tests cover request-time and dispatch-time gating,
+twenty publications with conflicts, failed settlement, and deadlines in
+`get-projects-worker-wiring`, `projects-worker-client` and `projects-changed`.
+
 On terminal PROJECTS_SNAPSHOT_CONFLICT, get-projects schedules the existing
 throttled projects-changed notification with cause conflict, then returns only
 {projectsError:{code:'PROJECTS_SNAPSHOT_CONFLICT',message:'Projects changed while loading; reload to retry.'}}.
@@ -1752,8 +1771,8 @@ the user DB schema. `getProjectsSnapshot('both')` calls `remember` with the
 assembled `defaultProjects` and `allProjects` of every accepted reply (not a
 stale delivery, not a boolean reply, never the `projection`); the store
 coalesces writes two seconds apart, serializes off the IPC path, refuses a
-payload above 8 MiB (and removes the previous file, so a list that outgrew the
-cap is not shown months later), and writes `tmp` then `rename` so a crash
+payload above 8 MiB while keeping the previous file and logging that limit only
+once per store lifetime (#1183), and writes `tmp` then `rename` so a crash
 leaves either the old file or the new one. The record carries a format
 version and the app version; `load` returns `null` and removes the file on a
 parse error, a foreign format, another app version (row shapes change between
@@ -1773,6 +1792,37 @@ does not touch the file. Write failures are logged by the store; an unexpected
 flush rejection or throw is logged by shutdown without skipping the remaining
 cleanup. A stalled write cannot extend the drain budget, so a forced timeout
 can still lose the latest snapshot. `get-last-known-projects` returns `load()`.
+
+Format 2 stores one `projects` list. Each project's `defaultOrder` and optional
+`defaultRows` indices reconstruct the default view with its original order,
+archives and hidden-project filtering, scoped by host and project path. The
+common session fields (`projectPath`, `cwd`, `sourceFolder`, `runtime`,
+`canLaunch`) are stored once per project when identical. Each session is a
+tuple of ID, summary, modified time, message count and optional display fields.
+`PROJECT_FIELDS` and `SESSION_FIELDS` explicitly retain the sidebar's headers,
+titles, archive/pin state, CLI/remote/background badges, schedule/subagent/workflow
+grouping, conversation IDs, status and visibility paths. Full prompts, created
+timestamps, transcript conversation-part details and projection diagnostics are
+not needed for this inert paint and are omitted. Names and AI titles stay
+separate because subagent labels use a different fallback order from root rows.
+The sources are `paintLastKnownProjects`/`dedup`/`refreshSidebar` in `public/app.js`,
+`renderProjects`/`buildSessionItem`/`buildSubagentItem` in `public/sidebar.js`,
+and visibility checks in `public/worktree-nesting.js`. On load the store rebuilds
+the existing paired IPC shape; the renderer does not know about the disk format.
+Older disk formats are discarded by the existing version guard.
+
+Project fields include `reenableOffer`, preserving the schedule notice, failed
+re-enables and the header's no-auto-collapse behavior in the provisional paint.
+If a default project (including its remote-host scope) or row has no match in
+`allProjects`, compaction rejects the payload and the store keeps the previous
+file, as it does for serialization failures.
+
+The synthetic 20-project, 1,500-session-per-project fixture measures 57,054,142
+bytes in the former paired shape and 7,849,001 bytes in format 2, below 8,388,608.
+`test/app-last-known-projects.test.js` also compares the actual sidebar HTML
+before and after a real disk round trip for local, archived, scheduled, remote
+and subagent rows with re-enable notices, alongside the provisional paint and
+handover tests.
 
 Renderer side, `paintLastKnownProjects` (app.js) runs from
 `loadStartupProjects` without being awaited. It gives up when the reply is not

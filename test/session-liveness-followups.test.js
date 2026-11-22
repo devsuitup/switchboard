@@ -19,7 +19,7 @@ function bootMain(t, { descriptor = {}, ...opts } = {}) {
   const timers = [];
   let unsubscribe;
   const context = vm.createContext({
-    stopping: false, clearTimeout() {},
+    stopping: false, populatePromise: null, clearTimeout() {},
     TRACE: { on: false }, trace() {},
     activeSessions: new Map(), log: { info() {}, debug() {}, warn() {} },
     sessionTransitions: { refreshDescriptorSessions() {}, detectPendingBackgroundContinuations() {} },
