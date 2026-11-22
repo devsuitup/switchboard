@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.109 — 2026-11-22
+
 ### New
 - Remote Hosts in Settings offers New session on each saved, enabled host, so you can choose a directory and start its first interactive session before any project appears. (#1109)
 - Settings → General → Appearance offers Dark, Light and System themes, with live updates for the app, file editors and open terminals. (#1176)
