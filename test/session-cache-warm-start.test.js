@@ -35,6 +35,30 @@ test('forced warm rebuild reports the full indexing total',
     assert.match(f.statuses.findLast(line => line.includes('[status] (done)')), /Indexed 1 sessions across 1 projects$/, 'a forced warm rebuild reports its full read');
   });
 
+for (const force of [false, true]) test('published Codex day counts once after repeated replans, force=' + force,
+  { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const f = await require('./fixtures/warm-start-1152.cjs').fixture(t);
+    f.codexWrite(0);
+    f.write('claude');
+    if (force) assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    const prototype = require('node:worker_threads').Worker.prototype, emit = prototype.emit;
+    let replans = 0;
+    t.mock.method(prototype, 'emit', function (event, msg, ...args) {
+      if (event === 'message' && msg?.type === 'done' && replans < 2) {
+        replans++;
+        msg = { ...msg, replanFolders: [f.codexFolder] };
+      }
+      return emit.call(this, event, msg, ...args);
+    });
+    const result = await f.restart({ force });
+    assert.equal(result.ok, true);
+    assert.equal(replans, 2);
+    assert.equal(f.codexScans().filter(row => row.ok).length, 3, 'each attempt really publishes the day');
+    assert.equal(f.db.getAllCached().length, 2);
+    assert.equal(result.sessions, 2, 'repeated successful publications count each folder only once');
+    assert.match(f.statuses.findLast(line => line.includes('[status] (done)')), /Indexed 2 sessions across 2 projects$/);
+  });
+
 test('stale Codex days coalesce into one scoped worker replan',
   { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
     const fx = require('./fixtures/warm-start-1152.cjs'), f = await fx.fixture(t);

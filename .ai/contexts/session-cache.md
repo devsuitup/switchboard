@@ -116,10 +116,12 @@ Warm completion says "Indexed session changes" rather than reporting replaced
 rows as the total history size. The full-population flag, including a forced
 rebuild on a warm DB, selects totals. Body and auxiliary counters remain actual reads;
 the title cache attributes bytes only to the folder that performed the read.
+Session totals share a per-folder publication count across scoped replans:
+a successful retry replaces that folder's previous count instead of adding it again.
 
 Strict inventory distinguishes confirmed ENOENT/ENOTDIR from incomplete or
-inaccessible scopes. Harness enumeration failures retain cached days (or the
-harness prefix when no cached day exists) as failed scopes for retry and never
+inaccessible scopes. Harness enumeration failures retain cached days and the
+harness prefix as failed scopes for retry and never
 prevent Claude publication. Failed scopes authorize no deletions. I/O and short
 body reads fail the day; a raced body read publishes a deferral.
 A stable complete parse yielding no row deletes the old
@@ -3331,7 +3333,9 @@ file/test hooks both restore in LIFO order; repeated restore calls are inert.
 The `warm-start-1144` and `continuation-718` fixtures install it for callers.
 The synchronous `warm-start-1152.scan()` also installs isolation with a finally
 teardown, reusing a currently active disposable fixture home so prepared rollouts
-remain visible. The guard checks every scan-bearing function in script fixtures.
+remain visible. The guard checks every scan-bearing function in script fixtures,
+including assignment arrows and object methods, and rejects scan tokens outside
+functions unless the file installs isolation at top level.
 The existing `isolated-home` fixture is schedule-specific and inspects Claude
 projects in the original home, so scan tests do not reuse it.
 

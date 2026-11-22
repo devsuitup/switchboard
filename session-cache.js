@@ -1644,7 +1644,8 @@ function scanFoldersViaWorker(options) {
   promise.finally(() => subsetScans.delete(promise)).catch(() => {});
   return promise;
 }
-function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, fileSubsets, startup, onFolder }) {
+function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, fileSubsets, startup, onFolder,
+  sessionCounts = { folders: new Map(), total: 0 } }) {
   if (stopping) return Promise.resolve({ ok: false, error: 'indexer shutting down' });
   return new Promise((resolve) => {
     const hasFolders = Array.isArray(folders) && folders.length > 0;
@@ -1668,7 +1669,6 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
     }
 
     let settled = false;
-    let sessions = 0;
     let scanned = 0;
     let writeError;
     let unknownFailure = false;
@@ -1683,7 +1683,7 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
       resolve(value);
     };
     const timer = startup ? null : setTimeout(() => {
-      settle({ ok: false, error: 'folder scan timed out', folders: scanned, sessions });
+      settle({ ok: false, error: 'folder scan timed out', folders: scanned, sessions: sessionCounts.total });
     }, SUBSET_SCAN_TIMEOUT_MS);
 
     try {
@@ -1702,7 +1702,10 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
         if (msg.type === 'folder') {
           scanned++;
           try {
-            sessions += await publishScannedFolder(msg);
+            const written = await publishScannedFolder(msg);
+            const folder = msg.folder || msg.result?.folder;
+            sessionCounts.total += written - (sessionCounts.folders.get(folder) || 0);
+            sessionCounts.folders.set(folder, written);
           } catch (err) {
             const folder = msg.folder || msg.result?.folder;
             if (!stopping && startup && folder && err.code === 'WRITER_STALE' && startup.config === startupConfig()) {
@@ -1715,7 +1718,7 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
             if (startup) log?.error(`[session-cache] folder write failed: ${err.message}`);
             else log?.warn(`[remote] folder write failed: ${err.message}`);
           }
-          onFolder?.(msg, sessions);
+          onFolder?.(msg, sessionCounts.total);
           return;
         }
         for (const folder of msg.failedFolders || []) failedFolders.add(folder);
@@ -1725,8 +1728,7 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
             try {
               const retry = await scanFoldersViaWorker({ projectsDir, folderPrefix, folders: [],
                 startup: { ...startupSnapshot(startup.force, [...replanFolders]), attempt: (startup.attempt || 0) + 1 },
-                onFolder: (retryMsg, count) => onFolder?.(retryMsg, sessions + count) });
-              sessions += retry.sessions || 0;
+                onFolder, sessionCounts });
               if (!retry.ok) {
                 writeError ||= retry.error || 'Startup replan failed';
                 unknownFailure ||= retry.unknownFailure;
@@ -1741,11 +1743,11 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
             for (const folder of replanFolders) failedFolders.add(folder);
           }
         }
-        settle({ ok: !!msg.ok && !writeError, error: writeError || msg.error, unknownFailure, failedFolders: [...failedFolders], folders: scanned, sessions });
-      }).catch(err => { writeError = err.message; settle({ ok: false, error: writeError, folders: scanned, sessions }); });
+        settle({ ok: !!msg.ok && !writeError, error: writeError || msg.error, unknownFailure, failedFolders: [...failedFolders], folders: scanned, sessions: sessionCounts.total });
+      }).catch(err => { writeError = err.message; settle({ ok: false, error: writeError, folders: scanned, sessions: sessionCounts.total }); });
     });
-    worker.on('error', err => { writes.then(() => settle({ ok: false, error: err.message, folders: scanned, sessions })); });
-    worker.on('exit', code => { workerExited = true; writes.then(() => settle({ ok: false, error: writeError || `worker exited ${code} without completion`, folders: scanned, sessions })); });
+    worker.on('error', err => { writes.then(() => settle({ ok: false, error: err.message, folders: scanned, sessions: sessionCounts.total })); });
+    worker.on('exit', code => { workerExited = true; writes.then(() => settle({ ok: false, error: writeError || `worker exited ${code} without completion`, folders: scanned, sessions: sessionCounts.total })); });
   });
 }
 
