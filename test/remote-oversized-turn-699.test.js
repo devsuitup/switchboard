@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
-const { createSshTransport, SESSIONS_MARKER, ALIVE_MARKER_PREFIX } = require('../src/main/remote/remote-transport');
+const { createSshTransport, LIST_COMMAND, SESSIONS_MARKER, ALIVE_MARKER_PREFIX } = require('../src/main/remote/remote-transport');
 const { createRemoteIndexer, refreshRemoteHeadTurns } = require('../src/main/remote/remote-index');
 const { createTaskRecordsClient } = require('../task-records-client');
 const { enumerateSessionFiles, resolveJsonlPath } = require('../read-session-file');
@@ -32,7 +32,7 @@ function fixture(t) {
     const remote = args.at(-1);
     state.commands.push({ command, remote });
     setImmediate(() => {
-      if (remote.startsWith('find ')) {
+      if (remote === LIST_COMMAND) {
         const inventory = state.present ? `${state.mtime / 1000}\t${state.size}\t${REL}\n` : '';
         const descriptor = state.live ? entry({ pid: 42, sessionId: ID, cwd: '/srv/a', startedAt: 1793361500000 }) + `${ALIVE_MARKER_PREFIX}1\n` : '';
         child.stdout.end(inventory + SESSIONS_MARKER + '\n' + descriptor);

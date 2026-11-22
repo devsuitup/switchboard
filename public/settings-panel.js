@@ -818,17 +818,52 @@
             <input type="text" class="settings-input rh-alias" placeholder="ssh alias" value="${escapeHtml(h.alias)}">
             <input type="text" class="settings-input rh-label" placeholder="label (optional)" value="${escapeHtml(h.label)}">
             <button class="settings-check-updates-btn rh-check" title="Check this host: ssh, claude, tmux, ~/.claude and the login. Read-only.">Check host</button>
+            <button class="settings-check-updates-btn rh-new-session" title="New session on ${escapeHtml(remoteHostLabel(h.alias, remoteHosts))}…" ${h.enabled ? '' : 'disabled'}>New session…</button>
             <button class="settings-remove-btn rh-remove" title="Remove host">Remove</button>
           </div>
           <div class="remote-host-enrol" data-i="${i}"></div>`).join('');
         listEl.querySelectorAll('.remote-host-row').forEach(row => {
           const i = Number(row.dataset.i);
-          row.querySelector('.rh-alias').addEventListener('input', e => { remoteHosts[i].alias = e.target.value; renderArchived(); });
-          row.querySelector('.rh-label').addEventListener('input', e => {
-            remoteHosts[i].label = e.target.value;
+          const launchButton = row.querySelector('.rh-new-session');
+          let launchPending = false;
+          const updateLaunchTitle = () => {
+            launchButton.title = `New session on ${remoteHostLabel(remoteHosts[i].alias, remoteHosts)}…`;
+          };
+          row.querySelector('.rh-alias').addEventListener('input', e => {
+            remoteHosts[i].alias = e.target.value;
+            updateLaunchTitle();
             renderArchived();
           });
-          row.querySelector('.rh-enabled').addEventListener('change', e => { remoteHosts[i].enabled = e.target.checked; });
+          row.querySelector('.rh-label').addEventListener('input', e => {
+            remoteHosts[i].label = e.target.value;
+            updateLaunchTitle();
+            renderArchived();
+          });
+          row.querySelector('.rh-enabled').addEventListener('change', e => {
+            remoteHosts[i].enabled = e.target.checked;
+            launchButton.disabled = launchPending || !e.target.checked;
+          });
+          launchButton.addEventListener('click', async () => {
+            if (launchPending) return;
+            launchPending = true;
+            launchButton.disabled = true;
+            const alias = remoteHosts[i].alias.trim();
+            const status = listEl.querySelector(`.remote-host-enrol[data-i="${i}"]`);
+            try {
+              const saved = await window.api.getSetting('global');
+              if (!row.isConnected || remoteHosts[i].alias.trim() !== alias) return;
+              if (!remoteHosts[i].enabled || !saved?.remoteHosts?.some(h => h.alias === alias && h.enabled !== false)) {
+                status.textContent = 'Save the settings with this host enabled before starting a session.';
+                return;
+              }
+              showRemoteLaunchDialog({ remoteAlias: alias, projectPath: '' });
+            } catch (error) {
+              status.textContent = 'Could not open a new session: ' + error.message;
+            } finally {
+              launchPending = false;
+              launchButton.disabled = !remoteHosts[i]?.enabled;
+            }
+          });
           if (typeof wireRemoteEnrolControls === 'function') {
             wireRemoteEnrolControls(row.querySelector('.rh-check'), listEl.querySelector(`.remote-host-enrol[data-i="${i}"]`), () => remoteHosts[i].alias, () => remoteHostLabel(remoteHosts[i].alias.trim(), remoteHosts));
           }

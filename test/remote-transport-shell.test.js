@@ -27,11 +27,22 @@ function sandbox() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-shell-'));
 }
 
-test('LIST_COMMAND: .claude/projects missing yields a non-zero exit status', { skip: SH_SKIP }, () => {
+test('LIST_COMMAND: missing .claude/projects yields a non-zero exit status', { skip: SH_SKIP }, () => {
   const dir = sandbox();
   try {
     const result = spawnSyncRetryingCrash('sh', ['-c', LIST_COMMAND], { cwd: dir, encoding: 'utf8' });
-    assert.notEqual(result.status, 0, 'a missing inventory root must fail the whole command');
+    assert.notEqual(result.status, 0, 'a missing inventory root must fail');
+    assert.equal(result.stdout, '');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('LIST_COMMAND: a find failure in an existing directory still fails the inventory', { skip: SH_SKIP }, () => {
+  const dir = sandbox();
+  try {
+    fs.mkdirSync(path.join(dir, '.claude', 'projects'), { recursive: true });
+    const result = spawnSyncRetryingCrash('sh', ['-c', 'find() { return 7; }; ' + LIST_COMMAND], { cwd: dir, encoding: 'utf8' });
+    assert.equal(result.status, 7, 'find errors must not be swallowed as an empty inventory');
+    assert.equal(result.stdout, '');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

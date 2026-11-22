@@ -513,6 +513,10 @@ function showRemoteLaunchDialog(project) {
       dialog.querySelector('#rld-error').textContent = 'Enter an absolute path made of letters, digits, space and . _ + @ : , = / -';
       return;
     }
+    if (cwd.length > 4096 || cwd.split('/').includes('..')) {
+      dialog.querySelector('#rld-error').textContent = 'The path must be at most 4096 characters and must not contain a .. segment.';
+      return;
+    }
     const options = {};
     if (dangerousSkip) options.dangerouslySkipPermissions = true;
     else if (selectedMode) options.permissionMode = selectedMode;

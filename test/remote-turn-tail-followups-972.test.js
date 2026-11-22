@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
-const { createSshTransport, SESSIONS_MARKER, ALIVE_MARKER_PREFIX } = require('../src/main/remote/remote-transport');
+const { createSshTransport, LIST_COMMAND, SESSIONS_MARKER, ALIVE_MARKER_PREFIX } = require('../src/main/remote/remote-transport');
 const { createRemoteIndexer } = require('../src/main/remote/remote-index');
 const { syncTurnTails } = require('../src/main/remote/remote-turn-tails');
 
@@ -35,7 +35,7 @@ function fixture(t) {
     child.kill = () => { state.held.push(() => child.emit('close', -1)); };
     const command = args.at(-1);
     setImmediate(() => {
-      if (command.startsWith('find ')) {
+      if (command === LIST_COMMAND) {
         state.inventories++;
         state.onInventory?.();
         const inventory = state.ids.map(id => `${state.mtime / 1000}\t${209 * 1024 * 1024}\t${rel(id)}\n`).join('');

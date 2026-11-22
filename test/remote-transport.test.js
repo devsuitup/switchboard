@@ -94,7 +94,7 @@ test('listFiles spawns one bounded ssh with the alias as an operand, never as a 
   // nothing the user typed is ever concatenated into a local shell string.
   assert.equal(args[args.length - 2], 'planificator');
   const command = args[args.length - 1];
-  assert.match(command, /^find \.claude\/projects /);
+  assert.equal(command, LIST_COMMAND);
   assert.ok(command.includes('find .claude/projects'), 'the inventory half must still run');
   assert.ok(command.includes('find .claude/sessions'), 'the session descriptors must ride the same command');
   assert.deepEqual(result, {
