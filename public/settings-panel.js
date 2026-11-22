@@ -818,6 +818,7 @@
             <input type="text" class="settings-input rh-alias" placeholder="ssh alias" value="${escapeHtml(h.alias)}">
             <input type="text" class="settings-input rh-label" placeholder="label (optional)" value="${escapeHtml(h.label)}">
             <button class="settings-check-updates-btn rh-check" title="Check this host: ssh, claude, tmux, ~/.claude and the login. Read-only.">Check host</button>
+            <button class="settings-check-updates-btn rh-new-session" title="New session on ${escapeHtml(remoteHostLabel(h.alias, remoteHosts))}…" ${h.enabled ? '' : 'disabled'}>New session…</button>
             <button class="settings-remove-btn rh-remove" title="Remove host">Remove</button>
           </div>
           <div class="remote-host-enrol" data-i="${i}"></div>`).join('');
@@ -828,7 +829,25 @@
             remoteHosts[i].label = e.target.value;
             renderArchived();
           });
-          row.querySelector('.rh-enabled').addEventListener('change', e => { remoteHosts[i].enabled = e.target.checked; });
+          row.querySelector('.rh-enabled').addEventListener('change', e => {
+            remoteHosts[i].enabled = e.target.checked;
+            row.querySelector('.rh-new-session').disabled = !e.target.checked;
+          });
+          row.querySelector('.rh-new-session').addEventListener('click', async () => {
+            const alias = remoteHosts[i].alias.trim();
+            const status = listEl.querySelector(`.remote-host-enrol[data-i="${i}"]`);
+            try {
+              const saved = await window.api.getSetting('global');
+              if (!row.isConnected || remoteHosts[i].alias.trim() !== alias) return;
+              if (!remoteHosts[i].enabled || !saved?.remoteHosts?.some(h => h.alias === alias && h.enabled !== false)) {
+                status.textContent = 'Save the settings with this host enabled before starting a session.';
+                return;
+              }
+              showRemoteLaunchDialog({ remoteAlias: alias, projectPath: '' });
+            } catch (error) {
+              status.textContent = 'Could not open a new session: ' + error.message;
+            }
+          });
           if (typeof wireRemoteEnrolControls === 'function') {
             wireRemoteEnrolControls(row.querySelector('.rh-check'), listEl.querySelector(`.remote-host-enrol[data-i="${i}"]`), () => remoteHosts[i].alias, () => remoteHostLabel(remoteHosts[i].alias.trim(), remoteHosts));
           }

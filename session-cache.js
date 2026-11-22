@@ -1287,7 +1287,7 @@ function buildProjectsFromCache(showArchived) {
         if (!projectPath) continue;
         if (hidden(alias, projectPath)) continue;
         const key = groupKey(alias, projectPath);
-        if (projectMap.has(key) || sdkOnlyProjectKeys.has(key)) continue;
+        if (projectMap.has(key) || (alias === null && sdkOnlyProjectKeys.has(key))) continue;
         // For a placeholder the on-disk name IS the ground truth — re-encoding
         // the lossy decode could diverge from it (>200-char hashed names).
         const bare = placeholder ? d.name : encodeProjectPath(projectPath);

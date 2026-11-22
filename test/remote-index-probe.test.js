@@ -142,11 +142,30 @@ test('a failed probe keeps the previous answer rather than forgetting it', async
   } finally { h.cleanup(); }
 });
 
-test('no probe runs when the sync itself failed', async () => {
+test('a host without a transcript directory can launch after its tool probe even when mirroring fails', async () => {
   const h = harness({ probe: async () => ({ tmux: true, inotifywait: true }), syncFails: () => true });
   try {
     await h.indexer.refreshNow();
-    assert.deepEqual(h.probes, []);
+    assert.equal(h.indexer.getRemoteHostProfile('box').tiers.find(t => t.tier === 'launch').available, true,
+      'a reachable tmux host can launch its first session despite missing transcripts');
+    assert.deepEqual(h.probes, ['box']);
+    const { handleLaunchRequest, createRemoteLaunchAdapter } = require('../src/main/remote/remote-launch');
+    const { launchBlockReason } = require('../src/main/remote/remote-host-profile');
+    const commands = [];
+    const adapter = createRemoteLaunchAdapter({ runRemoteCommand: async (alias, command) => {
+      commands.push({ alias, command });
+      return { code: 0, stdout: 'switchboard-3f2a9c10:@1.%2 1234' };
+    } });
+    const deps = { hasHost: alias => alias === 'box', launchBlockReason: alias => launchBlockReason(h.indexer.getRemoteHostProfile(alias)),
+      adapter, attach: async () => ({ ok: true }) };
+    const payload = { alias: 'box', sessionId: '3f2a9c10-7b1d-4e55-9a60-0123456789ab', cwd: '/sandbox/work/first', options: {} };
+    for (const cwd of ['relative', '/srv/../etc', '/srv/$(id)', '/' + 'a'.repeat(4096)]) {
+      assert.equal((await handleLaunchRequest({ ...payload, cwd }, deps)).ok, false);
+    }
+    assert.equal(commands.length, 0, 'invalid paths never reach SSH');
+    assert.equal((await handleLaunchRequest(payload, deps)).ok, true);
+    assert.equal(commands[0].alias, 'box');
+    assert.match(commands[0].command, /tmux new-session/);
   } finally { h.cleanup(); }
 });
 

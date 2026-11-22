@@ -625,6 +625,8 @@ test('restart() after adding a host keeps the transport usable', async () => {
   try {
     const timers = fakeTimers();
     const transport = lifecycleTransport();
+    let inventoryRan;
+    const inventory = new Promise(resolve => { inventoryRan = resolve; });
     let hosts = [];
     const indexer = createRemoteIndexer({
       getHosts: () => hosts,
@@ -633,6 +635,7 @@ test('restart() after adding a host keeps the transport usable', async () => {
       timers,
       sync: async ({ alias, transport: t }) => {
         await t.listFiles(alias);
+        inventoryRan();
         return { changedFolders: [], errors: [] };
       },
       scanFolders: () => {},
@@ -646,6 +649,7 @@ test('restart() after adding a host keeps the transport usable', async () => {
     hosts = [{ alias: 'planificator', enabled: true }];
     assert.equal(indexer.restart(), true, 'restart() must arm the timer');
     await indexer.refreshNow();
+    await inventory;
 
     assert.equal(transport.isDisposed(), false, 'restart() must never dispose the transport');
     assert.ok(transport.calls.length > 0, 'the inventory must actually run after restart()');

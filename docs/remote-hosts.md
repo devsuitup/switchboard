@@ -16,6 +16,7 @@ has:
 | Toggle | Whether the host is observed |
 | ssh alias | A host name or `Host` alias that `ssh` resolves — typically from `~/.ssh/config` |
 | label (optional) | The name shown for the host throughout the interface, defaulting to the alias |
+| New session… | Opens the remote session dialog, even before this host has any transcripts; save and enable the host first |
 | Remove | Deletes the row |
 
 An alias may only contain letters, digits, dot, dash and underscore (1 to 63
@@ -158,6 +159,10 @@ Their `+` starts a new session on the host when it has
 `tmux` (see [Launch a session](#launch-a-session)); without it the button is
 disabled and its tooltip says the host needs tmux.
 
+A remote project whose only sessions are hidden SDK/headless runs still keeps
+its header and `+`. Those sessions and their subagents remain hidden. Local
+projects with only hidden SDK sessions keep their existing behaviour: no header.
+
 ### Status
 
 The project header carries a dot for the host's state, with a tooltip:
@@ -176,7 +181,7 @@ each one above it why it is missing (for example no live session reports a
 messaging socket). Liveness and inject need a live session to read, so they read
 as missing on an idle host.
 
-Once per host, at its first successful refresh and then every six hours (and on
+Once per host, at its first refresh attempt and then every six hours (and on
 **Reconnect**), one extra ssh asks whether `tmux` and `inotifywait` are
 installed and nothing else; while one of them is missing it asks again every 30 minutes, so an install is noticed. A host with `tmux` and no session offers attach; a
 host without it does not, even when a descriptor names a pane, and the dot says
@@ -184,6 +189,8 @@ so. A host without `inotifywait` says that only the periodic pull runs. When the
 probe fails (timeout after 15 seconds, refused, unreadable answer), the host
 stays as it was and the probe is tried again 30 minutes later: an unknown answer
 is never shown as missing.
+The probe runs before transcript mirroring, so a new host without a transcript
+directory can confirm tmux and launch even while its mirror reports an error.
 
 What the tier gates:
 
@@ -361,6 +368,14 @@ travels on ssh's standard input only, never on a command line.
 - A session attached in a terminal is refused: type in the terminal.
 
 ## Launch a session
+
+Before the first transcript exists, use **Global Settings → Remote Hosts →
+New session…** on the host's row. Save the host with its toggle enabled first.
+The dialog asks for an absolute POSIX directory on that host; it starts empty
+and suggests any known project paths. This entry uses the same launch checks,
+permission options and tmux attachment as the project `+`. The main process
+refuses the launch if tmux has not yet been confirmed or is missing; the
+terminal displays the reason. Use Check host to diagnose missing tools.
 
 The `+` of a remote project opens a dialog: the directory (a list of the host's
 known project paths, or any absolute path typed) and the permission mode, with

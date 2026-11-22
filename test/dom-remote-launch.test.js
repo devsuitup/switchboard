@@ -81,7 +81,7 @@ test('an empty or relative path is refused in the dialog and nothing launches', 
   const { ctx, window, document, launched } = harness();
   try {
     window.showRemoteLaunchDialog(remoteProject('box', '/srv/app'));
-    for (const bad of ['', '   ', 'relative/dir', '/srv/$(id)']) {
+    for (const bad of ['', '   ', 'relative/dir', '/srv/$(id)', '/srv/../etc', '/' + 'a'.repeat(4096)]) {
       document.querySelector('#rld-path').value = bad;
       document.querySelector('.new-session-start-btn').click();
       assert.equal(launched.length, 0, JSON.stringify(bad));
