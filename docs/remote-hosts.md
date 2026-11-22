@@ -189,8 +189,10 @@ so. A host without `inotifywait` says that only the periodic pull runs. When the
 probe fails (timeout after 15 seconds, refused, unreadable answer), the host
 stays as it was and the probe is tried again 30 minutes later: an unknown answer
 is never shown as missing.
-The probe runs before transcript mirroring, so a new host without a transcript
-directory can confirm tmux and launch even while its mirror reports an error.
+The probe runs after mirroring succeeds or reports a non-transport error. A new
+host without a transcript directory can therefore confirm tmux and launch while
+its mirror reports an error. An unavailable transcript directory leaves any
+existing local mirror intact. An offline host skips the probe.
 
 What the tier gates:
 

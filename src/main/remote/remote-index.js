@@ -271,18 +271,27 @@ function createRemoteIndexer(ctx) {
     return !!tools && (!prev || !prev.tools || prev.tools.tmux !== tools.tmux || prev.tools.inotifywait !== tools.inotifywait);
   }
 
-  async function refreshHost(host, cancelled) {
+  async function refreshHost(host, cancelled, onToolsChanged) {
     const projectsDir = mirrorProjectsDirFor(ctx.dataDir, host.alias);
     const manifestPath = manifestPathFor(ctx.dataDir, host.alias);
     fs.mkdirSync(projectsDir, { recursive: true });
 
-    const result = await sync({
-      alias: host.alias,
-      transport: ctx.transport,
-      projectsDir,
-      manifestPath,
-      log,
-    });
+    let result;
+    try {
+      result = await sync({
+        alias: host.alias,
+        transport: ctx.transport,
+        projectsDir,
+        manifestPath,
+        log,
+      });
+    } catch (err) {
+      if (!err?.remoteTransport && !cancelled()) {
+        const toolsChanged = await probeHostTools(host.alias);
+        if (toolsChanged && !cancelled()) onToolsChanged();
+      }
+      throw err;
+    }
 
     if (stopped) return false;
     if (cancelled() && !hosts().some(h => h.alias === host.alias)) return false;
@@ -439,7 +448,7 @@ function createRemoteIndexer(ctx) {
           continue; // still backing off: no attempt, no log, no ssh
         }
         try {
-          if (await refreshHost(host, cancelled)) changed = true;
+          if (await refreshHost(host, cancelled, () => { changed = true; })) changed = true;
           if (cancelled()) break;
           if (onHostSuccess(host.alias)) changed = true;
           remoteSessionsAt.set(host.alias, now());
@@ -485,7 +494,7 @@ function createRemoteIndexer(ctx) {
     let changed = false;
     let error = null;
     try {
-      changed = await refreshHost(host, cancelled);
+      changed = await refreshHost(host, cancelled, () => { changed = true; });
       if (cancelled()) return cancelledResult(changed);
       if (onHostSuccess(alias)) changed = true;
       remoteSessionsAt.set(alias, now());

@@ -42,7 +42,7 @@ const ALIVE_MARKER_PREFIX = 'ALIVE:';
 // "Remote hosts — meta.json sidecars"). F9: each descriptor is followed by a
 // \002ALIVE:0|1 line so parseSessions() can drop dead pids without a 2nd ssh.
 const LIST_COMMAND =
-  `if [ -d ${REMOTE_PROJECTS_REL} ]; then find ${REMOTE_PROJECTS_REL} -type f \\( -name '*.jsonl' -o -name '*.meta.json' \\) -printf '%T@\\t%s\\t%P\\n' || exit $?; fi; ` +
+  `find ${REMOTE_PROJECTS_REL} -type f \\( -name '*.jsonl' -o -name '*.meta.json' \\) -printf '%T@\\t%s\\t%P\\n' || exit $?; ` +
   `printf '\\001SWITCHBOARD-SESSIONS\\001\\n'; ` +
   `find ${REMOTE_SESSIONS_REL} -maxdepth 1 -type f -name '[0-9]*.json' 2>/dev/null | LC_ALL=C sort | ` +
   `head -n ${MAX_SESSION_DESCRIPTORS} | while IFS= read -r f; do head -c ${MAX_SESSION_DESCRIPTOR_BYTES} "$f"; printf '\\n'; ` +

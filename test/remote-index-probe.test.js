@@ -10,6 +10,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { createSshTransport, LIST_COMMAND } = require('../src/main/remote/remote-transport');
+const { mirrorProjectsDirFor, manifestPathFor } = require('../src/main/remote/remote-hosts');
 
 const { createRemoteIndexer, PROBE_INTERVAL_MS, PROBE_RETRY_MS } = require('../src/main/remote/remote-index');
 
@@ -144,7 +145,7 @@ test('a failed probe keeps the previous answer rather than forgetting it', async
   } finally { h.cleanup(); }
 });
 
-test('no probe runs when the sync itself failed, including forced reconnects and post-launch refreshes', async () => {
+test('an offline host pays no probe, including forced reconnects and post-launch refreshes', async () => {
   const h = harness({ probe: async () => ({ tmux: true, inotifywait: true }), syncFails: () => true });
   try {
     for (const refresh of [() => h.indexer.refreshNow(), () => h.indexer.refreshNow({ force: true }),
@@ -155,7 +156,7 @@ test('no probe runs when the sync itself failed, including forced reconnects and
   } finally { h.cleanup(); }
 });
 
-test('a fresh host without a transcript directory mirrors empty, probes, notifies and can launch', async () => {
+test('a fresh host with a missing directory preserves its mirror, probes, notifies once and can launch', async () => {
   const dataDir = tmp();
   const remoteDir = tmp();
   const calls = [];
@@ -170,10 +171,14 @@ test('a fresh host without a transcript directory mirrors empty, probes, notifie
   const h = { indexer };
   try {
     const result = await indexer.refreshNow();
-    assert.deepEqual(result.errors, [], 'a missing transcript directory is an empty successful mirror');
+    assert.equal(result.errors.length, 1, 'a missing transcript directory must fail the mirror');
+    assert.match(result.errors[0].error, /find/);
     assert.deepEqual(calls, ['inventory', 'probe'], 'one inventory round trip precedes the probe');
     assert.deepEqual(indexer.getRemoteSessions('box').sessions, []);
-    assert.equal(indexer.getRemoteHostState('box').consecutiveFailures, 0);
+    assert.equal(indexer.getRemoteHostState('box').consecutiveFailures, 1);
+    assert.equal(indexer.getRemoteHostState('box').lastErrorTransport, false);
+    assert.equal(fs.existsSync(manifestPathFor(dataDir, 'box')), false, 'no inventory is written');
+    assert.deepEqual(fs.readdirSync(mirrorProjectsDirFor(dataDir, 'box')), []);
     assert.equal(notifications, 1, 'the newly available launch tier reaches the renderer');
     assert.equal(h.indexer.getRemoteHostProfile('box').tiers.find(t => t.tier === 'launch').available, true,
       'a reachable tmux host can launch its first session with no transcripts');
@@ -200,6 +205,76 @@ test('a fresh host without a transcript directory mirrors empty, probes, notifie
     fs.rmSync(remoteDir, { recursive: true, force: true });
   }
 });
+
+for (const method of ['refreshNow', 'refreshHostNow']) {
+  test(`${method}: missing remote directory preserves existing mirror, manifest and indexed folders`, async t => {
+    const dataDir = tmp();
+    const remoteDir = tmp();
+    t.after(() => {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      fs.rmSync(remoteDir, { recursive: true, force: true });
+    });
+    const projectsDir = mirrorProjectsDirFor(dataDir, 'box');
+    const manifestPath = manifestPathFor(dataDir, 'box');
+    const file = path.join(projectsDir, '-srv-app', 'aaaa.jsonl');
+    const content = '{"type":"user"}\n';
+    const manifest = JSON.stringify({ version: 1, files: { '-srv-app/aaaa.jsonl': { size: content.length, mtimeMs: 1 } } });
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, content);
+    fs.writeFileSync(manifestPath, manifest);
+    const drops = [];
+    const scans = [];
+    const transport = createSshTransport({ spawn: (_cmd, args, options) =>
+      spawn('sh', ['-c', args.at(-1) === LIST_COMMAND ? LIST_COMMAND : "printf 'tmux=1\\ninotifywait=1\\n'"],
+        { ...options, cwd: remoteDir }) });
+    const indexer = createRemoteIndexer({ getHosts: () => [{ alias: 'box' }], dataDir, transport,
+      listIndexedFolderKeys: () => ['box::-srv-app'], dropFolder: key => drops.push(key),
+      scanFolders: options => scans.push(options), timers: fakeTimers() });
+    t.after(() => indexer.dispose());
+    const result = await indexer[method](...(method === 'refreshNow' ? [] : ['box']));
+    assert.equal(fs.existsSync(file), true, 'a missing remote directory must never delete an existing mirrored file');
+    assert.equal(fs.readFileSync(file, 'utf8'), content);
+    assert.equal(fs.readFileSync(manifestPath, 'utf8'), manifest, 'the manifest remains byte-for-byte unchanged');
+    assert.deepEqual(drops, []);
+    assert.deepEqual(scans, []);
+    assert.match(method === 'refreshNow' ? result.errors[0]?.error : result.error, /find/);
+  });
+
+  test(`${method}: failed inventory probes and only changed tools or errors notify`, async t => {
+    const dataDir = tmp();
+    t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+    let answer = { tmux: true, inotifywait: true };
+    let probeFails = false;
+    let probes = 0;
+    let notifications = 0;
+    const originalError = new Error('find: .claude/projects: No such file or directory');
+    const indexer = createRemoteIndexer({ getHosts: () => [{ alias: 'box' }], dataDir,
+      sync: async () => { throw originalError; }, timers: fakeTimers(),
+      transport: { probeTools: async () => {
+        probes++;
+        if (probeFails) throw new Error('probe failed');
+        return answer;
+      } }, notify: () => notifications++ });
+    t.after(() => indexer.dispose());
+    const refresh = () => indexer[method](...(method === 'refreshNow' ? [{ force: true }] : ['box', { force: true }]));
+    await refresh();
+    assert.equal(probes, 1, 'a non-transport inventory error must still probe tools');
+    assert.equal(notifications, 1, 'tools and error changes share one notification');
+    await refresh();
+    assert.equal(notifications, 1, 'unchanged tools and error do not notify');
+    answer = { tmux: false, inotifywait: true };
+    await refresh();
+    assert.equal(notifications, 2, 'changed tools notify even with an unchanged inventory error');
+    assert.deepEqual(indexer.getRemoteHostProfile('box').tools, answer);
+    probeFails = true;
+    const result = await refresh();
+    assert.equal(method === 'refreshNow' ? result.errors[0]?.error : result.error, originalError.message,
+      'probe failure must not replace the original inventory error');
+    assert.equal(notifications, 2);
+    assert.deepEqual(indexer.getRemoteHostProfile('box').tools, answer);
+    assert.equal(fs.existsSync(manifestPathFor(dataDir, 'box')), false);
+  });
+}
 
 test('a transport with no probe is left alone', async () => {
   const h = harness({});

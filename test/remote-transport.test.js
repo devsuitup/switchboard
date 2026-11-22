@@ -93,7 +93,7 @@ test('listFiles spawns one bounded ssh with the alias as an operand, never as a 
   // nothing the user typed is ever concatenated into a local shell string.
   assert.equal(args[args.length - 2], 'planificator');
   const command = args[args.length - 1];
-  assert.match(command, /^if \[ -d \.claude\/projects \]; then find \.claude\/projects /);
+  assert.equal(command, LIST_COMMAND);
   assert.ok(command.includes('find .claude/projects'), 'the inventory half must still run');
   assert.ok(command.includes('find .claude/sessions'), 'the session descriptors must ride the same command');
   assert.deepEqual(result, {
@@ -107,7 +107,7 @@ test('listFiles spawns one bounded ssh with the alias as an operand, never as a 
 // feature and reading a '*.key' secret file dropped in the same directory.
 test('LIST_COMMAND is pinned exactly — any widening of the sessions glob must fail this test', () => {
   const expected =
-    `if [ -d .claude/projects ]; then find .claude/projects -type f \\( -name '*.jsonl' -o -name '*.meta.json' \\) -printf '%T@\\t%s\\t%P\\n' || exit $?; fi; ` +
+    `find .claude/projects -type f \\( -name '*.jsonl' -o -name '*.meta.json' \\) -printf '%T@\\t%s\\t%P\\n' || exit $?; ` +
     `printf '\\001SWITCHBOARD-SESSIONS\\001\\n'; ` +
     `find .claude/sessions -maxdepth 1 -type f -name '[0-9]*.json' 2>/dev/null | LC_ALL=C sort | ` +
     `head -n ${MAX_SESSION_DESCRIPTORS} | while IFS= read -r f; do head -c ${MAX_SESSION_DESCRIPTOR_BYTES} "$f"; printf '\\n'; ` +
