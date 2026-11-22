@@ -498,9 +498,14 @@ for (const replacement of [true, false]) test(`closing Archived Delete after a r
 });
 
 for (const refusal of [
-  { code: 'IDENTITY_UNAVAILABLE', error: 'No unambiguous known project mapping; reload projects.', retry: true, nextStep: true },
+  { code: 'IDENTITY_UNAVAILABLE', error: 'No unambiguous known project mapping; reload projects.', retry: true },
   { error: 'Stop the background job from the Agents view first, then reopen Delete project.', retry: true, nextStep: true },
-  { error: 'Background worker liveness cannot be verified. Check the Agents view. Stopping a job may not unblock project deletion.', retry: true, nextStep: true },
+  { error: 'Background worker liveness cannot be verified. Check the Agents view. Stopping a job may not unblock project deletion.', retry: true },
+  { error: 'Stop the external process and verify its exit.', retry: true },
+  { error: 'Background jobs prevent worktree removal (#1090). Check the Agents view.', retry: true },
+  { error: 'Stopping local terminals for project deletion is available on Windows only. Stop them first, then reopen Delete project.', retry: true, nextStep: true },
+  { error: 'Worktree activity is uncertain. Check its sessions and Agents, then reopen Delete.', retry: true, nextStep: true },
+  { error: 'Stop the sessions in this worktree first, then reopen Delete.', retry: true, nextStep: true },
   { code: 'INVALID_REQUEST', error: 'Invalid project selection.', retry: true },
   { code: 'SNAPSHOT_STALE', error: 'Snapshot changed.', refresh: true, retry: true },
   { code: 'TOKEN_LIMIT', error: 'Too many previews.', retry: true },
@@ -523,7 +528,7 @@ for (const refusal of [
   const reason = h.document.getElementById(button.getAttribute('aria-describedby'));
   assert.ok(reason && reason.textContent, 'refused Delete keeps its accessible reason');
   assert.doesNotMatch(reason.textContent, /delete its repository|Folder and path hints conflict/i);
-  assert.equal(/try again/i.test(reason.textContent), refusal.retry && !refusal.nextStep, 'only refusals without a next step need the generic retry sentence');
+  assert.equal(reason.textContent.includes('Reopen the menu and click Delete project to try again.'), refusal.retry && !refusal.nextStep, 'refusals without explicit reopen Delete advice keep the menu retry sentence');
   if (refusal.nextStep) assert.equal(reason.textContent, refusal.error, 'keep the existing next step without a duplicate retry sentence');
   assert.doesNotMatch(reason.textContent, /Close and reopen this menu to retry|Retry preview, or cancel/i);
   assert.equal(h.calls.execute.length, 0);

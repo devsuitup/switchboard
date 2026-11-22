@@ -165,7 +165,7 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, fo
         const retryable = !grouped;
         reason.textContent = grouped ? 'This worktree is grouped under its repository. To remove it from Switchboard, delete its repository instead.'
           : message.replace(/\s*(?:Close and reopen Delete to retry\.|Retry preview, or cancel\.)/g, '')
-            + (retryable && !/(?:^|[.;]\s*)(?:stop|check|reload)\b/i.test(message) ? ' Reopen the menu and click Delete project to try again.' : '');
+            + (retryable && !/\breopen Delete\b/i.test(message) ? ' Reopen the menu and click Delete project to try again.' : '');
         button.dataset.unavailable = 'true'; button.dataset.retryable = String(retryable); button.disabled = true;
       } })) {
         projectEntries.delete(entry); delete folders[entry];

@@ -40,7 +40,8 @@ token. A refusal disables Delete and writes its reason into the row;
 `aria-describedby` uses an entry-derived stable ID on both Delete and the row's
 summary. Every refusal except the grouped-worktree hint, including thrown IPC
 errors, explains how to reopen the menu and click Delete again unless the refusal
-already supplies a Stop, Check or Reload step; reopening only
+already explicitly says to reopen Delete. Stop, Check or Reload advice alone
+keeps the menu retry sentence; reopening only
 re-enables that explicit action, with no preview. Detached rows ignore refusal
 updates. The shared flow's `onDialogOpen` callback clears the row's checking
 message when the dialog opens.
