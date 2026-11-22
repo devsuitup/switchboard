@@ -25,6 +25,78 @@ const { readSessionFile } = require('../read-session-file');
 const { fullIndexConfig } = require('../src/main/session-index/full-read-state');
 require('./fixtures/isolated-codex-home.cjs')(test);
 
+for (const fault of ['EACCES', 'short', 'race', 'final']) {
+  test('Codex title snapshot rejects unknown and raced observations: ' + fault, t => {
+    const f = require('./fixtures/warm-start-1152.cjs').scanFixture(t);
+    fs.appendFileSync(f.titleFile, '\n');
+    const read = fs.readFileSync;
+    t.mock.method(fs, 'readFileSync', function (file, ...args) {
+      if (file === f.titleFile && fault === 'EACCES') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      const bytes = read.call(this, file, ...args);
+      if (file === f.titleFile && fault === 'short') return bytes.subarray(0, bytes.length - 1);
+      if (file === f.titleFile && fault === 'race') fs.appendFileSync(file, ' ');
+      return bytes;
+    });
+    if (fault === 'final') {
+      const enumerate = f.adapter.listTranscripts;
+      t.mock.method(f.adapter, 'listTranscripts', (...args) => {
+        const files = enumerate(...args);
+        fs.appendFileSync(f.titleFile, JSON.stringify({ id: f.row.sessionId, thread_name: 'raced title' }) + '\n');
+        return files;
+      });
+    }
+    const messages = f.scan();
+    assert.equal(messages.at(-1).ok, false, 'unknown or raced title observation fails the scope');
+    assert.ok(messages.every(msg => !msg.result), 'no stale title or skip result can be published');
+  });
+}
+
+for (const level of ['root', 'year', 'month', 'day']) {
+  test('Codex enumeration errors never authorize deletion: ' + level, t => {
+    const f = require('./fixtures/warm-start-1152.cjs').scanFixture(t);
+    const target = { root: f.adapter.sessionsRoot(), year: path.dirname(path.dirname(f.dir)), month: path.dirname(f.dir), day: f.dir }[level];
+    const read = fs.readdirSync;
+    t.mock.method(fs, 'readdirSync', function (dir, ...args) {
+      if (dir === target) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return read.call(this, dir, ...args);
+    });
+    const messages = f.scan();
+    assert.equal(messages.at(-1).ok, false, 'inaccessible Codex ' + level + ' fails rather than becoming an empty inventory');
+    assert.ok(messages.every(msg => !msg.result?.toDelete?.length));
+  });
+}
+
+for (const kind of ['subagent', 'empty', 'EACCES', 'short', 'race']) {
+  test('Codex stable exclusion differs from failed parse: ' + kind, t => {
+    const f = require('./fixtures/warm-start-1152.cjs').scanFixture(t);
+    const stable = ['subagent', 'empty'].includes(kind);
+    fs.writeFileSync(f.file, kind === 'empty' ? '' : require('./fixtures/warm-start-1152.cjs').body(f.root, 'newword', kind === 'subagent' ? { thread_source: 'subagent' } : {}));
+    const open = fs.openSync, read = fs.readSync;
+    let fd;
+    t.mock.method(fs, 'openSync', function (file, ...args) {
+      if (file === f.file && kind === 'EACCES') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      const value = open.call(this, file, ...args);
+      if (file === f.file) fd = value;
+      return value;
+    });
+    t.mock.method(fs, 'readSync', function (handle, ...args) {
+      if (handle === fd && kind === 'short') return 0;
+      const n = read.call(this, handle, ...args);
+      if (handle === fd && kind === 'race') fs.appendFileSync(f.file, ' ');
+      return n;
+    });
+    const messages = f.scan(), result = messages.find(msg => msg.result)?.result;
+    if (stable) {
+      assert.ok(result?.toDelete?.includes(f.row.sessionId), 'stable exclusion deletes the prior filename UUID');
+      assert.equal(result.deferred.length, 0);
+    } else {
+      assert.ok(messages.at(-1).ok === false || result?.deferred?.includes(path.basename(f.file)), 'failed read is explicitly failed or deferred');
+      assert.ok(!result?.toDelete?.includes(f.row.sessionId), 'failed parse cannot delete the prior row');
+      if (result) assert.deepEqual(Array.from(result.deferredIds || []), [f.row.sessionId], 'deferral uses the filename UUID');
+    }
+  });
+}
+
 function startupScan(t, mutate, fault, derive) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-a2-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

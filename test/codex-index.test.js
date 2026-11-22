@@ -7,6 +7,32 @@ const os = require('node:os');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const openStore = require('./fixtures/conversation-store.cjs');
+require('./fixtures/isolated-codex-home.cjs')(test);
+
+test('Codex headless marking survives selection and visibility changes',
+  { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const f = await require('./fixtures/warm-start-1152.cjs').fixture(t);
+    f.codexWrite(0); f.codexWrite(1, 'execword', { meta: { originator: 'codex_exec' } });
+    f.codexWrite(2, 'forkword', { meta: { originator: 'switchboard_own', forked_from_id: f.ids[0] } });
+    f.codexWrite(3, 'excludedword', { meta: { thread_source: 'subagent' } });
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(f.codexScans()[0].filesRead, 1, 'only uncertified excluded subagent is reread');
+    assert.equal(f.db.getCachedSession(f.ids[1])?.entrypoint, 'sdk-codex-exec', 'hidden exec remains indexed');
+    assert.ok(f.db.getCachedSession(f.ids[1]).fullReadStamp);
+    assert.equal(f.db.getCachedSession(f.ids[3]), null);
+    const stamp = f.db.getCachedSession(f.ids[1]).fullReadStamp;
+    const visible = async () => (await f.writer.buildProjectsFromCache(false)).flatMap(project => project.sessions).map(row => row.sessionId);
+    assert.ok(!(await visible()).includes(f.ids[1]), 'exec is hidden by default after startup');
+    await f.writer.setSetting('global', { hideSdkSessions: false });
+    assert.ok((await visible()).includes(f.ids[1]), 'hide off reveals indexed exec');
+    await f.writer.setSetting('global', { hideSdkSessions: true });
+    f.activeSessions.set(f.ids[1], { exited: false });
+    assert.ok((await visible()).includes(f.ids[1]), 'live exec remains visible');
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(f.db.getCachedSession(f.ids[1]).fullReadStamp, stamp);
+    assert.equal(f.codexScans()[0].filesRead, 1);
+  });
 
 const ID_A = '01a03f6c-fdf9-7c83-86e3-c388f81d765c';
 const ID_B = '01a03f6c-fdf9-7c83-86e3-c388f81d765d';

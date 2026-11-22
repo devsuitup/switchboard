@@ -12,15 +12,16 @@ async function fixture(t, { separateReader = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-1144-'));
   const previous = process.env.SWITCHBOARD_DATA_DIR;
   process.env.SWITCHBOARD_DATA_DIR = path.join(root, 'data');
-  const db = openStore(), worker = require('./project-deletion-worker.cjs')(db);
-  const reader = separateReader ? openStore({ readonly: true }) : db;
+  let db = openStore(), worker = require('./project-deletion-worker.cjs')(db);
+  let reader = separateReader ? openStore({ readonly: true }) : db;
   const calls = [], logs = [], descriptors = [], statuses = [], activeSessions = new Map();
-  const writer = createSessionIndexWriter({ readonlyBackend: reader, client: {
+  const makeWriter = () => createSessionIndexWriter({ readonlyBackend: reader, client: {
     ready: Promise.resolve(), request: async (name, ...args) => {
       calls.push({ name, args });
       return worker.client.request(name, ...args);
     },
   } });
+  let writer = makeWriter();
   const projects = path.join(root, 'projects'), folder = encodeProjectPath(root), dir = path.join(projects, folder);
   fs.mkdirSync(dir, { recursive: true });
   await writer.ready;
@@ -49,7 +50,19 @@ async function fixture(t, { separateReader = false } = {}) {
     initialize();
     return cache.populateCacheViaWorker(opts);
   };
-  return { root, projects, dir, folder, db, reader, writer, worker, cache, calls, logs, descriptors, statuses, activeSessions, write, scans, restart };
+  const reopen = async () => {
+    await cache.shutdownProducers();
+    if (reader !== db) reader.closeDb();
+    db.closeDb();
+    db = openStore();
+    reader = separateReader ? openStore({ readonly: true }) : db;
+    worker = require('./project-deletion-worker.cjs')(db);
+    writer = makeWriter();
+    await writer.ready;
+    initialize();
+  };
+  return { root, projects, dir, folder, get db() { return db; }, get reader() { return reader; },
+    get writer() { return writer; }, get worker() { return worker; }, cache, calls, logs, descriptors, statuses, activeSessions, write, scans, restart, reopen };
 }
 
 async function assertRebuildOracle(t, f) {

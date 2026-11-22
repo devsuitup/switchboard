@@ -44,7 +44,7 @@ const { conversationMeta } = require('./conversation-meta');
 const { cleanDisplayName } = require('./public/utils');
 const { isHostedJob } = require('./src/main/bg-agents/bg-agents-roster');
 const { state: TRACE, trace } = require('./src/main/shared/activity-trace');
-const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, matchesFullRead, observation, nameDerivationWitness, sourceRelativePath, startupInventoryMatches, deferStartupSources } = require('./src/main/session-index/full-read-state');
+const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, matchesFullRead, observation, nameDerivationWitness, sourceRelativePath, startupSourcePath, startupInventoryMatches, deferStartupSources } = require('./src/main/session-index/full-read-state');
 
 /**
  * Session cache module.
@@ -1551,10 +1551,14 @@ async function publishScannedFolder(msg) {
   try {
     if (msg.error) throw new Error(msg.error);
     if (result?.startup) {
+      if (result.fullIndexConfig !== startupConfig()
+        || (result.runtime === 'codex' && !harnessForFolder(result.folder).matchesTitleSnapshot(result.titleSnapshot))) {
+        throw Object.assign(new Error('Startup source configuration or titles changed before publication'), { code: 'WRITER_STALE' });
+      }
       const raced = [];
       for (const [relativePath, stamp] of result.checks) {
-        const file = path.join(PROJECTS_DIR, result.folder, relativePath);
-        if (stamp === null ? observation(file) !== null : !matchesFullRead(file, stamp, 'claude', relativePath)) {
+        const file = startupSourcePath(PROJECTS_DIR, result.folder, relativePath);
+        if (!file || (stamp === null ? observation(file) !== null : !matchesFullRead(file, stamp, result.runtime || 'claude', relativePath, result.titleSnapshot))) {
           raced.push(relativePath);
         }
       }
@@ -1588,7 +1592,8 @@ async function publishScannedFolder(msg) {
         const collision = hasCollisionName(row.sessionId);
         const witness = nameDerivationWitness(getMeta(row.sessionId, true), collision);
         if (!collision && cacheBackend.getNameDerivation?.(row.sessionId) === witness) continue;
-        if (!matchesFullRead(path.join(PROJECTS_DIR, row.folder, relativePath), row.fullReadStamp, 'claude', relativePath)) continue;
+        const file = startupSourcePath(PROJECTS_DIR, row.folder, relativePath);
+        if (!file || !matchesFullRead(file, row.fullReadStamp, row.runtime || 'claude', relativePath, result.titleSnapshot)) continue;
         names.push({ sessionId: row.sessionId, stamp: row.fullReadStamp, witness, collision });
       }
       if (names.length && !await writer.deriveCachedNames(names)) {
@@ -1747,7 +1752,8 @@ function startupSnapshot(force, scope) {
     const metas = getAllFolderMeta();
     const metadata = getAllMeta(true);
     const keys = new Set([...metas.keys(), ...rows.map(row => row.folder)]);
-    const inventory = [...keys].filter(folder => parseFolderKey(folder).alias === null && !harnessForFolder(folder)?.folderPrefix)
+    const inventory = [...keys].filter(folder => parseFolderKey(folder).alias === null
+      && !disabledHarnessIds().includes(harnessForFolder(folder).id))
       .map(folder => ({ folder, meta: metas.get(folder) || null, rows: rows.filter(row => row.folder === folder),
         metadata: rows.filter(row => row.folder === folder).map(row => [row.sessionId, metadata.get(row.sessionId) || null]),
         deferralVersions: [...(deferredContinuationFiles.get(folder) || [])].map(file => [file, deferredContinuationVersions.get(folder + '\0' + file)]),
@@ -1820,7 +1826,7 @@ function populateCacheViaWorker({ force = false } = {}, retryTimerFired = false)
       if (result.ok) {
         if (setInitialScanComplete) await writer.setInitialScanComplete();
         populateRetry = null;
-        sendStatus(`Indexed ${sessions} sessions across ${indexedProjects} projects`, 'done');
+        sendStatus(coldStart ? `Indexed ${sessions} sessions across ${indexedProjects} projects` : 'Indexed session changes', 'done');
         setTimeout(() => sendStatus(''), 5000).unref?.();
         progress(true);
         notifyRendererProjectsChanged('scan');

@@ -57,7 +57,7 @@ but once in distinct files. Auxiliary cwd, sidecar and title bytes are separate.
 No transcript text or absolute source paths are logged. Aggregate status text
 is unchanged.
 
-## Claude warm startup (#1144 A2)
+## Local warm startup (#1144 A2, #1152 Codex)
 
 `populateCacheViaWorker` remains the single-flight coordinator for startup,
 manual rebuild, repair and bounded retries. It captures rows, folder baselines,
@@ -81,9 +81,35 @@ and coalesce a full follow-up.
 Eligible folders use the existing subset reader with complete existing rows.
 An empty selection emits an unchanged result. Changed/deleted bridge members
 expand their old and new dependency groups through the existing merge helper;
-suppressed physical mirrors without rows may be reread. Enabled Codex folders
-retain one full harness pass, including Claude-disabled startup. Codex missing
-folder reconciliation remains in `harnessReconciliationFolders`.
+suppressed physical mirrors without rows may be reread. Enabled Codex days use
+a separate strict startup reader, including Claude-disabled startup. Its union
+includes cached-only days after a day, year or entire sessions root disappears.
+Disabled Codex never enters enumeration or title loading. Missing Codex folder
+reconciliation also remains in `harnessReconciliationFolders`.
+
+Codex source identity combines the validated date key and rollout filename UUID
+under the current configuration's sessions root. A cached absolute sessionFile
+is checked against that root and the stamped basename, never used as permission
+to read a previous CODEX_HOME. Invalid or ambiguous source witnesses force
+conservative reading; duplicate filename UUIDs use the full day route.
+A null legacy fileMtime forces reclassification even with an existing stamp.
+
+The strict reader requires a coherent external-title snapshot. Missing title
+indexes mean empty titles; unreadable, short or raced reads fail the scope.
+Certificates must explicitly contain the current effective title. A title delta
+reads only affected rollouts in full; unrelated title changes leave bodies
+skipped. Worker and main recheck the title observation, including empty subsets,
+and stale main-side results use the existing bounded replan. Cached-name repair
+uses the same source and naming fences without promoting AI titles to user names.
+
+Every Codex result has projectPath null and the full reader's index watermark,
+including the title index mtime. Startup reads finish intentionally excluded
+rollouts to distinguish a stable empty/subagent result from a failed or raced
+read. Deferrals use filename UUIDs, leave the watermark zero and retain pending
+state. Exec sessions remain indexed and certified; hiding remains a projection.
+Warm completion says "Indexed session changes" rather than reporting replaced
+rows as the total history size. Body and auxiliary counters remain actual reads;
+the title cache attributes bytes only to the folder that performed the read.
 
 Strict inventory distinguishes confirmed ENOENT/ENOTDIR from incomplete or
 inaccessible scopes. A stable complete parse yielding no row deletes the old

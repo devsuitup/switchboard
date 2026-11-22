@@ -28,6 +28,67 @@ function durableFixture(t) {
 
 const sqliteSkip = !openStore.supported && 'SQLite requires native binding or Node 22';
 
+for (const held of ['beginFullIndex', 'effects', 'certifyFullReads', 'sealFullIndex']) {
+  test('Codex publication interruption cannot create a false seal: held ' + held, { skip: sqliteSkip }, async t => {
+    const f = await require('./fixtures/warm-start-1152.cjs').fixture(t), file = f.codexWrite(0);
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    fs.appendFileSync(file, '\n');
+    let release, entered;
+    const gate = new Promise(resolve => { release = resolve; });
+    const started = new Promise(resolve => { entered = resolve; });
+    const request = f.worker.client.request, order = [];
+    f.worker.client.request = async (name, ...args) => {
+      const affected = name === 'effects' ? args[0].some(effect => effect.name === 'setFolderMeta' && effect.args[0] === f.codexFolder) : args[0] === f.codexFolder;
+      if (affected) order.push(name);
+      const reply = await request(name, ...args);
+      if (name === held && affected) { entered(); await gate; }
+      return reply;
+    };
+    const pending = f.restart();
+    assert.equal(await Promise.race([started.then(() => true), pending.then(() => false)]), true, 'publication cannot finish before the requested ACK stage');
+    try {
+      assert.ok(!f.logs.some(line => line.includes('[status] (done)')), 'no done status precedes the held ACK');
+      if (held !== 'sealFullIndex') {
+        assert.ok(!order.includes('sealFullIndex'), 'no seal request precedes the held effect or certificate ACK');
+        assert.ok(f.db.getFolderMeta(f.codexFolder).fullIndexPending, 'held ACK leaves a conservative pending publication');
+      }
+    } finally { release(); }
+    assert.equal((await pending).ok, true);
+  });
+}
+
+for (const mode of ['full', 'partial', 'deletion']) for (const lost of ['beginFullIndex', 'effects', 'certifyFullReads', 'sealFullIndex']) {
+  if (mode === 'deletion' && lost === 'certifyFullReads') continue;
+  test('Codex publication interruption cannot create a false seal: ' + mode + ' ' + lost, { skip: sqliteSkip }, async t => {
+    const f = await require('./fixtures/warm-start-1152.cjs').fixture(t);
+    const file = f.codexWrite(0);
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(f.codexScans()[0].mode, 'partial', 'Codex ACK qualification uses the startup subset route');
+    if (mode === 'deletion') fs.unlinkSync(file); else fs.appendFileSync(file, '\n');
+    const request = f.worker.client.request, order = [];
+    f.worker.client.request = async (name, ...args) => {
+      const affected = name === 'effects' ? args[0].some(effect => effect.name === 'setFolderMeta' && effect.args[0] === f.codexFolder) : args[0] === f.codexFolder;
+      if (affected) order.push(name);
+      const reply = await request(name, ...args);
+      if (name === lost && affected) throw Object.assign(new Error('lost ACK'), { code: 'WRITER_TIMEOUT' });
+      return reply;
+    };
+    assert.equal((await f.restart({ force: mode === 'full' })).ok, false, 'lost publication ACK cannot report successful qualification');
+    if (lost !== 'sealFullIndex') assert.ok(!order.includes('sealFullIndex'), 'seal cannot precede all materialization ACKs');
+    else if (mode !== 'deletion') assert.ok(order.indexOf('effects') < order.indexOf('certifyFullReads') && order.indexOf('certifyFullReads') < order.indexOf('sealFullIndex'), 'effects then certificates then seal');
+    else assert.ok(order.indexOf('effects') < order.indexOf('sealFullIndex'), 'deletion effects precede the seal');
+    const reader = openStore({ readonly: true });
+    try {
+      if (lost !== 'sealFullIndex') assert.ok(reader.getFolderMeta(f.codexFolder).fullIndexPending, 'pending state survives a new connection');
+      else assert.equal(reader.getFolderMeta(f.codexFolder).fullIndexVersion, 1, 'committed seal followed only acknowledged effects');
+    } finally { reader.closeDb(); }
+    f.worker.client.request = request;
+    await f.reopen();
+    assert.equal((await f.restart({ force: true })).ok, true);
+  });
+}
+
 test('full folder publication uses one certificate request for all rows', { skip: sqliteSkip }, async t => {
   const f = durableFixture(t), calls = [];
   const worker = require('./fixtures/project-deletion-worker.cjs')(f.store);

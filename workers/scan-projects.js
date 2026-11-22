@@ -6,7 +6,7 @@ const { deriveProjectPath, resolveWorktreePath } = require('../derive-project-pa
 const { setRemappedProjectReader } = require('../encode-project-path');
 const { readSessionFile, enumerateSessionFiles, mergeBridgeGroups, subagentSessionId, isCanonicalWorkflowPath } = require('../read-session-file');
 const { classifyTranscriptPath } = require('../subagent-attribution');
-const { prefixedHarnesses, readHarnessFolder } = require('../harnesses');
+const { prefixedHarnesses, readHarnessFolder, harnessFolderIndexMtimeMs } = require('../harnesses');
 const { enumerateReads, measureFolder } = require('../src/main/session-index/read-counters');
 const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, observation, fullReadStamp, matchesFullRead, sourceRelativePath, safeRelativePath, deferStartupSources } = require('../src/main/session-index/full-read-state');
 
@@ -187,6 +187,83 @@ function readStartupFolder(folder) {
   } finally { startupRead = null; }
 }
 
+function readStartupCodexFolder(harness, folder) {
+  const dir = harness.folderPath(folder);
+  if (!dir || !folder.startsWith(harness.folderPrefix)) throw new Error('Invalid Codex startup folder');
+  const entry = workerData.startup.inventory.find(item => item.folder === folder) || { folder, rows: [], meta: null };
+  const titleSnapshot = harness.readTitleSnapshot();
+  if (!titleSnapshot) throw new Error('Unknown Codex title snapshot');
+  const files = harness.listTranscripts(dir, { strict: true });
+  enumerateReads(files);
+  const folderObservation = observation(dir);
+  if (folderObservation === undefined) throw new Error('Cannot inspect Codex day');
+  const { rows, meta } = entry;
+  let reason = workerData.startup.force ? 'forced' : !meta ? 'missing-baseline' : meta.fullIndexPending ? 'pending'
+    : meta.fullIndexVersion !== SESSION_CONTENT_INDEX_VERSION ? 'version' : meta.fullIndexConfig !== scanConfig() ? 'configuration'
+      : workerData.startup.repairs?.includes(folder) ? 'repair' : null;
+  const byPath = new Map(), byId = new Map();
+  for (const file of files) {
+    const id = harness.sessionIdFromPath(file);
+    if (byId.has(id)) reason ||= 'ambiguous-source';
+    byId.set(id, file);
+  }
+  for (const row of rows) {
+    const stamped = sourceRelativePath(row);
+    const fallback = row.sessionFile && path.basename(row.sessionFile);
+    const relativePath = stamped || (fallback && safeRelativePath(fallback) && harness.sessionIdFromPath(fallback) === row.sessionId ? fallback : null);
+    if (!relativePath || byPath.has(relativePath)) { reason ||= 'ambiguous-source'; continue; }
+    byPath.set(relativePath, row);
+  }
+  const selected = new Set(entry.deferred || []), checks = new Map();
+  const present = new Set(files.map(file => path.basename(file)));
+  for (const file of files) {
+    const relativePath = path.basename(file), row = byPath.get(relativePath);
+    if (!row?.fileMtime || sourceRelativePath(row) !== relativePath
+      || !matchesFullRead(file, row.fullReadStamp, 'codex', relativePath, titleSnapshot)) selected.add(relativePath);
+    else checks.set(relativePath, row.fullReadStamp);
+  }
+  for (const relativePath of byPath.keys()) if (!present.has(relativePath)) {
+    const current = observation(path.join(dir, relativePath));
+    if (current === undefined) throw new Error('Cannot verify absent Codex rollout');
+    if (current !== null) reason ||= 'changed-layout';
+    else selected.add(relativePath);
+  }
+  const sessions = [], toDelete = [], deferred = [];
+  const paths = reason ? new Set([...present, ...byPath.keys()]) : selected;
+  for (const relativePath of paths) {
+    if (!safeRelativePath(relativePath) || relativePath.includes('/') || !harness.sessionIdFromPath(relativePath)) throw new Error('Invalid Codex startup source');
+    const file = path.join(dir, relativePath);
+    const before = observation(file);
+    if (before === undefined) throw new Error('Cannot inspect Codex rollout');
+    if (before === null) {
+      if (byPath.has(relativePath)) toDelete.push(byPath.get(relativePath).sessionId);
+      checks.set(relativePath, null);
+      continue;
+    }
+    const outcome = {};
+    const row = harness.readSessionFile(file, folder, { startup: true, outcome, titleSnapshot });
+    if (outcome.status === 'failed') throw new Error(outcome.error || 'Codex read failed');
+    if (outcome.status === 'absent' || outcome.status === 'deferred' || !outcome.stamp) deferred.push(relativePath);
+    else {
+      checks.set(relativePath, outcome.stamp);
+      if (!row && byPath.has(relativePath)) toDelete.push(byPath.get(relativePath).sessionId);
+    }
+    if (row) sessions.push(row);
+  }
+  for (const [relativePath, stamp] of checks) {
+    const file = path.join(dir, relativePath);
+    if (stamp === null ? observation(file) !== null : !matchesFullRead(file, stamp, 'codex', relativePath, titleSnapshot)) deferred.push(relativePath);
+  }
+  if (!harness.matchesTitleSnapshot(titleSnapshot)) throw new Error('Codex title snapshot changed during scan');
+  const result = { folder, projectPath: null, sessions, toDelete: [...new Set(toDelete)],
+    indexMtimeMs: harnessFolderIndexMtimeMs(harness, dir, files), partial: !reason,
+    startup: true, runtime: 'codex', reason: reason || (selected.size ? 'changed' : 'unchanged'),
+    checks: [...checks], deferred, goneFolder: folderObservation === null, inventory: entry,
+    metadataIds: rows.map(row => row.sessionId), titleSnapshot };
+  deferStartupSources(result, deferred);
+  return result;
+}
+
 // Scan all folders, streaming one message per folder as soon as it's read
 // instead of buffering every folder into one `results` array and posting a
 // single message at the very end. A large ~/.claude/projects/ (1GB+,
@@ -205,7 +282,7 @@ try {
     }
   };
   const folders = workerData.disabledHarnesses?.includes('claude') ? [] : workerData.startup
-    ? [...new Set([...listProjectFolders(), ...workerData.startup.inventory.map(entry => entry.folder)])]
+    ? [...new Set([...listProjectFolders(), ...workerData.startup.inventory.filter(entry => !entry.folder.startsWith('codex/')).map(entry => entry.folder)])]
       .filter(folder => !workerData.startup.scope || workerData.startup.scope.includes(folder))
     : Array.isArray(workerData.folders)
     ? workerData.folders.filter(f => typeof f === 'string' && f && f !== '.git' && f !== '.' && f !== '..' && !/[\\/]/.test(f))
@@ -215,7 +292,10 @@ try {
   const targets = workerData.disabledHarnesses?.includes('claude') ? [] : Array.isArray(workerData.targets) ? workerData.targets : [];
   // see .ai/contexts/session-cache.md ("Harness folders")
   const harnessFolders = (Array.isArray(workerData.folders) && !workerData.startup) || FOLDER_PREFIX !== '' ? []
-    : prefixedHarnesses(workerData.disabledHarnesses).flatMap(harness => harness.listFolders().map(folder => ({ harness, folder })))
+    : prefixedHarnesses(workerData.disabledHarnesses).flatMap(harness => [...new Set([
+      ...harness.listFolders({ strict: !!workerData.startup }),
+      ...(workerData.startup?.inventory || []).filter(entry => entry.folder.startsWith(harness.folderPrefix)).map(entry => entry.folder),
+    ])].map(folder => ({ harness, folder })))
       .filter(entry => !workerData.startup?.scope || workerData.startup.scope.includes(entry.folder));
   const total = folders.length + harnessFolders.length + targets.length;
   let current = 0;
@@ -238,7 +318,9 @@ try {
   for (const { harness, folder } of harnessFolders) {
     current++;
     try {
-      const { result, counters } = measureFolder(() => readHarnessFolder(harness, folder));
+      const { result, counters } = measureFolder(() => workerData.startup && harness.id === 'codex'
+        ? readStartupCodexFolder(harness, folder) : readHarnessFolder(harness, folder));
+      if (result?.deferred?.length) counters.filesFailed = Math.max(counters.filesFailed, result.deferred.length);
       if (result) Object.assign(result, { counters, fullIndexConfig: scanConfig() });
       parentPort.postMessage({ type: 'folder', result, counters, folder, current, total });
     } catch (error) {
