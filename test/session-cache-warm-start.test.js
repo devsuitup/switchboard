@@ -10,11 +10,384 @@ const { memoryWriter } = require('./fixtures/writer-memory.cjs');
 const { encodeProjectPath } = require('../encode-project-path');
 require('./fixtures/isolated-codex-home.cjs')(test);
 
+test('Codex warm restart skips interactive and hidden exec bodies',
+  { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const f = await require('./fixtures/warm-start-1152.cjs').fixture(t);
+    f.codexWrite(0);
+    f.codexWrite(1, 'hiddenword', { folder: f.other, cwd: path.join(f.root, 'other'), meta: { originator: 'codex_exec' } });
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    const before = require('./fixtures/warm-start-1152.cjs').logicalIndex(f.db);
+    await f.reopen();
+    assert.equal((await f.restart()).ok, true);
+    assert.deepEqual(f.codexScans().map(row => row.mode), ['partial', 'partial'], 'unchanged Codex days use partial publication');
+    assert.equal(f.codexScans().reduce((n, row) => n + row.bytesRead + row.readOperations, 0), 0, 'unchanged interactive and hidden exec bodies are never opened');
+    assert.equal(f.statuses.findLast(line => line.includes('[status] (done)')), '[status] (done) Indexed session changes', 'warm completion keeps the Indexed timing boundary without calling rewritten rows the total history');
+    assert.deepEqual(require('./fixtures/warm-start-1152.cjs').logicalIndex(f.db), before);
+    assert.equal(f.calls.filter(call => call.name === 'effects').flatMap(call => call.args[0]).filter(effect => /upsertCached|replaceSessionMetrics|upsertSearch/.test(effect.name)).length, 0, 'unchanged Codex causes no body, metrics or FTS replacements');
+  });
+
+test('forced warm rebuild reports the full indexing total',
+  { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const f = await require('./fixtures/warm-start-1152.cjs').fixture(t);
+    f.codexWrite(0);
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    assert.equal((await f.restart({ force: true })).ok, true);
+    assert.match(f.statuses.findLast(line => line.includes('[status] (done)')), /Indexed 1 sessions across 1 projects$/, 'a forced warm rebuild reports its full read');
+  });
+
+for (const force of [false, true]) test('published Codex day counts once after repeated replans, force=' + force,
+  { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const f = await require('./fixtures/warm-start-1152.cjs').fixture(t);
+    f.codexWrite(0);
+    f.write('claude');
+    if (force) assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    const prototype = require('node:worker_threads').Worker.prototype, emit = prototype.emit;
+    let replans = 0;
+    t.mock.method(prototype, 'emit', function (event, msg, ...args) {
+      if (event === 'message' && msg?.type === 'done' && replans < 2) {
+        replans++;
+        msg = { ...msg, replanFolders: [f.codexFolder] };
+      }
+      return emit.call(this, event, msg, ...args);
+    });
+    const result = await f.restart({ force });
+    assert.equal(result.ok, true);
+    assert.equal(replans, 2);
+    assert.equal(f.codexScans().filter(row => row.ok).length, 3, 'each attempt really publishes the day');
+    assert.equal(f.db.getAllCached().length, 2);
+    assert.equal(result.sessions, 2, 'repeated successful publications count each folder only once');
+    assert.match(f.statuses.findLast(line => line.includes('[status] (done)')), /Indexed 2 sessions across 2 projects$/);
+  });
+
+test('stale Codex days coalesce into one scoped worker replan',
+  { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const fx = require('./fixtures/warm-start-1152.cjs'), f = await fx.fixture(t);
+    const days = [f.codexFolder, f.other, 'codex/2026/08/28'];
+    days.forEach((folder, i) => f.codexWrite(i, 'dayword' + i, { folder }));
+    f.write('claude');
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    const prototype = require('node:worker_threads').Worker.prototype, emit = prototype.emit;
+    let workers = 0, changed = false;
+    const buffered = [];
+    t.mock.method(prototype, 'emit', function (event, msg, ...args) {
+      if (event === 'online') workers++;
+      if (!changed && event === 'message') {
+        if (msg?.result?.runtime === 'codex') { buffered.push(msg); return true; }
+        if (msg?.type === 'done') {
+          changed = true;
+          f.titles(days.map((_, i) => [f.ids[i], 'changed title ' + i]));
+          for (const held of buffered) emit.call(this, event, held);
+        }
+      }
+      return emit.call(this, event, msg, ...args);
+    });
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(workers, 2, 'all stale Codex days share one retry worker');
+    assert.equal(f.scans().filter(row => row.runtime === 'claude').length, 1, 'Codex title replan never rescans Claude');
+    days.forEach((_, i) => assert.equal(f.db.getCachedSession(f.ids[i]).aiTitle, 'changed title ' + i));
+    await fx.assertRebuildOracle(t, f);
+  });
+
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'full-read-1144-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
+
+test('cross-day duplicate Codex UUID stays on the same day after repeated warm starts',
+  { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const fx = require('./fixtures/warm-start-1152.cjs'), f = await fx.fixture(t);
+    f.codexWrite(0, 'firstday');
+    f.codexWrite(0, 'lastday', { folder: f.other });
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    const folder = f.db.getCachedSession(f.ids[0]).folder;
+    for (let i = 0; i < 2; i++) {
+      assert.equal((await f.restart()).ok, true);
+      assert.equal(f.db.getCachedSession(f.ids[0]).folder, folder, 'duplicate UUID must not alternate between days');
+      for (const day of [f.codexFolder, f.other]) {
+        assert.ok(f.codexScans().some(scan => scan.folder === day && scan.mode === 'full' && scan.reason === 'ambiguous-source'), 'every ambiguous day uses the full route');
+      }
+    }
+    await fx.assertRebuildOracle(t, f);
+  });
+
+test('Codex title changes after worker result are not published stale',
+  { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const f = await require('./fixtures/warm-start-1152.cjs').fixture(t);
+    f.codexWrite(0); f.titles([[f.ids[0], 'beforetitle']]);
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    const prototype = require('node:worker_threads').Worker.prototype, emit = prototype.emit;
+    let changed = false;
+    t.mock.method(prototype, 'emit', function (event, msg, ...args) {
+      if (event === 'message' && msg?.result?.folder === f.codexFolder && !changed) {
+        changed = true;
+        f.titles([[f.ids[0], 'aftertitle']]);
+      }
+      return emit.call(this, event, msg, ...args);
+    });
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(f.db.getCachedSession(f.ids[0]).aiTitle, 'aftertitle', 'all-skipped result must replan when titles change before publication');
+    assert.equal(JSON.parse(f.db.getCachedSession(f.ids[0]).fullReadStamp).dependencies.title, 'aftertitle');
+  });
+
+test('Codex watcher and rename races preserve newer state',
+  { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const f = await require('./fixtures/warm-start-1152.cjs').fixture(t), file = f.codexWrite(0);
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    fs.appendFileSync(file, '\n');
+    const original = f.writer.writeScannedFolderPartial.bind(f.writer);
+    let injected = false, stale = false;
+    f.writer.writeScannedFolderPartial = async result => {
+      if (result.folder === f.codexFolder && !injected) {
+        injected = true;
+        await f.writer.renameSession(f.ids[0], 'concurrentname');
+        try { return await original(result); } catch (error) { stale = error.code === 'WRITER_STALE'; throw error; }
+      }
+      return original(result);
+    };
+    assert.equal((await f.restart()).ok, true);
+    assert.ok(stale, 'writer admission rejects a stale affected-row naming witness');
+    assert.equal(f.db.getMeta(f.ids[0]).name, 'concurrentname');
+    let refreshed = false;
+    f.codexWrite(0, 'selectedword');
+    f.writer.writeScannedFolderPartial = async result => {
+      if (result.folder === f.codexFolder && !refreshed) {
+        refreshed = true;
+        f.codexWrite(0, 'watcherword');
+        await f.writer.refreshFolder(f.codexFolder);
+      }
+      return original(result);
+    };
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(f.db.getCachedSession(f.ids[0]).summary, 'watcherword', 'newer watcher materialization survives the paused scan result');
+    const relative = path.basename(file);
+    f.cache.applyContinuationRefresh(f.codexFolder, { deferred: new Set([relative]), accounted: new Set() });
+    fs.appendFileSync(file, '\n');
+    const request = f.worker.client.request;
+    let lost = false;
+    f.worker.client.request = async (name, ...args) => {
+      const reply = await request(name, ...args);
+      if (name === 'effects' && !lost && args[0].some(effect => effect.name === 'setFolderMeta' && effect.args[0] === f.codexFolder)) { lost = true; throw new Error('lost Codex effects ACK'); }
+      return reply;
+    };
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, false);
+    assert.ok(f.cache.continuationRefreshScope(f.codexFolder, { files: new Set(['neighbor.jsonl']) }).files.has(relative), 'lost ACK retains the deferred rollout path');
+    f.worker.client.request = request;
+    await f.reopen();
+    assert.equal((await f.restart()).ok, true, 'durable pending state recovers after store and writer replacement');
+    assert.ok(f.db.getCachedSession(f.ids[0]).fullReadStamp);
+    const { deferStartupSources } = require('../src/main/session-index/full-read-state');
+    const result = { folder: f.codexFolder, inventory: { rows: [] }, sessions: [], checks: [], partial: true, toDelete: [f.ids[2]] };
+    deferStartupSources(result, ['rollout-new-' + f.ids[2] + '.jsonl']);
+    assert.deepEqual(result.deferredIds, [f.ids[2]], 'new deferred Codex source uses filename UUID');
+    assert.deepEqual(result.toDelete, [], 'deferral protects the filename UUID');
+  });
+
+test('Codex scoped retry and force follow-up remain bounded',
+  { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const f = await require('./fixtures/warm-start-1152.cjs').fixture(t);
+    f.codexWrite(0); f.codexWrite(1, 'otherday', { folder: f.other }); f.write('claude');
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    const first = f.restart(), second = f.cache.populateCacheViaWorker({ force: true });
+    await Promise.all([first, second]);
+    assert.deepEqual(f.codexScans().filter(scan => scan.folder === f.codexFolder).map(scan => scan.mode), ['partial', 'full'], 'force during subset produces exactly one full follow-up');
+    const inventory = [...f.db.getAllFolderMeta()].map(([folder, meta]) => ({ folder, meta, rows: f.db.getCachedByFolder(folder) }));
+    const messages = require('./fixtures/warm-start-1152.cjs').scan({ projectsDir: f.projects, inventory, disabledHarnesses: [], scope: [f.other] });
+    assert.deepEqual(messages.filter(msg => msg.type === 'folder').map(msg => msg.folder), [f.other], 'one-day retry does not widen to other Codex or Claude folders');
+  });
+
+test('Codex actual body and auxiliary bytes are accounted', t => {
+  const f = require('./fixtures/warm-start-1152.cjs').scanFixture(t);
+  const read = fs.readSync, auxiliary = fs.readFileSync, open = fs.openSync;
+  const fds = new Set();
+  let bytes = 0, aux = 0, failRead = false;
+  t.mock.method(fs, 'openSync', function (file, ...args) {
+    const fd = open.call(this, file, ...args);
+    if (file === f.file) fds.add(fd); else fds.delete(fd);
+    return fd;
+  });
+  t.mock.method(fs, 'readSync', function (fd, ...args) { if (failRead && fds.has(fd)) return 0; const n = read.call(this, fd, ...args); if (fds.has(fd)) bytes += n; return n; });
+  t.mock.method(fs, 'readFileSync', function (file, ...args) { const value = auxiliary.call(this, file, ...args); if (file === f.titleFile) aux += Buffer.byteLength(value); return value; });
+  for (const delta of ['skip', 'body', 'title', 'failure']) {
+    if (delta === 'body' || delta === 'failure') fs.appendFileSync(f.file, '\n');
+    failRead = delta === 'failure';
+    if (delta === 'title') fs.appendFileSync(f.titleFile, JSON.stringify({ id: f.row.sessionId, thread_name: 'changed' }) + '\n');
+    bytes = 0; aux = 0;
+    const messages = f.scan(), msg = messages.find(msg => msg.folder === f.folder);
+    assert.equal(messages.at(-1).ok, !failRead);
+    assert.equal(msg.counters.bytesRead, bytes, 'actual returned rollout bytes equal instrumentation');
+    assert.equal(msg.counters.auxiliaryBytesRead, aux, 'actual title bytes are counted exactly once');
+    if (delta === 'skip') assert.equal(bytes, 0, 'empty subset has zero actual body bytes');
+    if (msg.result?.sessions[0]) f.entry.rows = [msg.result.sessions[0]];
+  }
+});
+
+for (const change of ['append', 'truncate', 'ctime', 'size', 'atomic', 'new', 'null', 'malformed', 'wrong-runtime', 'missing-title']) {
+  test('Codex selects only changed source observations: ' + change,
+    { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+      const f = await require('./fixtures/warm-start-1152.cjs').fixture(t);
+      const file = f.codexWrite(0);
+      f.codexWrite(1, 'neighborword');
+      fs.utimesSync(file, 1704067200, 1704067200);
+      assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+      const before = fs.readFileSync(file, 'utf8');
+      if (change === 'append' || change === 'size') fs.appendFileSync(file, '\n');
+      if (change === 'truncate') fs.writeFileSync(file, before.replace('originalword', 'short'));
+      if (change === 'ctime') fs.writeFileSync(file, before.replace('originalword', 'replacedword'));
+      if (change === 'atomic') { fs.writeFileSync(file + '.new', before); fs.renameSync(file + '.new', file); }
+      if (['ctime', 'size', 'atomic'].includes(change)) fs.utimesSync(file, 1704067200, 1704067200);
+      if (change === 'new') f.codexWrite(2, 'newword');
+      if (['null', 'malformed'].includes(change)) f.db.connection.prepare('UPDATE session_cache SET fullReadStamp=? WHERE sessionId=?').run(change === 'null' ? null : '{}', f.ids[0]);
+      if (change === 'wrong-runtime') f.db.connection.prepare('UPDATE session_cache SET fullReadStamp=? WHERE sessionId=?').run(JSON.stringify({ format: 1, runtime: 'claude', relativePath: 'ordinary.jsonl' }), f.ids[0]);
+      if (change === 'missing-title') {
+        const stamp = JSON.parse(f.db.getCachedSession(f.ids[0]).fullReadStamp);
+        delete stamp.dependencies.title;
+        f.db.connection.prepare('UPDATE session_cache SET fullReadStamp=? WHERE sessionId=?').run(JSON.stringify(stamp), f.ids[0]);
+      }
+      f.db.setFolderMeta(f.codexFolder, null, 0);
+      assert.equal((await f.restart()).ok, true);
+      assert.equal(f.codexScans()[0].filesRead, 1, 'only the dirty filename UUID is read: ' + change);
+      assert.equal(f.codexScans()[0].bytesRead, fs.statSync(change === 'new' ? path.join(path.dirname(file), 'rollout-2026-08-26T11-55-02-' + f.ids[2] + '.jsonl') : file).size);
+      await require('./fixtures/warm-start-1152.cjs').assertRebuildOracle(t, f);
+    });
+}
+
+for (const gate of ['pending', 'version', 'config', 'repair', 'force', 'incomplete', 'empty-cache', 'empty-fts', 'legacy']) {
+  test('Codex reuses sealed A1 baseline and rejects invalid gates: ' + gate,
+    { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+      const f = await require('./fixtures/warm-start-1152.cjs').fixture(t);
+      f.codexWrite(0, 'execword', { meta: { originator: 'codex_exec' } });
+      f.codexWrite(1);
+      assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+      assert.ok(f.db.getCachedSession(f.ids[0]).fullReadStamp);
+      assert.equal(f.db.getFolderMeta(f.codexFolder).fullIndexVersion, 1);
+      assert.equal((await f.restart()).ok, true);
+      assert.equal(f.codexScans()[0].bytesRead, 0, 'existing sealed A1 baseline is reusable');
+      if (gate === 'pending') f.db.connection.prepare('UPDATE cache_meta SET fullIndexPending=? WHERE folder=?').run('lost', f.codexFolder);
+      if (gate === 'version') f.db.connection.prepare('UPDATE cache_meta SET fullIndexVersion=99 WHERE folder=?').run(f.codexFolder);
+      if (gate === 'config') f.db.connection.prepare('UPDATE cache_meta SET fullIndexConfig=? WHERE folder=?').run('old', f.codexFolder);
+      if (gate === 'repair') await f.writer.setSetting('bridge_uuid_reindex_folders', [f.codexFolder]);
+      if (gate === 'incomplete') f.db.setSetting('initial_scan_complete', false);
+      if (gate === 'empty-cache') f.db.connection.exec('DELETE FROM session_cache');
+      if (gate === 'empty-fts') f.db.deleteSearchType('session');
+      if (gate === 'legacy') f.db.connection.prepare("UPDATE session_cache SET fileMtime=NULL, entrypoint='' WHERE sessionId=?").run(f.ids[0]);
+      assert.equal((await f.restart(gate === 'force' ? { force: true } : undefined)).ok, true);
+      assert.equal(f.codexScans()[0].filesRead, gate === 'legacy' ? 1 : 2, 'invalid gate requires complete work: ' + gate);
+      assert.equal(f.db.getCachedSession(f.ids[0]).entrypoint, 'sdk-codex-exec');
+    });
+}
+
+test('Codex title-only changes select affected UUIDs',
+  { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const f = await require('./fixtures/warm-start-1152.cjs').fixture(t);
+    f.codexWrite(0, 'summaryword'); f.codexWrite(1, 'neighborword');
+    f.titles([[f.ids[0], 'oldtitle']]);
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    const title = () => f.db.connection.prepare('SELECT f.title FROM search_map m JOIN search_fts f ON f.rowid=m.rowid WHERE m.id=?').get(f.ids[0]).title;
+    for (const entries of [[[f.ids[0], 'newtitle']], [[f.ids[0], 'firsttitle'], [f.ids[0], 'lasttitle']], [[f.ids[0], ' ']], [[f.ids[0], 'backtitle']], []]) {
+      f.titles(entries);
+      assert.equal((await f.restart()).ok, true);
+      assert.equal(f.codexScans()[0].filesRead, 1, 'title delta reads only its affected UUID');
+      assert.equal(f.db.getCachedSession(f.ids[0]).aiTitle, entries.at(-1)?.[1].trim() || null);
+    }
+    f.titles([[f.ids[0], 'beforemissing']]); await f.restart();
+    fs.unlinkSync(path.join(f.home, 'session_index.jsonl'));
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(f.db.getCachedSession(f.ids[0]).aiTitle, null);
+    assert.equal(title(), 'summaryword');
+    f.titles([[f.ids[2], 'unrelated']]);
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(f.codexScans()[0].bytesRead, 0, 'unrelated title entries do not dirty bodies');
+    assert.equal(f.db.getFolderMeta(f.codexFolder).indexMtimeMs, require('../harnesses').harnessFolderIndexMtimeMs(require('../harnesses/codex'), require('../harnesses/codex').folderPath(f.codexFolder), require('../harnesses/codex').listTranscripts(require('../harnesses/codex').folderPath(f.codexFolder))));
+    await f.writer.renameSession(f.ids[0], 'useroverride');
+    f.titles([[f.ids[0], 'hiddennewtitle']]);
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(title(), 'useroverride summaryword');
+    assert.equal(f.db.getCachedSession(f.ids[0]).aiTitle, 'hiddennewtitle');
+    await f.writer.renameSession(f.ids[0], null);
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(f.codexScans()[0].bytesRead, 0, 'clearing a user name repairs search without rereading');
+    assert.equal(title(), 'hiddennewtitle summaryword', 'cached name repair restores the certified AI title');
+    assert.ok(!f.db.getMeta(f.ids[0])?.name, 'AI titles never become user names');
+  });
+
+for (const removal of ['unlink', 'day', 'year', 'root', 'live']) {
+  test('Codex deletes missing rollout and absent store: ' + removal,
+    { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+      const f = await require('./fixtures/warm-start-1152.cjs').fixture(t), file = f.codexWrite(0);
+      f.codexWrite(1, 'neighborword', { folder: 'codex/2025/01/01' });
+      assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+      if (removal === 'live') f.activeSessions.set(f.ids[0], { exited: false });
+      const target = removal === 'unlink' || removal === 'live' ? file : removal === 'day' ? path.dirname(file) : removal === 'year' ? path.join(f.home, 'sessions', '2026') : path.join(f.home, 'sessions');
+      fs.rmSync(target, { recursive: true });
+      assert.equal((await f.restart()).ok, true);
+      assert.equal(!!f.db.getCachedSession(f.ids[0]), removal === 'live', 'confirmed absence deletes only nonlive UUID rows');
+      if (removal === 'live') {
+        f.activeSessions.delete(f.ids[0]);
+        await f.writer.releaseLiveSession(f.ids[0]);
+        await f.restart();
+      }
+      assert.equal(f.db.getCachedSession(f.ids[0]), null);
+      assert.equal(f.db.connection.prepare('SELECT count(*) AS n FROM session_metrics WHERE sessionId=?').get(f.ids[0]).n, 0);
+      assert.equal(f.db.connection.prepare('SELECT count(*) AS n FROM search_map WHERE id=?').get(f.ids[0]).n, 0);
+      if (['day', 'year', 'root'].includes(removal)) assert.equal(f.db.getAllFolderMeta().has(f.codexFolder), false, 'gone day metadata is removed');
+      if (removal !== 'root') assert.ok(f.db.getCachedSession(f.ids[1]));
+      await require('./fixtures/warm-start-1152.cjs').assertRebuildOracle(t, f);
+      await f.reopen();
+      f.codexWrite(2);
+      await assert.rejects(f.writer.completeGoneFolder(f.codexFolder), /reappeared|inspected/, 'reappearing Codex day cannot be finalized using the Claude root');
+    });
+}
+
+test('Codex relocation never opens prior home',
+  { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const f = await require('./fixtures/warm-start-1152.cjs').fixture(t);
+    f.codexWrite(0); f.codexWrite(1, 'oldonly', { folder: f.other });
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    require('./fixtures/isolated-codex-home.cjs')(t);
+    const newFile = f.codexWrite(0, 'relocated', { cwd: path.join(f.root, 'newcwd') });
+    f.titles([[f.ids[0], 'newhome']]);
+    const read = fs.openSync;
+    t.mock.method(fs, 'openSync', function (file, ...args) {
+      assert.ok(typeof file !== 'string' || !file.startsWith(f.home + path.sep), 'old home must never be opened');
+      return read.call(this, file, ...args);
+    });
+    const inventory = [...f.db.getAllFolderMeta()].map(([folder, meta]) => ({ folder, meta, rows: f.db.getCachedByFolder(folder) }));
+    const messages = require('./fixtures/warm-start-1152.cjs').scan({ projectsDir: f.projects, inventory, disabledHarnesses: [] });
+    assert.equal(messages.at(-1).ok, true, 'scan worker opens only the current home');
+    assert.equal(messages.find(msg => msg.result?.folder === f.codexFolder)?.result.sessions[0].sessionFile, newFile);
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(f.db.getCachedSession(f.ids[0]).sessionFile, newFile);
+    assert.equal(f.db.getCachedSession(f.ids[0]).aiTitle, 'newhome');
+    assert.equal(f.db.getCachedSession(f.ids[1]), null, 'old-only day is removed under the new root');
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(f.codexScans()[0].bytesRead, 0);
+    await require('./fixtures/warm-start-1152.cjs').assertRebuildOracle(t, f);
+  });
+
+test('Disabled Codex performs no startup I/O',
+  { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const f = await require('./fixtures/warm-start-1152.cjs').fixture(t), file = f.codexWrite(0);
+    f.codexWrite(1, 'retainedneighbor');
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    await f.writer.setSetting('global', { disabledHarnesses: ['codex'] });
+    fs.unlinkSync(file);
+    const adapter = require('../harnesses/codex');
+    const spies = ['listFolders', 'listTranscripts', 'readSessionFile', 'readSessionTitles', 'readTitleSnapshot', 'titleIndexMtimeMs']
+      .map(name => t.mock.method(adapter, name, () => assert.fail('disabled Codex called ' + name)));
+    const inventory = [...f.db.getAllFolderMeta()].map(([folder, meta]) => ({ folder, meta, rows: f.db.getCachedByFolder(folder) }));
+    const messages = require('./fixtures/warm-start-1152.cjs').scan({ projectsDir: f.projects, inventory, disabledHarnesses: ['codex'] });
+    assert.equal(messages.at(-1).ok, true);
+    for (const spy of spies) { assert.equal(spy.mock.callCount(), 0, 'disabled Codex makes no adapter I/O call'); spy.mock.restore(); }
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(f.codexScans().length, 0, 'disabled Codex has no scan results');
+    assert.ok(f.db.getCachedSession(f.ids[0]), 'disabled rows remain cached');
+    await f.writer.setSetting('global', { disabledHarnesses: ['claude'] });
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(f.db.getCachedSession(f.ids[0]), null, 're-enabled Codex catches up even while Claude is off');
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(f.codexScans()[0].mode, 'partial', 're-enabled day returns to warm selection');
+  });
 
 test('whole Claude readers certify ordinary, nested, legacy and workflow source observations', t => {
   const root = fixture(t);
@@ -384,7 +757,7 @@ test('A2 failed population never starts the continuation choice sweep', async ()
   assert.equal(sweeps, 0, 'a resolved failed population must not reconcile continuation choices');
 });
 
-test('A2 incremental restart equals a full rebuild of the same final transcript tree and metadata',
+test('Codex full and incremental histories have equal logical indexes',
   { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
     const { fixture: startupFixture, logicalIndex } = require('./fixtures/warm-start-1144.cjs');
     const f = await startupFixture(t);
@@ -392,6 +765,19 @@ test('A2 incremental restart equals a full rebuild of the same final transcript 
     fs.mkdirSync(day, { recursive: true });
     const codexId = '01a03f6c-fdf9-7c83-86e3-c388f81d765c';
     const codexFile = path.join(day, 'rollout-2026-08-26T11-55-02-' + codexId + '.jsonl');
+    const { ids: codexIds, body: codexBody } = require('./fixtures/warm-start-1152.cjs');
+    const codexWrite = (index, date, word, meta = {}) => {
+      const dir = path.join(process.env.CODEX_HOME, 'sessions', '2026', '08', date);
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, 'rollout-fixture-' + codexIds[index] + '.jsonl');
+      fs.writeFileSync(file, codexBody(path.join(f.root, 'cwd-' + date), word, meta));
+      return file;
+    };
+    const removedCodex = codexWrite(0, '26', 'codexdeletedtoken');
+    codexWrite(1, '26', 'hiddenunchanged', { originator: 'codex_exec' });
+    const forkFile = codexWrite(2, '27', 'forkbefore', { id: codexId, originator: 'switchboard_fork', forked_from_id: codexId });
+    const truncatedCodex = codexWrite(3, '27', 'truncatedbefore');
+    const goneDayFile = codexWrite(4, '28', 'gonedaytoken');
     fs.writeFileSync(codexFile, [
       { type: 'session_meta', timestamp: '2026-08-26T10:00:00.000Z', payload: { id: codexId, cwd: f.root, originator: 'codex_cli_rs' } },
       { type: 'response_item', timestamp: '2026-08-26T10:00:01.000Z', payload: { type: 'message', role: 'user', content: [{ type: 'text', text: 'codexunique' }] } },
@@ -443,6 +829,14 @@ test('A2 incremental restart equals a full rebuild of the same final transcript 
     sub('parent/subagents/workflows/wf_bcdefa/agent-new.jsonl', 'workflowafter');
     fs.appendFileSync(mirror, line('bridgeafterunique'));
     fs.writeFileSync(titleFile, JSON.stringify({ id: codexId, thread_name: 'after codex title' }) + '\n');
+    fs.unlinkSync(removedCodex);
+    fs.rmSync(path.dirname(goneDayFile), { recursive: true });
+    fs.appendFileSync(forkFile, JSON.stringify({ type: 'response_item', timestamp: '2026-08-27T11:00:00.000Z', payload: { type: 'message', role: 'assistant', content: 'forkaftertoken' } }) + '\n');
+    fs.writeFileSync(truncatedCodex, codexBody(path.join(f.root, 'cwd-27'), 'short'));
+    codexWrite(5, '27', 'newcodextoken');
+    await f.writer.renameSession(codexId, 'codexoverride');
+    f.db.setStarred(codexId, true);
+    f.db.setArchived([codexId], true);
     await f.writer.renameSession('named', 'User override');
     await f.writer.renameSession('named', null);
     f.db.setStarred('named', true);
@@ -454,13 +848,17 @@ test('A2 incremental restart equals a full rebuild of the same final transcript 
       JSON.parse(JSON.stringify(f.db.connection.prepare('SELECT * FROM ' + table).all()))]);
     const incremental = await f.restart();
     assert.equal(incremental.ok, true, 'incremental publication succeeds');
-    assert.equal(f.scans().filter(scan => scan.runtime === 'codex').length, 1, 'Codex has exactly one full pass');
-    assert.equal(f.scans().find(scan => scan.runtime === 'codex').mode, 'full');
+    assert.equal(f.scans().filter(scan => scan.runtime === 'codex').length, 3, 'Codex includes the vanished cached day');
+    assert.equal(f.scans().find(scan => scan.runtime === 'codex').mode, 'partial', 'Codex title change uses the subset route');
     assert.equal(f.db.getFolderMeta(worktreeFolder).projectPath, f.root);
     assert.deepEqual(JSON.parse(f.db.getCachedSession('continued').continuationIndex).ids, ['continuation-head']);
     assert.equal((await f.restart()).ok, true);
     assert.equal(f.scans().filter(scan => scan.runtime === 'claude').reduce((sum, scan) => sum + scan.filesRead, 0), 0,
       'subsequent no-change pass reads no Claude body');
+    assert.equal(f.scans().find(scan => scan.runtime === 'codex').bytesRead, 0, 'subsequent no-change pass reads no Codex body');
+    const visibleIds = async writer => (await writer.buildProjectsFromCache(false)).flatMap(project => project.sessions).map(row => row.sessionId).sort();
+    const incrementalVisible = await visibleIds(f.writer);
+    const incrementalHeatmap = JSON.parse(JSON.stringify(f.db.getDailyMetrics()));
     const incrementalData = process.env.SWITCHBOARD_DATA_DIR;
     const referenceData = path.join(f.root, 'reference');
     process.env.SWITCHBOARD_DATA_DIR = referenceData;
@@ -475,6 +873,8 @@ test('A2 incremental restart equals a full rebuild of the same final transcript 
     await referenceWriter.ready;
     referenceWriter.initializeCache({ PROJECTS_DIR: f.projects, activeSessions: new Map(), getMainWindow: () => null, log: { info() {}, warn() {}, error() {} } });
     assert.equal((await f.cache.populateCacheViaWorker({ force: true })).ok, true, 'reference full rebuild succeeds');
+    assert.deepEqual(await visibleIds(referenceWriter), incrementalVisible, 'Projects visible IDs equal a full rebuild');
+    assert.deepEqual(JSON.parse(JSON.stringify(reference.getDailyMetrics())), incrementalHeatmap, 'heatmap projection equals a full rebuild');
     await f.cache.shutdownProducers();
     reference.closeDb();
     f.db.closeDb();
@@ -483,12 +883,17 @@ test('A2 incremental restart equals a full rebuild of the same final transcript 
     const incrementalReader = openStore({ readonly: true });
     try {
       assert.deepEqual(logicalIndex(incrementalReader), logicalIndex(referenceReader), 'all logical index tables equal a full rebuild');
-      for (const token of ['appendafterunique', 'headerafterunique', 'newunique', 'bridgeafterunique', 'deletedunique', 'continuationunique', 'worktreeunique']) {
+      assert.equal(incrementalReader.connection.prepare('SELECT count(*) AS n FROM cache_meta WHERE fullIndexPending IS NOT NULL').get().n, 0, 'quiescent oracle has no pending publication');
+      const { nameDerivationWitness } = require('../src/main/session-index/full-read-state');
+      for (const row of incrementalReader.getAllCached()) assert.equal(incrementalReader.getNameDerivation(row.sessionId), nameDerivationWitness(incrementalReader.getMeta(row.sessionId, true)), 'name witness is valid: ' + row.sessionId);
+      assert.ok(incrementalReader.connection.prepare('SELECT sum(messageCount) AS n FROM session_metrics WHERE sessionId=?').get(codexIds[2]).n > 1, 'selected Codex metrics include the appended assistant turn');
+      for (const token of ['appendafterunique', 'headerafterunique', 'newunique', 'bridgeafterunique', 'deletedunique', 'continuationunique', 'worktreeunique', 'codexdeletedtoken', 'forkaftertoken', 'newcodextoken', 'gonedaytoken', 'codexoverride']) {
         const query = 'SELECT m.id FROM search_fts f JOIN search_map m ON m.rowid = f.rowid WHERE search_fts MATCH ? ORDER BY m.id';
         assert.deepEqual(JSON.parse(JSON.stringify(incrementalReader.connection.prepare(query).all(token))),
           JSON.parse(JSON.stringify(referenceReader.connection.prepare(query).all(token))), 'MATCH equivalence: ' + token);
       }
       assert.equal(incrementalReader.connection.prepare('SELECT count(*) AS n FROM search_map m LEFT JOIN search_content c ON c.rowid=m.rowid WHERE c.rowid IS NULL').get().n, 0);
+      assert.equal(incrementalReader.connection.prepare('SELECT count(*) AS n FROM search_map WHERE id=?').get(codexIds[0]).n, 0, 'removed Codex UUID has no search entry');
     } finally { incrementalReader.closeDb(); referenceReader.closeDb(); }
   });
 

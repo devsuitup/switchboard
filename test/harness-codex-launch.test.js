@@ -11,6 +11,25 @@ const vm = require('node:vm');
 const codex = require('../harnesses/codex');
 const { getHarness } = require('../harnesses');
 
+test('Codex selection leaves launch ownership and resume IDs intact',
+  { skip: !require('./fixtures/conversation-store.cjs').supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const f = await require('./fixtures/warm-start-1152.cjs').fixture(t);
+    const tag = codex.originatorTag('own-launch');
+    const file = f.codexWrite(0, 'forkword', { meta: { id: 'parent-lineage', originator: tag, forked_from_id: f.ids[1] } });
+    const before = fs.readFileSync(file);
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    assert.equal((await f.restart()).ok, true);
+    assert.ok(f.db.getCachedSession(f.ids[0]), 'filename UUID identifies fork independently of lineage');
+    assert.equal(f.codexScans()[0].bytesRead, 0, 'ownership remains testable after a warm subset');
+    assert.deepEqual(fs.readFileSync(file), before, 'startup never edits launch evidence');
+    const signals = codex.readLaunchSignals(file);
+    const launch = { tag, projectPath: f.root, spawnedAt: Date.parse('2026-08-26T10:00:00.000Z'), forkFrom: f.ids[1] };
+    assert.equal(codex.matchesLaunch(signals, launch), 'tag');
+    for (const originator of ['', 'codex_cli_rs', codex.originatorTag('foreign')]) assert.equal(codex.matchesLaunch({ ...signals, originator }, launch), false);
+    const argv = codex.buildLaunchArgs({ sessionId: f.db.getCachedSession(f.ids[0]).sessionId, isNew: false, options: {} });
+    assert.deepEqual(argv.slice(0, 2), ['resume', f.ids[0]], 'resume uses the filename UUID');
+  });
+
 const ID = '01a03f6c-fdf9-7c83-86e3-c388f81d765c';
 const NAME = `rollout-2026-08-26T11-55-02-${ID}.jsonl`;
 const FORCED_CONFIG = /^tui\.(notifications|notification_method|notification_condition|terminal_title)=/;

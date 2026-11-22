@@ -744,6 +744,13 @@ a certificate when its current row still equals the selected inventory row (or
 the row is new). A newer watcher replacement and existing deferred bridge groups
 remain untouched. Converting a full result to a subset retains deletion of
 inventory rows absent from the full read, excluding deferred IDs.
+
+#1152 routes Codex startup results through these same fences and ACK stages.
+The main-side source check resolves Codex basenames under the configured date
+directory and validates the external-title snapshot before admission. Deferred
+paths map to filename UUIDs. Gone-folder finalization resolves the adapter's
+current root, rechecks absence and keeps metadata while live rows remain.
+No additional schema, writer, publication token or certificate format is added.
 Deferred publication leaves the folder pending and unsealed while population completes successfully.
 Watcher publication of a marked repair also leaves it unsealed. Deferred
 generations clear after ACK only for the accepted paths, even when neighboring

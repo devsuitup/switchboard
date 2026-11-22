@@ -25,6 +25,129 @@ const { readSessionFile } = require('../read-session-file');
 const { fullIndexConfig } = require('../src/main/session-index/full-read-state');
 require('./fixtures/isolated-codex-home.cjs')(test);
 
+for (const fault of ['EACCES', 'short', 'race', 'final']) {
+  test('Codex title snapshot rejects unknown and raced observations: ' + fault, t => {
+    const f = require('./fixtures/warm-start-1152.cjs').scanFixture(t);
+    fs.appendFileSync(f.titleFile, '\n');
+    const read = fs.readFileSync;
+    t.mock.method(fs, 'readFileSync', function (file, ...args) {
+      if (file === f.titleFile && fault === 'EACCES') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      const bytes = read.call(this, file, ...args);
+      if (file === f.titleFile && fault === 'short') return bytes.subarray(0, bytes.length - 1);
+      if (file === f.titleFile && fault === 'race') fs.appendFileSync(file, ' ');
+      return bytes;
+    });
+    if (fault === 'final') {
+      const enumerate = f.adapter.listTranscripts;
+      t.mock.method(f.adapter, 'listTranscripts', (...args) => {
+        const files = enumerate(...args);
+        fs.appendFileSync(f.titleFile, JSON.stringify({ id: f.row.sessionId, thread_name: 'raced title' }) + '\n');
+        return files;
+      });
+    }
+    const messages = f.scan();
+    assert.equal(messages.at(-1).ok, fault === 'final', 'only a change after a coherent title snapshot requests a replan');
+    if (fault === 'final') assert.deepEqual(Array.from(messages.at(-1).replanFolders), [f.folder]);
+    assert.ok(messages.every(msg => !msg.result), 'no stale title or skip result can be published');
+  });
+}
+
+for (const level of ['root', 'year', 'month', 'day']) {
+  test('Codex enumeration errors never authorize deletion: ' + level, t => {
+    const f = require('./fixtures/warm-start-1152.cjs').scanFixture(t);
+    const target = { root: f.adapter.sessionsRoot(), year: path.dirname(path.dirname(f.dir)), month: path.dirname(f.dir), day: f.dir }[level];
+    const read = fs.readdirSync;
+    t.mock.method(fs, 'readdirSync', function (dir, ...args) {
+      if (dir === target) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return read.call(this, dir, ...args);
+    });
+    const claudeFolder = encodeProjectPath(f.root), claudeDir = path.join(f.root, claudeFolder);
+    fs.mkdirSync(claudeDir);
+    fs.writeFileSync(path.join(claudeDir, 'source.jsonl'), JSON.stringify({ type: 'user', cwd: f.root, message: { content: 'Claude stays available' } }) + '\n');
+    const messages = f.scan({ disabledHarnesses: [] });
+    assert.equal(messages.filter(msg => msg.folder === claudeFolder && msg.result?.sessions.length === 1).length, 1, 'Codex enumeration failure must still publish Claude');
+    assert.equal(messages.at(-1).ok, false, 'inaccessible Codex ' + level + ' fails rather than becoming an empty inventory');
+    assert.ok(messages.at(-1).failedFolders.includes(f.folder), 'failed Codex scope remains explicit for scoped retry');
+    assert.equal(messages.find(msg => msg.folder === f.folder).error, 'denied', 'the original enumeration failure is preserved');
+    assert.ok(messages.every(msg => !msg.result?.toDelete?.length));
+  });
+}
+
+for (const kind of ['subagent', 'empty', 'EACCES', 'short', 'race']) {
+  test('Codex stable exclusion differs from failed parse: ' + kind, t => {
+    const f = require('./fixtures/warm-start-1152.cjs').scanFixture(t);
+    const stable = ['subagent', 'empty'].includes(kind);
+    fs.writeFileSync(f.file, kind === 'empty' ? '' : require('./fixtures/warm-start-1152.cjs').body(f.root, 'newword', kind === 'subagent' ? { thread_source: 'subagent' } : {}));
+    const open = fs.openSync, read = fs.readSync;
+    let fd;
+    t.mock.method(fs, 'openSync', function (file, ...args) {
+      if (file === f.file && kind === 'EACCES') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      const value = open.call(this, file, ...args);
+      if (file === f.file) fd = value;
+      return value;
+    });
+    t.mock.method(fs, 'readSync', function (handle, ...args) {
+      if (handle === fd && kind === 'short') return 0;
+      const n = read.call(this, handle, ...args);
+      if (handle === fd && kind === 'race') fs.appendFileSync(f.file, ' ');
+      return n;
+    });
+    const messages = f.scan(), result = messages.find(msg => msg.result)?.result;
+    if (stable) {
+      assert.ok(result?.toDelete?.includes(f.row.sessionId), 'stable exclusion deletes the prior filename UUID');
+      assert.equal(result.deferred.length, 0);
+    } else {
+      if (kind === 'race') {
+        assert.equal(messages.at(-1).ok, true, 'source races publish a deferred result');
+        assert.ok(result.deferred.includes(path.basename(f.file)));
+      } else {
+        assert.equal(messages.at(-1).ok, false, 'I/O and short reads fail the day');
+        assert.deepEqual(Array.from(messages.at(-1).failedFolders), [f.folder]);
+        assert.equal(result, undefined);
+      }
+      assert.ok(!result?.toDelete?.includes(f.row.sessionId), 'failed parse cannot delete the prior row');
+      if (result) assert.deepEqual(Array.from(result.deferredIds || []), [f.row.sessionId], 'deferral uses the filename UUID');
+    }
+  });
+}
+
+test('Codex uses one title snapshot across all days and replans a mid-run change', t => {
+  const f = require('./fixtures/warm-start-1152.cjs').scanFixture(t);
+  const other = 'codex/2026/08/27';
+  fs.mkdirSync(f.adapter.folderPath(other), { recursive: true });
+  let snapshots = 0;
+  const snapshot = f.adapter.readTitleSnapshot;
+  t.mock.method(f.adapter, 'readTitleSnapshot', () => { snapshots++; return snapshot(); });
+  const messages = f.scan({ onMessage: msg => {
+    if (msg.folder === f.folder) fs.appendFileSync(f.titleFile, '\n');
+  } });
+  assert.equal(snapshots, 1, 'one coherent title snapshot per worker run');
+  assert.equal(messages.at(-1).ok, true, 'a title replan is not a scan failure');
+  assert.deepEqual(Array.from(messages.at(-1).replanFolders).sort(), [f.folder, other]);
+});
+
+test('Codex unindexed subagents stop early on both warm starts', t => {
+  const fx = require('./fixtures/warm-start-1152.cjs'), f = fx.scanFixture(t);
+  const file = path.join(f.dir, 'rollout-sub-' + fx.ids[5] + '.jsonl');
+  fs.writeFileSync(file, fx.body(f.root, 'subagent', { thread_source: 'subagent' }) + (JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: 'x'.repeat(1000) } }) + '\n').repeat(2000));
+  for (let run = 0; run < 2; run++) {
+    const msg = f.scan().find(msg => msg.folder === f.folder);
+    assert.ok(msg.counters.bytesRead <= 256 * 1024, 'an unindexed subagent reads at most one header chunk, never its whole body');
+    assert.equal(msg.result.deferred.length, 0, 'an intentional early exclusion has no pending deletion');
+  }
+});
+
+test('Codex duplicate UUID across days forces both days through full read', t => {
+  const f = require('./fixtures/warm-start-1152.cjs').scanFixture(t), other = 'codex/2026/08/27';
+  fs.mkdirSync(f.adapter.folderPath(other), { recursive: true });
+  fs.copyFileSync(f.file, path.join(f.adapter.folderPath(other), path.basename(f.file)));
+  for (let run = 0; run < 2; run++) {
+    const results = f.scan().filter(msg => msg.result).map(msg => msg.result);
+    assert.deepEqual(results.map(result => result.reason), ['ambiguous-source', 'ambiguous-source'], 'cross-day UUID ambiguity forces both full reads');
+    assert.ok(results.every(result => !result.partial));
+  }
+});
+
 function startupScan(t, mutate, fault, derive) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-a2-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

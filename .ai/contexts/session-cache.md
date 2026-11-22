@@ -54,10 +54,10 @@ including its seal when applicable, with runtime/mode/reason, enumerated/read/
 skipped/deleted/failed counts, read operations, actual body and auxiliary bytes,
 scan/write durations and `ok`. Bridge rereads count again in operations/bytes,
 but once in distinct files. Auxiliary cwd, sidecar and title bytes are separate.
-No transcript text or absolute source paths are logged. Aggregate status text
-is unchanged.
+No transcript text or absolute source paths are logged. Warm startup completion
+says "Indexed session changes" for both CLIs; full population reports totals.
 
-## Claude warm startup (#1144 A2)
+## Local warm startup (#1144 A2, #1152 Codex)
 
 `populateCacheViaWorker` remains the single-flight coordinator for startup,
 manual rebuild, repair and bounded retries. It captures rows, folder baselines,
@@ -81,12 +81,50 @@ and coalesce a full follow-up.
 Eligible folders use the existing subset reader with complete existing rows.
 An empty selection emits an unchanged result. Changed/deleted bridge members
 expand their old and new dependency groups through the existing merge helper;
-suppressed physical mirrors without rows may be reread. Enabled Codex folders
-retain one full harness pass, including Claude-disabled startup. Codex missing
-folder reconciliation remains in `harnessReconciliationFolders`.
+suppressed physical mirrors without rows may be reread. Enabled Codex days use
+a separate strict startup reader, including Claude-disabled startup. Its union
+includes cached-only days after a day, year or entire sessions root disappears.
+Disabled Codex never enters enumeration or title loading. Missing Codex folder
+reconciliation also remains in `harnessReconciliationFolders`.
+
+Codex source identity combines the validated date key and rollout filename UUID
+under the current configuration's sessions root. A cached absolute sessionFile
+is checked against that root and the stamped basename, never used as permission
+to read a previous CODEX_HOME. Invalid or ambiguous source witnesses force
+conservative reading; duplicate filename UUIDs within or across days force all
+affected days through the full day route, including during scoped replans.
+A null legacy fileMtime forces reclassification even with an existing stamp.
+
+The strict reader captures one coherent external-title snapshot per worker run. Missing title
+indexes mean empty titles; unreadable, short or raced reads fail the scope.
+Certificates must explicitly contain the current effective title. A title delta
+reads only affected rollouts in full; unrelated title changes leave bodies
+skipped. Worker and main recheck the title observation, including empty subsets,
+and stale worker or main-side results are collected until worker completion for
+one scoped replan of all stale days (at most two retries). A changed coherent
+snapshot requests a replan, while an unreadable or incomplete snapshot fails
+the scope. Claude results publish normally during either case. Cached-name repair
+uses the same source and naming fences without promoting AI titles to user names.
+
+Every Codex result has projectPath null and the full reader's index watermark,
+including the title index mtime. Startup reads finish intentionally excluded
+rollouts only when a prior row might need deletion. Unindexed subagents stop
+after the metadata header (at most one 256 KiB chunk per scan), without creating
+a certificate or a deferral. Deferrals use filename UUIDs, leave the watermark zero and retain pending
+state. Exec sessions remain indexed and certified; hiding remains a projection.
+Warm completion says "Indexed session changes" rather than reporting replaced
+rows as the total history size. The full-population flag, including a forced
+rebuild on a warm DB, selects totals. Body and auxiliary counters remain actual reads;
+the title cache attributes bytes only to the folder that performed the read.
+Session totals share a per-folder publication count across scoped replans:
+a successful retry replaces that folder's previous count instead of adding it again.
 
 Strict inventory distinguishes confirmed ENOENT/ENOTDIR from incomplete or
-inaccessible scopes. A stable complete parse yielding no row deletes the old
+inaccessible scopes. Harness enumeration failures retain cached days and the
+harness prefix as failed scopes for retry and never
+prevent Claude publication. Failed scopes authorize no deletions. I/O and short
+body reads fail the day; a raced body read publishes a deferral.
+A stable complete parse yielding no row deletes the old
 row; a failed or raced read retains it. Missing paths are checked again before
 publication. Live rows remain until release, which removes cache, metrics and
 search together. After a gone folder's publication is sealed, a writer-queued
@@ -3293,6 +3331,11 @@ calls per context are supported. A module-level stack defers released outer home
 inner homes have been released, so FIFO hooks on one context and nested
 file/test hooks both restore in LIFO order; repeated restore calls are inert.
 The `warm-start-1144` and `continuation-718` fixtures install it for callers.
+The synchronous `warm-start-1152.scan()` also installs isolation with a finally
+teardown, reusing a currently active disposable fixture home so prepared rollouts
+remain visible. The guard checks every scan-bearing function in script fixtures,
+including assignment arrows and object methods, and rejects scan tokens outside
+functions unless the file installs isolation at top level.
 The existing `isolated-home` fixture is schedule-specific and inspects Claude
 projects in the original home, so scan tests do not reuse it.
 
