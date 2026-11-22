@@ -62,7 +62,8 @@ for (const restarts of [1, 2]) for (const targeted of [true, false]) {
     for (let i = 0; i < restarts; i++) assert.equal((await f.restart()).ok, true);
     t.mock.restoreAll();
     assert.equal(appends, restarts);
-    assert.ok(f.db.getFolderMeta(f.folder).fullIndexPending);
+    assert.equal(f.db.getFolderMeta(f.folder).fullIndexPending, null);
+    assert.equal(f.db.getCachedSession('live').fullReadStamp, null);
     await f.writer.refreshFolder(f.folder, targeted ? { files: new Set(['live.jsonl']) } : undefined);
     const index = logicalIndex(f.db);
     assert.ok(index.search.find(row => row.id === 'live').body.includes('quokkaclosed'), 'FTS body has content written while closed');

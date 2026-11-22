@@ -57,6 +57,52 @@ but once in distinct files. Auxiliary cwd, sidecar and title bytes are separate.
 No transcript text or absolute source paths are logged. Warm startup completion
 says "Indexed session changes" for both CLIs; full population reports totals.
 
+## Streaming full reads and stable failures (#1180, #1181)
+
+Claude full reads use `jsonl-scan.scanLines` with 256 KiB chunks through the
+observed EOF. Daily metrics accumulate as lines arrive. The reader captures
+64-byte head/tail witnesses and the unterminated tail for both existing indexes.
+Startup, refreshFolder and bridge rereads use the same parser. Lazy bridge
+signature evidence also streams, bounded to the original read's byte length;
+an unreadable or truncated source yields empty signature evidence, so deleting
+a bridge source between reading and merging cannot fail its folder. Neither
+path materializes a whole-file UTF-8 string or an array of every line. For
+ordinary-sized records, output semantics and the version-1 golden ledger stay
+unchanged. The shared scanner caps each line at 64 MiB before
+UTF-8 conversion, discards oversized records through the next newline, and
+marks an oversized unterminated continuation as skipped. Claude, Codex, bridge
+signatures and refresh message recounts share this rule. Metric buckets and
+bridge identity evidence still depend on transcript content. The regression
+injects a lower line cap. The whole-string regression uses 2 MiB locally with
+an injected readFileSync limit; CI or SWITCHBOARD_TEST_LARGE_TRANSCRIPT runs
+the real 600 MiB fixture and measures peak RSS, metrics, the tentative final
+message and the complete-read stamp. Temporary files follow TMP/TEMP.
+
+A deterministic transcript read/derivation exception (ERR_STRING_TOO_LONG,
+RangeError, TypeError or SyntaxError) produces a separate negative
+witness in `cache_meta.readFailures`, keyed by relative source path. It contains
+the filesystem/dependency observation and an error code/type, never transcript
+text. It is not a successful `session_cache.fullReadStamp`. Prior rows survive
+with null content stamps; new failed transcripts do not create display rows.
+Matching witnesses suppress startup retries across reopen; changed or removed
+sources, forced rebuilds, content-version changes and configuration changes
+invalidate them. An explicit folder refresh retries witnessed sources and
+removes the witness after a successful read. Claude sidecars and Codex
+effective titles remain dependencies. Transient I/O errors (including EBUSY,
+EACCES, EPERM, EMFILE, ENFILE, EIO, EAGAIN), short reads and raced failures have
+no durable negative witness and remain deferred until the next start. Legacy
+transient witnesses are ignored. A folder with only deterministic witnesses
+retains its actual index mtime; only outstanding deferrals zero it. Publication
+checks contain one stamp per source. Directory and title-snapshot failures
+still fail or replan the scope.
+
+After acknowledged publication, a new failure observation logs one
+`[session-cache] transcript-read-failed` record with path and error type/code.
+Unchanged negative witnesses do not log again. Read/failed counters remain
+truthful even when the folder publishes successfully. All startup publications
+can seal their folder version/configuration; deferred or failed existing rows
+remain uncertified. A failed writer ACK still leaves conservative pending state.
+
 ## Local warm startup (#1144 A2, #1152 Codex)
 
 `populateCacheViaWorker` remains the single-flight coordinator for startup,
@@ -143,16 +189,17 @@ publication. Raced files defer their dependency group. An ordinary parsed row
 publishes its read content and metrics without a certificate if no newer row
 has replaced the inventory row; existing bridge groups remain untouched.
 The header-only watcher can update subsequent counts but does not include bytes
-appended after that full read in search or token metrics. The pending folder
-forces another full read on the next startup. When deferral converts a full
+appended after that full read in search or token metrics. Its null row stamp
+forces that source's full read on the next startup. When deferral converts a full
 scan to a subset, vanished inventory rows are still deleted unless deferred.
-Stable neighbors publish normally. The folder stays pending and unsealed, but counts
-as completed for population and `initial_scan_complete`; the next warm start
-re-reads it. A newly uncertified header row changed since selection is also
+Stable neighbors publish normally. After acknowledged effects and certificates,
+startup seals the folder version/configuration even with deferred sources (#1181).
+Only those sources keep null row stamps, so the next startup selects them rather
+than rereading their stable neighbors. A newly uncertified header row changed since selection is also
 deferred instead of repeatedly invalidating the folder. Deferred generations
 clear only after an accepted writer ACK and cannot clear newer observations.
 Accepted non-deferred paths clear and their name derivation runs even while
-another source keeps the folder pending.
+another source remains deferred.
 A zero folder marker alone never forces full reading. Watcher and reconciliation
 still discover new and changed sessions in a repair-marked folder; neither
 clears its repair marker nor seals it. Parsed results rejected as stale are resnapshotted on bounded

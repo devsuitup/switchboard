@@ -642,12 +642,18 @@ test('full scan counts actual body bytes including filtered bridge rereads and a
     sources.add(file);
     fs.writeFileSync(file, entries.map(entry => JSON.stringify(entry)).join('\n') + '\n');
   }
-  const readFile = fs.readFileSync;
+  const readFile = fs.readFileSync, open = fs.openSync, read = fs.readSync;
   let bytes = 0, operations = 0;
-  t.mock.method(fs, 'readFileSync', function (file, ...args) {
-    const value = readFile.call(this, file, ...args);
-    if (sources.has(file)) { bytes += Buffer.isBuffer(value) ? value.length : Buffer.byteLength(value); operations++; }
-    return value;
+  const bodyFds = new Set();
+  t.mock.method(fs, 'openSync', function (file, ...args) {
+    const fd = open.call(this, file, ...args);
+    if (sources.has(file) && /scanLines/.test(new Error().stack)) { bodyFds.add(fd); operations++; } else bodyFds.delete(fd);
+    return fd;
+  });
+  t.mock.method(fs, 'readSync', function (fd, ...args) {
+    const n = read.call(this, fd, ...args);
+    if (bodyFds.has(fd)) bytes += n;
+    return n;
   });
   const filename = path.join(__dirname, '../workers/scan-projects.js'), native = createRequire(filename), messages = [];
   vm.runInNewContext(readFile(filename, 'utf8'), { Buffer, console, process,

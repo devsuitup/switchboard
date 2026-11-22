@@ -36,11 +36,11 @@ for (const kind of ['unlinked', 'subagent', 'linked']) {
       const before = { ...initial, fileSize: null, modified: '2026-10-19T08:00:00.000Z' };
       h.rows.set(id, before);
       h.effects.length = 0;
-      const readFile = fs.readFileSync;
+      const open = fs.openSync;
       let fullReads = 0;
-      t.mock.method(fs, 'readFileSync', function (target, ...args) {
-        if (target === file) fullReads++;
-        return readFile.call(this, target, ...args);
+      t.mock.method(fs, 'openSync', function (target, ...args) {
+        if (target === file && /at (?:Object\.)?readSessionFile /.test(new Error().stack)) fullReads++;
+        return open.call(this, target, ...args);
       });
       const opts = targeted ? { files: new Set([relative]) } : {};
       init();
@@ -89,11 +89,11 @@ for (const subagent of [false, true]) {
       fs.appendFileSync(file, ' '.repeat(remaining - 1) + '\n' + answer + title);
       fs.utimesSync(file, pinned, pinned);
       assert.equal(fs.statSync(file).size, budget + delta);
-      const readFile = fs.readFileSync;
+      const open = fs.openSync;
       let fullReads = 0;
-      t.mock.method(fs, 'readFileSync', function (target, ...args) {
-        if (target === file) fullReads++;
-        return readFile.call(this, target, ...args);
+      t.mock.method(fs, 'openSync', function (target, ...args) {
+        if (target === file && /at (?:Object\.)?readSessionFile /.test(new Error().stack)) fullReads++;
+        return open.call(this, target, ...args);
       });
       await writer.refreshFolder(h.folder, { files: new Set([relative]) });
       const refreshed = h.rows.get(id);
@@ -185,13 +185,22 @@ for (const subagent of [false, true]) {
         const changedAt = new Date(pinned.getTime() + 1000);
         fs.utimesSync(files[0], changedAt, changedAt);
       }
-      const readFile = fs.readFileSync, fullReads = [];
-      t.mock.method(fs, 'readFileSync', function (file, ...args) {
-        if (files.includes(file)) fullReads.push(file);
-        return readFile.call(this, file, ...args);
+      const open = fs.openSync, read = fs.readSync, fullReads = [], bodyFds = new Set();
+      let bodyBytes = 0;
+      t.mock.method(fs, 'openSync', function (file, ...args) {
+        const fd = open.call(this, file, ...args);
+        if (files.includes(file) && /at (?:Object\.)?readSessionFile /.test(new Error().stack)) { fullReads.push(file); bodyFds.add(fd); } else bodyFds.delete(fd);
+        return fd;
+      });
+      t.mock.method(fs, 'readSync', function (fd, ...args) {
+        const n = read.call(this, fd, ...args);
+        if (bodyFds.has(fd)) bodyBytes += n;
+        return n;
       });
       await writer.refreshFolder(h.folder, { files: new Set([OTHER + '.jsonl', relative]) });
       assert.deepEqual(fullReads, scanFirst ? [] : [files[0]], 'all files share one synchronous byte budget');
+      assert.ok(bodyBytes <= 1024 * 1024, 'full body reads stay within the shared 1 MiB refresh budget');
+      assert.equal(bodyBytes, scanFirst ? 0 : 600 * 1024);
       assert.equal(h.rows.get(OTHER).messageCount, 2);
       assert.equal(h.rows.get(id).messageCount, 2, 'the second row counts appended messages through the bounded header path');
       for (const sessionId of [OTHER, id]) {

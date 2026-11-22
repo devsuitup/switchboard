@@ -131,11 +131,11 @@ test('ordinary bridge flush uses only header reads and synchronously advances th
   assert.equal(f.rows.get('c').mergedIntoSessionId, 'a');
   fs.appendFileSync(path.join(f.dir, 'a.jsonl'), JSON.stringify(f.msg('a-new', '09')) + '\n');
   const reads = [];
-  const original = fs.readFileSync;
-  fs.readFileSync = (file, ...args) => { if (String(file).startsWith(f.dir) && String(file).endsWith('.jsonl')) reads.push(file); return original(file, ...args); };
+  const original = fs.openSync;
+  fs.openSync = (file, ...args) => { if (String(file).startsWith(f.dir) && String(file).endsWith('.jsonl') && /scanLines/.test(new Error().stack)) reads.push(file); return original(file, ...args); };
   let result;
   try { result = cache.refreshFolder(f.folder, { files: new Set(['a.jsonl']) }); }
-  finally { fs.readFileSync = original; }
+  finally { fs.openSync = original; }
   assert.equal(f.rows.get('a').messageCount, 3, 'header refresh counts the appended message');
   assert.equal(result, 'activity', 'refreshFolder distinguishes the changed activity timestamp');
   assert.deepEqual(reads, [], 'ordinary flush must not read transcript bodies');
@@ -176,10 +176,10 @@ test('discovering another bridge member merges once and drops transient evidence
   f.write('b', [f.msg('b-own', '03')]);
   await cache.scanFoldersViaWorker({ projectsDir: f.root, folders: [f.folder] });
   f.write('c', [f.msg('b-own', '03'), f.msg('c-own', '04')]);
-  const reads = [], original = fs.readFileSync;
-  fs.readFileSync = (file, ...args) => { if (String(file).startsWith(f.dir) && String(file).endsWith('.jsonl')) reads.push(file); return original(file, ...args); };
+  const reads = [], original = fs.openSync;
+  fs.openSync = (file, ...args) => { if (String(file).startsWith(f.dir) && String(file).endsWith('.jsonl') && /scanLines/.test(new Error().stack)) reads.push(file); return original(file, ...args); };
   try { cache.refreshFolder(f.folder, { files: new Set(['c.jsonl']) }); }
-  finally { fs.readFileSync = original; }
+  finally { fs.openSync = original; }
   assert.ok(reads.length > 0, 'rare discovery retains the incremental main-thread merge');
   assert.equal(f.rows.get('c').mergedIntoSessionId, 'b');
   assert.ok([...f.rows.values()].every(r => !('messageUuids' in r) && !('messageSignatures' in r)));
@@ -248,9 +248,9 @@ test('one-time repair is adopted by population off-thread and cannot loop throug
     assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
     await f.writer.setSetting('bridge_uuid_reindex_folders', [f.folder]);
     f.calls.length = 0;
-    const reads = [], original = fs.readFileSync;
-    t.mock.method(fs, 'readFileSync', (file, ...args) => {
-      if (String(file).startsWith(f.dir) && String(file).endsWith('.jsonl')) reads.push(file);
+    const reads = [], original = fs.openSync;
+    t.mock.method(fs, 'openSync', (file, ...args) => {
+      if (String(file).startsWith(f.dir) && String(file).endsWith('.jsonl') && /scanLines/.test(new Error().stack)) reads.push(file);
       return original(file, ...args);
     });
     const first = cache.reindexRepairedFolders();
@@ -330,15 +330,15 @@ test('a UUID-complete bridge row gets signatures by re-reading instead of retain
   f.write('a', [f.msg('known', '01', 'Original synthetic payload')]);
   const row = f.reread('a');
   assert.equal(row.messageUuidsComplete, true);
-  f.write('a', [f.msg('known', '01', 'Re-read synthetic payload')]);
-  const reads = [], original = fs.readFileSync;
-  fs.readFileSync = (file, ...args) => { reads.push(file); return original(file, ...args); };
+  f.write('a', [f.msg('known', '01', 'Re-read! synthetic payload')]);
+  const reads = [], original = fs.openSync;
+  fs.openSync = (file, ...args) => { if (/scanLines/.test(new Error().stack)) reads.push(file); return original(file, ...args); };
   try {
-    assert.ok(row.messageSignatures[0].signature.includes('Re-read synthetic payload'));
+    assert.ok(row.messageSignatures[0].signature.includes('Re-read! synthetic payload'));
     assert.deepEqual(reads, [path.join(f.dir, 'a.jsonl')]);
     assert.equal(row.messageSignatures.length, 1);
     assert.equal(reads.length, 1, 'computed signatures are memoized');
-  } finally { fs.readFileSync = original; }
+  } finally { fs.openSync = original; }
 });
 
 test('mixed coverage still compares a complete predecessor with a legacy copied message', { timeout: 9000 }, t => {

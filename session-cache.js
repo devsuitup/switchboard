@@ -47,7 +47,7 @@ const { conversationMeta } = require('./conversation-meta');
 const { cleanDisplayName } = require('./public/utils');
 const { isHostedJob } = require('./src/main/bg-agents/bg-agents-roster');
 const { state: TRACE, trace } = require('./src/main/shared/activity-trace');
-const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, matchesFullRead, observation, nameDerivationWitness, sourceRelativePath, startupSourcePath, startupInventoryMatches, deferStartupSources } = require('./src/main/session-index/full-read-state');
+const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, matchesFullRead, observation, nameDerivationWitness, sourceRelativePath, startupSourcePath, startupInventoryMatches, deferStartupSources, readFailures } = require('./src/main/session-index/full-read-state');
 
 /**
  * Session cache module.
@@ -423,6 +423,7 @@ function refreshHarnessFolder(harness, folder) {
   const dir = harness.folderPath(folder);
   if (!dir || !fs.existsSync(dir)) return dropFolderRows(folder, { search: true });
   const cached = new Map(getCachedByFolder(folder).map(row => [row.sessionId, row]));
+  const failures = readFailures(getFolderMeta?.(folder));
   const titles = harness.readSessionTitles ? harness.readSessionTitles() : null;
   const files = harness.listTranscripts(dir);
   const current = new Set();
@@ -432,13 +433,15 @@ function refreshHarnessFolder(harness, folder) {
     const sessionId = harness.sessionIdFromPath(file);
     if (!sessionId) continue;
     current.add(sessionId);
+    const failure = failures.get(path.basename(file));
     let stat;
     try { stat = fs.statSync(file); } catch { continue; }
     const row = cached.get(sessionId);
     const title = titles instanceof Map ? titles.get(sessionId) || null : row?.aiTitle || null;
-    if (row && row.fileMtime === stat.mtime.toISOString() && (row.fileSize ?? null) === stat.size && (row.aiTitle || null) === title) continue;
+    if (!failure && row && row.fileMtime === stat.mtime.toISOString() && (row.fileSize ?? null) === stat.size && (row.aiTitle || null) === title) continue;
     const session = harness.readSessionFile(file, folder, null);
     if (!session) continue;
+    failures.delete(path.basename(file));
     sessionsToUpsert.push(session);
     const name = getMeta(session.sessionId)?.name || session.customTitle || session.aiTitle || '';
     searchEntriesToUpsert.push({ id: session.sessionId, type: 'session', folder,
@@ -458,7 +461,7 @@ function refreshHarnessFolder(harness, folder) {
     deleteSearchSession(sessionId);
     changed = true;
   }
-  setFolderMeta(folder, null, harnessFolderIndexMtimeMs(harness, dir, files));
+  setFolderMeta(folder, null, harnessFolderIndexMtimeMs(harness, dir, files), [...failures]);
   return changed;
 }
 
@@ -508,6 +511,7 @@ function refreshFolder(folder, opts = {}) {
   // A vanished directory falls through to a fresh derive so the missing-
   // project remap detection keeps working.
   const knownMeta = getFolderMeta ? getFolderMeta(folder) : null;
+  const failures = readFailures(knownMeta);
   let projectPath = knownMeta && knownMeta.projectPath && fs.existsSync(knownMeta.projectPath)
     && (parseFolderKey(folder).alias !== null || (storedProjectPathMatchesFolder(knownMeta.projectPath, folder)
       && resolveWorktreePath(knownMeta.projectPath) === knownMeta.projectPath))
@@ -616,6 +620,8 @@ function refreshFolder(folder, opts = {}) {
 
     if (cachedDbId !== null) currentIds.add(cachedDbId);
     const relativeFile = path.relative(folderPath, filePath);
+    const relativeSource = relativeFile.split(path.sep).join('/');
+    const failure = failures.get(relativeSource);
     const linked = cachedEntry && !parentSessionId && linkedContinuation(cachedEntry);
     const changedLinked = linked && changedContinuation(cachedEntry, filePath, stat);
     const plan = opts.preparedContinuations?.get(cachedDbId);
@@ -638,7 +644,7 @@ function refreshFolder(folder, opts = {}) {
     }
     const changedIndex = snapshot ? !sameContinuationStamp(snapshot, stat)
       : persistedStamp && !matchesContinuationStamp(persistedStamp, stat);
-    if (!changedLinked && !changedSize && cachedEntry && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
+    if (!failure && !changedLinked && !changedSize && cachedEntry && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
       && (!cachedEntry.continuationIndex || !changedIndex || parentSessionId || cachedEntry.parentSessionId)) {
       collector.accounted.add(relativeFile);
       continue; // unchanged, skip
@@ -646,7 +652,7 @@ function refreshFolder(folder, opts = {}) {
 
     const fullReadPinned = changedSize && !linked && cachedEntry.fileMtime === fileMtime && fileSize <= continuationBytesLeft;
     if (fullReadPinned) continuationBytesLeft = 0;
-    if (cachedEntry && !fullReadPinned) {
+    if (!failure && cachedEntry && !fullReadPinned) {
       let continuationIndex = cachedEntry.continuationIndex;
       if (validPlan) continuationIndex = plan.serialized;
       else if (opts.preparedContinuations?.has(cachedDbId) && changedLinked) { defer(); continue; }
@@ -730,6 +736,7 @@ function refreshFolder(folder, opts = {}) {
     // may still be replaced by a cutoff-filtered re-derivation, or dropped).
     const s = readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
     if (s) {
+      failures.delete(relativeSource);
       if (!parentSessionId && s.continuationIndex) {
         const head = continuationHead(filePath, stat.size);
         const after = fs.statSync(filePath, { bigint: true });
@@ -863,7 +870,7 @@ function refreshFolder(folder, opts = {}) {
   // Update folder mtime
   const outstanding = new Set([...(deferredContinuationFiles.get(folder) || []), ...collector.deferred]);
   for (const file of collector.accounted) outstanding.delete(file);
-  setFolderMeta(folder, projectPath, outstanding.size ? 0 : getFolderIndexMtimeMs(folderPath));
+  setFolderMeta(folder, projectPath, outstanding.size ? 0 : getFolderIndexMtimeMs(folderPath), [...failures]);
   if (!opts.managedContinuations) applyContinuationRefresh(folder, collector, true);
   if (sidebarChanged || [...updatedRows].some(([id, row]) => beforeRows.get(id) !== sidebarRowState(row))) return true;
   if (activityChanged || [...updatedRows].some(([id, row]) =>
@@ -1536,7 +1543,7 @@ function writeScannedFolder(r, unverifiedLocalFolder = null) {
       };
     }));
   }
-  setFolderMeta(folder, projectPath, indexMtimeMs);
+  setFolderMeta(folder, projectPath, indexMtimeMs, r.readFailures);
   if (!r.startup && setSetting && pendingRepairFolders().includes(folder)) {
     setSetting('bridge_uuid_reindex_folders', pendingRepairFolders().filter(key => key !== folder));
   }
@@ -1571,7 +1578,7 @@ function writeScannedFolderPartial(r) {
     deleteCachedSession(sessionId);
     deleteSearchSession(sessionId);
   }
-  setFolderMeta(folder, projectPath, indexMtimeMs);
+  setFolderMeta(folder, projectPath, indexMtimeMs, r.readFailures);
   return sessions.length;
 }
 
@@ -1625,7 +1632,14 @@ async function publishScannedFolder(msg) {
     }
     const written = result?.partial ? await writer.writeScannedFolderPartial(result)
       : await writer.writeScannedFolder(result, msg.unverifiedLocalFolder);
-    ok = result?.fullIndexOutcome !== false && !(result?.counters || msg.counters)?.filesFailed;
+    ok = result?.fullIndexOutcome !== false && (result?.startup || !(result?.counters || msg.counters)?.filesFailed);
+    if (result?.startup && ok) {
+      const previous = readFailures(result.inventory.meta);
+      for (const [relativePath, failure] of result.readFailures || []) {
+        if (previous.get(relativePath)?.stamp === failure.stamp) continue;
+        log?.info('[session-cache] transcript-read-failed ' + JSON.stringify({ path: startupSourcePath(PROJECTS_DIR, result.folder, relativePath), error: failure.error }));
+      }
+    }
     if (result?.startup && (result.fullIndexOutcome !== false || result.fullIndexDeferred)) {
       const names = [];
       for (const row of getCachedByFolder(result.folder)) {

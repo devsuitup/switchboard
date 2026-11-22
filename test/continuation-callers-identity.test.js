@@ -388,11 +388,17 @@ test('#656c cold resolve: a legacy index rescans once, persists the stamp and su
 for (const field of ['dev', 'ino', 'birthtimeNs', 'mtimeNs', 'size']) {
   test(`#656c full scan: a ${field} change during the read cannot persist a trusted stamp`, t => {
     const h = fixture(t);
-    const stat = fs.statSync, readFile = fs.readFileSync;
+    const stat = fs.statSync, open = fs.openSync, readSync = fs.readSync;
+    let fd;
     let read = false;
-    t.mock.method(fs, 'readFileSync', (name, ...args) => {
-      const result = readFile(name, ...args);
-      if (name === h.file) read = true;
+    t.mock.method(fs, 'openSync', (name, ...args) => {
+      const result = open(name, ...args);
+      if (name === h.file) fd = result; else if (result === fd) fd = undefined;
+      return result;
+    });
+    t.mock.method(fs, 'readSync', (handle, ...args) => {
+      const result = readSync(handle, ...args);
+      if (handle === fd) read = true;
       return result;
     });
     t.mock.method(fs, 'statSync', (name, options) => {
@@ -402,7 +408,9 @@ for (const field of ['dev', 'ino', 'birthtimeNs', 'mtimeNs', 'size']) {
     });
     const row = cache.readSessionFile(h.file, h.folder, h.root);
     assert.ok(row);
+    assert.equal(read, true);
     assert.equal(row.continuationIndex, null);
+    assert.equal(row.fullReadStamp, null);
     assert.doesNotThrow(() => JSON.stringify(row));
   });
 }

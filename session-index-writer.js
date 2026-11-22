@@ -161,7 +161,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         if (projectsDir) {
           const candidates = effects.filter(effect => effect.name === 'upsertCachedSessions').flatMap(effect => effect.args[0]).filter(row => fullIds.has(row.sessionId));
           const folders = new Set(candidates.map(row => row.folder));
-          if (scanFolder && !scanResult?.unverified && (name === 'writeScannedFolder' || scanResult?.startup && (scanResult.deferred?.length || effects.some(effect => effect.name === 'deleteCachedSession')))) folders.add(scanFolder);
+          if (scanFolder && !scanResult?.unverified && (name === 'writeScannedFolder' || scanResult?.startup && (scanResult.deferred?.length || scanResult.readFailures?.length || effects.some(effect => effect.name === 'deleteCachedSession')))) folders.add(scanFolder);
           for (const key of folders) {
             const publication = { token: randomUUID(), config: scanResult?.fullIndexConfig || currentConfig(), began: false };
             publications.set(key, publication);
@@ -186,7 +186,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         }
         if (publications.size) {
           effects.unshift(...[...publications.keys()].map(key => ({ name: 'invalidateFullIndex', args: [key] })));
-          const affectedIds = new Set([...fullIds, ...effects.filter(effect => effect.name === 'deleteCachedSession').map(effect => effect.args[0])]);
+          const affectedIds = new Set([...(scanResult?.deferredIds || []), ...fullIds, ...effects.filter(effect => effect.name === 'deleteCachedSession').map(effect => effect.args[0])]);
           effects.splice(1, 0, ...[...affectedIds].map(id => ({ name: 'invalidateFullRead', args: [id] })));
           for (const effect of effects) if (effect.name === 'upsertCachedSessions') {
             for (const row of effect.args[0]) {
@@ -239,12 +239,8 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         for (const [key, publication] of publications) if (publication.began && !publication.failed) {
           try {
             if (!scanResult?.startup && (backend.getSetting('bridge_uuid_reindex_folders') || []).includes(key)) continue;
-            if (scanResult?.startup && scanResult.deferred?.length && publication.config === currentConfig()) {
-              scanResult.fullIndexDeferred = true;
-              continue;
-            }
-            if (publication.config === currentConfig() && !scanResult?.counters?.filesFailed) {
-              const full = name === 'writeScannedFolder';
+            if (publication.config === currentConfig() && (scanResult?.startup || !scanResult?.counters?.filesFailed)) {
+              const full = scanResult?.startup || name === 'writeScannedFolder';
               const sealed = await send('sealFullIndex', key, publication.token, full ? SESSION_CONTENT_INDEX_VERSION : publication.previousIndex?.fullIndexVersion ?? null,
                 full ? publication.config : publication.previousIndex?.fullIndexConfig ?? null, publication.config, { receipt: forwarded });
               if (forwarded) {
