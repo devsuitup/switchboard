@@ -1549,6 +1549,7 @@ async function publishScannedFolder(msg) {
   const started = performance.now();
   let ok = false;
   try {
+    if (msg.replan) throw Object.assign(new Error('Startup title snapshot changed'), { code: 'WRITER_STALE' });
     if (msg.error) throw new Error(msg.error);
     if (result?.startup) {
       if (result.fullIndexConfig !== startupConfig()
@@ -1671,7 +1672,7 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
     let scanned = 0;
     let writeError;
     let unknownFailure = false;
-    const failedFolders = new Set();
+    const failedFolders = new Set(), replanFolders = new Set();
     let worker;
     let workerExited = false;
     const settle = (value) => {
@@ -1704,15 +1705,10 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
             sessions += await publishScannedFolder(msg);
           } catch (err) {
             const folder = msg.folder || msg.result?.folder;
-            try {
-              if (!stopping && startup && folder && (startup.attempt || 0) < 2 && err.code === 'WRITER_STALE' && startup.config === startupConfig()) {
-                const retry = await scanFoldersViaWorker({ projectsDir, folderPrefix, folders: [],
-                  startup: { ...startupSnapshot(startup.force, [folder]), attempt: (startup.attempt || 0) + 1 },
-                  onFolder: retryMsg => { msg = { ...retryMsg, current: msg.current, total: msg.total }; } });
-                if (retry.ok) { sessions += retry.sessions; onFolder?.(msg, sessions); return; }
-                err = new Error(retry.error);
-              }
-            } catch (retryError) { err = retryError; }
+            if (!stopping && startup && folder && err.code === 'WRITER_STALE' && startup.config === startupConfig()) {
+              replanFolders.add(folder);
+              return;
+            }
             if (!writeError || (folder && !failedFolders.size)) writeError = err.message;
             if (folder) failedFolders.add(folder);
             else unknownFailure = true;
@@ -1723,6 +1719,28 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
           return;
         }
         for (const folder of msg.failedFolders || []) failedFolders.add(folder);
+        for (const folder of msg.replanFolders || []) replanFolders.add(folder);
+        if (replanFolders.size) {
+          if (!stopping && startup && (startup.attempt || 0) < 2 && startup.config === startupConfig()) {
+            try {
+              const retry = await scanFoldersViaWorker({ projectsDir, folderPrefix, folders: [],
+                startup: { ...startupSnapshot(startup.force, [...replanFolders]), attempt: (startup.attempt || 0) + 1 },
+                onFolder: (retryMsg, count) => onFolder?.(retryMsg, sessions + count) });
+              sessions += retry.sessions || 0;
+              if (!retry.ok) {
+                writeError ||= retry.error || 'Startup replan failed';
+                unknownFailure ||= retry.unknownFailure;
+                for (const folder of retry.failedFolders?.length ? retry.failedFolders : replanFolders) failedFolders.add(folder);
+              }
+            } catch (error) {
+              writeError ||= error.message;
+              for (const folder of replanFolders) failedFolders.add(folder);
+            }
+          } else {
+            writeError ||= 'Startup replan limit reached';
+            for (const folder of replanFolders) failedFolders.add(folder);
+          }
+        }
         settle({ ok: !!msg.ok && !writeError, error: writeError || msg.error, unknownFailure, failedFolders: [...failedFolders], folders: scanned, sessions });
       }).catch(err => { writeError = err.message; settle({ ok: false, error: writeError, folders: scanned, sessions }); });
     });
@@ -1826,7 +1844,7 @@ function populateCacheViaWorker({ force = false } = {}, retryTimerFired = false)
       if (result.ok) {
         if (setInitialScanComplete) await writer.setInitialScanComplete();
         populateRetry = null;
-        sendStatus(coldStart ? `Indexed ${sessions} sessions across ${indexedProjects} projects` : 'Indexed session changes', 'done');
+        sendStatus(populateFull ? `Indexed ${sessions} sessions across ${indexedProjects} projects` : 'Indexed session changes', 'done');
         setTimeout(() => sendStatus(''), 5000).unref?.();
         progress(true);
         notifyRendererProjectsChanged('scan');

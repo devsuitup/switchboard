@@ -5,7 +5,10 @@ const os = require('node:os');
 const path = require('node:path');
 const homes = [];
 
-function isolateCodexHome(t) {
+function isolateCodexHome(t, { reuse = false } = {}) {
+  if (reuse && homes.some(frame => !frame.released && frame.home === process.env.CODEX_HOME)) {
+    return { home: process.env.CODEX_HOME, restore() {} };
+  }
   const previous = process.env.CODEX_HOME;
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-codex-home-'));
   const frame = { previous, home, released: false };

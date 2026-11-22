@@ -79,14 +79,16 @@ function sourceRelativePath(row) {
 
 function startupFolderPath(projectsDir, folder) {
   if (typeof folder !== 'string') return null;
-  if (folder.startsWith('codex/')) return require('../../../harnesses/codex').folderPath(folder);
+  const harness = require('../../../harnesses').harnessForFolder(folder);
+  if (harness.folderPrefix && folder.startsWith(harness.folderPrefix)) return harness.folderPath(folder);
   return folder && folder !== '.' && folder !== '..' && !/[\\/:]/.test(folder) ? path.join(projectsDir, folder) : null;
 }
 
 function startupSourcePath(projectsDir, folder, relativePath) {
   const dir = startupFolderPath(projectsDir, folder);
   if (!dir || !safeRelativePath(relativePath)) return null;
-  if (folder.startsWith('codex/') && (relativePath.includes('/') || !require('../../../harnesses/codex').sessionIdFromPath(relativePath))) return null;
+  const harness = require('../../../harnesses').harnessForFolder(folder);
+  if (harness.folderPrefix && folder.startsWith(harness.folderPrefix) && (relativePath.includes('/') || !harness.sessionIdFromPath(relativePath))) return null;
   return path.join(dir, relativePath);
 }
 
@@ -120,7 +122,8 @@ function deferStartupSources(result, paths) {
   const rows = [...result.inventory.rows, ...result.sessions];
   const deferred = new Set([...(result.deferred || []), ...paths]);
   const rejected = new Set([...deferred].map(relativePath => {
-    if (result.folder.startsWith('codex/')) return require('../../../harnesses/codex').sessionIdFromPath(relativePath);
+    const harness = require('../../../harnesses').harnessForFolder(result.folder);
+    if (harness.folderPrefix && result.folder.startsWith(harness.folderPrefix)) return harness.sessionIdFromPath(relativePath);
     const known = rows.find(row => sourceRelativePath(row) === relativePath);
     if (known) return known.sessionId;
     const parsed = classifyTranscriptPath(relativePath);

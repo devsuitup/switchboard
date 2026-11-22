@@ -86,6 +86,7 @@ for (const mode of ['full', 'partial', 'deletion']) for (const lost of ['beginFu
     f.worker.client.request = request;
     await f.reopen();
     assert.equal((await f.restart({ force: true })).ok, true);
+    await require('./fixtures/warm-start-1152.cjs').assertRebuildOracle(t, f);
   });
 }
 

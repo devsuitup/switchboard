@@ -113,6 +113,10 @@ function hasIsolation(source, shared = false, script = false) {
     return { scan, isolated };
   }
   if (shared) return functions.has('fixture') && inspect(functions.get('fixture')).isolated;
+  if (script) {
+    const scanners = [...functions.values()].map(node => inspect(node)).filter(result => result.scan);
+    if (scanners.length) return scanners.every(result => result.isolated);
+  }
   const results = callbacks.map(callback => inspect(callback));
   const scans = results.filter(result => result.scan);
   return scans.length > 0 ? scans.every(result => result.isolated) : results.length > 0 && results.every(result => result.isolated);

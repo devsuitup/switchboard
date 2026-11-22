@@ -26,11 +26,66 @@ test('Codex warm restart skips interactive and hidden exec bodies',
     assert.equal(f.calls.filter(call => call.name === 'effects').flatMap(call => call.args[0]).filter(effect => /upsertCached|replaceSessionMetrics|upsertSearch/.test(effect.name)).length, 0, 'unchanged Codex causes no body, metrics or FTS replacements');
   });
 
+test('forced warm rebuild reports the full indexing total',
+  { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const f = await require('./fixtures/warm-start-1152.cjs').fixture(t);
+    f.codexWrite(0);
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    assert.equal((await f.restart({ force: true })).ok, true);
+    assert.match(f.statuses.findLast(line => line.includes('[status] (done)')), /Indexed 1 sessions across 1 projects$/, 'a forced warm rebuild reports its full read');
+  });
+
+test('stale Codex days coalesce into one scoped worker replan',
+  { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const fx = require('./fixtures/warm-start-1152.cjs'), f = await fx.fixture(t);
+    const days = [f.codexFolder, f.other, 'codex/2026/08/28'];
+    days.forEach((folder, i) => f.codexWrite(i, 'dayword' + i, { folder }));
+    f.write('claude');
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    const prototype = require('node:worker_threads').Worker.prototype, emit = prototype.emit;
+    let workers = 0, changed = false;
+    const buffered = [];
+    t.mock.method(prototype, 'emit', function (event, msg, ...args) {
+      if (event === 'online') workers++;
+      if (!changed && event === 'message') {
+        if (msg?.result?.runtime === 'codex') { buffered.push(msg); return true; }
+        if (msg?.type === 'done') {
+          changed = true;
+          f.titles(days.map((_, i) => [f.ids[i], 'changed title ' + i]));
+          for (const held of buffered) emit.call(this, event, held);
+        }
+      }
+      return emit.call(this, event, msg, ...args);
+    });
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(workers, 2, 'all stale Codex days share one retry worker');
+    assert.equal(f.scans().filter(row => row.runtime === 'claude').length, 1, 'Codex title replan never rescans Claude');
+    days.forEach((_, i) => assert.equal(f.db.getCachedSession(f.ids[i]).aiTitle, 'changed title ' + i));
+    await fx.assertRebuildOracle(t, f);
+  });
+
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'full-read-1144-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
+
+test('cross-day duplicate Codex UUID stays on the same day after repeated warm starts',
+  { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
+    const fx = require('./fixtures/warm-start-1152.cjs'), f = await fx.fixture(t);
+    f.codexWrite(0, 'firstday');
+    f.codexWrite(0, 'lastday', { folder: f.other });
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    const folder = f.db.getCachedSession(f.ids[0]).folder;
+    for (let i = 0; i < 2; i++) {
+      assert.equal((await f.restart()).ok, true);
+      assert.equal(f.db.getCachedSession(f.ids[0]).folder, folder, 'duplicate UUID must not alternate between days');
+      for (const day of [f.codexFolder, f.other]) {
+        assert.ok(f.codexScans().some(scan => scan.folder === day && scan.mode === 'full' && scan.reason === 'ambiguous-source'), 'every ambiguous day uses the full route');
+      }
+    }
+    await fx.assertRebuildOracle(t, f);
+  });
 
 test('Codex title changes after worker result are not published stale',
   { skip: !openStore.supported && 'SQLite requires native binding or Node 22' }, async t => {
@@ -265,7 +320,7 @@ test('Codex relocation never opens prior home',
     const f = await require('./fixtures/warm-start-1152.cjs').fixture(t);
     f.codexWrite(0); f.codexWrite(1, 'oldonly', { folder: f.other });
     assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
-    process.env.CODEX_HOME = path.join(f.root, 'home-b');
+    require('./fixtures/isolated-codex-home.cjs')(t);
     const newFile = f.codexWrite(0, 'relocated', { cwd: path.join(f.root, 'newcwd') });
     f.titles([[f.ids[0], 'newhome']]);
     const read = fs.openSync;

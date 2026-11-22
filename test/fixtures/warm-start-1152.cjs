@@ -33,14 +33,17 @@ async function fixture(t) {
 module.exports = { ...base, fixture, ids, body };
 
 function scan({ projectsDir, inventory = [], force = false, scope, disabledHarnesses = ['claude'], onMessage }) {
-  const filename = require.resolve('../../workers/scan-projects');
-  const native = require('node:module').createRequire(filename);
-  const messages = [];
-  require('node:vm').runInNewContext(fs.readFileSync(filename, 'utf8'), { Buffer, console, process,
-    require: name => name === 'worker_threads' ? { parentPort: { postMessage: msg => { messages.push(msg); onMessage?.(msg); } },
-      workerData: { projectsDir, disabledHarnesses, folders: [], startup: { inventory, force, scope } } } : native(name),
-  }, { filename });
-  return messages;
+  const isolation = require('./isolated-codex-home.cjs')(null, { reuse: true });
+  try {
+    const filename = require.resolve('../../workers/scan-projects');
+    const native = require('node:module').createRequire(filename);
+    const messages = [];
+    require('node:vm').runInNewContext(fs.readFileSync(filename, 'utf8'), { Buffer, console, process,
+      require: name => name === 'worker_threads' ? { parentPort: { postMessage: msg => { messages.push(msg); onMessage?.(msg); } },
+        workerData: { projectsDir, disabledHarnesses, folders: [], startup: { inventory, force, scope } } } : native(name),
+    }, { filename });
+    return messages;
+  } finally { isolation.restore(); }
 }
 module.exports.scan = scan;
 

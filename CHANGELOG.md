@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Changed
-- After a restart, Switchboard re-reads only the Codex sessions changed since the previous run, as it already does for Claude Code transcripts. (#1152)
+- After a restart, Switchboard re-reads only the Codex sessions changed since the previous run, as it already does for Claude Code transcripts. Warm startup now finishes with "Indexed session changes" for both CLIs; a full rebuild still reports the indexing totals. (#1152)
 
 ## v0.0.108 — 2026-11-21
 

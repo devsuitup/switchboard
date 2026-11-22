@@ -196,7 +196,7 @@ function readSessionFile(filePath, folder, opts) {
       const payload = entry.payload;
       if (!payload) return;
       if (entry.type === 'session_meta') {
-        if (isSubagentMeta(payload)) { subagent = true; return opts?.startup ? undefined : false; }
+        if (isSubagentMeta(payload)) { subagent = true; return opts?.startup && !opts.allowSubagentEarlyStop ? undefined : false; }
         projectPath = projectPath || payload.cwd || null;
         if (HEADLESS_ORIGINATORS.has(payload.originator)) entrypoint = HEADLESS_ENTRYPOINT;
         return;
@@ -230,6 +230,10 @@ function readSessionFile(filePath, folder, opts) {
     };
     const scan = bodyRead(filePath, () => scanLines(filePath, 0, onLine, stat.size));
     if (scan.tail && !scan.stopped) onLine(scan.tail);
+    if (opts?.startup && subagent && scan.stopped && opts.allowSubagentEarlyStop) {
+      opts.outcome.status = 'excluded-early';
+      return null;
+    }
     if (opts?.startup) {
       opts.outcome.stamp = fullReadStamp(filePath, id, path.basename(filePath), before, scan.read,
         { title: opts.titleSnapshot.titles.get(sessionId) || null });
