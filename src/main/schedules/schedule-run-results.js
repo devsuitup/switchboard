@@ -63,6 +63,8 @@ function writeScheduleRunResult(runsDir, input, log, { rename = fs.renameSync } 
       startedAt: new Date(startedAtMs).toISOString(), endedAt: new Date(endedAtMs).toISOString(), outcome,
       exitCode: Number.isInteger(code) ? code : null, signal: signal || null,
       failure: outcome === 'exited' || outcome === 'signal' ? classifyRunExit(input) : null, error };
+    if (typeof input.jobId === 'string') record.jobId = input.jobId;
+    if (typeof input.cleanup === 'string') record.cleanup = input.cleanup;
     fs.mkdirSync(runsDir, { recursive: true });
     const destination = path.join(runsDir, filename);
     lock = destination + '.lock';
@@ -99,7 +101,7 @@ function validRecord(record, match) {
     && (record.dueMs === null || Number.isFinite(record.dueMs))
     && typeof record.startedAt === 'string' && Date.parse(record.startedAt) === Number(match[2])
     && typeof record.endedAt === 'string' && Number.isFinite(Date.parse(record.endedAt))
-    && ['exited', 'signal', 'spawn-error', 'refused'].includes(record.outcome)
+    && ['exited', 'signal', 'spawn-error', 'refused', 'timed-out'].includes(record.outcome)
     && (record.outcome !== 'signal' || typeof record.signal === 'string' && record.signal.length > 0)
     && (!['refused', 'spawn-error'].includes(record.outcome) || typeof record.error === 'string')
     && (record.outcome !== 'exited' || Number.isInteger(record.exitCode))

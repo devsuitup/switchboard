@@ -1,5 +1,24 @@
 # Context: bg-agents
 
+## Scheduled background jobs (#611, CLI 2.1.302 Windows measurements)
+
+Schedules optionally create regular daemon jobs; Agents uses the existing roster
+and attach path. The scheduler links history to the UUID reported in state.json,
+whose first eight hex characters are the job id. Its synthetic schedule lifetime
+is kind bg, so opening its sidebar row attaches rather than launching a second
+writer. See [schedule-runner.md](schedule-runner.md) for identity transfer and
+the monitoring/cleanup boundary.
+
+The 2026-11-23 measurements supersede these older lifecycle assumptions:
+`working` can mean blocked awaiting an initial prompt, and does not prove an
+active turn. A done worker stays alive. Stopping a done job leaves state.json as
+done with unchanged terminal timestamps; stopping an unfinished job can produce
+stopped. State writes use a temporary file followed by rename. On Windows,
+redirected dispatch output had no ANSI codes (the parser still tolerates them).
+Flagless bg resume reuses a stopped job's saved options and UUID; supplying
+options creates a copy. Stale done can persist through the new turn, so completion
+must use a terminal timestamp newer than launch. No behavior after rm was measured.
+
 Dispatch and saved background restore use the shared project operation gate;
 see [project-operation-gate.md](project-operation-gate.md). Restore uses the saved
 working-set project identity and exempts `attachOnly`.
@@ -687,7 +706,7 @@ absent at zero, so a roster without external sessions reads as before.
 
 `JOB_STATES` is `running`, `working`, `blocked`, `done`, `stopped`, `failed`. These are
 turn states: `done` means the turn ended, while the daemon may still host the
-session between messages. `working` means an active turn; `blocked` means the
+session between messages. `working` alone does not prove an active turn; `blocked` means the
 job parked itself (for example, a quota pause or awaiting a go-ahead). Its live
 descriptor supplies Working for an open or unknown turn when busy, and joins Active;
 waiting is Needs attention. A done job with waiting joins Active.

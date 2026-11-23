@@ -4362,9 +4362,9 @@ if (!app.isPackaged) {
 
     // Shared runCommand for cron scheduler and "run now" — takes argv, not a shell string
     const { spawn: cpSpawn } = require('child_process');
-    async function runScheduleCommand(claudeArgv, cwd, name, onDone, { manual = false, filePath, slug, dueMs = null } = {}) {
+    async function runScheduleCommand(claudeArgv, cwd, name, onDone, { manual = false, filePath, slug, dueMs = null, background, timeoutMs } = {}) {
       const startedAtMs = Date.now();
-      const sessionId = claudeArgv[claudeArgv.indexOf('--resume') + 1];
+      let sessionId = claudeArgv[claudeArgv.indexOf('--resume') + 1];
       const recordResult = details => {
         if (!filePath) return;
         const { scheduleRunsDir, writeScheduleRunResult } = require('./src/main/schedules/schedule-run-results');
@@ -4390,6 +4390,40 @@ if (!app.isPackaged) {
         let launch = headlessClaudeLaunch(shell, claudeArgv, { env, profileArgs: profile.args || [] });
 
         const sandbox = resolveScheduleSandbox(cwd, getSetting, SETTING_DEFAULTS.sandbox);
+        if (background?.runAsBackground) {
+          const { launchBackgroundSchedule, backgroundRefusal } = require('./src/main/schedules/schedule-background');
+          const refusal = backgroundRefusal({ sandbox, remoteAlias: background.remoteAlias, shell,
+            wrapper: (getSetting('project:' + cwd) || {}).preLaunchCmd ?? globalSettings.preLaunchCmd });
+          if (refusal) {
+            log.warn(`[schedule] ${runName}: ${refusal}`);
+            scheduleIpc.reportRunExit(mainWindow, { name, projectPath: cwd, sessionId, manual, code: 0, backgroundFallback: refusal });
+          } else {
+            const result = await launchBackgroundSchedule({ argv: claudeArgv, cwd, name, sessionId, prompt: background.prompt, timeoutMs: timeoutMs ?? background.timeoutMs }, {
+              runCommand: runClaudeCommand,
+              track: (id, lifetime, dir, _name, options) => cliSessionState.trackScheduleRun(id, lifetime, dir, runName, options),
+              isJoined: (id, jobId) => [...activeSessions.values()].some(s => !s.exited && s.pty && s.isAttach && s.attachJobId === jobId)
+                || cliSessionState.readAllDescriptors().some(d => (d.sessionId === id || d.jobId === jobId) && d.kind !== 'bg'),
+            });
+            if (result.sessionId) sessionId = result.sessionId;
+            if (!result.ok) {
+              recordResult({ outcome: result.outcome || 'spawn-error', error: result.error, cleanup: result.cleanup });
+              log.error(`[schedule] ${runName}: ${result.error}`);
+              if (onDone) onDone();
+              return result;
+            }
+            const activityId = `schedule:${sessionId}`;
+            activityReporter.sessionStarted({ sessionId: activityId, project: cwd, name: `Scheduled: ${runName}` });
+            void result.completion.then(details => {
+              recordResult({ ...details, jobId: result.jobId });
+              log.info(`[schedule] ${runName}: ${details.outcome}; ${details.cleanup}`);
+              scheduleIpc.reportRunExit(mainWindow, { name, projectPath: cwd, sessionId, manual, ...details, stderr: details.stderr || details.error });
+            }).catch(error => log.error(`[schedule] ${runName}: ${error.message}`)).finally(() => {
+              activityReporter.sessionEnded(activityId);
+              if (onDone) onDone();
+            });
+            return { ok: true, sessionId, jobId: result.jobId };
+          }
+        }
         if (sandbox) {
           const addDirs = [];
           for (let i = 0; i < claudeArgv.length - 1; i++) {

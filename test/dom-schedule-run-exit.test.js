@@ -27,6 +27,13 @@ function setup(t) {
   return { ...h, get reloads() { return reloads; }, exit: payload => ipcRenderer.emit('schedule-run-exit', {}, payload) };
 }
 
+test('background fallback displays the reason without claiming the run failed', t => {
+  const h = setup(t);
+  h.exit({ name: 'Nightly', sessionId: 'fallback', code: 0, backgroundFallback: 'Background sessions cannot run under this sandbox; using headless for this run.' });
+  assert.match(h.document.body.textContent, /Background sessions cannot run under this sandbox; using headless/);
+  assert.doesNotMatch(h.document.body.textContent, /exited with code|failed/);
+});
+
 for (const code of [0, 42]) {
   test(`schedule exit ${code} queues a schedules reload`, t => {
     const h = setup(t);

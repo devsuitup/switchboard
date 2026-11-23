@@ -1,5 +1,27 @@
 # Automation
 
+## Join a scheduled run
+
+In **Schedules → Create**, enable **Run as a background session (can be joined
+while it runs)**, or add `runAsBackground: true` to an existing schedule's front
+matter. This is off by default. Open the running conversation in Sessions or
+Agents to attach to its background job. Its run history links to that same
+conversation. The project must already be trusted by Claude Code; an untrusted
+workspace reports a launch failure.
+
+This option is local only; remote schedules ignore it. The create form disables
+it for remote and sandboxed projects. A saved schedule using a sandbox or an
+unsupported shell wrapper runs headless instead, with a visible reason and log
+entry. Ordinary headless schedules retain their current command and lifecycle.
+
+Background runs have a one-hour limit. An optional positive `timeoutMs` front
+matter value changes that limit in milliseconds. When the job reports completion
+or reaches its limit, Switchboard stops it and removes the daemon job, keeping
+the transcript. If somebody has joined, the job is left running and the history
+records **left running, joined**. Stop and remove it in Agents when finished.
+Closing Switchboard interrupts this monitoring; it does not recover unfinished
+schedule monitors at the next launch.
+
 ## Read-only session status
 
 Write a JSON file atomically to the configured triggers directory. Its UUID

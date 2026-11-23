@@ -107,9 +107,10 @@ async function readStatusEvidence(id, deadline, options = {}) {
   return result;
 }
 
-function trackScheduleRun(sessionId, child, cwd, scheduleName) {
+function trackScheduleRun(sessionId, child, cwd, scheduleName, { jobId } = {}) {
   const key = sessionId.toLowerCase();
   const live = { kind: 'schedule', pid: child.pid, cwd, startedAt: Date.now(), scheduleName };
+  if (jobId) { live.kind = 'bg'; live.jobId = jobId; }
   scheduledRuns.set(key, live);
   notifyStatusesChanged();
   const release = () => {

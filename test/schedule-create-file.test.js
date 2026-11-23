@@ -20,6 +20,17 @@ function setup(t) {
   return { root, fields, deps, create };
 }
 
+test('background opt in round trips into scanner and sandbox rejects creation', async t => {
+  const h = setup(t);
+  const result = await h.create({ ...h.fields, runAsBackground: true });
+  assert.equal(result.ok, true);
+  assert.equal(runner.scanSchedules(null, [h.root])[0].runAsBackground, true);
+  fs.unlinkSync(result.filePath);
+  const refused = await h.create({ ...h.fields, runAsBackground: true }, { platform: 'linux', getSetting: () => ({ sandbox: true }) });
+  assert.equal(refused.field, 'runAsBackground');
+  assert.match(refused.error, /sandbox/i);
+});
+
 test('creation round trips every field through the runner with LF and defaults', async t => {
   const h = setup(t);
   const result = await h.create({ ...h.fields, 'catch-up': true });

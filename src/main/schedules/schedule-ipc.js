@@ -237,16 +237,18 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
         slug: meta.slug || path.basename(realPath, '.md').replace(/^schedule-/, ''),
         cli: meta.cli || {},
         prompt: body,
+        runAsBackground: meta.runAsBackground === 'true',
+        timeoutMs: Number(meta.timeoutMs),
       };
 
       const { sessionId } = createScheduleSession(schedule);
       const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
 
-      const result = await runCommand(claudeArgs, projectPath, schedule.name, () => {}, { manual: true, filePath: realPath, slug: schedule.slug });
+      const result = await runCommand(claudeArgs, projectPath, schedule.name, () => {}, { manual: true, filePath: realPath, slug: schedule.slug, ...(schedule.runAsBackground ? { background: schedule } : {}) });
       if (!result?.ok) return { ok: false, error: result?.error || 'The schedule launcher returned no result. Check the shell settings and project folder, then try Run now again.' };
 
       log.info(`[schedule] Manual run triggered: ${schedule.name} (session ${sessionId})`);
-      return { ok: true, sessionId };
+      return { ok: true, sessionId: result.sessionId || sessionId };
     } catch (err) {
       log.error('[schedule] Failed to run schedule:', err);
       return { ok: false, error: err.message };
@@ -254,11 +256,12 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
   });
 }
 
-function reportRunExit(window, { name, projectPath, sessionId, manual = false, code, signal, sandbox, stderr }) {
-  if (code === 0 || !window || window.isDestroyed() || window.webContents.isDestroyed()) return;
+function reportRunExit(window, { name, projectPath, sessionId, manual = false, code, signal, sandbox, stderr, backgroundFallback }) {
+  if ((code === 0 && !backgroundFallback) || !window || window.isDestroyed() || window.webContents.isDestroyed()) return;
   window.webContents.send('schedule-run-exit', {
     name, projectPath, sessionId, manual, code, signal: signal || null,
     failure: classifyRunExit({ code, sandbox, stderr }),
+    ...(backgroundFallback ? { backgroundFallback } : {}),
   });
 }
 

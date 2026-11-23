@@ -102,11 +102,12 @@ function scheduleOutcome(run) {
   const result = run.result;
   if (result) {
     if (result.unreadable) return 'Unknown: result record unreadable';
+    if (result.outcome === 'timed-out') return `Timed out${result.cleanup ? ' — ' + result.cleanup : ''}`;
     if (result.outcome === 'refused') return `Refused: ${result.error}`;
     if (result.outcome === 'spawn-error') return `Failed to start: ${result.error}`;
     if (result.outcome === 'signal') return `Stopped: ${result.signal}`;
     if (result.outcome === 'exited' && Number.isInteger(result.exitCode)) {
-      if (result.exitCode === 0) return 'Exit 0';
+      if (result.exitCode === 0) return `Exit 0${result.cleanup ? ' — ' + result.cleanup : ''}`;
       const hint = scheduleRunFailureHint(result.failure);
       return `Failed: exit ${result.exitCode} — ${hint}`;
     }
@@ -235,6 +236,16 @@ function openScheduleCreateForm(projects) {
   add('cron', 'Cron (5 fields, machine local time)');
   add('enabled', 'Enabled', 'input', 'checkbox').checked = true;
   add('catch-up', 'Catch up once when a run was missed', 'input', 'checkbox');
+  const background = add('runAsBackground', 'Run as a background session (can be joined while it runs)', 'input', 'checkbox');
+  const updateBackground = () => {
+    const selected = projects.find(entry => entry.projectPath === project.value);
+    const reason = selected?.remoteAlias ? 'Background schedules are local only.' : selected?.sandboxed ? 'Background sessions cannot run under the sandbox wrapper.' : '';
+    background.disabled = !!reason;
+    if (reason) background.checked = false;
+    errors.get('runAsBackground').textContent = reason;
+  };
+  project.addEventListener('change', updateBackground);
+  updateBackground();
   add('prompt', 'Prompt', 'textarea');
   const mode = add('cli.permission-mode', 'Permission mode', 'select');
   for (const entry of PERMISSION_MODES) {
@@ -285,7 +296,7 @@ function openScheduleCreateForm(projects) {
     error.textContent = '';
     const value = name => controls.get(name).value;
     const fields = { name: value('name'), slug: value('slug'), cron: value('cron'), prompt: value('prompt'),
-      enabled: controls.get('enabled').checked, 'catch-up': controls.get('catch-up').checked, cli: {} };
+      enabled: controls.get('enabled').checked, 'catch-up': controls.get('catch-up').checked, runAsBackground: background.checked, cli: {} };
     for (const key of ['permission-mode', 'allowed-tools', 'model', 'max-budget-usd', 'append-system-prompt']) {
       if (value(`cli.${key}`).trim()) fields.cli[key] = value(`cli.${key}`);
     }
@@ -295,6 +306,7 @@ function openScheduleCreateForm(projects) {
     catch (failure) { result = { ok: false, error: failure?.message || String(failure) }; }
     busy = false;
     for (const control of controls.values()) control.disabled = false;
+    updateBackground();
     submit.disabled = cancel.disabled = false;
     if (result?.ok) {
       close();
@@ -362,6 +374,8 @@ function buildScheduleItem(project, schedule, data) {
         : schedule.nextRunMs === null ? 'No run within a year'
           : `Next run: ${scheduleTime(schedule.nextRunMs, data.now)}`;
   scheduleText(item, 'schedule-state', state);
+  if (schedule.runAsBackground) scheduleText(item, 'schedule-state', project.remoteAlias ? 'Background option ignored: local schedules only'
+    : project.sandboxed ? 'Background unavailable under sandbox: runs headless' : 'Background session: can be joined while it runs');
   if (schedule.problems.length) scheduleText(item, 'schedule-problems', schedule.problems.join('; '));
   if (schedule.linked) scheduleText(item, 'schedule-problems', 'linked file: edit it at its source');
   if (schedule.catchUp) {

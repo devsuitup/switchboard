@@ -32,8 +32,9 @@ const FOLDER = path.join(ROOT, '.claude', 'projects', require('../encode-project
 
 const at = (day, hour, minute, second = 0) => new Date(2026, 0, day, hour, minute, second).getTime();
 
-function writeSchedule({ cron, catchUp = true, file = 'schedule-report.md', catchUpLine }) {
+function writeSchedule({ cron, catchUp = true, file = 'schedule-report.md', catchUpLine, runAsBackground = false }) {
   const lines = ['---', 'name: Report', `cron: ${cron}`];
+  if (runAsBackground) lines.push('runAsBackground: true');
   if (catchUpLine !== undefined) lines.push(catchUpLine);
   else if (catchUp) lines.push('catch-up: true');
   lines.push('---', '', 'Write the report.', '');
@@ -275,13 +276,14 @@ test('catch-up: a schedule without catch-up does not run on resume, even in its 
   assert.equal(r.runs.length, 1, 'the tick runs it, as before');
 });
 
-test('catch-up: a catch-up while the previous run is still going is skipped, not queued', (t) => {
-  const r = rig({ cron: '0 20 * * *' });
+for (const runAsBackground of [false, true]) test(`catch-up: a catch-up while the previous run is still going is skipped, not queued (background=${runAsBackground})`, (t) => {
+  const r = rig({ cron: '0 20 * * *', runAsBackground });
   r.holdRuns();
   fakeClock(t, at(5, 19, 59, 30));
   const stop = r.start();
   t.mock.timers.tick(60_000);
   assert.equal(r.runs.length, 1, 'the 20:00 run, still going');
+  if (runAsBackground) assert.equal(r.runs[0].identity.background.runAsBackground, true);
 
   t.mock.timers.setTime(at(6, 21, 0, 10));
   r.resume.emit('resume');

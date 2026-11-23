@@ -32,6 +32,16 @@ function api() {
   return require(filename);
 }
 
+test('background timeout and joined cleanup survive persistence and readback', t => {
+  const h = fixture(t);
+  const input = { ...h.input, outcome: 'timed-out', code: null, error: 'Timed out', jobId: h.input.sessionId.slice(0, 8), cleanup: 'left running, joined' };
+  api().writeScheduleRunResult(h.runsDir, input, h.log);
+  const result = api().readScheduleRunResults(h.runsDir, [input.sessionId]).get(input.sessionId);
+  assert.equal(result.outcome, 'timed-out');
+  assert.equal(result.cleanup, 'left running, joined');
+  assert.equal(result.jobId, input.jobId);
+});
+
 function launcher(t, options = {}) {
   const f = fixture(t);
   const filename = path.join(__dirname, '../main.js');

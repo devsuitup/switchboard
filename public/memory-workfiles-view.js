@@ -14,7 +14,11 @@ function scheduleRunFailureHint(failure) {
       : 'See the log for details, then try Run now again.';
 }
 
-function showScheduleRunExit({ name, projectPath, sessionId, manual = false, code, signal, failure }) {
+function showScheduleRunExit({ name, projectPath, sessionId, manual = false, code, signal, failure, backgroundFallback }) {
+  if (backgroundFallback) {
+    showAppNotice({ id: `ScheduleBackground:${projectPath}:${name}`, kind: 'info', message: `Schedule ${name}: ${backgroundFallback}` });
+    return;
+  }
   if (code === 0) return;
   const id = manual ? `ScheduleRun:${sessionId}` : `ScheduleRun:${projectPath}:${name}`;
   const count = manual ? 1 : (scheduleRunFailureCounts.get(id) || 0) + 1;
