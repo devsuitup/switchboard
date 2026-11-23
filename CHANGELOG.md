@@ -15,6 +15,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### Fixed
 - Resume with config now shows the launch settings of the session's own CLI (Claude or Codex) and its working directory. Enter on a list in New Session or Resume with config no longer launches the session. (#1201)
 - Focusing content below the window no longer shifts the whole interface up under the title bar. (#1204)
+- On a Codex tab, Send to background is now disabled and says that Codex sessions cannot be sent to the background, instead of failing with a message about unreadable session state. (#1234)
 - Re-reading conversation history does less repeated work, especially for sessions with usage history spanning many days or models. (#1192)
 - More credentials are masked in notice logs, and notice loops now have an hourly limit so they cannot quickly rotate away log history. Restore and Restart clicks are identified in the notice history. (#1214)
 - A conversation changed before startup no longer keeps a stale sidebar row for the whole run when another part of the conversation cannot be read. Unchanged parts no longer keep index repairs pending or trigger repeated reads at every launch. (#1213)

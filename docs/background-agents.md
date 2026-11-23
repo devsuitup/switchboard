@@ -217,7 +217,8 @@ so Switchboard reattaches it after each restart.
 
 Send or clear any unsubmitted prompt first, and answer any open terminal
 dialog. The action is unavailable for plain terminals, remote sessions,
-sandboxed sessions and sessions started through a pre-launch command.
+sandboxed sessions, Codex sessions (the Codex CLI has no background jobs) and
+sessions started through a pre-launch command.
 Switchboard also refuses when it cannot read Claude's state, and while Claude
 is working: send it to the background once it is idle. If subagents are running,
 Switchboard asks before sending: Claude may stop them during the move.

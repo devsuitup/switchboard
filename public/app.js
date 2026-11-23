@@ -1738,6 +1738,8 @@ function backgroundActionReason(sessionId) {
   if (entry.attach) return 'This session already runs in the background';
   if (entry.session.type === 'terminal') return 'A plain terminal cannot be sent to the background because it has no Claude session';
   if (entry.session.remoteAlias) return 'A remote session cannot be sent to the background from Switchboard';
+  const harness = entry.session.runtime && window._harnesses?.get(entry.session.runtime);
+  if (harness?.capabilities?.bgJobs === false) return `${harness.label} sessions cannot be sent to the background`;
   if (sandboxedSessions.get(sessionId)) return 'This session cannot be sent to the background because it runs in the sandbox and the background worker would run outside it';
   if (entry.backgrounding) return 'Moving to the background…';
   return null;
@@ -2076,6 +2078,11 @@ async function sendSessionToBackground(sessionId) {
 function initTerminalBackgroundControl() {
   const button = document.getElementById('terminal-bg-btn');
   button.addEventListener('click', () => { if (activeSessionId) sendSessionToBackground(activeSessionId); });
+  // see .ai/contexts/cli-harnesses.md ("Capabilities in the renderer")
+  Promise.resolve(window.api.getHarnesses?.()).then(list => {
+    window._harnesses = new Map((Array.isArray(list) ? list : []).filter(h => h?.id).map(h => [h.id, h]));
+    updateTerminalHeader();
+  }).catch(() => {});
   if (window.api.onBgHandoffNotice) window.api.onBgHandoffNotice((id, message) => {
     if (typeof exitHandoffs !== 'undefined' && exitHandoffs.has(id)) return;
     showAppNotice({ id: 'background-progress:' + id, kind: 'info', message });

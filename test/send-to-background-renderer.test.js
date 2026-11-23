@@ -300,3 +300,52 @@ test('R-S2 GUARD same-id handoff attaches once at original tab position', async 
   assert.equal(h.spawned[0].options.jobId, 'aaaaaaaa');
   assert.deepEqual([...h.ctx.openSessions.keys()], before);
 });
+
+function harnessHeader(t, harnesses) {
+  const h = handoff(t);
+  const doc = h.dom.window.document;
+  doc.body.innerHTML = '<button id="terminal-bg-btn"></button><button id="terminal-refresh-btn"></button>';
+  h.ctx.terminalHeaderStatus = doc.createElement('span');
+  h.ctx.terminalStopBtn = doc.createElement('button');
+  h.ctx.paintTerminalHeaderStatus = () => {};
+  h.ctx.lastSessionExit = () => null;
+  h.ctx.updatePtyTitle = () => {};
+  h.dom.window.api.getHarnesses = async () => harnesses;
+  const app = loadAppFunctions(h.ctx, { functions: ['initTerminalBackgroundControl', 'updateTerminalHeader'] });
+  app.initTerminalBackgroundControl();
+  const show = session => {
+    h.ctx.openSessions.get('old').session = { sessionId: 'old', ...session };
+    app.updateTerminalHeader();
+    return { reason: h.app.backgroundActionReason('old'), button: doc.getElementById('terminal-bg-btn') };
+  };
+  return { ...h, show };
+}
+
+const CLAUDE = { id: 'claude', label: 'Claude', capabilities: { bgJobs: true } };
+
+test('R16: a Codex tab shows Send to background disabled with a reason naming the CLI; a Claude tab is unchanged', async t => {
+  const h = harnessHeader(t, [CLAUDE, { id: 'codex', label: 'Codex', capabilities: { bgJobs: false } }]);
+  await new Promise(resolve => setImmediate(resolve));
+  const codex = h.show({ runtime: 'codex' });
+  assert.equal(codex.reason, 'Codex sessions cannot be sent to the background');
+  assert.equal(codex.button.style.display, '');
+  assert.equal(codex.button.disabled, true);
+  assert.equal(codex.button.getAttribute('aria-disabled'), 'true');
+  assert.equal(codex.button.title, 'Codex sessions cannot be sent to the background');
+  for (const session of [{ runtime: 'claude' }, {}]) {
+    const claude = h.show(session);
+    assert.equal(claude.reason, null);
+    assert.equal(claude.button.style.display, '');
+    assert.equal(claude.button.disabled, false);
+    assert.match(claude.button.title, /^Send to background/);
+  }
+});
+
+test('R17: the renderer reads the harness capability, not the runtime name', async t => {
+  const h = harnessHeader(t, [CLAUDE, { id: 'codex', label: 'Codex', capabilities: { bgJobs: true } }, { id: 'other', label: 'Other CLI', capabilities: { bgJobs: false } }]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.show({ runtime: 'codex' }).reason, null);
+  const other = h.show({ runtime: 'other' });
+  assert.equal(other.reason, 'Other CLI sessions cannot be sent to the background');
+  assert.equal(other.button.disabled, true);
+});
