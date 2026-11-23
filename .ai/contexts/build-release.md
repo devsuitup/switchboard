@@ -94,11 +94,17 @@ The exported `STRONG_MARKERS` retains the study's POSIX/platform variants.
 Relative production requires are followed transitively with a per-test visited
 set: reaching a production file containing `process.platform` selects the test.
 Test helpers are traversed to reach production dependencies. Their
-`processes`, `filesystem`, `conpty` and `links` markers also select callers
+`processes`, `filesystem`, `conpty`, `links` and `sqlite` markers also select callers
 transitively, as do those markers in production dependencies. Helper-only
 `platform` and `winpath` markers do not propagate: `dom-setup.js` must not
 select every jsdom caller solely for its platform setup. Other marker categories
 remain direct-test checks; production `process.platform` remains transitive.
+SQLite binding names (`better-sqlite3` and `node:sqlite`) select both direct
+tests and callers through relative helpers. This keeps real-store tests in
+Windows CI even when the helper loads the store through a VM rather than a
+literal relative require. The fixture fallback regression names the binding
+directly, so its source-extraction load is also selected. Node 20 keeps the
+fixture callers' existing visible unsupported-runtime skips.
 Node_modules are excluded. Literal requires
 resolve files, `.js`, `.cjs` and `index.js`; unresolved literals in test fixtures
 are ignored. The read/dependency caches are scoped to one selection call.
@@ -115,6 +121,17 @@ branch. No production-module exclusion list is applied. The selection is 387
 of 570 files at #1029 (379 before the change: 13 added, 5 removed); selection
 above roughly 75% requires reporting contributors before considering justified
 exclusions.
+
+At #1220, adding the SQLite marker selects 632 of 707 files (622 before),
+with no removals. Five of the ten additions use `fixtures/conversation-store.cjs`:
+the fixture fallback, pin metadata, harness schema, writer BUSY short retry,
+and writer chunk wall-time suites. The other additions are db-fts-contentless,
+db-search-query-bound, db-session-metrics, search-worker-db-failure and
+worker-exit-grace. All 40 fixture consumers are now selected. The regression
+in `platform-test-selection.test.js` discovers these consumers by reading
+sources and checks their inclusion without executing them; it also exercises
+direct and transitive selection for each binding. The existing heuristic
+limits still apply to other test families; this is not an all-suite guarantee.
 
 The FILETIME conversion and comparison live in the pure
 `src/main/cli/proc-start.js`, re-exported by `cli-session-state.js`.

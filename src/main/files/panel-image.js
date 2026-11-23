@@ -1,6 +1,6 @@
 'use strict';
 
-const SYSTEM_VIEWER_EXTENSIONS = Object.freeze(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.pdf']);
+const SYSTEM_VIEWER_EXTENSIONS = Object.freeze(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.pdf', '.md', '.mdx', '.txt', '.log', '.json', '.jsonl', '.csv', '.tsv']);
 
 function sniffPanelImage(buf) {
   if (buf.length >= 8 && buf.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) return 'image/png';

@@ -224,6 +224,7 @@ async function readChangesFile({ cwd, relPath, staged, maxBytes }, deps = {}) {
     ok: true,
     original,
     current: toLf(currentText),
+    path: target.path,
     version: versionOf(buf),
     binary: false,
     truncated: false,

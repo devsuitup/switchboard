@@ -44,6 +44,22 @@ controls. Above 100 % the strip keeps its 32 CSS px and is taller than the
 controls. On macOS and in full screen the variable is undefined and the strip is
 `--strip-height`.
 
+## Preventing focus from scrolling the app container
+
+`#app-container` shares the body's height with the fixed-height status bar.
+Its descendants use container-relative heights rather than `100vh`, which
+would extend below the available space. The container uses `overflow: clip`:
+unlike `hidden`, it cannot become a scroll container when `focus()` or
+`scrollIntoView()` targets content below the fold. This keeps the whole
+interface from sliding up under the title bar (#1204).
+
+`test/app-container-viewport-height-css.test.js` checks descendant heights,
+the status bar boundary, and the computed overflow parsed from the shipped
+CSS. jsdom does not model layout scrolling (zero geometry and no
+`scrollIntoView` in the local probe), so the overflow assertion protects the
+CSS contract; it does not verify browser focus scrolling. No existing e2e
+journey directly exercises this container scrolling boundary.
+
 ## Keeping content out from under the controls
 
 The controls cover the window's top-right corner. The renderer learns their

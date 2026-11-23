@@ -32,10 +32,19 @@ The editor offers:
 - Markdown highlighting, and a preview toggle that renders the document (the
   choice is remembered);
 - **Copy path** and **Copy content**;
+- **Open in default app** and **Reveal in folder**, for local files;
 - a word-wrap toggle;
 - `Ctrl+F` / `Cmd+F` to find, `Ctrl+G` / `Cmd+G` to go to a line;
 - **Save**, or `Ctrl+S` / `Cmd+S`;
 - a reload when the file changes on disk.
+
+**Open in default app** opens the saved file without saving your current edits.
+It is available for Markdown, plain text, logs, JSON/JSONL, CSV/TSV, PDF and
+PNG/JPEG/GIF/WebP/BMP images. Other file types, including scripts and executables,
+offer **Reveal in folder** only. Both actions also appear in local Touched file
+viewers, including `.work-files` documents opened through terminal paths, and
+in the Activity trace viewer. Remote files and virtual content have neither.
+If the operating system cannot perform the action, a dialog reports the failure.
 
 Markdown previews render fenced `mermaid` blocks as diagrams, including in the
 Touched/Changes editor. Invalid diagrams keep their source visible with an inline

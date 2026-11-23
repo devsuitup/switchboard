@@ -7,6 +7,7 @@ const STRONG_MARKERS = {
   platform: /process\.platform|os\.platform\(\)|\bplatform\s*:\s*['"](win32|linux|darwin)|['"]win32['"]|path\.win32|path\.posix|isWindows|IS_WINDOWS/,
   winpath: /[A-Za-z]:\\|\b[A-Za-z]:\/|RUNNER~1|~1[\/]|\\\\\?\\|\bUNC\b/,
   conpty: /conpty|useConptyDll|node-pty/i,
+  sqlite: /\b(?:better-sqlite3|node:sqlite)\b/,
   shell: /cmd\.exe|powershell|pwsh|\.bat['"]|\.cmd['"]|COMSPEC|ComSpec/,
   links: /junction|symlink|reparse|EPERM|EBUSY|EACCES/,
   env: /USERPROFILE|LOCALAPPDATA|APPDATA|\bTEMP\b|process\.env\.TMP\b|HOMEDRIVE/,
@@ -17,7 +18,7 @@ const STRONG_MARKERS = {
   filesystem: /\bfs\.(?:promises\.)?rename(?:Sync)?\s*\(|\brealpath(?:Sync)?\b|\bbirthtime(?:Ms|Ns)?\b|\bbigint\s*:\s*true/,
 };
 const MIN_PLATFORM_TESTS = 150;
-const TRANSITIVE_MARKERS = ['processes', 'filesystem', 'conpty', 'links'].map(name => STRONG_MARKERS[name]);
+const TRANSITIVE_MARKERS = ['processes', 'filesystem', 'conpty', 'links', 'sqlite'].map(name => STRONG_MARKERS[name]);
 
 function selectPlatformTests(files, { root = path.resolve(__dirname, '..'), minimum = MIN_PLATFORM_TESTS } = {}) {
   const sources = new Map();

@@ -92,7 +92,7 @@ function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThro
   window.api.unwatchFile = filePath => { watchCalls.push(['unwatch', filePath]); return Promise.resolve({ ok: true }); };
   window.api.onFileChanged = handler => changeListeners.push(handler);
   window.api.gitChangesStatus = () => { calls.status.push('status'); return Promise.resolve({ ok: true, branch: {}, files: [], totals: {} }); };
-  window.api.gitChangesFile = (id, filePath, options) => { calls.gitFile.push({ id, filePath, options }); return Promise.resolve({ ok: true, original: 'before\n', current: 'file body', version: 'v1' }); };
+  window.api.gitChangesFile = (id, filePath, options) => { calls.gitFile.push({ id, filePath, options }); return Promise.resolve({ ok: true, path: '/work/' + filePath, original: 'before\n', current: 'file body', version: 'v1' }); };
   window.api.saveFileForPanel = (filePath, content, expected, options) => {
     calls.save.push({ filePath, content, expected, options });
     return Promise.resolve(saveImpl ? saveImpl(calls.save.length - 1) : { ok: true, version: 'v2' });
