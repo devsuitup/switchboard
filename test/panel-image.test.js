@@ -46,7 +46,8 @@ function shellHandlers(overrides = {}) {
   const handlers = new Map();
   const absolute = path.resolve('fixture.png');
   const context = {
-    path, SYSTEM_VIEWER_EXTENSIONS: panelImage.SYSTEM_VIEWER_EXTENSIONS,
+    path: overrides.path || path, process: { platform: overrides.platform || process.platform },
+    SYSTEM_VIEWER_EXTENSIONS: panelImage.SYSTEM_VIEWER_EXTENSIONS,
     fs: {
       realpathSync: { native: p => { calls.order.push('realpath'); return p; } },
       statSync: () => { calls.order.push('stat'); return { isFile: () => true }; },
@@ -67,6 +68,75 @@ function shellHandlers(overrides = {}) {
     show: (...args) => handlers.get('show-item-in-folder')?.(null, ...args) };
 }
 
+function openFixture(t) {
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'viewer-fix1-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+for (const kind of ['executable', 'directory', 'document']) {
+  test('1203 fix1: viewer resolves a document link to ' + kind, async t => {
+    const dir = openFixture(t);
+    const target = path.join(dir, kind === 'executable' ? 'x.bat' : 'target.md');
+    if (kind === 'directory') fs.mkdirSync(target);
+    else fs.writeFileSync(target, 'fixture');
+    const link = path.join(dir, 'note.md');
+    try {
+      fs.symlinkSync(target, link, kind === 'directory' && process.platform === 'win32' ? 'junction' : kind === 'directory' ? 'dir' : 'file');
+    } catch (error) {
+      if (process.platform === 'win32' && kind !== 'directory' && ['EPERM', 'EACCES'].includes(error.code)) {
+        t.skip('Windows file symlink privilege unavailable: ' + error.code);
+        return;
+      }
+      throw error;
+    }
+    const api = shellHandlers({ fs });
+    await api.open(link, { viewer: true });
+    assert.deepEqual(api.calls.open, kind === 'document' ? [fs.realpathSync.native(target)] : [],
+      kind === 'document' ? 'Open must use the canonical document path' : 'Open must refuse a link to ' + kind);
+  });
+}
+
+test('1203 fix1: a regular markdown file still opens', async t => {
+  const target = path.join(openFixture(t), 'note.md');
+  fs.writeFileSync(target, 'fixture');
+  const api = shellHandlers({ fs });
+  await api.open(target, { viewer: true });
+  assert.deepEqual(api.calls.open, [fs.realpathSync.native(target)]);
+});
+
+for (const kind of ['executable', 'directory', 'sensitive', 'realpath-error', 'stat-error', 'canonical']) {
+  test('1203 fix1: viewer rechecks the resolved target: ' + kind, async () => {
+    const requested = path.resolve('note.md');
+    const real = path.resolve(kind === 'executable' ? 'x.bat' : 'target.md');
+    const api = shellHandlers({
+      sensitive: p => kind === 'sensitive' && p === real,
+      fs: {
+        realpathSync: { native: () => {
+          if (kind === 'realpath-error') throw new Error('missing');
+          return real;
+        } },
+        statSync: () => {
+          if (kind === 'stat-error') throw new Error('unreadable');
+          return { isFile: () => kind !== 'directory' };
+        },
+      },
+    });
+    await api.open(requested, { viewer: true });
+    assert.deepEqual(api.calls.open, kind === 'canonical' ? [real] : [], 'resolved target: ' + kind);
+  });
+}
+
+test('1203 fix1: Windows viewer refuses alternate data streams after the drive prefix', async () => {
+  const api = shellHandlers({ path: path.win32, platform: 'win32' });
+  for (const target of ['C:\\d\\x.bat:s.md', 'C:\\d\\folder:s\\note.md', '\\\\server\\share\\x.bat:s.md']) {
+    await api.open(target, { viewer: true });
+    assert.deepEqual(api.calls.open, [], 'ADS must not reach shell.openPath: ' + target);
+  }
+  await api.open('C:\\d\\note.md', { viewer: true });
+  assert.deepEqual(api.calls.open, ['C:\\d\\note.md'], 'the drive colon is allowed');
+});
+
 test('T8b: main enforces the system-viewer allowlist and keeps the terminal route', async () => {
   const api = shellHandlers();
   for (const ext of ['.exe', '.pif', '.url']) await api.open(path.resolve('tool' + ext), { viewer: true });
@@ -75,6 +145,27 @@ test('T8b: main enforces the system-viewer allowlist and keeps the terminal rout
   assert.deepEqual(api.calls.open, [api.absolute]);
   await api.open(path.resolve('tool.exe'));
   assert.equal(api.calls.open.length, 2);
+});
+
+test('1203: viewer IPC refuses Windows executable names including case and trailing aliases', async () => {
+  const api = shellHandlers();
+  for (const name of ['x.bat', 'x.cmd', 'x.ps1', 'x.exe', 'x.BAT.', 'x.cmd ', 'x.Ps1. ',
+    'x.ExE', 'x.com', 'x.vbs', 'x.js', 'x.msi', 'x.lnk', 'x.scr', 'x.reg', 'x.txt.exe']) {
+    await api.open(path.resolve(name), { viewer: true });
+    assert.equal(api.calls.open.length, 0, name + ' must never reach shell.openPath');
+  }
+});
+
+test('1203: viewer IPC opens allowlisted documents and still blocks sensitive files', async () => {
+  for (const ext of ['.md', '.MDX', '.txt', '.log', '.json', '.jsonl', '.csv', '.tsv', '.PDF', '.png']) {
+    const api = shellHandlers();
+    const target = path.resolve('document' + ext);
+    await api.open(target, { viewer: true });
+    assert.deepEqual(api.calls.open, [target], ext + ' opens in the default app');
+    const sensitive = shellHandlers({ sensitive: () => true });
+    await sensitive.open(target, { viewer: true });
+    assert.deepEqual(sensitive.calls.open, []);
+  }
 });
 
 for (const kind of ['relative', 'raw git', 'real git', 'sensitive', 'directory', 'regular']) {

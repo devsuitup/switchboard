@@ -70,6 +70,32 @@ test('generic sources and physical CRLF line endings stay out', t => {
   assert.deepEqual(selector().selectPlatformTests(['test/plain.js', 'test/crlf.js'], options), []);
 });
 
+for (const binding of ['better-sqlite3', 'node:sqlite']) {
+  test(`SQLite binding ${binding} selects direct and transitive consumers`, t => {
+    const options = fixture(t, {
+      'test/direct.js': `require('${binding}')`,
+      'test/indirect.js': "require('./bridge.cjs')",
+      'test/bridge.cjs': "require('./database.cjs')",
+      'test/database.cjs': `require('${binding}')`,
+    });
+    const files = ['test/direct.js', 'test/indirect.js'];
+    assert.deepEqual(selector().selectPlatformTests(files, options), files,
+      'SQLite consumers must run on Windows even without other platform markers');
+  });
+}
+
+test('every conversation-store fixture consumer remains in the Windows selection', () => {
+  const files = fs.readdirSync(path.join(root, 'test'))
+    .filter(name => name.endsWith('.test.js'))
+    .map(name => `test/${name}`)
+    .filter(file => fs.readFileSync(path.join(root, file), 'utf8').includes('fixtures/conversation-store.cjs'));
+  assert.ok(files.includes('test/conversation-store-fixture-564.test.js'));
+  assert.ok(files.includes('test/pin-metadata-1207.test.js'));
+  const selected = selector().selectPlatformTests(files, { minimum: 0 });
+  assert.deepEqual(files.filter(file => !selected.includes(file)), [],
+    'no real-SQLite fixture consumer may silently disappear from Windows CI');
+});
+
 for (const [marker, source] of Object.entries({
   processes: 'spawn(command, args)',
   filesystem: 'fs.realpathSync(dir)',

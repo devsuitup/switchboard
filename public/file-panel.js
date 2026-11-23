@@ -1423,6 +1423,7 @@ function openTouchedImage(sessionId, absolutePath, image, returnList) {
 
 function applyChangesPair(tab, pair) {
   tab.diffLoading = false;
+  tab.localFilePath = pair.path || null;
   tab.editable = true;
   tab.readOnly = !!pair.readOnly;
   if (pair.kind === 'remote') tab.remote = true;
@@ -1498,6 +1499,7 @@ async function syncOpenChangesFile(sessionId, tab) {
     if (currentPanelSessionId === sessionId) renderPanel(sessionId);
     return;
   }
+  tab.localFilePath = result.path || tab.localFilePath;
   tab.fileError = null;
 
   if (tab.image) {
@@ -2127,6 +2129,8 @@ function setupChangesListSplitter() {
 }
 
 // Built once: a render must never tear the open editor down — see .ai/contexts/changes-view.md
+let changesDiffFileActions = null;
+
 function buildChangesDiffChrome() {
   const header = document.createElement('div');
   header.className = 'viewer-toolbar';
@@ -2188,6 +2192,9 @@ function buildChangesDiffChrome() {
   });
   controls.appendChild(changesDiffSaveBtn);
 
+  changesDiffFileActions = window.createViewerFileActions({ openExternal: true, revealInFolder: true });
+  controls.appendChild(changesDiffFileActions.el);
+
   header.appendChild(controls);
   changesDiffEl.appendChild(header);
 
@@ -2214,6 +2221,7 @@ function buildChangesDiffChrome() {
 
 function renderChangesDiff(sessionId, tab) {
   window.setViewerPath(changesDiffTitleEl, tab.selectedFile.path);
+  changesDiffFileActions.setPath(!tab.remote && (tab.editable || tab.image) && !tab.fileError && !tab.diffLoading ? tab.absolutePath || tab.localFilePath : '');
 
   changesDiffHostEl.classList.toggle('panel-image-host', !!tab.image);
   if (tab.image) {

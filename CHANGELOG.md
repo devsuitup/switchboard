@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
+- Local file viewers now offer **Open in default app** for supported documents and **Reveal in folder**, including Memory, Activity traces and files opened from Touched or terminal paths. Unsaved edits stay in the editor; scripts and executables can only be revealed. (#1203)
 - Notices and question dialogs now leave a bounded history in the application log, including dismissals and answers, with common credentials masked; session titles and prompts are not recorded, and project paths remain intact. (#1196)
 - Settings → Advanced → Diagnostics shows the size of Switchboard's logs and activity traces and lets you delete files older than a chosen number of days, keeping current files. (#1197)
 
@@ -14,6 +15,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### Fixed
 - Resume with config now shows the launch settings of the session's own CLI (Claude or Codex) and its working directory. Enter on a list in New Session or Resume with config no longer launches the session. (#1201)
 - Focusing content below the window no longer shifts the whole interface up under the title bar. (#1204)
+- Re-reading conversation history does less repeated work, especially for sessions with usage history spanning many days or models. (#1192)
 - More credentials are masked in notice logs, and notice loops now have an hourly limit so they cannot quickly rotate away log history. Restore and Restart clicks are identified in the notice history. (#1214)
 - A conversation changed before startup no longer keeps a stale sidebar row for the whole run when another part of the conversation cannot be read. Unchanged parts no longer keep index repairs pending or trigger repeated reads at every launch. (#1213)
 - Session triggers now retry temporary project lookup conflicts within their timeout instead of refusing immediately during startup. (#1215)

@@ -1265,9 +1265,20 @@ ipcMain.handle('open-main-log', async () => {
 ipcMain.handle('open-path', (_event, filePath, opts) => {
   if (typeof filePath !== 'string' || !filePath) return;
   const resolved = path.resolve(filePath);
-  if (opts?.viewer && !SYSTEM_VIEWER_EXTENSIONS.includes(path.extname(resolved).toLowerCase())) return;
-  // Mirror the read/save-file-for-panel guard: never hand a sensitive path
-  // (~/.ssh, credentials, etc.) to the OS default opener.
+  if (opts?.viewer) {
+    try {
+      if (process.platform === 'win32' && resolved.replace(/^[a-z]:/i, '').includes(':')) return;
+      if (!SYSTEM_VIEWER_EXTENSIONS.includes(path.extname(resolved).toLowerCase())) return;
+      if (isSensitivePath(resolved)) return;
+      const real = fs.realpathSync.native(resolved);
+      if (!fs.statSync(real).isFile()) return;
+      if (!SYSTEM_VIEWER_EXTENSIONS.includes(path.extname(real).toLowerCase())) return;
+      if (isSensitivePath(real)) return;
+      return shell.openPath(real);
+    } catch {
+      return;
+    }
+  }
   if (isSensitivePath(resolved)) return;
   return shell.openPath(resolved);
 });

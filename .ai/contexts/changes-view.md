@@ -1,5 +1,15 @@
 # Context: changes-view
 
+## Local file toolbar actions (#1203)
+
+Successful `readChangesFile` content pairs include `path`, the same guarded
+disk path used for the read. The renderer retains it as `localFilePath` for
+Open in default app and Reveal in folder; relative-path save and watch calls
+are unchanged. Touched uses its existing absolute path. Remote and virtual
+diff content, pending reads and file errors hide both actions. The common
+toolbar implementation and extension policy are described in
+`.ai/contexts/viewer-panel.md`, "Local file actions".
+
 Main-process modules for this context live in `src/main/changes/` (ADR 0005, step 6).
 
 **Purpose**: A git-status-sourced view of a session's working tree, in the
