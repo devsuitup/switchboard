@@ -15,6 +15,14 @@ sessions share a tree, and after a change was committed or reverted. Issue #309.
 User-facing behavior: `docs/touched-files.md`. IPC and its guard row:
 `.ai/contexts/ipc-bridge.md` ("Touched files").
 
+Local file editor headers also use `createViewerFileActions` from
+`viewer-toolbar.js` for **Open in default app** and **Reveal in folder** (#1203).
+This includes local image previews and `.work-files` opened through terminal
+links. Remote files have neither action. The shared document allowlist,
+unchanged-buffer behavior, failure handling and IPC guards are documented in
+`.ai/contexts/viewer-panel.md`, "Local file actions". The existing refusal
+fallback also recognizes these document extensions.
+
 ## Key files
 
 | File | Role |

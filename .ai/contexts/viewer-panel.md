@@ -153,6 +153,8 @@ under Electron's Node mode. The normal CI test runner discovers these files.
 const panel = new ViewerPanel(container, {
   copyPath: bool,         // show copy-path button
   copyContent: bool,      // show copy-content button
+  openExternal: bool,     // open allowlisted local documents in the default app
+  revealInFolder: bool,   // reveal a local file in its folder
   language: 'markdown' | 'auto',  // editor mode
   storageKey: string,     // localStorage key for preview-mode persistence
   format: bool,           // show JSON/JSONL prettify button (auto-hidden for non-json files)
@@ -182,8 +184,46 @@ Used in `public/app.js` for Memory and in `public/activity-trace-panel.js` for A
 | `closeBtn` | `opts.onClose` provided |
 | `copyPathBtn` | `opts.copyPath` |
 | `copyContentBtn` | `opts.copyContent` |
+| `openExternalBtn` | `opts.openExternal`, a local absolute path and an allowlisted extension |
+| `revealInFolderBtn` | `opts.revealInFolder` and a local absolute path |
 
 The toolbar factory builds all configured buttons up front; `open()` toggles visibility based on file extension.
+
+## Local file actions (#1203)
+
+Memory and Activity trace opt into both actions through `ViewerPanel` options.
+`createViewerFileActions` in `viewer-toolbar.js` supplies the same controls to
+the Touched/Changes editor, including `.work-files` documents opened from a
+terminal link and local image previews. Its `setPath` updates the target when
+the displayed file changes. Before a path is set, and for virtual content,
+both buttons are hidden and disabled. The file panel passes no path for remote,
+loading, unreadable or non-file diff content. These controls operate on the
+saved disk file; neither action saves or replaces the editor buffer.
+
+For Changes rows, `readChangesFile` returns its already validated `path` with
+the content pair. The renderer stores it as `localFilePath` for these actions;
+it does not reconstruct a disk path from the row or change the relative-path
+save/watch contracts. Touched continues to use its existing `absolutePath`.
+
+Open always invokes `openPath(path, {viewer: true})`. The existing main-process
+extension and sensitive-path guards remain authoritative. The document
+allowlist is PNG/JPG/JPEG/GIF/WebP/BMP/PDF, MD/MDX/TXT/LOG/JSON/JSONL/CSV/TSV.
+It is mirrored in the toolbar and the Touched refusal fallback; tests compare
+both lists to `src/main/files/panel-image.js`. All other extensions, including
+executables and scripts, keep Open hidden and disabled. Extension matching is
+case-insensitive and does not remove trailing dots or spaces. Reveal calls
+`showItemInFolder` and retains its existing path, Git-metadata, sensitive-path
+and regular-file checks. Both actions report IPC refusals or failures through
+`appAlert`. Explicit `display: none` accompanies `hidden`, because the shared
+icon-button display rule overrides the browser's hidden default.
+
+`test/viewer-file-actions.test.js` exercises the shipped renderer, both viewer
+call sites, path changes, dirty buffers, remote content, image previews, failure
+reporting and computed visibility with the shipped CSS. `test/panel-image.test.js`
+executes the extracted IPC handlers with a stubbed shell, including Windows
+executable extensions, mixed case and trailing dots/spaces. Neither test launches
+Electron or an external application. This ports the idea from Ali Basiri's
+upstream doctly/switchboard commit `5433e95b` and PR #105.
 
 ## Invariants
 

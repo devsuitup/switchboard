@@ -16,7 +16,7 @@ const TOUCHED_DAY_MS = 24 * 60 * 60 * 1000;
 const TOUCHED_RELATIVE_THRESHOLD_MS = TOUCHED_DAY_MS;
 const TOUCHED_MINUTE_MS = 60 * 1000;
 const TOUCHED_OPENED_MAX = 50;
-const SYSTEM_VIEWER_EXTENSIONS = Object.freeze(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.pdf']);
+const SYSTEM_VIEWER_EXTENSIONS = Object.freeze(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.pdf', '.md', '.mdx', '.txt', '.log', '.json', '.jsonl', '.csv', '.tsv']);
 
 function renderPanelFileRefusal(host, filePath) {
   const refusal = document.createElement('div');

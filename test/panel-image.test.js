@@ -77,6 +77,27 @@ test('T8b: main enforces the system-viewer allowlist and keeps the terminal rout
   assert.equal(api.calls.open.length, 2);
 });
 
+test('1203: viewer IPC refuses Windows executable names including case and trailing aliases', async () => {
+  const api = shellHandlers();
+  for (const name of ['x.bat', 'x.cmd', 'x.ps1', 'x.exe', 'x.BAT.', 'x.cmd ', 'x.Ps1. ',
+    'x.ExE', 'x.com', 'x.vbs', 'x.js', 'x.msi', 'x.lnk', 'x.scr', 'x.reg', 'x.txt.exe']) {
+    await api.open(path.resolve(name), { viewer: true });
+    assert.equal(api.calls.open.length, 0, name + ' must never reach shell.openPath');
+  }
+});
+
+test('1203: viewer IPC opens allowlisted documents and still blocks sensitive files', async () => {
+  for (const ext of ['.md', '.MDX', '.txt', '.log', '.json', '.jsonl', '.csv', '.tsv', '.PDF', '.png']) {
+    const api = shellHandlers();
+    const target = path.resolve('document' + ext);
+    await api.open(target, { viewer: true });
+    assert.deepEqual(api.calls.open, [target], ext + ' opens in the default app');
+    const sensitive = shellHandlers({ sensitive: () => true });
+    await sensitive.open(target, { viewer: true });
+    assert.deepEqual(sensitive.calls.open, []);
+  }
+});
+
 for (const kind of ['relative', 'raw git', 'real git', 'sensitive', 'directory', 'regular']) {
   test('T8c: show in folder guards ' + kind, async () => {
     const api = shellHandlers({
