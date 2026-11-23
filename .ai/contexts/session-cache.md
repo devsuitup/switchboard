@@ -104,6 +104,10 @@ stamp, while an unreadable predecessor can change merge attribution, message
 counts and continuation indexes without changing the sibling file. Unchanged
 siblings leave `filesDeferred` at zero, preserve the real folder mtime, and let
 bridge repair complete so the next startup does not invalidate the full index.
+A sibling withheld by a persistent failure witness is still fully reread at
+every startup while its full-read stamp stays null, at the same cost as before
+this change. The unchanged-sibling metadata check runs only for groups containing
+a failed source; any stat error keeps the sibling deferred without failing the folder.
 Changed or deleted siblings keep the mtime at zero until reconcile publishes or
 removes them; later startups then converge on the updated file metadata. Groups
 with transient failures or read races remain deferred, including their siblings.

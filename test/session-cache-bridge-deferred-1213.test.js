@@ -22,6 +22,46 @@ async function bridgeFixture(t) {
   return { ...state, bad, sibling };
 }
 
+for (const persistentFailure of [false, true]) {
+  test(`bridge sibling stat EPERM with ${persistentFailure ? 'a deterministic failure' : 'no read failure'} keeps the folder scan healthy`, options, async t => {
+    const { f, folder, bad, sibling } = await bridgeFixture(t);
+    const unrelated = f.write('other-bridge', 'other', [{ type: 'bridge-session', bridgeSessionId: 'other-1213' }]);
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    if (persistentFailure) {
+      fs.appendFileSync(bad, '\n');
+      timers(t);
+      failReads(t, f, [bad], 'ERR_STRING_TOO_LONG');
+      assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+      assert.equal(JSON.parse(f.db.getFolderMeta(folder).readFailures).length, 1);
+    }
+    const inventory = [{ folder, meta: f.db.getFolderMeta(folder), rows: f.db.getCachedByFolder(folder), metadata: [] }];
+    const stat = fs.statSync;
+    let siblingStats = 0, unrelatedStats = 0;
+    const patch = t.mock.method(fs, 'statSync', function (file, ...args) {
+      if (/scan-projects\.js:\d+:\d+\)?\r?\n\s+at Array\.filter/.test(new Error().stack)) {
+        if (file === unrelated) unrelatedStats++;
+        if (file === sibling) {
+          siblingStats++;
+          throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+        }
+      }
+      return stat.call(this, file, ...args);
+    });
+    let messages;
+    try {
+      messages = require('./fixtures/warm-start-1152.cjs').scan({ projectsDir: f.projects, inventory,
+        scope: [folder], disabledHarnesses: [] });
+    } finally { patch.mock.restore(); }
+    const message = messages.find(msg => msg.type === 'folder' && msg.folder === folder);
+    assert.equal(message.error, undefined, 'a sibling stat EPERM must not fail the folder');
+    assert.equal(messages.at(-1).ok, true);
+    assert.deepEqual(Array.from(message.result.deferred), persistentFailure ? ['bridge-sibling.jsonl'] : []);
+    assert.equal(siblingStats, persistentFailure ? 1 : 0, 'only a withheld sibling needs a metadata stat');
+    assert.equal(unrelatedStats, 0, 'a group without a failed source needs no sibling metadata stat');
+    if (persistentFailure) assert.equal(message.result.indexMtimeMs, 0, 'an inaccessible sibling keeps reconcile eligible');
+  });
+}
+
 test('a changed bridge winner converges after reconcile across two restarts', options, async t => {
   const { f, folder } = await setup(t);
   const bridge = [{ type: 'bridge-session', bridgeSessionId: 'bridge-winner-1213' }];

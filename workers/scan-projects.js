@@ -225,17 +225,19 @@ function readStartupFolder(folder) {
     const transientGroups = new Set([...rows, ...result.sessions]
       .filter(row => deferred.includes(sourceRelativePath(row) || row.sessionId + '.jsonl'))
       .map(row => row.bridgeSessionId).filter(Boolean));
-    const unchangedSiblings = new Set(rows.filter(row => {
-      if (!row.bridgeSessionId || transientGroups.has(row.bridgeSessionId)) return false;
+    const failedGroups = new Set([...rows, ...result.sessions]
+      .filter(row => startupRead.failedSources.has(sourceRelativePath(row) || row.sessionId + '.jsonl'))
+      .map(row => row.bridgeSessionId).filter(Boolean));
+    const unchangedSiblings = new Set(startupRead.failedSources.size ? rows.filter(row => {
+      if (!failedGroups.has(row.bridgeSessionId) || transientGroups.has(row.bridgeSessionId)) return false;
       try {
         const stat = fs.statSync(path.join(folderPath, sourceRelativePath(row) || row.sessionId + '.jsonl'), { bigint: true });
         return row.fileMtime === continuationMtime(stat) && (row.fileSize == null || row.fileSize === Number(stat.size));
-      } catch (error) {
-        if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+      } catch {
         return false;
       }
     })
-      .map(row => sourceRelativePath(row) || row.sessionId + '.jsonl'));
+      .map(row => sourceRelativePath(row) || row.sessionId + '.jsonl') : []);
     deferStartupSources(result, [...deferred, ...startupRead.failedSources]);
     result.deferred = result.deferred?.filter(relativePath => deferred.includes(relativePath)
       || (!startupRead.failedSources.has(relativePath) && !unchangedSiblings.has(relativePath))) || [];
