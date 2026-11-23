@@ -149,6 +149,8 @@ contextBridge.exposeInMainWorld('api', {
   getActivityTraceState: () => ipcRenderer.invoke('get-activity-trace-state'),
   setActivityTraceEnabled: (enabled) => ipcRenderer.invoke('set-activity-trace-enabled', enabled),
   listActivityTraceFiles: () => ipcRenderer.invoke('list-activity-trace-files'),
+  getDiagnosticFiles: (days) => ipcRenderer.invoke('get-diagnostic-files', days),
+  pruneDiagnosticFiles: (days, files) => ipcRenderer.invoke('prune-diagnostic-files', days, files),
   readActivityTraceFile: (filePath) => ipcRenderer.invoke('read-activity-trace-file', filePath),
   deleteActivityTraceFile: (filePath) => ipcRenderer.invoke('delete-activity-trace-file', filePath),
   // see .ai/contexts/activitywatch.md
