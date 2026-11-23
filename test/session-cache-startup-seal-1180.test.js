@@ -60,13 +60,13 @@ for (const kind of ['P full baseline', 'S sealed baseline']) {
     assert.equal(f.scans()[0].filesFailed, 1);
     assert.equal(f.db.getFolderMeta(f.folder).fullIndexPending, null);
     assert.equal(f.db.getFolderMeta(f.folder).fullIndexVersion, 1);
-    const failures = f.logs.filter(line => line.startsWith('[session-cache] transcript-read-failed '));
+    const failures = f.logs.filter(line => line.startsWith('[index] read failed '));
     assert.equal(failures.length, 1, 'failed path and error logged once');
-    assert.equal(JSON.parse(failures[0].slice('[session-cache] transcript-read-failed '.length)).path, bad);
+    assert.equal(failures[0], `[index] read failed folder=${f.folder} file=${path.basename(bad)} size=${fs.statSync(bad).size} error=TypeError`);
     await f.reopen();
     assert.equal((await f.restart()).ok, true);
     assert.equal(f.scans()[0].filesRead, 0, 'unchanged failed source has a durable failure witness');
-    assert.equal(f.logs.filter(line => line.startsWith('[session-cache] transcript-read-failed ')).length, 0);
+    assert.equal(f.logs.filter(line => line.startsWith('[index] read failed ')).length, 0);
     const open = fs.openSync;
     let refreshReads = 0;
     const patch = t.mock.method(fs, 'openSync', function (target, ...args) {

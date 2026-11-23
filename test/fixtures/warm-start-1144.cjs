@@ -26,7 +26,7 @@ async function fixture(t, { separateReader = false } = {}) {
   fs.mkdirSync(dir, { recursive: true });
   await writer.ready;
   const initialize = () => writer.initializeCache({ PROJECTS_DIR: projects, activeSessions, getMainWindow: () => null,
-    getLocalDescriptors: () => descriptors, log: { info: line => { logs.push(line); statuses.push(line); }, warn() {}, error() {} } });
+    getLocalDescriptors: () => descriptors, log: { info: line => { logs.push(line); statuses.push(line); }, warn: line => logs.push(line), error() {} } });
   initialize();
   t.after(async () => {
     await cache.shutdownProducers();
