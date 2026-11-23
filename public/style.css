@@ -524,7 +524,7 @@ body { display: flex; flex-direction: column; }
   display: flex;
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow: clip;
 }
 
 /* see docs/product/BUILDING-BLOCKS.md (B8) */

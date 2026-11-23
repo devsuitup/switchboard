@@ -100,6 +100,16 @@ function excludedBySignature(entry, exclusions) {
 }
 
 function extractDailyMetrics(lines, fallbackDate, sinceTimestampExclusive, excludedMessageUuids, excludedMessageSignatures, map = new Map()) {
+  for (const line of lines) {
+    if (!line) continue;
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    accumulateDailyMetrics(entry, fallbackDate, sinceTimestampExclusive, excludedMessageUuids, excludedMessageSignatures, map);
+  }
+  return Array.from(map.values());
+}
+
+function accumulateDailyMetrics(entry, fallbackDate, sinceTimestampExclusive, excludedMessageUuids, excludedMessageSignatures, map) {
   const bucket = (date, model) => {
     const key = `${date}|${model}`;
     let m = map.get(key);
@@ -115,49 +125,41 @@ function extractDailyMetrics(lines, fallbackDate, sinceTimestampExclusive, exclu
     return m;
   };
 
-  for (const line of lines) {
-    if (!line) continue;
-    let entry;
-    try { entry = JSON.parse(line); } catch { continue; }
+  if (sinceTimestampExclusive && (!entry.timestamp || entry.timestamp <= sinceTimestampExclusive)) return;
+  if (excludedMessageUuids?.has(entry.uuid)) return;
+  if (excludedBySignature(entry, excludedMessageSignatures)) return;
 
-    if (sinceTimestampExclusive && (!entry.timestamp || entry.timestamp <= sinceTimestampExclusive)) continue;
-    if (excludedMessageUuids?.has(entry.uuid)) continue;
-    if (excludedBySignature(entry, excludedMessageSignatures)) continue;
+  const ts = typeof entry.timestamp === 'string' && entry.timestamp.length >= 10
+    ? entry.timestamp.slice(0, 10)
+    : fallbackDate;
 
-    const ts = typeof entry.timestamp === 'string' && entry.timestamp.length >= 10
-      ? entry.timestamp.slice(0, 10)
-      : fallbackDate;
+  const isAssistant = entry.type === 'assistant' ||
+    (entry.type === 'message' && entry.role === 'assistant');
+  const isUser = entry.type === 'user' ||
+    (entry.type === 'message' && entry.role === 'user');
 
-    const isAssistant = entry.type === 'assistant' ||
-      (entry.type === 'message' && entry.role === 'assistant');
-    const isUser = entry.type === 'user' ||
-      (entry.type === 'message' && entry.role === 'user');
-
-    if (isAssistant) {
-      let model = entry.message?.model || '';
-      if (model === '<synthetic>') model = '';
-      const m = bucket(ts, model);
-      m.messageCount += 1;
-      if (model) {
-        const usage = entry.message?.usage || {};
-        m.inputTokens += usage.input_tokens | 0;
-        m.outputTokens += usage.output_tokens | 0;
-        m.cacheReadTokens += usage.cache_read_input_tokens | 0;
-        m.cacheCreationTokens += usage.cache_creation_input_tokens | 0;
-      }
-      const content = entry.message?.content;
-      if (Array.isArray(content)) {
-        for (const c of content) {
-          if (c && c.type === 'tool_use') m.toolCallCount += 1;
-        }
-      }
-    } else if (isUser) {
-      if (isToolResultOnly(entry.message?.content)) continue;
-      bucket(ts, '').messageCount += 1;
+  if (isAssistant) {
+    let model = entry.message?.model || '';
+    if (model === '<synthetic>') model = '';
+    const m = bucket(ts, model);
+    m.messageCount += 1;
+    if (model) {
+      const usage = entry.message?.usage || {};
+      m.inputTokens += usage.input_tokens | 0;
+      m.outputTokens += usage.output_tokens | 0;
+      m.cacheReadTokens += usage.cache_read_input_tokens | 0;
+      m.cacheCreationTokens += usage.cache_creation_input_tokens | 0;
     }
+    const content = entry.message?.content;
+    if (Array.isArray(content)) {
+      for (const c of content) {
+        if (c && c.type === 'tool_use') m.toolCallCount += 1;
+      }
+    }
+  } else if (isUser) {
+    if (isToolResultOnly(entry.message?.content)) return;
+    bucket(ts, '').messageCount += 1;
   }
-
-  return Array.from(map.values());
 }
 
 // --- First-prompt selection ---
@@ -271,7 +273,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
         if (continuationLine && /"type"\s*:\s*"continued-in"/.test(line)) continuationUnresolved = true;
         return;
       }
-      extractDailyMetrics([line], fallbackDate, cutoff, excludedMessageUuids, excludedMessageSignatures, metricBuckets);
+      accumulateDailyMetrics(entry, fallbackDate, cutoff, excludedMessageUuids, excludedMessageSignatures, metricBuckets);
       const continuation = continuationLine ? continuationId(entry, fileBase) : null;
       if (continuation) continuationIds.add(continuation);
       if (continuationLine && entry.type === 'continued-in' && entry.sessionId === fileBase && !continuation) continuationUnresolved = true;

@@ -1,5 +1,17 @@
 # Context: cli-session-state
 
+The process-table timeout is an `execFile` child-kill budget, not a hard
+wall-clock bound on the returned promise (#1192 investigation). Its timer runs
+on the calling event loop; synchronous work can delay that timer, the child's
+close callback and the continuation recording elapsed time. Node also waits
+for child close before invoking the `execFile` callback after its timeout kill.
+The probe wrapper has no separate completion deadline. A controlled delayed
+callback reproduces a 15,000 ms grant settling at virtual 211,701 ms, but does
+not identify which mechanism caused the live incident. Increasing the timeout
+would not solve event-loop starvation. Correlate the summary below with main
+loop delay and child start/kill/exit/close timestamps before changing ownership
+or failure-caching behavior.
+
 `readProcessTableSnapshot(deadline, { fresh: true, signal })` isolates deletion
 discovery from the global cached or in-flight process-table read. It starts a
 new probe with the lesser of 15 seconds and the remaining request budget,
