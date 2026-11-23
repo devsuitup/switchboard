@@ -96,14 +96,16 @@ deferrals do not arm that queue. They remain eligible for filesystem reconcile
 and the next startup. Legacy transient witnesses are ignored. A folder with only deterministic witnesses
 retains its actual index mtime; only outstanding deferrals zero it. Publication
 excludes a deterministic failure's bridge siblings too. A withheld sibling stays
-deferred only when its read row differs from its inventory row. Compare the
-persisted row fields with `rowWitness`, excluding the incremental message-count
-cache: its `filtered` flag can differ solely because an unreadable predecessor
-was absent from a full scan. The actual message count remains compared. Do not
-compare full-read stamps, which can be null after a header refresh. Unchanged
+deferred only when its source is gone or its file mtime/size differs from the
+inventory row's `fileMtime`/`fileSize`, using the same `continuationMtime` conversion
+and nullable-size rule as `refreshFolder`. Do not compare derived row fields or
+full-read stamps: header refreshes set `modified` to the file mtime and clear the
+stamp, while an unreadable predecessor can change merge attribution, message
+counts and continuation indexes without changing the sibling file. Unchanged
 siblings leave `filesDeferred` at zero, preserve the real folder mtime, and let
 bridge repair complete so the next startup does not invalidate the full index.
-Changed siblings keep the mtime at zero until reconcile publishes them. Groups
+Changed or deleted siblings keep the mtime at zero until reconcile publishes or
+removes them; later startups then converge on the updated file metadata. Groups
 with transient failures or read races remain deferred, including their siblings.
 Publication checks contain one stamp per source.
 Directory and title-snapshot failures

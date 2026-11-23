@@ -6,9 +6,10 @@ const { deriveProjectPath, resolveWorktreePath } = require('../derive-project-pa
 const { setRemappedProjectReader } = require('../encode-project-path');
 const { readSessionFile, enumerateSessionFiles, mergeBridgeGroups, subagentSessionId, isCanonicalWorkflowPath } = require('../read-session-file');
 const { classifyTranscriptPath } = require('../subagent-attribution');
+const { continuationMtime } = require('../session-continuations');
 const { prefixedHarnesses, readHarnessFolder, harnessFolderIndexMtimeMs } = require('../harnesses');
 const { enumerateReads, measureFolder } = require('../src/main/session-index/read-counters');
-const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, observation, fullReadStamp, matchesFullRead, sourceRelativePath, safeRelativePath, deferStartupSources, readFailures, failureStamp, deterministicReadFailure, rowWitness } = require('../src/main/session-index/full-read-state');
+const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, observation, fullReadStamp, matchesFullRead, sourceRelativePath, safeRelativePath, deferStartupSources, readFailures, failureStamp, deterministicReadFailure } = require('../src/main/session-index/full-read-state');
 
 const PROJECTS_DIR = workerData.projectsDir;
 const REMAPS = workerData.remaps && typeof workerData.remaps === 'object' ? workerData.remaps : {};
@@ -221,13 +222,19 @@ function readStartupFolder(folder) {
     Object.assign(result, { startup: true, reason: reason || (selected.size ? 'changed' : 'unchanged'),
       checks: [...startupRead.checks], deferred, goneFolder, inventory: entry, metadataIds: rows.map(row => row.sessionId) });
     const indexMtimeMs = result.indexMtimeMs;
-    const readRows = new Map(result.sessions.map(row => [row.sessionId, row]));
     const transientGroups = new Set([...rows, ...result.sessions]
       .filter(row => deferred.includes(sourceRelativePath(row) || row.sessionId + '.jsonl'))
       .map(row => row.bridgeSessionId).filter(Boolean));
-    const unchangedSiblings = new Set(rows.filter(row => row.bridgeSessionId && !transientGroups.has(row.bridgeSessionId)
-      && (!readRows.has(row.sessionId) || rowWitness({ ...row, messageCountIndex: null })
-        === rowWitness({ ...readRows.get(row.sessionId), messageCountIndex: null })))
+    const unchangedSiblings = new Set(rows.filter(row => {
+      if (!row.bridgeSessionId || transientGroups.has(row.bridgeSessionId)) return false;
+      try {
+        const stat = fs.statSync(path.join(folderPath, sourceRelativePath(row) || row.sessionId + '.jsonl'), { bigint: true });
+        return row.fileMtime === continuationMtime(stat) && (row.fileSize == null || row.fileSize === Number(stat.size));
+      } catch (error) {
+        if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+        return false;
+      }
+    })
       .map(row => sourceRelativePath(row) || row.sessionId + '.jsonl'));
     deferStartupSources(result, [...deferred, ...startupRead.failedSources]);
     result.deferred = result.deferred?.filter(relativePath => deferred.includes(relativePath)

@@ -22,6 +22,81 @@ async function bridgeFixture(t) {
   return { ...state, bad, sibling };
 }
 
+test('a changed bridge winner converges after reconcile across two restarts', options, async t => {
+  const { f, folder } = await setup(t);
+  const bridge = [{ type: 'bridge-session', bridgeSessionId: 'bridge-winner-1213' }];
+  const sibling = f.write('a-winner', 'winner', bridge);
+  const bad = f.write('z-bad', 'bad', bridge);
+  assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+  const winner = f.db.getCachedSession('a-winner');
+  assert.equal(winner.created, f.db.getCachedSession('z-bad').created);
+  assert.equal(winner.mergedIntoSessionId, null);
+  fs.appendFileSync(bad, '\n');
+  fs.appendFileSync(sibling, JSON.stringify({ type: 'user', uuid: 'winner-added', cwd: f.root,
+    timestamp: '2024-01-02T00:00:00.000Z', message: { content: 'winner changed' } }) + '\n');
+  fs.utimesSync(sibling, new Date('2025-01-01'), new Date('2025-01-01'));
+  timers(t);
+  failReads(t, f, [bad], 'ERR_STRING_TOO_LONG');
+  assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+  assert.equal(f.db.getCachedSession('a-winner').messageCount, winner.messageCount);
+  f.cache.init({ PROJECTS_DIR: f.projects, activeSessions: f.activeSessions, getMainWindow: () => null,
+    db: f.db, log: { info() {}, warn() {}, error() {} } });
+  await f.cache.reconcileCacheFromFilesystemAsync({ throttle: false });
+  const refreshed = f.db.getCachedSession('a-winner');
+  assert.equal(refreshed.messageCount, winner.messageCount + 1);
+  assert.equal(refreshed.fullReadStamp, null, 'the winner takes the header-only refresh path');
+  assert.equal(refreshed.modified, refreshed.fileMtime);
+  const open = fs.openSync;
+  let opens = 0;
+  t.mock.method(fs, 'openSync', function (file, ...args) {
+    if (file === bad) opens++;
+    return open.call(this, file, ...args);
+  });
+  for (let restart = 1; restart <= 2; restart++) {
+    await f.reopen();
+    assert.equal((await f.restart()).ok, true);
+    assert.equal(f.db.getFolderMeta(folder).indexMtimeMs,
+      require('../folder-index-state').getFolderIndexMtimeMs(f.dir),
+      `restart ${restart}: a reconciled winner keeps the real folder mtime`);
+    assert.equal(f.scans().find(scan => scan.folder === folder).filesDeferred, 0,
+      `restart ${restart}: a reconciled winner is no longer deferred`);
+    f.cache.init({ PROJECTS_DIR: f.projects, activeSessions: f.activeSessions, getMainWindow: () => null,
+      db: f.db, log: { info() {}, warn() {}, error() {} } });
+    await f.cache.reconcileCacheFromFilesystemAsync({ throttle: false });
+    assert.equal(opens, 0, `restart ${restart}: the witnessed source is not reopened`);
+  }
+});
+
+test('bridge repair completes on the first run for a mirror sharing predecessor UUIDs', options, async t => {
+  const { f, folder, bad, sibling } = await bridgeFixture(t);
+  fs.writeFileSync(sibling, fs.readFileSync(bad, 'utf8') + JSON.stringify({ type: 'user',
+    uuid: 'mirror-added', cwd: f.root, timestamp: '2024-01-02T00:00:00.000Z',
+    message: { content: 'mirror continuation' } }) + '\n');
+  assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+  assert.equal(f.db.getCachedSession('bridge-sibling').mergedIntoSessionId, 'bridge-bad',
+    'the inventory contains a real compaction mirror');
+  fs.appendFileSync(bad, '\n');
+  timers(t);
+  failReads(t, f, [bad], 'ERR_STRING_TOO_LONG');
+  await f.writer.setSetting('bridge_uuid_reindex_folders', [folder]);
+  assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+  assert.deepEqual(Array.from(f.db.getSetting('bridge_uuid_reindex_folders')), [],
+    'an unchanged mirror must complete the pending repair on the first run');
+});
+
+test('a bridge sibling deleted before startup is removed by reconcile', options, async t => {
+  const { f, bad, sibling } = await bridgeFixture(t);
+  fs.appendFileSync(bad, '\n');
+  fs.unlinkSync(sibling);
+  timers(t);
+  failReads(t, f, [bad], 'ERR_STRING_TOO_LONG');
+  assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+  f.cache.init({ PROJECTS_DIR: f.projects, activeSessions: f.activeSessions, getMainWindow: () => null,
+    db: f.db, log: { info() {}, warn() {}, error() {} } });
+  await f.cache.reconcileCacheFromFilesystemAsync({ throttle: false });
+  assert.ok(!f.db.getCachedSession('bridge-sibling'), 'reconcile must remove the deleted sibling row');
+});
+
 test('bridge repair completes despite a persistent deterministic failure', options, async t => {
   const { f, folder, bad } = await bridgeFixture(t);
   fs.appendFileSync(bad, '\n');
