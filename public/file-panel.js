@@ -808,10 +808,12 @@ function showUnsavedEditsDialog(tabs) {
     document.body.appendChild(overlay);
 
     let finished = false;
+    const reportChoice = window.observeModalQuestion(dialog, 'unsaved-edits');
     cancelUnsavedQuestion = () => finish(false);
-    function finish(proceed) {
+    function finish(proceed, choice = 'cancel') {
       if (finished) return;
       finished = true;
+      reportChoice(choice);
       cancelUnsavedQuestion = null;
       overlay.remove();
       unregister();
@@ -824,7 +826,7 @@ function showUnsavedEditsDialog(tabs) {
     saveBtn.focus();
 
     cancelBtn.onclick = () => finish(false);
-    discardBtn.onclick = () => finish(true);
+    discardBtn.onclick = () => finish(true, 'Discard');
     saveBtn.onclick = async () => {
       for (const btn of [cancelBtn, discardBtn, saveBtn]) btn.disabled = true;
       const failures = [];
@@ -835,7 +837,7 @@ function showUnsavedEditsDialog(tabs) {
         if (reason) failures.push(`${labels[i]} ${reason}`);
       }
       if (!failures.length) {
-        finish(true);
+        finish(true, saveBtn.textContent);
         return;
       }
       errorEl.textContent = failures.join('. ');

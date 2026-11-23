@@ -1,5 +1,43 @@
 # Renderer modal stack and questions
 
+## UI notice history (#1196)
+
+`preload.logUiNotice` sends `ui-notice-log` without waiting for a reply.
+`src/main/app/ui-notice-log.js` owns the main-process listener; main only
+composes it with electron-log and the current window and disposes it on quit.
+Only that window's main frame is accepted. Missing, throwing or rejected APIs
+never prevent showing, answering or dismissing UI.
+
+`app-notices.js` reports `show`, `dismiss`, `replace` and `merge`, including the
+in-place main-process error group update. `show` records the rendered message,
+the notice ID, info/warning/error severity and an explicit source or ID prefix.
+Undo notices use info. Legacy restore toasts and updater notices/status use the
+same channel. The existing `[restore-bg]` diagnostic remains unchanged.
+
+`observeModalQuestion` in `modal-stack.js` records the title, displayed text and
+offered labels at mount, then the actual answer or `cancel`. It is used by
+choice-dialog (appConfirm, appChoose, appAlert and direct showChoiceDialog),
+session/worktree deletion and the unsaved Save/Discard/Cancel question. Queued
+questions log only when mounted. Dynamic checkbox labels and checked states
+are recorded on acceptance; opaque preview plans and tokens are not serialized.
+Configuration forms and informational modals are not question helpers.
+
+Main writes single-line JSON with a `[ui-notice]` prefix at info level, independent
+of Debug Mode. Each field is redacted through `shared/redact-log-text.js`, then
+capped: ID 160, source 80, text 4096, title 256, answer 1024 characters, and at
+most 20 choice labels of 256 characters. Input text processing caps at 16384
+characters per field. Paths are preserved; common bearer credentials, named
+token/password/secret/API-key values, provider token prefixes and URL credentials
+are masked. No main.log redaction helper existed at this revision: this shared
+helper protects the new channel, and does not claim to sanitize other log writers.
+
+Identical consecutive normalized events are counted as additional occurrences
+(`repeated N×`) when the run changes or within one second. At most 20 event/repeat
+lines plus one suppression summary are written per one-second window, so even
+alternating IDs cannot flood the log. The fixed deadline is not extended by new
+events. Its timer is unreferenced, cleared on disposal, and pending counts flush
+on graceful quit. Abrupt termination can lose the final partial window.
+
 Project deletion uses `showChoiceDialog` with `onChange`, `planDetails` and
 `planUnavailable`. Details are literal text, applied only after request sequence
 and current-answer matching. A reason keeps Confirm disabled while preserving

@@ -1,5 +1,41 @@
 // see docs/product/BUILDING-BLOCKS.md (B8)
 const appNoticeEntries = new Map();
+const transientNoticeEntries = new WeakMap();
+
+window.trackUiNotice = function (element, source) {
+  if (transientNoticeEntries.has(element)) { transientNoticeEntries.get(element)(); return; }
+  let previous = null;
+  function report(event, text) {
+    try {
+      window.api?.logUiNotice?.({ event, id: element.id, source, text,
+        kind: text === 'Update check failed' ? 'error' : 'info' })?.catch?.(() => {});
+    } catch {}
+  }
+  function sync() {
+    const text = element.querySelector('.restore-toast-msg, #update-toast-msg')?.textContent ?? element.textContent;
+    const visible = element.isConnected && !element.hidden && !element.classList.contains('hidden') && !!text;
+    if (!visible && previous !== null) { report('dismiss', previous); previous = null; }
+    if (visible && previous !== text) {
+      if (previous !== null) report('replace', text);
+      report('show', text);
+      previous = text;
+    }
+    if (!element.isConnected) { observer.disconnect(); transientNoticeEntries.delete(element); }
+  }
+  const observer = new MutationObserver(sync);
+  observer.observe(element, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'hidden'] });
+  if (element.parentNode) observer.observe(element.parentNode, { childList: true });
+  transientNoticeEntries.set(element, sync);
+  sync();
+};
+
+function reportAppNotice(event, options, notice) {
+  try {
+    window.api?.logUiNotice?.({ event, kind: options.kind === 'error' || options.kind === 'warning' ? options.kind : 'info',
+      id: options.id, source: options.source || String(options.id || 'notice').split(/[:-]/)[0],
+      text: notice.querySelector('.app-notice-message').textContent })?.catch?.(() => {});
+  } catch {}
+}
 
 window.api?.onMainProcessError?.(notice => {
   const previous = appNoticeEntries.get('main-process-errors');
@@ -18,6 +54,8 @@ window.api?.onMainProcessError?.(notice => {
   if (previous) {
     previous.options = options;
     previous.notice.querySelector('.app-notice-message').textContent = options.message(members);
+    reportAppNotice('merge', options, previous.notice);
+    reportAppNotice('show', options, previous.notice);
   }
   const group = previous?.notice || showAppNotice(options);
   let announcement = group.querySelector('.app-notice-announcement');
@@ -67,6 +105,7 @@ function showSessionActionFailure(operation, session, error, recovery, onRetry, 
 function clearAppNotice(id, { membersOnly = false, exceptGroup } = {}) {
   const entry = appNoticeEntries.get(id);
   if (entry && !membersOnly) {
+    reportAppNotice('dismiss', entry.options, entry.notice);
     clearTimeout(entry.timer);
     const restoreFocus = entry.notice.contains(document.activeElement);
     entry.notice.remove();
@@ -136,6 +175,8 @@ function showAppNotice(options) {
   if (previous) previous.notice.replaceWith(notice);
   else container.append(notice);
   appNoticeEntries.set(id, entry);
+  if (previous) reportAppNotice(options.mergeMembers ? 'merge' : 'replace', options, notice);
+  reportAppNotice('show', options, notice);
   if (kind !== 'error' && !persistent) {
     let remaining = kind === 'undo' ? 10_000 : 15_000;
     let started;

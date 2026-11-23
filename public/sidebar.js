@@ -3145,7 +3145,10 @@ async function showDeleteSessionDialog(session) {
     if (p.subagents > 0) parts.push(`${p.subagents} subagent transcript${p.subagents !== 1 ? 's' : ''}`);
     statusEl.innerHTML = projectLine + `<pre class="dwt-dirty-list">${escapeHtml(parts.join('\n'))}</pre>`;
 
+    const reportChoice = window.observeModalQuestion(dialog, 'delete-session');
+
     function close(confirmed) {
+      reportChoice(confirmed ? 'Delete permanently' : 'cancel');
       overlay.remove();
       unregister();
       resolve(confirmed);
@@ -3190,6 +3193,7 @@ async function showDeleteWorktreeDialog(name, worktreePath, freshStatus) {
 
     const statusEl = dialog.querySelector('#dwt-status');
     const confirmBtn = dialog.querySelector('#dwt-confirm');
+    const reportChoice = window.observeModalQuestion(dialog, 'delete-worktree');
     let shown;
 
     Promise.resolve().then(() => freshStatus || window.api.worktreeStatus(worktreePath)).then((status) => {
@@ -3239,6 +3243,7 @@ async function showDeleteWorktreeDialog(name, worktreePath, freshStatus) {
     });
 
     function close(confirmed) {
+      reportChoice(confirmed ? 'Delete worktree' : 'cancel');
       overlay.remove();
       unregister();
       resolve(confirmed);

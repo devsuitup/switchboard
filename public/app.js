@@ -839,6 +839,7 @@ async function tickRestorePlanner() {
       `<button class="restore-toast-btn restore-toast-restore">Restore</button>` +
       `<button class="restore-toast-btn restore-toast-dismiss">Dismiss</button>`;
     document.body.appendChild(toast);
+    window.trackUiNotice?.(toast, 'restore');
     restoreAwaitingConsent = candidates;
 
     toast.querySelector('.restore-toast-restore').addEventListener('click', async () => {
@@ -878,6 +879,7 @@ function showColdCacheNotice(count) {
     toast.remove();
     restorePlanner?.dismiss();
   });
+  window.trackUiNotice?.(toast, 'restore');
 }
 
 function showRestoreNotice(id, text) {
@@ -895,6 +897,7 @@ function showRestoreNotice(id, text) {
   toast.append(msg, dismiss);
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), LIVE_ELSEWHERE_NOTICE_MS);
+  window.trackUiNotice?.(toast, 'restore');
 }
 
 function showNotRestoredNotice(unavailable) {
@@ -3441,8 +3444,9 @@ let updaterStatusTimer = null;
 function setUpdaterStatus(text, duration) {
   if (updaterStatusTimer) clearTimeout(updaterStatusTimer);
   statusBarUpdater.textContent = text;
+  window.trackUiNotice?.(statusBarUpdater, 'updater');
   if (duration) {
-    updaterStatusTimer = setTimeout(() => { statusBarUpdater.textContent = ''; }, duration);
+    updaterStatusTimer = setTimeout(() => { statusBarUpdater.textContent = ''; window.trackUiNotice?.(statusBarUpdater, 'updater'); }, duration);
   }
 }
 const updaterHandler = (type, data) => {
@@ -3476,6 +3480,7 @@ const updaterHandler = (type, data) => {
       const notice = (data.releaseName && data.releaseName !== `v${data.version}` && data.releaseName !== data.version) ? `<span class="update-summary">${escapeHtml(data.releaseName)}</span>` : '';
       msg.innerHTML = `New Version Ready<br><span class="update-version">v${data.version}</span> (<a href="https://github.com/devsuitup/switchboard/releases" target="_blank" class="update-notes-link">release notes</a>)${notice}`;
       toast.classList.remove('hidden');
+      window.trackUiNotice?.(toast, 'updater');
       document.getElementById('update-restart-btn').onclick = () => window.api.updaterInstall();
       document.getElementById('update-dismiss-btn').onclick = () => {
         toast.classList.add('hidden');

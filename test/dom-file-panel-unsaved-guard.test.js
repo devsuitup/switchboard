@@ -112,6 +112,19 @@ function setup() {
 
 const flush = () => new Promise((r) => setTimeout(r, 5));
 
+test('unsaved question logs the offered actions and actual discard choice', async t => {
+  const ctx = setup();
+  t.after(() => ctx.destroy());
+  const events = [];
+  ctx.window.api.logUiNotice = event => events.push(event);
+  const pending = ctx.window.showUnsavedEditsDialog([{ filePath: '/repo/a.md', absolutePath: '/repo/a.md' }]);
+  ctx.window.document.getElementById('unsaved-discard').click();
+  assert.equal(await pending, true);
+  assert.equal(events[0]?.title, 'Unsaved file edits');
+  assert.deepEqual(Array.from(events[0].choices), ['Cancel', 'Discard', 'Save']);
+  assert.equal(events.at(-1).choice, 'Discard');
+});
+
 function wireGuard(ctx) {
   const ipcMain = new EventEmitter();
   const timers = [];

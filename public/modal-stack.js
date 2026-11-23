@@ -5,6 +5,25 @@ const modalIdleQuestions = [];
 let modalQuestionActive = false;
 let modalIdleTimer = null;
 
+window.observeModalQuestion = function (dialog, source) {
+  const title = dialog.querySelector('h2, h3')?.textContent || '';
+  const id = `${source}:${title}`;
+  function report(event, choice = '') {
+    try {
+      const choices = [...dialog.querySelectorAll('button:not([hidden]), label')].map(control => control.textContent).filter(label => label && label !== '×');
+      window.api?.logUiNotice?.({ event, kind: 'info', id, source, title, choices, choice,
+        text: dialog.textContent })?.catch?.(() => {});
+    } catch {}
+  }
+  report('dialog-show');
+  let finished = false;
+  return choice => {
+    if (finished) return;
+    finished = true;
+    report('dialog-choice', choice || 'cancel');
+  };
+};
+
 function hasOpenModal() {
   return modalStack.length > 0;
 }

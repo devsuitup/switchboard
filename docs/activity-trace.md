@@ -1,5 +1,11 @@
 # Activity Trace
 
+Notices and question dialogs are also recorded in `main.log`, even with Debug
+Mode off. Look for `[ui-notice]` to see the displayed text, source, dismissals
+and answers. Common credentials are masked and paths are kept. Long fields are
+truncated; repeated events are counted, and a rate-limit summary reports omitted
+events during a burst. Settings → Advanced → Diagnostics provides access to the logs.
+
 **Debug mode** records a diagnostic trace of the sidebar's activity indicators —
 the light-blue working spinner, the blue "response ready" dot, the orange
 attention LED, the violet subagent states and the green running dot (see

@@ -270,6 +270,10 @@ function openChoiceDialog({
     function close(value) {
       if (closed) return;
       closed = true;
+      const selection = value === null ? 'cancel' : value?.action === secondaryAction?.id && secondaryAction ? secondaryAction.label
+        : radios.find(({ option }) => option.id === value?.choice)?.option.label || confirmBtn.textContent;
+      const answers = value === null ? [] : boxes.map(({ box, text }) => `${text.textContent}=${!box.disabled && box.checked}`);
+      reportChoice([selection, ...answers].join('; '));
       if (finishPlanWait) finishPlanWait();
       if (closeOpenChoiceDialog === close) closeOpenChoiceDialog = null;
       overlay.remove();
@@ -308,6 +312,7 @@ function openChoiceDialog({
     overlay.addEventListener('click', (event) => { if (event.target === overlay) close(null); });
 
     document.body.appendChild(overlay);
+    const reportChoice = window.observeModalQuestion(dialog, 'dialog');
     const unregister = registerModal({ overlay, cancel: () => close(null), enter, restoreFocus: false });
     closeOpenChoiceDialog = close;
     if (closeWith) closeWith.then(close, () => {});

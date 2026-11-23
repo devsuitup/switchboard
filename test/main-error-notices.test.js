@@ -277,6 +277,7 @@ test('renderer subscribes before sending ready through the real preload', t => {
   const ipc = new EventEmitter();
   let ready = 0;
   ipc.send = channel => {
+    if (channel === 'ui-notice-log') return;
     assert.equal(channel, 'main-error-notices-ready');
     assert.equal(ipc.listenerCount('main-process-error'), 1, 'listener must precede readiness');
     ready++;
@@ -289,7 +290,7 @@ test('renderer subscribes before sending ready through the real preload', t => {
   }, { filename: preloadPath });
   const noticesPath = path.join(__dirname, '..', 'public', 'app-notices.js');
   const noticesSource = fs.readFileSync(noticesPath, 'utf8');
-  const subscription = noticesSource.slice(noticesSource.indexOf('window.api?'), noticesSource.indexOf('async function openMainErrorLog'));
+  const subscription = noticesSource.slice(noticesSource.indexOf('window.api?.onMainProcessError?.('), noticesSource.indexOf('async function openMainErrorLog'));
   vm.runInContext(subscription, dom.context, { filename: noticesPath });
   assert.equal(ready, 1, 'installed renderer listener must send readiness');
   assert.match(dom.document.querySelector('[data-notice-id="main-process-errors"]').textContent, /early error/);
