@@ -27,6 +27,7 @@
   "inline": {
     "sidebar.js": "0ca21a55ee4ae846937c019515186b35c2c0b76adb6640699addfadea0a46d15",
     "jsonl-viewer.js": "d74bf42a3c33ba87b8f4cf9441df0814380890a6ca0c239f3479207f36c73e2a",
-    "viewer-toolbar.js": "1ec7045aa2659f8933cb9e277503536952d044d3aa186855b2770f43648fa1f1"
+    "viewer-toolbar.js": "1ec7045aa2659f8933cb9e277503536952d044d3aa186855b2770f43648fa1f1",
+    "app-notices.js": "b29cc32ee76d5fdedd666d6a65fed0d30adb131771781cc02066e57d35f99c24"
   }
 }

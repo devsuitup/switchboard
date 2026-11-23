@@ -2,6 +2,15 @@
 
 const { redactLogText } = require('../shared/redact-log-text');
 
+const SECOND_MS = 1000;
+const MINUTE_MS = 60 * SECOND_MS;
+const HOUR_MS = 60 * MINUTE_MS;
+const SECOND_WRITE_LIMIT = 20;
+const MINUTE_WRITE_LIMIT = 60;
+const MINUTE_BYTE_LIMIT = 64 * 1024;
+const HOUR_BYTE_LIMIT = 256 * 1024;
+const HOUR_SUMMARY_RESERVE = 256;
+
 function installUiNoticeLog({ ipcMain, log, getWindow, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
   let timer = null;
   let started = 0;
@@ -10,6 +19,10 @@ function installUiNoticeLog({ ipcMain, log, getWindow, now = Date.now, setTimer 
   let secondStarted = 0;
   let secondWrites = 0;
   let suppressed = 0;
+  let hourStarted = now();
+  let hourBytes = 0;
+  let hourLimited = false;
+  let hourDropped = 0;
   let last = null;
   let repeats = 0;
   let lastSeen = -Infinity;
@@ -18,6 +31,26 @@ function installUiNoticeLog({ ipcMain, log, getWindow, now = Date.now, setTimer 
 
   function write(line) {
     try { log.info(`[ui-notice] ${line}`); } catch {}
+    hourBytes += Buffer.byteLength(`[ui-notice] ${line}\n`);
+  }
+
+  function writeHourly(line, count) {
+    if (now() - hourStarted >= HOUR_MS) {
+      hourStarted = now();
+      hourBytes = 0;
+      if (hourLimited) write(`resumed after hourly byte limit; dropped ${hourDropped} notices`);
+      hourLimited = false;
+      hourDropped = 0;
+    }
+    const size = Buffer.byteLength(`[ui-notice] ${line}\n`);
+    if (hourLimited || hourBytes + size > HOUR_BYTE_LIMIT - HOUR_SUMMARY_RESERVE) {
+      if (!hourLimited) write('hourly byte limit reached; dropping notices until the next hour');
+      hourLimited = true;
+      hourDropped += count;
+      return false;
+    }
+    write(line);
+    return true;
   }
 
   function flushRepeats() {
@@ -28,10 +61,11 @@ function installUiNoticeLog({ ipcMain, log, getWindow, now = Date.now, setTimer 
   }
 
   function emit(line, count = 1) {
-    if (now() - secondStarted >= 1000) { secondStarted = now(); secondWrites = 0; }
+    if (now() - secondStarted >= SECOND_MS) { secondStarted = now(); secondWrites = 0; }
     const size = Buffer.byteLength(`[ui-notice] ${line}\n`);
-    if (writes >= 60 || secondWrites >= 20 || bytes + size > 65536) { suppressed += count; return false; }
-    write(line);
+    if (hourLimited && now() - hourStarted < HOUR_MS) { hourDropped += count; return false; }
+    if (writes >= MINUTE_WRITE_LIMIT || secondWrites >= SECOND_WRITE_LIMIT || bytes + size > MINUTE_BYTE_LIMIT) { suppressed += count; return false; }
+    if (!writeHourly(line, count)) return false;
     writes++;
     secondWrites++;
     bytes += size;
@@ -42,7 +76,7 @@ function installUiNoticeLog({ ipcMain, log, getWindow, now = Date.now, setTimer 
     clearTimer(timer);
     timer = null;
     flushRepeats();
-    if (suppressed) write(`suppressed ${suppressed} events (rate limit)`);
+    if (suppressed) writeHourly(`suppressed ${suppressed} events (rate limit)`, suppressed);
     writes = 0;
     bytes = 0;
     suppressed = 0;
@@ -62,7 +96,8 @@ function installUiNoticeLog({ ipcMain, log, getWindow, now = Date.now, setTimer 
         title: bounded(value.title, 256),
         choices: Array.isArray(value.choices) ? value.choices.slice(0, 20).map(choice => bounded(choice, 256)) : [],
         choice: bounded(value.choice, 1024),
-        reason: ['user', 'expired', 'cleared'].includes(value.reason) ? value.reason : '',
+        reason: ['user', 'expired', 'cleared'].includes(value.reason) ? value.reason
+          : typeof value.reason === 'string' && value.reason.startsWith('action:') ? bounded(value.reason, 256) : '',
         counts: Array.isArray(value.counts) ? value.counts.slice(0, 5).map(member => ({ id: bounded(member.id, 160), count: Number.isSafeInteger(member.count) && member.count > 0 ? member.count : 1 })) : [],
       };
       if (value.unmarked === true) {
@@ -74,13 +109,13 @@ function installUiNoticeLog({ ipcMain, log, getWindow, now = Date.now, setTimer 
         entry.unmarked = true;
       }
       const line = JSON.stringify(entry);
-      if (timer !== null && now() - started >= 60000) flush();
+      if (timer !== null && now() - started >= MINUTE_MS) flush();
       if (timer === null) {
         started = now();
-        timer = setTimer(flush, 60000);
+        timer = setTimer(flush, MINUTE_MS);
         timer?.unref?.();
       }
-      if (now() - lastSeen >= 60000) { flushRepeats(); last = null; }
+      if (now() - lastSeen >= MINUTE_MS) { flushRepeats(); last = null; }
       lastSeen = now();
       if (line === last) { repeats++; return; }
       flushRepeats();

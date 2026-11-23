@@ -185,6 +185,49 @@ function setup(t) {
   return { ...ctx, events };
 }
 
+for (const label of ['Restore', 'Restart']) test(`action ${label} reaches the sink as the dismissal reason`, t => {
+  const { window, document } = setup(t);
+  const lines = connectSink(t, window);
+  let calls = 0;
+  window.showAppNotice({ id: 'action-test', message: 'Ready', actionLabel: label, onAction: () => { calls++; } });
+  document.querySelector('.app-notice-action').click();
+  assert.equal(calls, 1);
+  assert.equal(lines.at(-1).event, 'dismiss');
+  assert.equal(lines.at(-1).reason, `action:${label}`);
+});
+
+for (const [label, selector] of [['Restore', 'restore-toast-restore'], ['Restart', 'update-restart-btn'], ['Later', 'update-dismiss-btn']]) {
+  test(`transient ${label} click records its action label through the sink`, async t => {
+    const { window, document } = setup(t);
+    const lines = connectSink(t, window);
+    const toast = document.createElement('div');
+    toast.innerHTML = `<span class="restore-toast-msg">Ready</span><button class="${selector}" id="${selector}"><span>${label}</span></button>`;
+    document.body.append(toast);
+    window.trackUiNotice(toast, 'restore');
+    toast.querySelector('button').addEventListener('click', () => toast.remove());
+    toast.querySelector('button span').click();
+    await Promise.resolve();
+    assert.equal(lines.at(-1).event, 'dismiss');
+    assert.equal(lines.at(-1).reason, label === 'Later' ? 'user' : `action:${label}`);
+  });
+}
+
+test('Restart is logged before install without waiting for a DOM removal, and only once', async t => {
+  const { window, document } = setup(t);
+  const lines = connectSink(t, window);
+  const toast = document.createElement('div');
+  toast.innerHTML = '<span id="update-toast-msg">Update ready</span><button id="update-restart-btn">Restart</button>';
+  document.body.append(toast);
+  window.trackUiNotice(toast, 'updater');
+  let installReason;
+  toast.querySelector('button').onclick = () => { installReason = lines.at(-1).reason; };
+  toast.querySelector('button').click();
+  assert.equal(installReason, 'action:Restart', 'action must reach the sink before the install request');
+  toast.remove();
+  await Promise.resolve();
+  assert.equal(lines.filter(line => line.event === 'dismiss').length, 1);
+});
+
 test('project action failure keeps folder wording in the real log', t => {
   const { window } = setup(t);
   const lines = connectSink(t, window);
