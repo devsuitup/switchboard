@@ -9,6 +9,7 @@ const {
 } = require('./remote-attach');
 const { isValidAlias } = require('./remote-hosts');
 const { remoteHostLabel } = require('../../../public/utils');
+const { claudeCommand, customArgsForLaunch } = require('../terminals/shell-profiles');
 
 const DEFAULT_LAUNCH_TIMEOUT_MS = 20000;
 const NO_DIR_EXIT_CODE = 9;
@@ -55,7 +56,8 @@ function buildLaunchScript({ sessionId, cwd, options }) {
   if (!dir.ok) throw new Error(dir.error);
   const flags = buildClaudeArgs(options);
   if (!flags.ok) throw new Error(flags.error);
-  const claude = ['claude', '--session-id', sessionId.toLowerCase(), ...flags.args].join(' ');
+  const claude = claudeCommand('/bin/sh', ['--session-id', sessionId.toLowerCase(), ...flags.args],
+    { windows: false, customArgs: options?.customArgs });
   return `cwd=${shellSingleQuote(cwd)}; [ -d "$cwd" ] || exit ${NO_DIR_EXIT_CODE}; ` +
     `command -v tmux >/dev/null 2>&1 || exit ${NO_TMUX_EXIT_CODE}; ` +
     `command -v claude >/dev/null 2>&1 || exit ${NO_CLAUDE_EXIT_CODE}; ` +
@@ -138,7 +140,13 @@ async function handleLaunchRequest(payload, deps) {
   const admission = projectOperationGate.tryAdmit(payload.cwd, alias);
   if (!admission) return { ok: false, error: PROJECT_OPERATION_ERROR };
   try {
-  const launched = await deps.adapter.launch(alias, { sessionId: payload.sessionId, cwd: payload.cwd, options: payload.options });
+  let customArgs;
+  try {
+    customArgs = customArgsForLaunch('claude', payload.options, deps.getSetting || (() => null), payload.cwd);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  const launched = await deps.adapter.launch(alias, { sessionId: payload.sessionId, cwd: payload.cwd, options: { ...payload.options, customArgs } });
   if (!launched.ok) return launched;
 
   const attachResult = await deps.attach(alias, launched.descriptor, normalizeSize(payload.initialSize));

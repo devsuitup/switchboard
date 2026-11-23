@@ -19,10 +19,11 @@ async function resolveDefaultSessionOptions(project) {
   options.browserMode = effective.browserMode === undefined ? SETTING_DEFAULTS.browserMode : effective.browserMode;
   if (effective.sandbox && window.api.platform === 'linux') options.sandbox = true;
   if (effective.preLaunchCmd) options.preLaunchCmd = effective.preLaunchCmd;
+  if (effective.customArgs !== undefined) options.customArgs = effective.customArgs;
   if (effective.addDirs) options.addDirs = effective.addDirs;
   if (effective.mcpEmulation === false) options.mcpEmulation = false;
   // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
-  for (const key of ['codexSandbox', 'codexApproval', 'codexModel', 'codexEffort']) {
+  for (const key of ['codexSandbox', 'codexApproval', 'codexModel', 'codexEffort', 'codexCustomArgs']) {
     if (effective[key]) options[key] = effective[key];
   }
   return options;
@@ -409,6 +410,7 @@ async function showNewSessionDialog(project, opener = document.activeElement) {
     }
     const preLaunch = dialog.querySelector('#nsd-pre-launch').value.trim();
     if (preLaunch) options.preLaunchCmd = preLaunch;
+    if (effective.customArgs !== undefined) options.customArgs = effective.customArgs;
     options.addDirs = dialog.querySelector('#nsd-add-dirs').value.trim();
     if (effective.mcpEmulation === false) options.mcpEmulation = false;
     close(false);
@@ -652,6 +654,7 @@ async function showResumeSessionDialog(session) {
     }
     const preLaunch = dialog.querySelector('#rsd-pre-launch').value.trim();
     if (preLaunch) options.preLaunchCmd = preLaunch;
+    if (effective.customArgs !== undefined) options.customArgs = effective.customArgs;
     options.addDirs = dialog.querySelector('#rsd-add-dirs').value.trim();
     if (effective.mcpEmulation === false) options.mcpEmulation = false;
     close();

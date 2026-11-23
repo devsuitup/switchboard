@@ -447,6 +447,7 @@ const rendererCrossFileGlobals = {
   THEME_CHOICES: 'readonly',
   BROWSER_MODES: 'readonly',
   normalizeBrowserSettings: 'readonly',
+  validateCustomArgs: 'readonly',
 
   // Terminal right-click context menu (public/terminal-context-menu.js)
   terminalRightClickMode: 'writable',
@@ -672,6 +673,7 @@ module.exports = [
         THEME_CHOICES: 'off',
         BROWSER_MODES: 'off',
         normalizeBrowserSettings: 'off',
+        validateCustomArgs: 'off',
       },
     },
     rules: {

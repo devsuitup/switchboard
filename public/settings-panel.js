@@ -159,6 +159,10 @@
         <div class="settings-field">
           <div class="settings-field-info"><span class="settings-label">Codex reasoning effort</span><div class="settings-description">Passed as <code>model_reasoning_effort</code></div></div>
           <div class="settings-field-control">${codexSelect('sv-codex-effort', 'codexEffort', [['', 'Codex default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max'], ['ultra', 'Ultra']])}</div>
+        </div>
+        <div class="settings-field settings-field-wide">
+          <div class="settings-field-info"><label class="settings-label" for="sv-codex-custom-args">Custom arguments</label><div class="settings-description">Appended to Codex commands. Use your selected shell's quoting. One line, no control characters.</div></div>
+          <div class="settings-field-control"><textarea rows="1" class="settings-input" id="sv-codex-custom-args">${escapeHtml(fieldValue('codexCustomArgs'))}</textarea></div>
         </div>` : ''}
       </div>` : '';
 
@@ -175,6 +179,15 @@
     <div class="settings-form">
       <div class="settings-section">
         <div class="settings-section-title">Claude CLI Options</div>
+
+        <div class="settings-field settings-field-wide">
+          <div class="settings-field-info">
+            <label class="settings-label" for="sv-custom-args">Custom Arguments</label>
+            ${useGlobalCheckbox('customArgs')}
+            <div class="settings-description">Appended to Claude commands. Use your selected shell's quoting; remote sessions use POSIX quoting. One line, no control characters.</div>
+          </div>
+          <div class="settings-field-control"><textarea rows="1" class="settings-input" id="sv-custom-args" ${fieldDisabled('customArgs')}>${escapeHtml(fieldValue('customArgs'))}</textarea></div>
+        </div>
 
         <div class="settings-field">
           <div class="settings-field-info">
@@ -591,7 +604,7 @@
     }
     const launchPage = isProject ? 'launch' : 'sessions';
     moveGroup(launchPage, 'Launch', ['sv-pre-launch', 'sv-add-dirs', 'sv-worktree', 'sv-worktree-name', 'sv-browser-mode', 'sv-sandbox']);
-    moveGroup(launchPage, 'Claude', ['sv-perm-mode']);
+    moveGroup(launchPage, 'Claude', ['sv-perm-mode', 'sv-custom-args']);
     if (isProject) {
       const identity = document.createElement('dl');
       identity.className = 'settings-project-identity';
@@ -628,7 +641,7 @@
       moveGroup('general', 'IDE', ['sv-mcp-emulation']);
       const harnessGroup = form.querySelector('.sv-harness-toggle')?.closest('.settings-section');
       if (harnessGroup) pages.get('sessions').insertBefore(harnessGroup, pages.get('sessions').lastElementChild);
-      moveGroup('sessions', 'Codex', ['sv-codex-sandbox', 'sv-codex-approval', 'sv-codex-model', 'sv-codex-effort']);
+      moveGroup('sessions', 'Codex', ['sv-codex-sandbox', 'sv-codex-approval', 'sv-codex-model', 'sv-codex-effort', 'sv-codex-custom-args']);
       moveGroup('sessions', 'Sidebar list', ['sv-visible-count', 'sv-max-age', 'sv-hide-sdk']);
       moveGroup('automation', 'Schedules', ['sv-schedules-tab']);
       for (const [pageId, selector] of [['general', '#sv-auto-update'], ['keyboard', '.settings-shortcut-btn'], ['remote', '#sv-remote-hosts'], ['integrations', '#sv-activity-reporting'], ['advanced', '#sv-activity-trace'], ['archived', '#sv-archived-projects']]) {
@@ -742,7 +755,7 @@
           event.preventDefault();
           const selected = pages.get(button.dataset.section);
           const page = selected.hidden ? [...pages.values()].find(page => !page.hidden) : selected;
-          const control = page && [...page.querySelectorAll('input:not(:disabled), select:not(:disabled), button:not(:disabled), summary')].find(control => !control.closest('[hidden]'));
+          const control = page && [...page.querySelectorAll('input:not(:disabled), select:not(:disabled), textarea:not(:disabled), button:not(:disabled), summary')].find(control => !control.closest('[hidden]'));
           (control || page?.querySelector('h2') || form.querySelector('#sv-save-btn')).focus();
         }
       });
@@ -768,7 +781,7 @@
     unsaved.className = 'settings-unsaved';
     unsaved.setAttribute('role', 'status');
     footer.prepend(unsaved);
-    const trackedControls = [...form.querySelectorAll('input, select')].filter(control => !['sv-filter', 'sv-activity-trace', 'sv-activity-reporting'].includes(control.id));
+    const trackedControls = [...form.querySelectorAll('input, select, textarea')].filter(control => !['sv-filter', 'sv-activity-trace', 'sv-activity-reporting'].includes(control.id));
     const controlValue = control => String(control.type === 'checkbox' ? control.checked : control.value);
     let initialHosts;
     let initialShortcuts;
@@ -918,6 +931,7 @@
       browserMode: 'sv-browser-mode',
       sandbox: 'sv-sandbox',
       preLaunchCmd: 'sv-pre-launch',
+      customArgs: 'sv-custom-args',
       addDirs: 'sv-add-dirs',
     };
     settingsViewerBody.querySelectorAll('.use-global-cb').forEach(cb => {
@@ -980,6 +994,17 @@
 
     // Save button
     async function saveSettings() {
+      for (const input of settingsViewerBody.querySelectorAll('#sv-custom-args, #sv-codex-custom-args')) {
+        if (input.disabled) continue;
+        const check = validateCustomArgs(input.value);
+        input.setCustomValidity(check.ok ? '' : check.error);
+        if (!check.ok) {
+          const page = input.closest('.settings-page');
+          settingsViewerBody.querySelector(`.settings-nav [data-section="${page?.dataset.section}"]`)?.click();
+          input.reportValidity();
+          return;
+        }
+      }
       let settings = {};
       let rejectedHosts = false;
       const submitted = dirtySnapshot();
@@ -996,6 +1021,7 @@
               browserMode: () => settingsViewerBody.querySelector('#sv-browser-mode').value,
               sandbox: () => settingsViewerBody.querySelector('#sv-sandbox').checked,
               preLaunchCmd: () => settingsViewerBody.querySelector('#sv-pre-launch').value.trim(),
+              customArgs: () => settingsViewerBody.querySelector('#sv-custom-args').value,
               addDirs: () => settingsViewerBody.querySelector('#sv-add-dirs').value.trim(),
             };
             if (fieldMap[field]) settings[field] = fieldMap[field]();
@@ -1009,11 +1035,12 @@
         const sandboxToggle = settingsViewerBody.querySelector('#sv-sandbox');
         if (sandboxToggle) settings.sandbox = sandboxToggle.checked;
         settings.preLaunchCmd = settingsViewerBody.querySelector('#sv-pre-launch').value.trim();
+        settings.customArgs = settingsViewerBody.querySelector('#sv-custom-args').value;
         settings.addDirs = settingsViewerBody.querySelector('#sv-add-dirs').value.trim();
         if (harnessToggles.length) settings.disabledHarnesses = harnessToggles.filter(t => !t.checked).map(t => t.dataset.harness);
         const usageToggle = settingsViewerBody.querySelector('#sv-show-codex-usage');
         if (usageToggle) settings.showCodexUsage = usageToggle.checked;
-        for (const [key, id] of [['codexSandbox', 'sv-codex-sandbox'], ['codexApproval', 'sv-codex-approval'], ['codexModel', 'sv-codex-model'], ['codexEffort', 'sv-codex-effort']]) {
+        for (const [key, id] of [['codexSandbox', 'sv-codex-sandbox'], ['codexApproval', 'sv-codex-approval'], ['codexModel', 'sv-codex-model'], ['codexEffort', 'sv-codex-effort'], ['codexCustomArgs', 'sv-codex-custom-args']]) {
           const field = settingsViewerBody.querySelector('#' + id);
           if (field) settings[key] = field.value;
         }

@@ -78,13 +78,13 @@ function envFor(kind) {
   return { ...env, PATH: `${bins[kind]};${path.dirname(process.execPath)};${process.env.PATH ?? process.env.Path}`, SB_ARGV_OUT: path.join(bins[kind], 'argv.json') };
 }
 
-async function runSchedule(shell, kind, claudeArgv) {
+async function runSchedule(shell, kind, claudeArgv, customArgs = '') {
   for (const suffix of ['', '.ps1']) fs.rmSync(path.join(bins[kind], 'argv.json' + suffix), { force: true });
   const env = envFor(kind);
   const log = { info() {}, warn() {}, error() {} };
   const ctx = vm.createContext({
     require: createRequire(path.join(ROOT, 'main.js')), fs, path, os, process, Date, setTimeout, clearTimeout,
-    DB_PATH: path.join(bins[kind], 'db'), getSetting: () => ({}), isProjectSettingsArchived: () => false,
+    DB_PATH: path.join(bins[kind], 'db'), getSetting: () => ({ customArgs }), isProjectSettingsArchived: () => false,
     SETTING_DEFAULTS: { shellProfile: 'test', sandbox: false }, resolveShell: () => ({ path: shell }),
     quoteArgvForShell: profiles.quoteArgvForShell, shellArgs: profiles.shellArgs, headlessClaudeLaunch: profiles.headlessClaudeLaunch,
     cleanPtyEnv: env, resolveScheduleSandbox: () => false,
@@ -108,6 +108,14 @@ async function runSchedule(shell, kind, claudeArgv) {
 
 const ARGV = ['--resume', ID, '-p', 'Run the scheduled task', '--permission-mode', 'auto', '--allowedTools', 'Bash,Read',
   '--add-dir', 'C:\\space dir\\', '--append-system-prompt', 'say "hi" a" b\\ & %PATH% ^ |<> $env:PATH `x` ;', '--model', ''];
+
+for (const [shell, available] of shells) {
+  test(`${shell}: scheduled custom arguments preserve generated argv and shell-quoted values`, { skip: !available || skip }, async () => {
+    const generated = ['--resume', ID, '-p', 'Run the scheduled task'];
+    const result = await runSchedule(shell, 'npm', generated, '--model "custom model"');
+    assert.deepEqual(result.argv, [...generated, '--model', 'custom model']);
+  });
+}
 
 for (const [shell, available] of shells) {
   const options = { skip: skip || (!available && `${shell} is not installed`), timeout: 90000 };

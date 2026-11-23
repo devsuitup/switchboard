@@ -74,6 +74,29 @@ That covers a wrapper (`aws-vault exec profile --`), an environment assignment
 
 ## How the command is built
 
+### Custom arguments
+
+In **Settings → Sessions → Claude**, **Custom Arguments** adds text after the
+generated Claude arguments. **Project Settings → Launch → Claude** can override
+it; an empty override removes the global arguments. It applies when starting,
+resuming or forking, including the Configure dialogs, scheduled runs and remote
+launches. Sandbox launches pass the same arguments through the wrapper.
+
+**Settings → Sessions → Codex → Custom arguments** is a separate global field
+for Codex starts, resumes and forks. Both fields default to empty. They do not
+change running sessions, plain terminals, or attachment to an existing process.
+
+Write one line using the selected shell's argument quoting, for example
+`--settings '{"outputStyle":"Learning"}'` in bash or PowerShell. On cmd, use cmd's
+quoting rules instead. Remote launches use POSIX quoting on the remote host.
+The text is interpreted by that shell, including its expansions and operators;
+Switchboard does not split it into arguments or escape it as one argument.
+Newlines, tabs and other control characters are rejected by Settings and again
+before launch. Generated arguments keep their existing shell escaping, and the
+whole remote command stays quoted while it passes through SSH and tmux.
+
+### Generated arguments
+
 - A new session gets `--session-id <uuid>`, so its row and its transcript share
   an id from the start.
 - Opening an existing session runs `claude --resume <id>` in the directory

@@ -2248,6 +2248,7 @@ ipcMain.handle('remote-launch-session', async (_event, payload) => {
   if (sessionId && activeSessions.has(sessionId)) return { ok: false, error: 'invalid request' };
   let session;
   const result = await handleLaunchRequest(payload, {
+    getSetting,
     hasHost: (alias) => enabledHosts((getSetting('global') || {}).remoteHosts).some(h => h.alias === alias),
     getHosts: () => (getSetting('global') || {}).remoteHosts,
     launchBlockReason: (alias) => launchBlockReason(remoteIndexer.getRemoteHostProfile(alias)),
@@ -3365,6 +3366,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       if (launchSandbox && process.platform !== 'linux') {
         return { ok: false, error: 'Sandbox mode requires Linux (bubblewrap)' };
       }
+      const customArgs = isAttach ? '' : require('./src/main/terminals/shell-profiles')
+        .customArgsForLaunch(launchHarness.binary, sessionOptions, getSetting, spawnCwd);
 
       // preLaunchCmd is raw shell by design (e.g. "aws-vault exec profile --")
       // — see pre-launch-cmd-guard.js for what is and isn't blocked and why.
@@ -3392,14 +3395,17 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         }
       }
 
-      let claudeCmd = claudeCommand(shell, claudeArgs, { env: cleanPtyEnv, cwd: spawnCwd, prefix: pre, extraArgs: shellExtraArgs, ide: ideAdded,
-        binary: launchHarness.binary });
+      const commandBuilder = launchHarness.binary === 'codex'
+        ? require('./src/main/terminals/shell-profiles').codexCommand : claudeCommand;
+      let claudeCmd = commandBuilder(shell, claudeArgs, { env: cleanPtyEnv, cwd: spawnCwd, prefix: pre, extraArgs: shellExtraArgs, ide: ideAdded,
+        binary: launchHarness.binary, customArgs });
 
       // Sandbox: run claude inside a bubblewrap sandbox that only exposes the
       // project directory and Claude's own config/state dirs. Linux only —
       // bwrap has no macOS/Windows equivalent wired up here.
       if (launchSandbox) {
         claudeCmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgs);
+        if (customArgs) claudeCmd += ' ' + customArgs;
         if (pre) claudeCmd = pre + ' ' + claudeCmd;
       }
 
@@ -4376,7 +4382,8 @@ if (!app.isPackaged) {
         const shell = profile.path;
         const env = { ...cleanPtyEnv, FORCE_COLOR: '0' };
         // see .ai/contexts/schedule-runner.md ("Windows launches")
-        let launch = headlessClaudeLaunch(shell, claudeArgv, { env, profileArgs: profile.args || [] });
+        const customArgs = require('./src/main/terminals/shell-profiles').customArgsForLaunch('claude', null, getSetting, cwd);
+        let launch = headlessClaudeLaunch(shell, claudeArgv, { env, profileArgs: profile.args || [], customArgs });
 
         const sandbox = resolveScheduleSandbox(cwd, getSetting, SETTING_DEFAULTS.sandbox);
         if (sandbox) {
@@ -4394,7 +4401,7 @@ if (!app.isPackaged) {
           }
           env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = require('./src/main/triggers/trigger-watcher').getTriggersDir();
           fs.mkdirSync(path.join(env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR, 'processed'), { recursive: true });
-          const cmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgv);
+          const cmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgv) + (customArgs ? ' ' + customArgs : '');
           launch = { program: shell, args: shellArgs(shell, cmd, profile.args || []), verbatim: false };
           const bindEnv = sandboxBindEnv(addDirs);
           if (bindEnv) env.SWITCHBOARD_SANDBOX_BINDS = bindEnv;

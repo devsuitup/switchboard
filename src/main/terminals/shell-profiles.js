@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const { SETTING_DEFAULTS, validateCustomArgs } = require('../../../public/setting-defaults');
 const { escapeForCmd, cmdEscapePasses, powershellReparsesClaude, resolveWindowsClaude, SHIM_INVOCATION } = require('../../../claude-binary');
 
 // --- Cross-platform shell resolution ---
@@ -232,14 +233,33 @@ function fitsCommandLine(shellPath, command, extraArgs) {
 
 const survivesPowerShellNative = (token, batch) => token !== '' && !/"/.test(token) && !(batch && /[&|<>^%!\r\n]/.test(token)) && !(/\s/.test(token) && token.endsWith('\\'));
 
-function claudeCommand(shellPath, argv, { env, cwd, prefix = '', windows = isWindows, extraArgs = [], ide = false, binary = 'claude' } = {}) {
+function customArgsForLaunch(binary, options, getSetting, cwd) {
+  const key = binary === 'codex' ? 'codexCustomArgs' : 'customArgs';
+  const project = binary === 'codex' ? {} : getSetting('project:' + cwd) || {};
+  const global = getSetting('global') || {};
+  const value = options?.[key] !== undefined ? options[key]
+    : project[key] !== undefined ? project[key]
+      : global[key] !== undefined ? global[key] : SETTING_DEFAULTS[key];
+  const check = validateCustomArgs(value);
+  if (!check.ok) throw new Error(check.error);
+  return value;
+}
+
+function codexCommand(shellPath, argv, options = {}) {
+  return claudeCommand(shellPath, argv, { ...options, binary: 'codex' });
+}
+
+function claudeCommand(shellPath, argv, { env, cwd, prefix = '', windows = isWindows, extraArgs = [], ide = false, binary = 'claude', customArgs = '' } = {}) {
+  const check = validateCustomArgs(customArgs);
+  if (!check.ok) throw new Error(check.error);
+  const suffix = customArgs ? ' ' + customArgs : '';
   const wrapped = !!prefix.trim();
   const quoted = quoteArgvForShell(shellPath, argv, { env, cwd, wrapped });
-  const plain = (wrapped ? prefix + ' ' : '') + binary + ' ' + quoted;
+  const plain = (wrapped ? prefix + ' ' : '') + binary + ' ' + quoted + suffix;
   if (!(windows && isPowerShellShell(shellPath))) return plain;
-  const helper = powershellLaunch(argv, prefix, binary);
+  const helper = powershellLaunch(argv, prefix, binary) + suffix;
   if (fitsCommandLine(shellPath, helper, extraArgs)) return helper;
-  const baseline = ide ? (wrapped ? prefix + ' ' : '') + binary + ' ' + quoteArgvForShell(shellPath, argv.slice(0, -1), { env, cwd, wrapped }) + ' --ide' : plain;
+  const baseline = ide ? (wrapped ? prefix + ' ' : '') + binary + ' ' + quoteArgvForShell(shellPath, argv.slice(0, -1), { env, cwd, wrapped }) + ' --ide' + suffix : plain;
   if (!fitsCommandLine(shellPath, baseline, extraArgs)) return helper;
   const batch = wrapped || powershellReparsesClaude(env || {});
   if (argv.every(token => survivesPowerShellNative(token, batch))) return baseline;
@@ -252,7 +272,16 @@ function isUnixLikeShell(shellPath) {
 }
 
 // see .ai/contexts/schedule-runner.md ("Windows launches")
-function headlessClaudeLaunch(shellPath, argv, { env = {}, profileArgs = [], windows = isWindows, deps } = {}) {
+function headlessClaudeLaunch(shellPath, argv, { env = {}, profileArgs = [], windows = isWindows, deps, customArgs = '' } = {}) {
+  const check = validateCustomArgs(customArgs);
+  if (!check.ok) return { error: check.error };
+  if (customArgs) {
+    const command = claudeCommand(shellPath, argv, { env, windows, extraArgs: profileArgs, customArgs });
+    if (windows && isCmdShell(shellPath)) {
+      return { program: shellPath, args: ['/d', '/s', '/c', `"${command}"`], verbatim: true };
+    }
+    return { program: shellPath, args: shellArgs(shellPath, command, profileArgs, { windows }), verbatim: false };
+  }
   if (windows && !isUnixLikeShell(shellPath)) {
     const plan = resolveWindowsClaude(argv, env, deps);
     return plan.error ? { error: plan.error } : { program: plan.program, args: plan.args, verbatim: plan.verbatim };
@@ -289,4 +318,4 @@ function shellArgs(shellPath, cmd, extraArgs, { pty = false, windows = isWindows
   return [];
 }
 
-module.exports = { isCmdShell, discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgForShell, quoteArgvForShell, claudeCommand, headlessClaudeLaunch };
+module.exports = { isCmdShell, discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgForShell, quoteArgvForShell, claudeCommand, codexCommand, customArgsForLaunch, headlessClaudeLaunch };

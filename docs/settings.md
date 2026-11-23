@@ -106,11 +106,19 @@ A saved `chrome` setting is read as the matching Browser choice: `true` selects
 | Setting | Key | Default | Effect |
 |---|---|---|---|
 | Pre-launch Command | `preLaunchCmd` | empty | Written in front of the `claude` command, e.g. `aws-vault exec profile --`; restricted to letters, digits, spaces and `- _ . / \ : =` — see [Launching sessions](launching-sessions.md#pre-launch-command) |
+| Custom Arguments | `customArgs` | empty | Appended to Claude commands for new sessions, resumes, forks, schedules and remote launches; supports a project override — see [Custom arguments](launching-sessions.md#custom-arguments) |
 
 #### CLI Agents and Codex
 
 The existing CLI switches and Codex sandbox, approval, model and reasoning-effort
 controls are grouped here. See [Launching sessions](launching-sessions.md).
+
+**Custom arguments** (`codexCustomArgs`, empty by default) in the Codex section
+applies to Codex new sessions, resumes and forks. It is global, like the other
+Codex launch controls, and independent of Claude's Custom Arguments.
+Both fields reject newlines and control characters. Quote values for the
+selected shell; remote Claude launches use POSIX shell quoting. Saving an empty
+Claude project override disables the global arguments for that project.
 
 **Show Codex usage** (`showCodexUsage`, off by default) displays Codex rate
 limits in the status bar and Stats. When enabled, it reads `CODEX_HOME/auth.json`
