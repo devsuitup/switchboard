@@ -203,10 +203,15 @@ saved disk file; neither action saves or replaces the editor buffer.
 For Changes rows, `readChangesFile` returns its already validated `path` with
 the content pair. The renderer stores it as `localFilePath` for these actions;
 it does not reconstruct a disk path from the row or change the relative-path
-save/watch contracts. Touched continues to use its existing `absolutePath`.
+save/watch contracts. A successful refresh recovers that path before the dirty
+buffer early return, so a restored stash keeps both disk actions without saving
+or replacing the draft. Touched continues to use its existing `absolutePath`.
 
 Open always invokes `openPath(path, {viewer: true})`. The existing main-process
-extension and sensitive-path guards remain authoritative. The document
+extension and sensitive-path guards remain authoritative. Viewer Open resolves
+the native realpath, requires a regular file, checks both the requested and real
+extensions and sensitive paths, and passes the real path to the shell. Windows
+colons after the drive prefix (ADS) and validation errors are refused. The document
 allowlist is PNG/JPG/JPEG/GIF/WebP/BMP/PDF, MD/MDX/TXT/LOG/JSON/JSONL/CSV/TSV.
 It is mirrored in the toolbar and the Touched refusal fallback; tests compare
 both lists to `src/main/files/panel-image.js`. All other extensions, including

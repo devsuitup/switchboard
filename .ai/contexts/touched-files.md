@@ -608,11 +608,14 @@ Errors from detached images are ignored so an earlier render cannot refuse the
 currently displayed image. Refresh clears both earlier open errors and refusals.
 
 Binary, encoding and size refusals show "This file can't be shown here." with
-one action. PNG/JPG/JPEG/GIF/WebP/BMP/PDF extensions, case insensitive, offer
+one action. Extensions in the [viewer allowlist](viewer-panel.md#local-file-actions-1203), case insensitive, offer
 Open with system viewer via openPath(path, { viewer: true }); all others offer
 Show in folder. SYSTEM_VIEWER_EXTENSIONS lives in the pure main module and a
 classic-script copy in touched-files-view.js; panel-image.test.js compares them.
-Main enforces the same viewer allowlist. Unflagged terminal openPath is unchanged.
+Main enforces that allowlist on both the requested name and its native-realpath
+target, requires `fs.statSync(real).isFile()`, and checks both paths for
+sensitivity before opening the canonical target. Windows colons after the drive
+prefix (ADS) and validation errors are refused. Unflagged terminal openPath is unchanged.
 
 show-item-in-folder validates string and absolute path before resolving, then
 refuses raw and native-realpath Git segments, sensitive paths, and non-regular

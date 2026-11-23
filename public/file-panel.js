@@ -1499,6 +1499,7 @@ async function syncOpenChangesFile(sessionId, tab) {
     if (currentPanelSessionId === sessionId) renderPanel(sessionId);
     return;
   }
+  tab.localFilePath = result.path || tab.localFilePath;
   tab.fileError = null;
 
   if (tab.image) {

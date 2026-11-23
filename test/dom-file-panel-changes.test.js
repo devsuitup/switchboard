@@ -1518,6 +1518,34 @@ test('a save whose IPC rejects is reported and leaves the button usable (mutatio
 
 // --- Losing work by accident ---------------------------------------------
 
+test('1203 fix1: restored unsaved Changes buffers recover both disk actions', async t => {
+  const diskPath = '/repo/new.txt';
+  const ctx = setupFilePanelDom({ fileImpl: () => ({ ...DEFAULT_PAIR, path: diskPath }) });
+  t.after(() => ctx.destroy());
+  const opened = [];
+  const revealed = [];
+  ctx.window.api.openPath = async (...args) => { opened.push(args); return ''; };
+  ctx.window.api.showItemInFolder = async p => { revealed.push(p); return { ok: true }; };
+  await openFile(ctx, 's1', 'new.txt');
+  ctx.editors.at(-1).box.text = 'unsaved draft\n';
+  ctx.window.openDiffTab('s1', 'other', { oldFilePath: '/repo/other.md', oldContent: 'other', newContent: 'other' });
+  await flush();
+  assert.ok(ctx.stashOf('s1'), 'the draft was stashed');
+  await ctx.window.openChangesTab('s1');
+  await flush();
+  const header = ctx.document.querySelector('#changes-diff-view .viewer-toolbar');
+  const open = header.querySelector('[aria-label="Open in default app"]');
+  const reveal = header.querySelector('[aria-label="Reveal in folder"]');
+  assert.equal(open.hidden, false, 'restored draft exposes Open');
+  assert.equal(reveal.hidden, false, 'restored draft exposes Reveal');
+  open.click(); reveal.click();
+  await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(opened)), [[diskPath, { viewer: true }]]);
+  assert.deepEqual(revealed, [diskPath]);
+  assert.equal(ctx.editors.at(-1).box.text, 'unsaved draft\n');
+  assert.deepEqual(ctx.calls.save, []);
+});
+
 test('a session opening its own file keeps the unsaved buffer and restores it (mutation target: the stash)', async () => {
   const ctx = setupFilePanelDom();
   try {
