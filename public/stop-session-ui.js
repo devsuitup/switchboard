@@ -116,7 +116,8 @@ function describeSessionStopPlan(row, targets, excluded) {
     ...excluded.map(part => [...label(part.sessionId), ': ' + part.reason + '.'])];
   const text = log => confirmParts.map(line => (Array.isArray(line) ? line : [line])
     .map(part => typeof part === 'object' ? log ? part.session.sessionId?.slice(0, 8) : part.label : part).join('')).join('\n');
-  return { targets, excluded, attach: attachOnly, confirmText: text(false), confirmParts, logText: text(true) };
+  return { targets, excluded, attach: attachOnly, confirmText: text(false), confirmParts,
+    sessions: confirmParts.flat(Infinity).filter(part => part?.session).map(part => part.session), logText: text(true) };
 }
 
 function planSessionDetach(row, { tabOnly = false, retryTargets } = {}) {
@@ -393,16 +394,17 @@ async function confirmAndStopProjectFolder(project, retryRows) {
       ...candidates.map(entry => [{ session: entry.row, label: entry.name }, `${entry.midTurn ? ' (mid-turn)' : ''}: ${entry.plan.targets.map(target => target.where).join(', ')}${entry.background ? '; runs in the background and is refused unless you explicitly include background jobs' : ''}.`]),
       ...entries.flatMap(entry => entry.plan.excluded.map(part => [{ session: entry.row, label: entry.name }, ` (part ${part.sessionId}): ${part.reason}.`])),
     ];
+    const sessions = messageParts.flat(Infinity).filter(part => part?.session).map(part => part.session);
     let force = false;
     if (hasBackground) {
-      const answer = await showChoiceDialog({ title: 'Stop all?', message, messageParts, danger: true, initialFocus: 'cancel', sessions: rows,
+      const answer = await showChoiceDialog({ title: 'Stop all?', message, messageParts, danger: true, initialFocus: 'cancel', sessions,
         confirmLabel: 'Stop', selectedId: retryRows?.some(entry => entry.targets.some(target => target.job && !target.notHosted && !target.jobStopped)) ? 'force' : 'others', options: [
           { id: 'force', label: 'Stop all including background jobs' },
           { id: 'others', label: 'Stop the others only' },
         ] });
       if (!answer) return;
       force = answer.choice === 'force';
-    } else if (!await appConfirm({ title: 'Stop all?', message, messageParts, confirmLabel: 'Stop', danger: true, sessions: rows })) return;
+    } else if (!await appConfirm({ title: 'Stop all?', message, messageParts, confirmLabel: 'Stop', danger: true, sessions })) return;
     const failures = [];
     const logFailures = [];
     const failedRows = [];

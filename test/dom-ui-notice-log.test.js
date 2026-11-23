@@ -185,6 +185,157 @@ function setup(t) {
   return { ...ctx, events };
 }
 
+test('project action failure keeps folder wording in the real log', t => {
+  const { window } = setup(t);
+  const lines = connectSink(t, window);
+  window.showSessionActionFailure('Archive', { projectPath: '/repo' }, 'disk unavailable');
+  assert.match(lines[0].text, /Archive failed for folder at \/repo/);
+  assert.doesNotMatch(lines[0].text, /00000000/);
+});
+
+for (const failure of [false, 'restore', 'undo']) test(`archived session ${failure || 'restore'} marks labels through the real sink`, async t => {
+  const { window, document, context } = setup(t);
+  const lines = connectSink(t, window);
+  const session = { sessionId: 'abcdef12-2345-6789', name: 'PRIVATE ARCHIVE LABEL', archived: 1 };
+  window.loadProjects = async () => {};
+  window.persistSessionArchive = async (row, value, _refresh, onError) => {
+    if (failure === 'restore' || (failure === 'undo' && value === 1)) { onError(new Error('disk unavailable')); return false; }
+    row.archived = value;
+    return true;
+  };
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/archived-manager.js'), 'utf8'), context,
+    { filename: 'public/archived-manager.js' });
+  const container = document.createElement('div'); document.body.append(container);
+  window.renderArchivedProjects(container, { entries: [], projects: [{ projectPath: '/repo', sessions: [session] }] });
+  container.querySelector('.archived-unarchive').click();
+  await new Promise(resolve => setImmediate(resolve));
+  if (failure === 'undo') {
+    document.querySelector('.app-notice-action').click();
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  const visible = document.querySelector(failure ? '.choice-dialog-body' : '.app-notice-message');
+  assert.ok(visible.textContent.includes(session.name));
+  if (failure) document.querySelector('.choice-dialog-confirm').click();
+  else document.querySelector('.app-notice-dismiss').click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(lines.length >= 2);
+  assert.doesNotMatch(JSON.stringify(lines), /PRIVATE ARCHIVE LABEL/);
+  assert.ok(lines.every(line => typeof line.text === 'string' && line.text.includes('abcdef12')));
+});
+
+for (const scenario of ['plain', 'mixed', 'unknown', 'moving-only', 'untitled']) test(`session exit ${scenario} retains text and maps marked row offsets`, async t => {
+  const { window, document, context } = setup(t);
+  const lines = connectSink(t, window);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/file-panel.js'), 'utf8'), context, { filename: 'public/file-panel.js' });
+  const owner = { sessionId: 'abcdef12-2345-6789', name: 'PRIVATE EXIT LABEL' };
+  window.openSessions.set(owner.sessionId, { session: owner });
+  window.backgroundActionReason = () => '';
+  const moving = { id: owner.sessionId, type: 'session', cwd: '/repo/alpha', background: 'busy' };
+  const plain = { id: '12345678-terminal', type: 'plain', cwd: '/repo/beta' };
+  const panel = { id: '87654321-panel', owner: owner.sessionId, type: 'panel' };
+  const untitled = { id: 'fedcba98-2345-6789', type: 'session', cwd: '/repo/gamma' };
+  const rows = scenario === 'plain' ? [plain] : scenario === 'untitled' ? [untitled]
+    : scenario === 'moving-only' ? [moving] : [plain, panel, moving, untitled];
+  const pending = window.confirmSessionExit({ action: 'close', snapshot: { rows, unknown: scenario === 'unknown',
+    counts: { sessions: rows.filter(row => row.type === 'session').length, plain: rows.includes(plain) ? 1 : 0, panels: rows.includes(panel) ? 1 : 0 }, remote: {} } });
+  const paragraphs = [...document.querySelectorAll('.choice-dialog-body p')];
+  const rowText = row => row === plain ? 'Plain terminal · beta · 12345678'
+    : row === panel ? 'Panel shell of "PRIVATE EXIT LABEL" · 87654321'
+    : row === untitled ? 'Untitled conversation · gamma · fedcba98'
+    : '"PRIVATE EXIT LABEL" · alpha · abcdef12' + (scenario === 'unknown' ? '' : ' · waits for its turn to end (up to 10 minutes)');
+  const expectedRows = scenario === 'unknown'
+    ? ['Switchboard could not list the local work that will stop.', ...rows.map(rowText)]
+    : rows.includes(moving) ? ['Moves to the background:', rowText(moving),
+      ...(rows.length > 1 ? ['Stops:', ...rows.filter(row => row !== moving).map(rowText)] : [])] : rows.map(rowText);
+  assert.deepEqual(paragraphs.slice(0, expectedRows.length).map(p => p.textContent), expectedRows, 'row offsets preserve headings and the exact row order');
+  if (rows.includes(moving)) {
+    assert.ok(paragraphs.find(p => p.textContent.startsWith('"PRIVATE EXIT LABEL"')).querySelector('[data-log-session="abcdef12"]'));
+    if (rows.includes(panel)) assert.ok(paragraphs.find(p => p.textContent.startsWith('Panel shell')).querySelector('[data-log-session="abcdef12"]'));
+  }
+  document.querySelector('.choice-dialog-cancel').click();
+  await pending;
+  assert.equal(lines.length, 2);
+  for (const line of lines) {
+    assert.equal(typeof line.text, 'string', 'session-exit keeps its dialog text');
+    if (rows.includes(plain)) assert.match(line.text, /Plain terminal · beta · 12345678/);
+    if (rows.includes(untitled)) assert.match(line.text, /Untitled conversation · gamma · fedcba98/);
+    if (rows.includes(panel)) assert.match(line.text, /Panel shell of "abcdef12" · 87654321/);
+    if (rows.includes(moving)) assert.match(line.text, /"abcdef12" · alpha · abcdef12/);
+    if (rows.includes(moving) && scenario !== 'unknown') assert.match(line.text, /Moves to the background:\n"abcdef12" · alpha · abcdef12/);
+    if (scenario === 'unknown') assert.match(line.text, /could not list the local work/);
+  }
+  assert.doesNotMatch(JSON.stringify(lines), /PRIVATE EXIT LABEL/);
+});
+
+test('multipart stop and archive confirmations keep their id-only text', async t => {
+  const { window, document, context } = setup(t);
+  const lines = connectSink(t, window);
+  const session = { sessionId: 'abcdef12-2345-6789', name: 'PRIVATE PART LABEL',
+    mergedMemberIds: ['abcdef12-2345-6789', 'bcdef123-2345-6789'], projectPath: '/repo' };
+  window.sessionMap.set(session.sessionId, session);
+  window.activePtyIds.add(session.sessionId);
+  loadAppFunctions(context, { functions: ['confirmAndStopSession'] });
+  const pending = window.confirmAndStopSession(session);
+  await new Promise(resolve => setImmediate(resolve));
+  document.querySelector('.choice-dialog-cancel').click(); await pending;
+  const archive = window.archiveSessionRows([session]);
+  await new Promise(resolve => setImmediate(resolve));
+  document.querySelector('.choice-dialog-cancel').click(); await archive;
+  assert.equal(lines.length, 4);
+  for (const line of lines) {
+    assert.equal(typeof line.text, 'string', 'multipart plan keeps its id-only text');
+    assert.match(line.text, /Part abcdef12/);
+  }
+  assert.doesNotMatch(JSON.stringify(lines), /PRIVATE PART LABEL/);
+});
+
+test('folder archive logs only its five rendered running labels and handles unchecking', async t => {
+  const { window, document } = setup(t);
+  const lines = connectSink(t, window);
+  const sessions = Array.from({ length: 7 }, (_, i) => ({ sessionId: `${i + 1}bcdef12-2345-6789`, name: `PRIVATE FOLDER ${i}`, projectPath: '/repo', archived: 0 }));
+  const project = { projectPath: '/repo', sessions };
+  window.cachedAllProjects = [project];
+  sessions.slice(0, 6).forEach(row => window.activePtyIds.add(row.sessionId));
+  window.api.getProjectArchivePlan = async () => ({ schedules: [] });
+  const pending = window.archiveProjectFolder(project);
+  await new Promise(resolve => setImmediate(resolve));
+  const checkbox = document.querySelector('input[data-choice-id="archiveSessions"]');
+  assert.ok(checkbox);
+  assert.equal(typeof lines[0].text, 'string', 'folder archive keeps its checked text');
+  assert.match(lines[0].text, /1bcdef12/);
+  assert.match(lines[0].text, /\+1 more/);
+  checkbox.click();
+  document.querySelector('.choice-dialog-cancel').click(); await pending;
+  assert.equal(typeof lines.at(-1).text, 'string', 'unchecked archive keeps its text');
+  assert.match(lines.at(-1).text, /Archive the 7 sessions/);
+  assert.doesNotMatch(JSON.stringify(lines), /PRIVATE FOLDER/);
+});
+
+test('stop folder excludes idle labels from the marking contract', async t => {
+  const { window, document } = setup(t);
+  const lines = connectSink(t, window);
+  const sessions = ['abcdef12-2345-6789', 'bcdef123-2345-6789'].map(sessionId => ({ sessionId, name: 'PRIVATE STOP FOLDER', projectPath: '/repo' }));
+  const project = { projectPath: '/repo', sessions };
+  window.cachedAllProjects = [project];
+  window.activePtyIds.add(sessions[0].sessionId);
+  const pending = window.confirmAndStopProjectFolder(project);
+  await new Promise(resolve => setImmediate(resolve));
+  document.querySelector('.choice-dialog-cancel').click(); await pending;
+  assert.equal(typeof lines[0].text, 'string', 'stop folder keeps its text with idle rows');
+  assert.match(lines[0].text, /abcdef12/);
+  assert.doesNotMatch(JSON.stringify(lines), /PRIVATE STOP FOLDER/);
+});
+
+test('resume settings title marks its session label', async t => {
+  const { window, document, context } = setup(t);
+  for (const file of ['setting-defaults.js', 'dialogs.js']) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../public', file), 'utf8'), context, { filename: 'public/' + file });
+  }
+  await window.showResumeSessionDialog({ sessionId: 'abcdef12-2345-6789', name: 'PRIVATE RESUME LABEL', projectPath: '/repo' });
+  assert.equal(document.querySelector('h3 [data-log-session="abcdef12"]')?.textContent, 'PRIVATE RESUME LABEL');
+  document.querySelector('.new-session-cancel-btn').click();
+});
+
 test('notices report shown text, source, merge, replace and dismissal, including main error merges', t => {
   const { window, document, events } = setup(t);
   window.showAppNotice({ id: 'restore:jobs', kind: 'warning', members: [{ id: 'a', text: 'One' }], message: members => members.map(m => m.text).join('\n') });

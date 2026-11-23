@@ -219,17 +219,15 @@ async function archiveSessionRows(rows, olderRule) {
     const running = targets.filter(target => !target.attach).length;
     const question = olderRule ? `Archive ${prepared.plans.length} older session${prepared.plans.length === 1 ? '' : 's'}?`
       : rows.length === 1 ? 'Archive this session?' : `Archive ${rows.length} sessions?`;
-    if (!await appConfirm({
-      title: question, confirmLabel: 'Archive', danger: targets.length > 0, sessions: rows,
-      messageParts: [question, ...(olderRule ? [olderRule, ...olderArchiveParts('To archive:', prepared.plans),
+    const messageParts = [question, ...(olderRule ? [olderRule, ...olderArchiveParts('To archive:', prepared.plans),
         ...olderArchiveParts('Kept:', prepared.kept), ...olderArchiveParts('Refused:', prepared.refusals),
         'Kept and refused sessions stay unarchived. Undo restores archived rows.'] : []),
         ...(running ? [`${running} running process${running === 1 ? '' : 'es'} will be stopped first.`] : []),
-        ...prepared.plans.filter(({ plan }) => plan.targets.length).flatMap(({ plan }) => plan.confirmParts.slice(1))],
-      message: [question, ...(olderRule ? [olderRule, olderArchiveList('To archive:', prepared.plans),
-        olderArchiveList('Kept:', prepared.kept), olderArchiveList('Refused:', prepared.refusals),
-        'Kept and refused sessions stay unarchived. Undo restores archived rows.'] : []), ...(running ? [`${running} running process${running === 1 ? '' : 'es'} will be stopped first.`] : []),
-        ...prepared.plans.filter(({ plan }) => plan.targets.length).map(({ plan }) => plan.confirmText.split('\n').slice(1).join('\n'))].join('\n'),
+        ...prepared.plans.filter(({ plan }) => plan.targets.length).flatMap(({ plan }) => plan.confirmParts.slice(1))];
+    if (!await appConfirm({
+      title: question, confirmLabel: 'Archive', danger: targets.length > 0,
+      sessions: messageParts.flat(Infinity).filter(part => part?.session).map(part => part.session), messageParts,
+      message: messageParts.map(line => [line].flat(Infinity).map(part => part?.session ? part.label : part).join('')).join('\n'),
     })) return null;
     return { archiveSessions: true };
   }, prepare);
@@ -2036,6 +2034,7 @@ async function archiveProjectFolder(project, button) {
     }
     const confirmed = await confirmSessionArchivePlan(sessions, prepared, async current => {
       const choices = [];
+      const markedSessions = [];
       const running = current.plans.flatMap(({ session, plan }) => plan.targets.filter(target => !target.attach).map(target =>
         `${cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId}${rowSessionIds(session).length > 1 ? ` (part ${target.sessionId})` : ''}${target.possiblyLive ? ' (possibly running)' : ''} ${target.where}`));
       if (sessions.length > 0) {
@@ -2043,9 +2042,12 @@ async function archiveProjectFolder(project, button) {
         const runningParts = current.plans.flatMap(({ session, plan }) => plan.targets.filter(target => !target.attach).map(target =>
           [{ session, label: cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId },
           `${rowSessionIds(session).length > 1 ? ` (part ${target.sessionId})` : ''}${target.possiblyLive ? ' (possibly running)' : ''} ${target.where}`]));
-        const labelParts = checked => [`Archive the ${counted(sessions.length, 'session')}`,
+        const labelParts = checked => {
+          markedSessions.splice(0, markedSessions.length, ...(checked ? runningParts.slice(0, 5).map(parts => parts[0].session) : []));
+          return [`Archive the ${counted(sessions.length, 'session')}`,
           ...(checked && running.length ? [' — stopped first: ', ...runningParts.slice(0, 5).flatMap((parts, i) => [i ? '; ' : '', ...parts]),
             running.length > 5 ? `; +${running.length - 5} more` : ''] : [])];
+        };
         choices.push({ id: 'archiveSessions', label, labelParts, checked: true, rememberKey: 'archiveFolder.archiveSessions' });
       }
       if (disableable.length > 0) {
@@ -2061,7 +2063,7 @@ async function archiveProjectFolder(project, button) {
 
       if (!choices.length && !running.length) return {};
       return showChoiceDialog({
-        title: `Archive ${shortProjectPath(parent.projectPath)}?`, sessions,
+        title: `Archive ${shortProjectPath(parent.projectPath)}?`, sessions: markedSessions,
         message,
         choices,
         confirmLabel: 'Archive folder',

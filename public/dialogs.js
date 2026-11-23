@@ -561,7 +561,7 @@ async function showResumeSessionDialog(session) {
   const sessionName = session.name || session.aiTitle || session.summary || session.sessionId.slice(0, 8);
 
   dialog.innerHTML = `
-    <h3>Resume Session — ${escapeHtml(sessionName)}</h3>
+    <h3></h3>
     <div class="new-session-body">
     <div class="settings-field">
       <div class="settings-label">Permission Mode</div>
@@ -614,6 +614,8 @@ async function showResumeSessionDialog(session) {
 
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
+
+  window.renderSessionText(dialog.querySelector('h3'), ['Resume Session — ', { session, label: sessionName }]);
 
   // Bind mode grid clicks
   const modeGrid = dialog.querySelector('#rsd-mode-grid');

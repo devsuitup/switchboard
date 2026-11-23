@@ -44,7 +44,8 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, fo
       await activeArchivedProjectsManager.refresh();
     }
   };
-  const fail = (title, errors, returnFocus) => appAlert({ title, message: errors.join('\n'), returnFocus });
+  const fail = (title, errors, returnFocus) => appAlert({ title, messageParts: errors,
+    sessions: errors.flat(Infinity).filter(part => part?.session).map(part => part.session), returnFocus });
   function selection() {
     bulk.textContent = selected.size ? `Unarchive selected (${selected.size})` : 'Unarchive selected';
     bulk.disabled = busy || !selected.size;
@@ -89,7 +90,7 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, fo
       } catch (error) { errors.push(`${project.name}: ${error.message}`); }
     }
     for (const session of sessions) {
-      await window.persistSessionArchive(session, 1, false, error => errors.push(`${sessionName(session)}: ${error.message || error}`));
+      await window.persistSessionArchive(session, 1, false, error => errors.push([{ session, label: sessionName(session) }, `: ${error.message || error}`]));
     }
     lock(false); render(); await reload();
     if (errors.length) await fail(sessions.length ? 'Could not archive items' : 'Could not archive project', errors, filter);
@@ -120,7 +121,7 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, fo
       } catch (error) { errors.push(`${identity(entry).name}: ${error.message}`); }
     }
     for (const session of sessions) {
-      if (await window.persistSessionArchive(session, 0, false, error => errors.push(`${sessionName(session)}: ${error.message || error}`))) {
+      if (await window.persistSessionArchive(session, 0, false, error => errors.push([{ session, label: sessionName(session) }, `: ${error.message || error}`]))) {
         restoredSessions.push(session); selected.delete(sessionKey(session));
       }
     }
@@ -137,6 +138,8 @@ function renderArchivedProjects(container, { entries, kinds = {}, dates = {}, fo
         : `${completed.length} ${restoredFolders.length ? 'projects and folders' : 'projects'} restored.`;
       const reversible = restoredProjects.length || restoredSessions.length;
       const notice = showAppNotice({ id: noticeId, kind: reversible ? 'undo' : 'info', dismissOnAction: false,
+        sessions: !completed.length && restoredSessions.length === 1 ? restoredSessions : [],
+        logText: !completed.length && restoredSessions.length === 1 ? `Session "${restoredSessions[0].sessionId.match(/^[a-f0-9]{8}/i)?.[0] || '00000000'}" restored.` : undefined,
         message: message + (restoredFolders.length
           ? `${reversible ? ` Undo re-archives ${restoredSessions.length ? 'sessions and project archives' : 'projects only'}.` : ''} To archive folders again, use Archive folder.` : ''),
         ...(reversible ? { actionLabel: 'Undo', onAction: () => {

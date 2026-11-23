@@ -47,6 +47,19 @@ the current members on every event. `showRestoreNotice(id, text, session,
 { logText, logId })` forwards those fields to the transient observer, including
 dismissal. Session action descriptions accept `{ log: true }` for the safe form.
 
+`sessions` declares only labels actually rendered, not all rows involved in an
+operation. Session-exit derives it from its marked row parts, excluding plain
+terminals and untitled conversations while marking panel owners. Multi-part
+stop plans contain part IDs rather than row labels; their `sessions` is empty.
+Archive confirmations derive their text and identities from `messageParts`.
+Archive-folder keeps the shared identity array in sync with its checkbox label:
+only the first five displayed running rows when checked, none when unchecked.
+Archived-manager failure paragraphs mark each session label, and single-session
+restore notices supply the short ID in `logText` for both show and dismissal.
+Project action descriptions without a session ID retain their visible wording.
+Resume settings mark their title with `renderSessionText`; this configuration
+form remains outside question logging.
+
 Every session whose label is displayed must be passed in `sessions` (or on notice
 members). Without explicit `logText`, if any supplied session lacks a DOM marker,
 `sessionNoticeLog` emits only event metadata, a source/ID-derived identity,

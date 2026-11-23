@@ -1591,7 +1591,7 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
       message: excluded.length ? plan.confirmText : 'Nothing is running to stop.' });
     return;
   }
-  if (!await appConfirm({ title: plan.attach ? 'Detach tab?' : 'Stop session?', message: plan.confirmText, messageParts: plan.confirmParts, sessions: [session],
+  if (!await appConfirm({ title: plan.attach ? 'Detach tab?' : 'Stop session?', message: plan.confirmText, messageParts: plan.confirmParts, sessions: plan.sessions,
     confirmLabel: plan.attach ? 'Detach' : 'Stop', danger: !plan.attach })) return;
   const { failures, failedTargets, stopped } = await executeSessionStopTargets(targets);
   if (failures.length) {

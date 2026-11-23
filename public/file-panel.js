@@ -939,7 +939,7 @@ async function confirmSessionExit(detail, changed) {
     messageParts[offset++] = rowParts.get(row);
   }
   const result = await showChoiceDialog({ title: 'Stop ' + total + ' and ' + verb + '?', message, messageParts,
-    sessions: snapshot.rows.map(row => ({ sessionId: row.owner || row.id, name: displayName(row.owner || row.id) })),
+    sessions: [...rowParts.values()].flat(Infinity).filter(part => part?.session).map(part => part.session),
     confirmLabel: 'Stop and ' + label, initialFocus: 'cancel', danger: true,
     secondaryAction: moving.length ? { id: 'background', label: 'Move ' + words(moving) + ' to background' + (stopping.length ? ', stop ' + words(stopping) + ', and ' : ' and ') + label, danger: stopping.length > 0 } : null,
     returnFocus: document.activeElement, replace: true, closeWith: changed && changed.then(() => null) });

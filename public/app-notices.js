@@ -89,7 +89,7 @@ function sessionActionNoticeId(operation, session) {
 }
 
 function sessionActionDescription(session, { log = false } = {}) {
-  const rawName = log ? session?.sessionId?.match(/^[a-f0-9]{8}/i)?.[0] || '00000000' : session?.name || session?.aiTitle || session?.summary;
+  const rawName = log && session?.sessionId ? session.sessionId.match(/^[a-f0-9]{8}/i)?.[0] || '00000000' : session?.name || session?.aiTitle || session?.summary;
   const name = typeof cleanDisplayName === 'function' ? cleanDisplayName(rawName) : rawName;
   const identity = name ? `"${name}"${session?.sessionId ? ` (${session.sessionId})` : ''}`
     : session?.sessionId ? `"${session.sessionId}"` : 'folder';
