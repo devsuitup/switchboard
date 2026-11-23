@@ -57,6 +57,12 @@ const DIRECTORY_SCAN_MS = 5000;
 
 const THEME_CHOICES = [['dark', 'Dark'], ['light', 'Light'], ['system', 'System']];
 
+const CODEX_CHOICES = {
+  codexSandbox: [['', 'Codex default'], ['read-only', 'Read-only'], ['workspace-write', 'Workspace write'], ['danger-full-access', 'Full access (danger)']],
+  codexApproval: [['', 'Codex default'], ['on-request', 'On request'], ['never', 'Never']],
+  codexEffort: [['', 'Codex default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max'], ['ultra', 'Ultra']],
+};
+
 const BROWSER_MODES = Object.freeze([
   Object.freeze({ value: 'off', label: 'Off' }),
   Object.freeze({ value: 'claude-in-chrome', label: 'Claude in Chrome' }),
@@ -78,7 +84,7 @@ function normalizeBrowserSettings(settings, diagnostic = message => console.warn
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { SETTING_DEFAULTS, THEME_CHOICES, BROWSER_MODES, normalizeBrowserSettings,
+  module.exports = { SETTING_DEFAULTS, THEME_CHOICES, CODEX_CHOICES, BROWSER_MODES, normalizeBrowserSettings,
     PROJECT_DELETE_PREVIEW_TIMEOUT_MS, PROJECT_DELETE_DIALOG_TIMEOUT_MS, PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS,
     PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS, PROJECT_DELETE_WORKTREE_REMOVE_TIMEOUT_MS, DIRECTORY_SCAN_MS };
 }
