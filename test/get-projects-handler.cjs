@@ -17,7 +17,8 @@ module.exports = function loadGetProjectsHandler(context) {
   const helperEnd = source.indexOf('\n}', helperStart) + 2;
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
   const sandbox = {
-    console, performance, structuredClone, Buffer, cliSessionState, require: createRequire(filename),
+    console, performance, structuredClone, Buffer, cliSessionState, appQuitting: false,
+    setTimeout: () => ({ unref() {} }), clearTimeout() {}, require: createRequire(filename),
     isIndexingFinished: () => context.isInitialScanComplete(),
     log: { warn() {}, info() {}, error() {} }, notifyRendererProjectsChanged() {}, lastKnownProjects: { remember() {} }, ...context,
     ipcMain: { handle: (name, callback) => { assert.equal(name, 'get-projects'); handler = callback; } },
@@ -36,5 +37,6 @@ module.exports = function loadGetProjectsHandler(context) {
   vm.runInContext(source.slice(clientStart, acceptedEnd + 4), sandbox, { filename,
     lineOffset: source.slice(0, clientStart).split('\n').length - 1 });
   handler.reconciledAt = () => sandbox.projectsReconciledAt;
+  handler.triggerSnapshot = () => sandbox.getTriggerProjectSnapshot();
   return handler;
 };

@@ -687,6 +687,7 @@ body { display: flex; flex-direction: column; }
   background: var(--surface-deep);
   border-top: 1px solid var(--hairline);
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   padding: 0 10px;
   font-size: 11px;
@@ -718,6 +719,7 @@ body { display: flex; flex-direction: column; }
 
 #status-bar-quota {
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 12px;
   cursor: pointer;
@@ -726,7 +728,19 @@ body { display: flex; flex-direction: column; }
   margin-left: auto;
   transition: opacity 0.15s;
 }
-/* One bar per limit window; count varies with what the usage API reports. */
+.quota-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.quota-group[hidden] { display: none; }
+.quota-group-label {
+  color: var(--text-label);
+  font-weight: 600;
+  white-space: nowrap;
+}
 .quota-item {
   display: flex;
   align-items: center;
@@ -758,6 +772,9 @@ body { display: flex; flex-direction: column; }
 .quota-pct {
   color: var(--text-label);
   white-space: nowrap;
+  min-width: 4ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ========== SIDEBAR ========== */

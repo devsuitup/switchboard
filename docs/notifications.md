@@ -87,14 +87,23 @@ The bar at the bottom of the window shows `N open here · N sessions · N projec
 (the open-here count only when it is above zero), and transient messages such as
 indexing progress and the update status.
 
-On the right, **usage gauges** show the Claude plan's rate limits: the 5-hour
-window, the week, and any per-model weekly limit, each with its percentage and,
-in its tooltip, when it resets. They are fetched every 5 minutes from
+On the right, **usage gauges** are grouped under **Claude** and **Codex**.
+Claude shows its 5-hour window, week and any per-model limit (such as Fable).
+Both groups label windows by duration: **Week** for seven days, **5h** for five
+hours, and compact labels such as **24h** or **3d** for other durations. Codex
+only shows a 5h gauge when that window is present in its data, regardless of
+whether the API calls it primary or secondary. Each gauge shows its percentage;
+its tooltip keeps the source label and reset time. Claude figures are fetched every 5 minutes from
 Anthropic's usage endpoint with the CLI's own OAuth credentials (the macOS
 Keychain, or `~/.claude/.credentials.json`), and are hidden when none are
 available. Clicking them opens the [Stats](activity-stats.md) tab.
 
 Enable **Show Codex usage** in Settings → Sessions → CLI Agents to add Codex
-gauges alongside Claude, including named model limits. It is off by default;
+gauges in the Codex group, including named model limits. It is off by default;
 unavailable Codex usage hides quietly. See [Settings](settings.md#cli-agents-and-codex)
 for the credentials and endpoint it uses.
+
+Switching a CLI off in Settings hides its whole group. Turning **Show Codex
+usage** off also removes the Codex group immediately. The footer stays on one
+fixed-height row, with fixed minimum percentage widths to keep ordinary usage
+updates steady. Group labels and gauges use the current light or dark palette.

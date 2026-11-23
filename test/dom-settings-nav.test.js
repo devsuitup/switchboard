@@ -415,6 +415,50 @@ test('Codex usage is opt-in under CLI Agents and saving applies it without resta
   assert.equal(h.q('#sv-show-codex-usage'), null);
 });
 
+for (const runtime of ['claude', 'codex']) {
+  test(`saving the ${runtime} CLI toggle immediately hides and restores its footer group`, async t => {
+    const h = setup(t);
+    loadAppFunctions(h.ctx, {
+      functions: ['quotaWindowLabel', 'shortQuotaLabel', 'buildQuotaBar', 'replaceQuotaRows', 'applyUsageHarnesses'],
+      declarations: ['quotaGaugeEl', 'disabledQuotaRuntimes'],
+    });
+    h.w._applyUsageHarnesses = h.w.applyUsageHarnesses;
+    h.w.replaceQuotaRows([{ kind: 'session', label: 'Current session', percent: 7 }], 'claude');
+    h.w.replaceQuotaRows([{ kind: 'codex', windowMinutes: 10080, label: 'Codex 1wk', percent: 11 }], 'codex');
+    const group = h.q(`[data-runtime="${runtime}"]`);
+    await h.open();
+    const toggle = h.q(`.sv-harness-toggle[data-harness="${runtime}"]`);
+    for (const enabled of [false, true]) {
+      toggle.checked = enabled;
+      toggle.dispatchEvent(new h.w.Event('change', { bubbles: true }));
+      h.q('#sv-save-btn').click();
+      await settle();
+      assert.equal(group.hidden, !enabled, 'Save applies CLI visibility to the whole footer group');
+      assert.equal(h.q(`[data-runtime="${runtime}"]`), group);
+    }
+  });
+}
+
+test('saving after getHarnesses fails preserves a hidden Codex footer group', async t => {
+  const h = setup(t);
+  loadAppFunctions(h.ctx, {
+    functions: ['quotaWindowLabel', 'shortQuotaLabel', 'buildQuotaBar', 'replaceQuotaRows', 'applyUsageHarnesses'],
+    declarations: ['quotaGaugeEl', 'disabledQuotaRuntimes'],
+  });
+  h.w._applyUsageHarnesses = h.w.applyUsageHarnesses;
+  h.saved.global = { disabledHarnesses: ['codex'] };
+  h.w.applyUsageHarnesses(['codex']);
+  h.w.replaceQuotaRows([{ kind: 'codex', windowMinutes: 300, label: 'Codex 5h', percent: 42 }], 'codex');
+  h.w.api.getHarnesses = async () => { throw new Error('harness listing unavailable'); };
+  await h.open();
+  assert.equal(h.q('.sv-harness-toggle'), null);
+  h.q('#sv-visible-count').value = '42';
+  h.q('#sv-save-btn').click();
+  await settle();
+  assert.equal(h.saved.global.visibleSessionCount, 42, 'unrelated setting was saved');
+  assert.equal(h.q('[data-runtime="codex"]').hidden, true, 'missing harness controls must preserve hidden Codex');
+});
+
 function setup(t) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'public/index.html'), 'utf8'), { url: 'http://localhost', runScripts: 'outside-only' });
   t.after(() => dom.window.close());
@@ -532,8 +576,8 @@ test('flushing a deferred enable refreshes Codex rows after persistence', async 
   const statsFile = path.join(root, 'public/stats-view.js');
   vm.runInContext(fs.readFileSync(statsFile, 'utf8'), h.ctx, { filename: statsFile });
   loadAppFunctions(h.ctx, {
-    functions: ['shortQuotaLabel', 'buildQuotaBar', 'replaceQuotaRows', 'refreshCodexQuotaGauge', 'applyCodexUsage', 'refreshCodexUsage'],
-    declarations: ['quotaGaugeEl', 'codexQuotaRequest', 'codexQuotaEnabled'],
+    functions: ['quotaWindowLabel', 'shortQuotaLabel', 'buildQuotaBar', 'replaceQuotaRows', 'refreshCodexQuotaGauge', 'applyCodexUsage', 'refreshCodexUsage', 'applyUsageHarnesses'],
+    declarations: ['quotaGaugeEl', 'codexQuotaRequest', 'codexQuotaEnabled', 'disabledQuotaRuntimes'],
   });
   h.w._applyCodexUsage = h.w.applyCodexUsage;
   await h.w.applyCodexUsage(false);
@@ -545,7 +589,7 @@ test('flushing a deferred enable refreshes Codex rows after persistence', async 
   h.w.api.getCodexUsage = async () => {
     if (!read().showCodexUsage) return {};
     callsAfterSave++;
-    return { limits: [{ kind: 'codex', short: '5h', label: 'Codex 5h', percent: 42 }] };
+    return { limits: [{ kind: 'codex', windowMinutes: 300, short: '5h', label: 'Codex 5h', percent: 42 }] };
   };
   await h.open();
   h.w.api.getSetting = async () => {

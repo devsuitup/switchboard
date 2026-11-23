@@ -659,14 +659,40 @@ an undefined value to the renderer. After a deferred enabling write succeeds,
 `flushDeferredProjectDeletionWrites` calls `refreshCodexUsage` for both surfaces
 using the current renderer state, so a newer turn-off cannot be undone. Another
 deferral or a failed write does not trigger that refresh.
-`replaceQuotaRows` removes non-row children from the shipped gauge markup before
-updating either provider; placeholders cannot keep an otherwise empty gauge visible.
+The shipped gauge starts empty. `replaceQuotaRows` owns one `.quota-group`
+per CLI, ordered Claude then Codex, and retains that group's node across
+refreshes. A group contains one CLI heading and its quota bars; no empty
+placeholder can keep the gauge visible. `data-runtime` belongs to the group.
+`applyUsageHarnesses` hides whole groups using `disabledHarnesses`, loaded on
+the first quota refresh and applied immediately by Settings on Save. A live
+setting change wins over an in-flight initial settings read. Row replacement
+uses default visibility without committing it while that read is pending;
+a rejected read remains uninitialized so the next refresh retries. Settings
+only applies CLI visibility when the saved patch contains an array, preserving
+hidden groups if harness discovery failed. This changes only
+footer visibility, not usage fetching or Stats. `showCodexUsage` keeps its
+existing behavior on both surfaces, including deferred saves.
 Status bar polling remains every five minutes; Stats has its own refresh button.
 
 Codex rows reuse `buildQuotaBar` and `buildUsageSection`; Claude keeps its own
 rows and error handling. Reset text shares `formatResetTime` from `claude-auth.js`.
 Model-specific status-bar labels include the limit name. Over-limit percentages
 remain visible; bar widths clamp to 100%.
+For the footer, Codex rows also carry `windowMinutes` (the API's
+`limit_window_seconds` divided by 60 and rounded to the nearest minute) and `model`.
+Existing API labels remain available for tooltips and Stats. Tooltips add the
+CLI prefix only when the label does not already start with that name.
+The shared renderer `quotaWindowLabel` also rounds incoming minutes, then
+maps 10080 minutes to `Week`, 300 to `5h`, whole days longer than 24 hours to
+`Nd`, whole hours to `Nh`, and other positive durations to `Nm`; absent or
+invalid durations read `Usage`. Claude's legacy `session` and `weekly*` kinds
+provide durations when no explicit duration is supplied. Primary/secondary
+position never supplies a duration or creates a missing window. Claude model
+gauges keep the model name; Codex model gauges show name and window.
+The footer stays 22px tall with non-wrapping groups and tabular percentages
+reserved to at least four characters. Its group headings use `--text-label`;
+tracks and fill colors retain the existing shared palette tokens. jsdom checks
+both resolved palettes, not browser layout or pixel output.
 The adapted endpoint contract, duration labels and per-model filtering credit
 **Ali Basiri**, `doctly/switchboard`, commits `ee656523` and `3ca3d19d`.
 The fork adds explicit consent, quiet failure, timeout, backoff, redirect refusal
@@ -1757,23 +1783,31 @@ Projects query worker. Tests cover request-time and dispatch-time gating,
 twenty publications with conflicts, failed settlement, and deadlines in
 `get-projects-worker-wiring`, `projects-worker-client` and `projects-changed`.
 
-On terminal PROJECTS_SNAPSHOT_CONFLICT, get-projects schedules the existing
-throttled projects-changed notification with cause conflict, then returns only
+On terminal PROJECTS_SNAPSHOT_CONFLICT, every get-projects request returns only
 {projectsError:{code:'PROJECTS_SNAPSHOT_CONFLICT',message:'Projects changed while loading; reload to retry.'}}.
-Preload recognizes that exact envelope and reconstructs a coded Error. An
-effect-free build whose third dispatch conflicts on the live snapshot is not an
-error (#1125): get-projects returns the paired reply with `projectsStale: true`
-(boolean replies stay plain arrays) and schedules the same conflict
-notification, so the renderer renders it as any reply and the next reload
-replaces it; main logs the differing live component for the rejected case and
-the job options for a caller timeout (session-cache.md, "Projects query
-worker"). Ordinary errors still reject; boolean arrays and the paired defaultProjects/allProjects
+Preload recognizes that exact envelope and reconstructs a coded Error. The
+renderer keeps its previous lists and provisional paint, without committing a
+generation, announcing trigger readiness or advancing restore. Main retains no
+worker-result fallback cache and does not clone successful full results for one.
+Disk snapshots and empty lists never replace an unavailable worker result.
+An effect-free conflicted build is not an error (#1125): its own rows pass
+through with `projectsStale: true` on paired replies (boolean replies stay plain
+arrays). Neither path immediately notifies the renderer. Both share a coalesced
+five-second retry in main, re-armed on stale or unavailable replies. Non-conflict
+retry errors back off through 5 seconds, 30 seconds and a two-minute cap, with
+one log per step; a successful snapshot resets the backoff. A successful retry
+emits a reconcile notification. Main selects one dispatch for snapshot
+races; the generic client defaults to three. Main logs the differing live
+component for conflicts and the job options for caller timeouts
+(session-cache.md, "Projects query worker"). Ordinary errors still
+reject; boolean arrays and the paired defaultProjects/allProjects
 reply retain their successful shapes, with compact provenance on the paired
 reply. Its `projection.facts` map shares deciding inputs by opaque `scope|root`
 across both views (#742). Rows carry no `projectionFacts`; main's assembly and
 the renderer observer resolve representatives through the envelope's proof member
 sets. Subagents and terminals have no facts. Paired activity-trace byte counts
-include the envelope. Rejected worker results never reach placeholder/archive/attach assembly.
+include the envelope. Rejected worker payloads never reach assembly, and rejected
+conflicts never reassemble or persist prior lists.
 
 session-projection-changed is a narrow preload send. Main requires its own
 window's webContents and main frame, validates allowlisted typed fields and logs

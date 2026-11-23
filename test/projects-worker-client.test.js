@@ -22,9 +22,9 @@ function fixture(options = {}) {
   return { client, worker, messages, applied, reply, change: () => { version++; } };
 }
 
-for (const changeAt of ['before reply', 'during apply']) test(`deletion read-only retry tolerates an ordinary DB change ${changeAt}`, async () => {
+for (const maxDiscards of [1, 3]) for (const changeAt of ['before reply', 'during apply']) test(`deletion read-only retry tolerates an ordinary DB change ${changeAt}, budget=${maxDiscards}`, async () => {
   let calls = 0;
-  const f = fixture({ apply: async () => {
+  const f = fixture({ maxDiscards, apply: async () => {
     if (++calls === 1) throw Object.assign(new Error('deleted'), { code: 'PROJECT_EPOCH_STALE' });
     if (changeAt === 'during apply') f.change();
   } });
@@ -32,6 +32,7 @@ for (const changeAt of ['before reply', 'during apply']) test(`deletion read-onl
   try {
     f.reply(0, { effects: [{ name: 'setFolderMeta' }], keptLiveRows: [] });
     await new Promise(resolve => setImmediate(resolve));
+    assert.ok(f.messages[1], 'deletion must retain one read-only fallback even with a single-dispatch race budget');
     assert.equal(f.messages[1].readOnly, true);
     if (changeAt === 'before reply') f.change();
     const result = { effects: [], keptLiveRows: [], reconciled: false };

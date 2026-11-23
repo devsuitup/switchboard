@@ -7,8 +7,12 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### New
 - Settings → Advanced → Diagnostics shows the size of Switchboard's logs and activity traces and lets you delete files older than a chosen number of days, keeping current files. (#1197)
 
+### Changed
+- Footer usage gauges are grouped under Claude and Codex, share Week and 5h window labels, and hide with their CLI setting. (#1208)
+
 ### Fixed
 - Background sessions retry temporary attachment failures at startup and share one dismissible notice with recovery actions. Finished jobs with queued tasks first try to recover; if respawn completes but their worker is confirmed dead, they no longer return at every launch. Timeouts and daemon errors keep them saved for another attempt at the next launch. (#1191)
+- With sessions active, Switchboard no longer reloads the project list in a loop, which kept the main process busy and logged spurious refresh errors; a project change that loses a race with indexing is now retried instead of dropped. (#1194)
 - A temporarily unreadable session is retried during the run, and a single failed read no longer makes the next start re-read its whole project folder, including subagent sessions. (#1193)
 
 ## v0.0.109 — 2026-11-22
