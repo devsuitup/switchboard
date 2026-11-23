@@ -131,7 +131,7 @@ test('T5.2 persisted writer revision bypasses the settings ACK mirror', () => {
   assert.equal(module.exports.getSetting('_writer_revision', { fresh: true }), 2);
 });
 
-for (const away of [false, true]) test(`T5.5/T5.6 stale fallback crosses the bridge and delayed recovery refreshes accepted lists, away=${away}`, async t => {
+for (const away of [false, true]) test(`T5.5/T5.6 conflict errors cross the bridge and delayed recovery refreshes accepted lists, away=${away}`, async t => {
   const { setupSidebarDom } = require('./dom-setup');
   const { loadAppFunctions } = require('./app-source');
   const h = setupSidebarDom(); t.after(() => h.destroy());
@@ -203,10 +203,11 @@ for (const away of [false, true]) test(`T5.5/T5.6 stale fallback crosses the bri
   f.reply(4, fresh);
   await flush(); assert.equal(w.cachedProjects[0].projectPath, 'fresh'); assert.equal(assemblies, 4);
   const coded = bridge.getProjects('both');
+  const rejected = assert.rejects(coded, { code: 'PROJECTS_SNAPSHOT_CONFLICT', message: 'Projects changed while loading; reload to retry.' });
   for (let i = 5; i < 8; i++) { await flush(); f.change(); f.reply(i, effectful); }
-  const fallback = await coded;
-  assert.equal(fallback.projectsStale, true);
-  assert.equal(fallback.defaultProjects[0].projectPath, 'fresh');
+  await rejected;
+  assert.equal(assemblies, 4, 'rejected conflicts never reassemble accepted lists');
+  assert.equal(w.cachedProjects[0].projectPath, 'fresh');
   const stale = bridge.getProjects('both');
   for (let i = 8; i < 11; i++) { await flush(); f.change(); f.reply(i, { ...readonly, defaultProjects: [{ projectPath: 'stale', sessions: [] }], allProjects: [] }); }
   const delivered = await stale;

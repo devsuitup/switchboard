@@ -2280,7 +2280,6 @@ async function loadProjects({ resort = false } = {}) {
     }
     const response = await window.api.getProjects('both');
     if (obsolete()) return state.outcome;
-    if (response.projectsFallback) throw Object.assign(new Error('Projects changed while loading; reload to retry.'), { code: 'PROJECTS_SNAPSHOT_CONFLICT' });
     const { defaultProjects, allProjects } = response;
     const [globalSettings, folderArchives] = await Promise.all([
       window.api.getSetting('global'), window.api.getSetting('archivedProjects'),

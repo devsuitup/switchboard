@@ -1436,29 +1436,34 @@ ipcMain.handle('get-last-known-projects', () => lastKnownProjects.load());
 let projectsReconcileAfterPopulate = false;
 let projectsReconciling = false;
 let projectsReconcileAttemptedAt = -Infinity;
-let projectsLastResult = null;
 let projectsRetryTimer = null;
 let projectsRetryRunning = false;
+let projectsRetryFailures = 0;
 
-function queueProjectsRetry() {
+function queueProjectsRetry(delay = 5000) {
   if (projectsRetryTimer || projectsRetryRunning || appQuitting) return;
   projectsRetryTimer = setTimeout(async () => {
     projectsRetryTimer = null;
     if (appQuitting) return;
     projectsRetryRunning = true;
     let stale = false;
+    let retryDelay = 5000;
     try {
-      const reply = await getProjectsSnapshot('both');
+      const reply = await getProjectsSnapshot('both', true);
       stale = !!(reply.projectsStale || reply.projectsError);
       if (!stale) notifyRendererProjectsChanged('reconcile');
-    } catch { stale = true; }
+    } catch {
+      stale = true;
+      projectsRetryFailures = Math.min(projectsRetryFailures + 1, 3);
+      retryDelay = [5000, 30000, 120000][projectsRetryFailures - 1];
+    }
     finally { projectsRetryRunning = false; }
-    if (stale) queueProjectsRetry();
-  }, 5000);
+    if (stale) queueProjectsRetry(retryDelay);
+  }, delay);
   projectsRetryTimer.unref?.();
 }
 
-async function getProjectsSnapshot(showArchived) {
+async function getProjectsSnapshot(showArchived, retry = false) {
   const started = TRACE.on ? performance.now() : null;
   try {
     const repairFolders = getSetting('bridge_uuid_reindex_folders');
@@ -1503,10 +1508,8 @@ async function getProjectsSnapshot(showArchived) {
       const changed = err.reason === 'live' ? ` changed=${changedLiveComponents(err.before, err.after)}` : '';
       log.info(`[projects] snapshot conflict after ${err.dispatches ?? 'unknown'} dispatches: reason=${err.reason ?? 'unknown'}${changed} reconcile=${err.reconcile ?? 'unknown'}`);
       queueProjectsRetry();
-      if (!projectsLastResult || showArchived !== 'both') throw err;
-      result = { ...structuredClone(projectsLastResult), stale: true, fallback: true };
+      throw err;
     } finally { if (reconcile) projectsReconciling = false; }
-    const consistentResult = result.stale ? null : structuredClone(result);
     const projection = result.projection
       ? { ...result.projection, removedInputs: structuredClone(result.projection.removedInputs) }
       : undefined;
@@ -1539,16 +1542,17 @@ async function getProjectsSnapshot(showArchived) {
     if (result.stale) {
       queueProjectsRetry();
       if (showArchived === 'both') reply.projectsStale = true;
-      if (result.fallback) reply.projectsFallback = true;
     } else {
-      projectsLastResult = consistentResult;
+      projectsRetryFailures = 0;
       if (showArchived === 'both') lastKnownProjects.remember({ defaultProjects: reply.defaultProjects, allProjects: reply.allProjects });
     }
     return reply;
   } catch (err) {
     if (err.code === 'PROJECTS_SNAPSHOT_CONFLICT') return { projectsError: { code: err.code, message: 'Projects changed while loading; reload to retry.' } };
-    if (err.code === 'PROJECTS_WORKER_TIMEOUT') log.warn(`[projects] get-projects timed out after ${err.timeoutMs} ms: reconcile=${err.reconcile ?? 'unknown'} dispatches=${err.dispatches ?? 'unknown'}`);
-    else console.error('Error listing projects:', err);
+    if (!retry || projectsRetryFailures < 3) {
+      if (err.code === 'PROJECTS_WORKER_TIMEOUT') log.warn(`[projects] get-projects timed out after ${err.timeoutMs} ms: reconcile=${err.reconcile ?? 'unknown'} dispatches=${err.dispatches ?? 'unknown'}`);
+      else console.error('Error listing projects:', err);
+    }
     throw err;
   }
 }

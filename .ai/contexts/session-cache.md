@@ -484,24 +484,23 @@ read-only build, preserving the deletion fence without replaying old effects.
 Effect-free conflicted replies can be delivered stale; effect-bearing replies
 still reject internally without publishing their remaining effects.
 
-Main substitutes only for a rejected conflict, using an in-process consistent
-result for paired callers. It saves a clone before assembly and clones that
-cache again on reuse so expired placeholders cannot accumulate. Current
-archive/hidden and live annotations still apply. This paired fallback carries
-both `projectsStale: true` and `projectsFallback: true`; the renderer rejects it
-before committing a generation, dropping provisional paint, announcing trigger
-readiness or advancing restore. Without an in-process result, and for boolean
-callers, main returns the exact `projectsError` conflict envelope recognized by
-preload. Persisted last-known lists remain provisional paint only; neither
-those nor invented empty lists seed the cache. Effect-free stale worker replies
-pass through with their current DB rows and only `projectsStale: true`, as in
-#1125; they never overwrite the consistent cache or the persisted last-known
-lists. No conflict or stale result immediately notifies the renderer.
+For every rejected conflict, paired and boolean callers receive the exact
+`projectsError` conflict envelope recognized by preload. Main retains no fallback
+worker-result cache, makes no full-result clone for it, and never reassembles or
+persists old lists after a rejection. The renderer keeps its previous lists and
+provisional paint without committing a generation, announcing trigger readiness
+or advancing restore. Persisted last-known lists remain provisional paint only.
+Effect-free stale worker replies pass through with their current DB rows and
+only `projectsStale: true`, as in #1125; they never overwrite the persisted
+last-known lists. No conflict or stale result immediately notifies the renderer.
 One unrefed five-second timer retries the snapshot in
 main, independently of renderer visibility. Concurrent failures share it; while
-it runs they cannot arm another timer. A stale, unavailable or rejected retry
-arms one further interval; a rejected retry logs once at the snapshot boundary;
-a successful retry emits one reconcile notification. Persistent contention
+it runs they cannot arm another timer. A stale or unavailable reply arms one
+further five-second interval. Non-conflict retry errors back off through 5 seconds,
+30 seconds and a two-minute cap. The snapshot boundary logs each backoff step
+once, suppressing repeated capped errors. Any successful non-stale snapshot,
+including a foreground load, resets the failure count and log suppression.
+A successful retry emits one reconcile notification. Persistent contention
 therefore costs at most one background refresh per five seconds, without a
 renderer feedback loop. Quitting prevents new retries and makes the timer inert.
 Real errors still follow the error path. Expected conflicts log at info with

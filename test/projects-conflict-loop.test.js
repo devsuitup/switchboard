@@ -78,9 +78,8 @@ test('writer racing every snapshot has one build per request, one reconcile per 
   assert.equal(counts.notifications, 0, 'conflicts must not immediately re-notify the renderer');
   assert.equal(counts.pending, 1, 'one coalesced delayed refresh');
   for (const reply of replies) {
-    assert.equal(reply.projectsError, undefined);
-    assert.equal(reply.projectsStale, true);
-    assert.equal(reply.allProjects[0].projectPath, '/consistent');
+    assert.equal(reply.projectsError?.code, 'PROJECTS_SNAPSHOT_CONFLICT');
+    assert.equal(reply.allProjects, undefined);
   }
   for (let i = 0; i < 3; i++) {
     const before = f.messages.length;
@@ -215,7 +214,7 @@ test('watcher backs off per failed folder while healthy folders retain the 500ms
   assert.equal(f.time.timers.size, 0);
 });
 
-for (const code of ['PROJECTS_WORKER_TIMEOUT', 'PROJECTS_WORKER_EXIT']) test(`rejected retry re-arms once and logs once: ${code}`, async () => {
+for (const code of ['PROJECTS_WORKER_TIMEOUT', 'PROJECTS_WORKER_EXIT']) test(`rejected retry backs off, caps logging and resets on success: ${code}`, async () => {
   const time = clock(), errors = [], notifications = [];
   let phase = 'conflict';
   const invoke = loadHandler({ ...time, TRACE: { on: false }, projectsReconciledAt: 0,
@@ -234,6 +233,28 @@ for (const code of ['PROJECTS_WORKER_TIMEOUT', 'PROJECTS_WORKER_EXIT']) test(`re
   assert.equal(time.timers.size, 1, 'a rejected delayed retry must re-arm without a filesystem event');
   assert.equal(errors.length, 1, 'a failed delayed retry is logged only once');
   assert.deepEqual(notifications, []);
-  phase = 'fresh'; await time.advance(5000);
+  const remaining = () => [...time.timers.values()][0].at - time.Date.now();
+  assert.equal(remaining(), 5000, 'first non-conflict failure retries after 5 seconds');
+  await time.advance(5000);
+  assert.equal(remaining(), 30000, 'second non-conflict failure backs off to 30 seconds');
+  assert.equal(errors.length, 2);
+  await time.advance(30000);
+  assert.equal(remaining(), 120000, 'third non-conflict failure backs off to two minutes');
+  assert.equal(errors.length, 3);
+  await time.advance(120000);
+  assert.equal(remaining(), 120000, 'permanent failure stays capped at two minutes');
+  assert.equal(errors.length, 3, 'capped retries must not repeat the error log');
+  assert.equal(time.timers.size, 1);
+  assert.deepEqual(notifications, []);
+  phase = 'fresh'; await time.advance(120000);
   assert.equal(time.timers.size, 0); assert.deepEqual(notifications, ['reconcile']);
+  phase = 'conflict'; await invoke(null, 'both');
+  assert.equal(remaining(), 5000, 'success resets the retry delay');
+  phase = 'failure'; await time.advance(5000);
+  assert.equal(remaining(), 5000, 'success resets the failure count');
+  assert.equal(errors.length, 4, 'success resets the per-step log suppression');
+  phase = 'fresh'; await invoke(null, 'both');
+  phase = 'failure'; await time.advance(5000);
+  assert.equal(remaining(), 5000, 'a successful foreground load also resets retry backoff');
+  assert.equal(errors.length, 5);
 });

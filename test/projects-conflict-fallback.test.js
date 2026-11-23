@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const loadHandler = require('./get-projects-handler.cjs');
-const { extractFunction, loadAppFunctions } = require('./app-source');
+const { loadAppFunctions } = require('./app-source');
 const { setupSidebarDom } = require('./dom-setup');
 const { createRestorePlanner } = require('../public/restore-plan');
 const conflict = () => Object.assign(new Error('Projects changed while loading; reload to retry.'), { code: 'PROJECTS_SNAPSHOT_CONFLICT' });
@@ -39,29 +39,25 @@ test('effect-free stale rows pass through after a conflict and do not resurrect 
   assert.equal(reply.projectsFallback, undefined);
   assert.equal(reply.projectsStale, true);
 });
-test('cached conflict fallback is explicit and boolean callers remain unavailable', async () => {
-  const f = fixture(); await f.invoke(null, 'both'); f.conflict();
-  assert.equal((await f.invoke(null, 'both')).projectsFallback, true, 'a cached reply must not be committed by the renderer');
-  for (const mode of [false, true]) assert.equal((await f.invoke(null, mode)).projectsError?.code, 'PROJECTS_SNAPSHOT_CONFLICT');
+test('conflicts after success return only an error envelope without assembling cached lists', async () => {
+  let assemblies = 0;
+  const f = fixture({ writer: { applyAndPersistArchived: async projects => { assemblies++; return projects; } } });
+  await f.invoke(null, 'both'); f.conflict();
+  for (const mode of ['both', false, true]) {
+    const reply = await f.invoke(null, mode);
+    assert.equal(reply.projectsError?.code, 'PROJECTS_SNAPSHOT_CONFLICT', 'every conflict must return an error envelope even after a successful load');
+    assert.equal(reply.allProjects, undefined);
+    assert.equal(reply.defaultProjects, undefined);
+    assert.equal(reply.projectsFallback, undefined);
+  }
+  assert.equal(assemblies, 2, 'conflicts must not re-assemble or persist old lists');
+  await assert.rejects(f.invoke.triggerSnapshot(), /project lookup unavailable/, 'trigger must refuse a conflict after success');
 });
 test('trigger snapshot refuses effect-free stale rows', async () => {
   const f = fixture(); f.reply({ ...rows('/real'), stale: true });
   await assert.rejects(f.invoke.triggerSnapshot(), /project lookup unavailable/, 'stale project lookup must be retryable');
 });
-test('placeholder assembly never contaminates the consistent cache or a later fallback', async () => {
-  let placeholders = [{ projectPath: '/remote', remoteAlias: 'host', sessionId: 'temporary' }];
-  const filename = path.join(__dirname, '../main.js'), source = fs.readFileSync(filename, 'utf8');
-  const context = { remoteIndexer: { getAllPlaceholderSessions: () => placeholders }, joinFolderKey: (alias, folder) => alias + ':' + folder };
-  vm.createContext(context);
-  for (const name of ['toSidebarPlaceholderSession', 'mergePlaceholderSessions']) vm.runInContext(extractFunction(source, name), context, { filename });
-  const f = fixture({ mergePlaceholderSessions: context.mergePlaceholderSessions });
-  const first = await f.invoke(null, 'both');
-  assert.ok(first.allProjects.some(p => p.sessions.some(s => s.sessionId === 'temporary')));
-  placeholders = []; f.conflict();
-  const second = await f.invoke(null, 'both');
-  assert.equal(second.allProjects.some(p => p.sessions.some(s => s.sessionId === 'temporary')), false, 'expired placeholders must not survive in the fallback cache');
-});
-for (const consumer of ['loadStartupProjects', 'markRestoreIndexingDone', 'reloadProjects']) test(`renderer does not commit a fallback or give up restore through ${consumer}`, async t => {
+for (const consumer of ['loadStartupProjects', 'markRestoreIndexingDone', 'reloadProjects']) test(`renderer keeps previous lists and pending restore on a conflict through ${consumer}`, async t => {
   const h = setupSidebarDom(); t.after(() => h.destroy()); const w = h.window;
   const planner = createRestorePlanner({ savedSet: [{ sessionId: 'saved' }] });
   const provisional = [{ projectPath: '/provisional', sessions: [] }];
@@ -72,7 +68,12 @@ for (const consumer of ['loadStartupProjects', 'markRestoreIndexingDone', 'reloa
   for (const name of ['reportActivityFocus', 'reportActivityTitles', 'renderDefaultStatus', 'setRemoteHostLabels', 'refreshSidebar', 'clearAppNotice']) w[name] = () => {};
   w.console.warn = () => {}; w.setTimeout = () => 1;
   w.pollActiveSessions = async () => undefined;
-  w.api.getProjects = async () => ({ ...rows('/deleted'), projectsStale: true, projectsFallback: true });
+  const f = fixture(); await f.invoke(null, 'both'); f.conflict();
+  const filename = path.join(__dirname, '../preload.js'), source = fs.readFileSync(filename, 'utf8');
+  const start = source.indexOf('getProjects: ') + 'getProjects: '.length;
+  const end = source.indexOf('  sessionProjectionChanged:', start);
+  assert.ok(start > 'getProjects: '.length && end > start);
+  w.api.getProjects = vm.runInNewContext(source.slice(start, end).trimEnd().replace(/,$/, ''), { ipcRenderer: { invoke: (_name, mode) => f.invoke(null, mode) } }, { filename });
   w.api.getSetting = async () => ({}); w.api.getActiveTerminals = async () => [];
   w.api.triggerActionsReady = async () => { ready++; };
   w.restorePlanner = planner; w.skippedWorkingSetEntries = new Map();
@@ -81,11 +82,12 @@ for (const consumer of ['loadStartupProjects', 'markRestoreIndexingDone', 'reloa
   w.restoreStartupSessions = async options => { loaded = options?.projectsLoaded; if (loaded) await w.tickRestorePlanner(); };
   loadAppFunctions(h.context, { functions: ['dedup', 'loadProjects', 'reloadProjects', 'loadStartupProjects', 'markRestoreIndexingDone'], declarations: ['startupProjectsHandedOver'] });
   await w[consumer]({ restoreRetry: true });
-  assert.equal(w.loadProjects.state.committed, 0, 'fallback must not commit a project generation');
+  assert.equal(w.loadProjects.state.committed, 0, 'conflict must not commit a project generation');
   assert.equal(w.cachedProjects, provisional);
+  assert.equal(w.cachedAllProjects, provisional);
   assert.equal(w.sidebarContent.classList.contains('projects-provisional'), true);
   if (consumer === 'loadStartupProjects') assert.equal(loaded, false);
   assert.equal(ready, 0);
-  assert.equal(ticks, 0, 'fallback must not advance the restore planner');
+  assert.equal(ticks, 0, 'conflict must not advance the restore planner');
   assert.equal(planner.isSettled(), false);
 });
