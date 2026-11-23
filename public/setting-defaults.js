@@ -33,6 +33,7 @@ const SETTING_DEFAULTS = {
   receiveBetaVersions: false,
   shellProfile: 'auto',
   activityReporting: false, // see .ai/contexts/activitywatch.md
+  logRetentionDays: 14,
   remoteTriggers: false,
   remoteHosts: [],
   remoteRefreshMs: 300000,

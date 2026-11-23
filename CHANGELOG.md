@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- Settings → Advanced → Diagnostics shows the size of Switchboard's logs and activity traces and lets you delete files older than a chosen number of days, keeping current files. (#1197)
+
 ### Changed
 - Footer usage gauges are grouped under Claude and Codex, share Week and 5h window labels, and hide with their CLI setting. (#1208)
 

@@ -1,5 +1,34 @@
 # Context: ipc-bridge
 
+## Diagnostic log pruning (#1197)
+
+The existing Diagnostics section and `activity-trace-panel.js` own the grouped
+inventory and manual age cleanup, alongside the existing trace list/viewer.
+`get-diagnostic-files(days)` and `prune-diagnostic-files(days, files)` delegate
+to `src/main/shared/diagnostic-files.js`. Main supplies the active electron-log
+transport's `getFile().path`, `TRACE_DIR` and `activityTrace.currentFile()`;
+the renderer cannot select a directory. The allowlist is the transport's base
+filename and its `.old` rotation, plus `activityTrace.TRACE_FILE_RE`.
+
+The module canonicalizes paths (including Windows short TEMP spellings),
+rejects linked files and diagnostic roots that are themselves links, permits
+linked ancestors, and rechecks age, active paths and
+the preview's size/mtime/device/inode before each synchronous unlink. It does
+not recurse. Missing files are skipped; filesystem failures are returned per
+file. Inventory errors are displayed without hiding readable groups.
+`appConfirm` receives the eligible count and bytes; only its accepted snapshot
+is submitted. `logRetentionDays` defaults to 14 in `SETTING_DEFAULTS`, is saved
+with global Settings, and accepts whole days from 1 to 36500. Save resets an
+invalid retention input to its last saved value without blocking other settings,
+including when Diagnostics is hidden. Deletion paths are re-derived from the
+canonical root plus the allowlisted basename. No startup job.
+
+Age eligibility is strictly older than the retention cutoff (`mtimeMs < cutoff`);
+an exact-boundary file is kept. The diagnostic tests use a whole-second clock
+for both `utimesSync` and the injected current time so fractional-second storage
+rounding cannot move the boundary fixture across the cutoff. Real-file tests
+also pin eligibility and pruning one second on either side of the cutoff.
+
 For the synchronous appearance bootstrap (`get-initial-theme`), shared default,
 and live window/renderer updates, see [theme.md](theme.md).
 
