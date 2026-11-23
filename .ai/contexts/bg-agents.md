@@ -120,10 +120,11 @@ with dead or unknown worker liveness, even with pending task evidence. Live
 workers always follow the attach path, including idle `done` workers. Without
 supersession, dead `done` jobs retain automatic recovery, including when valid
 task evidence has queued tasks (#796). A queued job retires with an informational
-reason only after an attempted recovery fails to attach and a fresh conversation
-check proves its worker is still dead (#1191). A refused respawn is not an
-attempted recovery; attach-only checks never respawn or retire on queued evidence
-alone. Unknown worker liveness
+reason only after an acknowledged respawn fails to attach and a fresh conversation
+check proves its worker is still dead (#1191). A refused, timed-out or unknown
+respawn result, including daemon startup errors, preserves the refusal reason
+and saved entry for recovery at the next launch. Attach-only checks never respawn
+or retire on queued evidence alone. Unknown worker liveness
 still requires the empty, terminal task evidence introduced by #1065; live
 workers still attach. The exception does not infer worker death from `done`,
 and does not change recovery for other states. Legacy lookups retain
@@ -140,8 +141,9 @@ dormant and in-flight slots, clear its Restore notice and schedule persistence
 without opening a terminal or displaying a failure during startup. On a user
 click, retirement instead continues the ordinary guarded open in the same click.
 The transcript and Agents record remain available for an explicit user open or
-Respawn. Queued-job retirement follows a failed automatic recovery; the other
-retirement rules never call Respawn. Attach-only retries never call Respawn.
+Respawn. Queued-job retirement follows an acknowledged respawn with no surviving
+worker; the other retirement rules never call Respawn. Attach-only retries never
+call Respawn.
 
 Background restore outcomes share one persistent `Restore:background` notice
 with one Dismiss (#1191). Its members retain session name/id, cwd, job id and
@@ -160,7 +162,9 @@ the user to the Agents view or the sidebar rather than choosing a job for them.
 `prepareBackgroundRestore` retries worker-liveness-unknown and unavailable
 background-descriptor outcomes twice, with a one-second backoff before each
 retry. Both retries pass `attachOnly: true`; they cannot invoke Respawn (#785).
-Each attempt, including the descriptor recheck, has a 120-second renderer bound:
+Each attempt, including the descriptor recheck, has a 120-second renderer bound,
+named `RESTORE_BACKGROUND_VERB_RECONCILE_DESCRIPTOR_CHECK_TIMEOUT_MS` in
+`prepareBackgroundRestore`:
 60 seconds for the CLI verb, 20 for its subsequent roster reconciliation,
 15 for descriptor publication, and 25 for conversation checks and IPC overhead.
 These allowances track `VERB_TIMEOUT_MS`, `LIST_TIMEOUT_MS` in `bg-agents.js`

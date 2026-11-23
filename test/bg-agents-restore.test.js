@@ -26,13 +26,20 @@ function fixture(t) {
   return write;
 }
 
-for (const outcome of ['attached', 'dead', 'unknown', 'failed', 'refused', 'attach-only']) test(`M3 queued done job first recovers and retires only after failed recovery: ${outcome}`, async t => {
+for (const outcome of ['attached', 'dead', 'unknown', 'failed', 'timeout', 'no-result', 'daemon-error', 'refused', 'attach-only']) test(`R1 queued done job retires only after completed respawn and confirmed death: ${outcome}`, async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const write = fixture(t);
   write('aaaaaaaa', { state: 'done', updatedAt: '2026-11-23T01:00:00Z', inFlight: { tasks: 0, kinds: [], queued: 1 } });
   const handlers = new Map(), calls = [];
   t.mock.method(bg, 'conversationCheck', async () => ({ known: true, state: 'done', workerLiveness: calls.length && outcome === 'unknown' ? 'unknown' : 'dead', sessionIds: [SID] }));
-  t.mock.method(bg, 'runVerb', async (...args) => { calls.push(args); return ['failed', 'refused'].includes(outcome) ? { ok: false, refused: outcome === 'refused', error: 'respawn failed' } : { ok: true }; });
+  const errors = { failed: 'respawn failed', timeout: 'respawn timed out after 60000 ms', 'daemon-error': 'daemon failed to start' };
+  t.mock.method(bg, 'runVerb', async (...args) => {
+    calls.push(args);
+    if (outcome === 'daemon-error') throw new Error(errors[outcome]);
+    if (outcome === 'no-result') return undefined;
+    if (errors[outcome]) return { ok: false, error: errors[outcome] };
+    return outcome === 'refused' ? { ok: false, refused: true, error: 'respawn refused' } : { ok: true };
+  });
   require('../src/main/bg-agents/bg-agents-ipc').init({
     ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, bgAgents: bg,
     getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map(),
@@ -46,9 +53,15 @@ for (const outcome of ['attached', 'dead', 'unknown', 'failed', 'refused', 'atta
   t.mock.timers.tick(15000);
   const result = await pending;
   assert.deepEqual(calls, outcome === 'attach-only' ? [] : [['respawn', 'aaaaaaaa']], 'M3 first sight must preserve automatic respawn');
-  const expected = { attached: 'attach', dead: 'retire', unknown: 'respawned-not-attached', failed: 'retire', refused: 'refuse', 'attach-only': 'refuse' };
-  assert.equal(result.action, expected[outcome]);
+  const expected = { attached: 'attach', dead: 'retire', unknown: 'respawned-not-attached', failed: 'refuse', timeout: 'refuse', 'no-result': 'refuse', 'daemon-error': 'refuse', refused: 'refuse', 'attach-only': 'refuse' };
+  assert.equal(result.action, expected[outcome], `R1 ${outcome}: only completed respawn with confirmed death retires`);
   if (outcome === 'dead') assert.match(result.reason, /ended.*queued/);
+  if (errors[outcome] || outcome === 'no-result') {
+    assert.ok(result.reason.includes(`Respawn result is unknown (${errors[outcome] || 'no result'})`), 'R1 preserves the refusal reason for retry on next launch');
+    t.mock.timers.tick(15000);
+    await handlers.get('restore-background-job')({}, SID);
+    assert.equal(calls.length, 2, 'R1 an expired respawn hold allows another recovery attempt');
+  }
 });
 
 for (const state of ['done', 'failed', 'stopped']) {

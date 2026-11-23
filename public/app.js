@@ -598,6 +598,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
 
 
 async function prepareBackgroundRestore(session, item, { attachOnly = false, interactive = false } = {}) {
+  const RESTORE_BACKGROUND_VERB_RECONCILE_DESCRIPTOR_CHECK_TIMEOUT_MS = 120000;
   let result;
   let attempts = 0;
   let live;
@@ -620,7 +621,7 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
           return { ...outcome, action: 'refuse', reason: 'The background descriptor is no longer available — not attached' };
         }
         return outcome;
-      })(), new Promise(resolve => { timer = setTimeout(() => resolve({ action: 'refuse', reason: 'Background restore timed out — check the Agents view before retrying' }), 60000 + 20000 + 15000 + 25000); })]);
+      })(), new Promise(resolve => { timer = setTimeout(() => resolve({ action: 'refuse', reason: 'Background restore timed out — check the Agents view before retrying' }), RESTORE_BACKGROUND_VERB_RECONCILE_DESCRIPTOR_CHECK_TIMEOUT_MS); })]);
     } catch (err) { result = { action: 'refuse', reason: err.message || String(err) }; }
     finally { clearTimeout(timer); }
     live = result?.live;
