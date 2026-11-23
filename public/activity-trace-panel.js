@@ -176,3 +176,47 @@ function wireActivityTraceToggle(inputEl, listEl) {
 window.openActivityTraceFile = openActivityTraceFile;
 window.renderActivityTraceFiles = renderActivityTraceFiles;
 window.wireActivityTraceToggle = wireActivityTraceToggle;
+
+function wireDiagnosticFiles(container, traceList) {
+  const inventory = container.querySelector('#sv-diagnostic-inventory');
+  const daysInput = container.querySelector('#sv-log-retention-days');
+  const button = container.querySelector('#sv-prune-logs');
+  const status = container.querySelector('#sv-prune-result');
+  if (!inventory || !daysInput || !button || !status) return;
+  const refresh = async days => {
+    const plan = await window.api.getDiagnosticFiles(days);
+    if (!inventory.isConnected) return plan;
+    inventory.textContent = plan.groups.map(g => `${g.kind === 'main' ? 'Main logs' : 'Activity traces'}: ${g.count} files · ${formatTraceSize(g.size)}`).join(' | ');
+    if (plan.errors?.length) inventory.textContent += ' — ' + plan.errors.map(e => `${e.filePath || ''}: ${e.error}`).join('; ');
+    return plan;
+  };
+  refresh(Number(daysInput.value)).catch(err => { inventory.textContent = `Could not list log files: ${err.message}`; });
+  button.addEventListener('click', async () => {
+    if (button.disabled || !daysInput.reportValidity()) return;
+    const days = Number(daysInput.value);
+    if (!Number.isInteger(days) || days < 1 || days > 36500) return;
+    button.disabled = true;
+    daysInput.disabled = true;
+    try {
+      const plan = await refresh(days);
+      if (!plan.count) { status.textContent = 'No eligible files to delete.'; return; }
+      if (!await appConfirm({ title: 'Delete old log files?', message: `Delete ${plan.count} files (${formatTraceSize(plan.size)}) older than ${days} days?\n\nCurrent files are kept. This cannot be undone.`, confirmLabel: 'Delete', danger: true })) return;
+      const result = await window.api.pruneDiagnosticFiles(days, plan.files.filter(f => f.eligible));
+      status.textContent = `${result.deleted.length} deleted · ${result.skipped.length} skipped · ${result.failed.length} failed`;
+      for (const file of [...result.skipped, ...result.failed]) {
+        const detail = document.createElement('div');
+        detail.textContent = `${file.filePath || ''}: ${file.code || ''} ${file.error || ''}`;
+        status.appendChild(detail);
+      }
+      await refresh(days);
+      await renderActivityTraceFiles(traceList);
+    } catch (err) {
+      status.textContent = `Could not delete log files: ${err.message}`;
+    } finally {
+      button.disabled = false;
+      daysInput.disabled = false;
+    }
+  });
+}
+
+window.wireDiagnosticFiles = wireDiagnosticFiles;

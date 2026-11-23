@@ -29,6 +29,22 @@ global settings. The Diagnostics section also lists the trace files with their
 size and date, and opens or deletes them; the file being written cannot be
 deleted.
 
+### Deleting older log files
+
+Settings → Advanced → Diagnostics shows counts and total sizes for main logs
+and activity traces. Choose **Delete files older than** (14 days by default),
+then **Delete old files…**. The confirmation shows the eligible count and size;
+the result lists deleted, skipped and failed files, including per-file errors.
+Save remembers the chosen number of days. Cleanup is manual; it does not run
+at startup. Age uses the file's last modification time, strictly older than
+the selected number of days.
+
+The current main log and recording trace are kept. Files changed since the
+confirmation preview are skipped. Only the logger's current and rotated log
+names and the activity-trace filename pattern in their own directories are
+eligible. Linked directories and linked files are refused; sessions, the
+database and CLI folders are excluded.
+
 ### From the environment
 
 ```bash

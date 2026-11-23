@@ -528,6 +528,17 @@
             <div class="activity-trace-list" id="sv-activity-trace-list" data-settings-filter-exclude></div>
           </div>
         </div>
+        <div class="settings-field settings-field-wide">
+          <div class="settings-field-info">
+            <span class="settings-label">Switchboard log files</span>
+            <div id="sv-diagnostic-inventory" class="settings-description" data-settings-filter-exclude></div>
+            <label for="sv-log-retention-days">Delete files older than</label>
+            <input id="sv-log-retention-days" type="number" min="1" max="36500" step="1" required value="${escapeHtml(String(fieldValue('logRetentionDays')))}" aria-label="Log retention in days"> days
+            <button type="button" id="sv-prune-logs" class="settings-check-updates-btn">Delete old files…</button>
+            <div class="settings-description">Current log and recording traces are kept. Save remembers the number of days.</div>
+            <div id="sv-prune-result" class="settings-description" role="status" data-settings-filter-exclude></div>
+          </div>
+        </div>
       </div>` : ''}
 
       ${!isProject ? `<div class="settings-section">
@@ -895,6 +906,7 @@
       const traceList = settingsViewerBody.querySelector('#sv-activity-trace-list');
       wireActivityTraceToggle(settingsViewerBody.querySelector('#sv-activity-trace'), traceList);
       renderActivityTraceFiles(traceList);
+      window.wireDiagnosticFiles(settingsViewerBody, traceList);
     }
 
     // Use-global checkboxes toggle field disabled state
@@ -1006,6 +1018,9 @@
         }
         settings.visibleSessionCount = parseInt(settingsViewerBody.querySelector('#sv-visible-count').value) || SETTING_DEFAULTS.visibleSessionCount;
         settings.sessionMaxAgeDays = parseInt(settingsViewerBody.querySelector('#sv-max-age').value) || SETTING_DEFAULTS.sessionMaxAgeDays;
+        const logRetention = settingsViewerBody.querySelector('#sv-log-retention-days');
+        if (!logRetention.reportValidity()) return;
+        settings.logRetentionDays = Number(logRetention.value) || SETTING_DEFAULTS.logRetentionDays;
         settings.terminalTheme = settingsViewerBody.querySelector('#sv-terminal-theme').value || SETTING_DEFAULTS.terminalTheme;
         settings.theme = settingsViewerBody.querySelector('#sv-theme').value || SETTING_DEFAULTS.theme;
         settings.terminalRightClick = settingsViewerBody.querySelector('#sv-right-click').value || SETTING_DEFAULTS.terminalRightClick;
