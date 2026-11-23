@@ -103,7 +103,7 @@ const secretProbes = [
   ...['xoxa', 'xoxb', 'xoxp', 'xoxr', 'xoxs'].map(prefix => `${prefix}-probe-secret`),
   'eyJhbGciOiJIUzI1NiJ9.payload.signature', 'glpat-probe-secret', 'AKIA1234567890ABCDEF', 'npm_probe_secret',
   ...['sig', 'key', 'signature', 'code', 'auth', 'token', 'access_token'].map(key => `https://example.test/?${key}=probe-secret&next=ok`),
-  'sk-proj-probe-secret0123456789abcdef', 'ghp_probe_secret', 'github_pat_probe_secret', 'Bearer probe-secret', 'https://user:probe-secret@example.test',
+  'sk-probe-secret0123456789abcdef', 'ghp_probe_secret', 'github_pat_probe_secret', 'Bearer probe-secret', 'https://user:probe-secret@example.test',
 ];
 for (const probe of secretProbes) test(`M2 masks ${probe.split(/[=:]/)[0]}`, t => {
   const { send, lines } = setup(t);

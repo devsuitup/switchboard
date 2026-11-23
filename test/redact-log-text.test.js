@@ -39,30 +39,45 @@ const cases = [
   ['quoted unknown authorization', '{"Authorization":"Custom opaque credential","next":1}', '{"Authorization":[REDACTED],"next":1}'],
   ['bare cookie', 'Cookie: abc123secret\nnext line', 'Cookie: [REDACTED]\nnext line'],
   ['bare Set-Cookie', 'Set-Cookie: abc123secret', 'Set-Cookie: [REDACTED]'],
-  ['Windows credential path', 'C:\\Users\\jb\\password=1\\x', 'C:\\Users\\jb\\password=1\\x'],
+  ['Windows credential path', 'C:\\Users\\jb\\password=1\\x', 'C:\\Users\\jb\\password=[REDACTED]'],
   ['POSIX credential path', '/repo/password=1/x', '/repo/password=1/x'],
   ['long sk path', 'C:\\work\\sk-learn-experiments-2024\\run', 'C:\\work\\sk-learn-experiments-2024\\run'],
   ['sk letters only', 'sk-abcdefghijklmnopqrstuvwxyz', 'sk-abcdefghijklmnopqrstuvwxyz'],
   ['sk project key', 'sk-proj-abc123_abcdefghijklmnopqrstuvwxyz', '[REDACTED]'],
   ['sk Anthropic key', 'sk-ant-api03-abc123_abcdefghijklmnopqrstuvwxyz', '[REDACTED]'],
+  ...['clientsecret=', 'apitoken=', 'authtoken:', 'AUTHTOKEN=', 'APITOKEN=', 'accesstoken=', 'refreshtoken=', 'dbpassword=', 'userpassword:', 'mysqlpassword=', 'githubtoken=', 'appsecret='].map(key =>
+    [`compound ${key}`, `${key}abc123secret`, `${key}[REDACTED]`]),
+  ...['bypass', 'compass', 'trespass', 'tokens', 'max_tokens', 'secretary', 'passive'].map(key =>
+    [`ordinary ${key}`, `${key}=ordinary`, `${key}=ordinary`]),
+  ...['svcacct-', 'admin-', 'None-', 'or-v1-'].map(prefix =>
+    [`sk ${prefix}key`, `sk-${prefix}abc123def456ghi789jkl012`, '[REDACTED]']),
+  ['sk underscore suffix', 'sk-abc123def456ghi789jkl012_x', '[REDACTED]'],
+  ['escaped newline credential', 'stderr: "error\\nDB_PASSWORD=abc123secret\\n"', 'stderr: "error\\nDB_PASSWORD=[REDACTED]"'],
+  ['escaped tab credential', 'out=\\tGITHUB_TOKEN=abc123secret', 'out=\\tGITHUB_TOKEN=[REDACTED]'],
+  ['backslash credential', '\\password=abc123secret', '\\password=[REDACTED]'],
+  ['backslash CLI credential', '\\--token abc123secret', '\\--token [REDACTED]'],
 ];
 for (const [name, input, expected] of cases) test(name, () => {
   assert.equal(redactLogText(input), expected);
 });
 
-test('100 KB adversarial lines finish within 250 ms each without changing ordinary text', () => {
+test('100 KB adversarial lines finish within 100 ms each without changing ordinary text', t => {
   for (const input of ['a'.repeat(102400), 'a-'.repeat(51200), 'a_'.repeat(51200), 'http://' + 'a:'.repeat(51200), 'eyJ' + 'a'.repeat(102400), ' '.repeat(102400), '"'.repeat(102400), 'sk-' + 'a'.repeat(102400), 'C:\\' + 'password\\'.repeat(12000), '--' + 'accessToken'.repeat(10000)]) {
     const start = performance.now();
     assert.equal(redactLogText(input), input);
-    assert.ok(performance.now() - start < 250, `100 KB redaction under 250ms: ${input.slice(0, 20)}`);
+    const elapsed = performance.now() - start;
+    t.diagnostic(`${JSON.stringify(input.slice(0, 20))}: ${elapsed.toFixed(3)} ms`);
+    assert.ok(elapsed < 100, `100 KB redaction under 100ms: ${input.slice(0, 20)}`);
   }
 });
 
-test('100 KB new credential rules finish within 250 ms each', () => {
-  for (const prefix of ['--token=', '--password ', 'accessToken=', 'secretKey=', 'passwordHash=', 'Authorization: AWS4-HMAC-SHA256 ', 'Authorization: Digest ', 'Cookie: ', 'sk-proj-', 'sk-ant-']) {
-    const input = prefix + (prefix === 'Cookie: ' ? 'a;'.repeat(51200) : 'a'.repeat(102400));
+test('100 KB new credential rules finish within 100 ms each', t => {
+  for (const prefix of ['--token=', '--password ', 'accessToken=', 'secretKey=', 'passwordHash=', 'Authorization: AWS4-HMAC-SHA256 ', 'Authorization: Digest ', 'Cookie: ', 'sk-proj-', 'sk-ant-', 'sk-svcacct-', 'sk-admin-', 'sk-None-', 'sk-or-v1-', 'clientsecret=', '\\nDB_PASSWORD=', '\\--token ']) {
+    const input = prefix + (prefix === 'Cookie: ' ? 'a;'.repeat(51200) : 'a'.repeat(102399) + '1');
     const start = performance.now();
     assert.ok(redactLogText(input).length < 100, prefix);
-    assert.ok(performance.now() - start < 250, `100 KB redaction under 250ms: ${prefix}`);
+    const elapsed = performance.now() - start;
+    t.diagnostic(`${JSON.stringify(prefix)}: ${elapsed.toFixed(3)} ms`);
+    assert.ok(elapsed < 100, `100 KB redaction under 100ms: ${prefix}`);
   }
 });

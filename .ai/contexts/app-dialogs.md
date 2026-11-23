@@ -87,17 +87,19 @@ and masking only the following value. Unknown Authorization schemes mask the
 whole line value, or the quoted value, including Digest and AWS4 credentials.
 Cookie/Set-Cookie scans semicolon-separated assignments and preserves trailing
 prose and bare attributes; without an assignment it masks the field value.
-Credential keys are whole words, underscore/hyphen-delimited suffixes
-(`DB_PASSWORD`, `client_secret`), or case-sensitive camel boundaries
-(`accessToken`, `clientSecret`). `secretKey` and `passwordHash` are masked
+Credential suffixes also cover lowercase compounds (`clientsecret`, `apitoken`)
+and camel boundaries (`accessToken`, `clientSecret`). Only `pass` requires a
+whole key or underscore/hyphen delimiter. `secretKey` and `passwordHash` are masked
 conservatively; `bypass` and `compass` remain ordinary keys. AWS
 `X-Amz-Signature`/`X-Amz-Credential`, equals/space-separated
 `--token`/`--api-key`/`--password`/`--auth-token`, and
 passwords in any `scheme://user:password@host` URL are covered. Usernames and
-hosts are retained. `sk-proj-` and `sk-ant-` tokens are masked; other bare `sk-`
-tokens need at least 20 ASCII letters/digits including a digit. Kebab names
-such as `sk-learn-experiments-2024` are preserved. Key scans exclude both POSIX
-and Windows path separators at their left boundary.
+hosts are retained. `sk-` tokens allow up to three hyphenated ASCII alphanumeric
+prefix segments, followed by at least 20 ASCII letters/digits/underscores including
+a digit, covering proj, ant, svcacct, admin, None and or-v1. Kebab names such as
+`sk-learn-experiments-2024` are preserved. Key scans exclude POSIX separators at
+their left boundary, but accept backslashes so literal escape sequences do not
+hide credentials. Windows credential-like path segments are conservatively masked.
 Quoted values, including ones truncated before a closing quote, are masked as
 values; subsequent lines stay intact. Key and URL scans guard their left token
 boundary to prevent rescanning long suffixes, and cookie/value scans advance
