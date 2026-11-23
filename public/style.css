@@ -5011,6 +5011,10 @@ body { display: flex; flex-direction: column; }
   width: 100%;
 }
 
+.settings-field-wide .settings-input.settings-input-compact {
+  width: 56px;
+}
+
 /* --- Buttons --- */
 .settings-btn-row {
   display: flex;

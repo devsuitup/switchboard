@@ -4,8 +4,11 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- Settings → Advanced → Diagnostics shows the size of Switchboard's logs and activity traces and lets you delete files older than a chosen number of days, keeping current files. (#1197)
+
 ### Fixed
-- A project refresh conflict no longer replaces your sessions with an empty or older list, or makes startup restoration give up. A folder that cannot be read no longer delays updates from other folders. (#1194)
+- With sessions active, Switchboard no longer reloads the project list in a loop, which kept the main process busy and logged spurious refresh errors; a project change that loses a race with indexing is now retried instead of dropped. (#1194)
 
 ## v0.0.109 — 2026-11-22
 
@@ -17,7 +20,6 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - After a restart, Switchboard re-reads only the Codex sessions changed since the previous run, as it already does for Claude Code transcripts. Warm startup now finishes with "Indexed session changes" for both CLIs; a full rebuild still reports the indexing totals. (#1152)
 
 ### Fixed
-- Active sessions no longer cause repeated project reloads, excess CPU use or spurious refresh errors when indexing overlaps a sidebar refresh. (#1194)
 - While the session index is being built at startup, the sidebar no longer reloads over and over with "Projects changed while loading" and timeouts. (#1182)
 - The sidebar from your previous run is shown at startup on large histories too, instead of being dropped when it grew past 8 MiB. (#1183)
 - Startup no longer re-reads whole project folders at every launch when one transcript cannot be read or is being written during the scan, and transcripts larger than about 500 MB are indexed again. (#1180, #1181)
