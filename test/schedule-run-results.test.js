@@ -42,6 +42,15 @@ test('background timeout and joined cleanup survive persistence and readback', t
   assert.equal(result.jobId, input.jobId);
 });
 
+for (const outcome of ['stopped', 'job-missing']) test(`a background ${outcome} outcome survives persistence with its warning`, t => {
+  const h = fixture(t);
+  const input = { ...h.input, outcome, code: null, error: `job ${outcome}`, jobId: h.input.sessionId.slice(0, 8), cleanup: 'removed', warning: 'schedule provenance not recorded: EISDIR' };
+  api().writeScheduleRunResult(h.runsDir, input, h.log);
+  const result = api().readScheduleRunResults(h.runsDir, [input.sessionId]).get(input.sessionId);
+  assert.equal(result.outcome, outcome);
+  assert.equal(result.warning, input.warning);
+});
+
 function launcher(t, options = {}) {
   const f = fixture(t);
   const filename = path.join(__dirname, '../main.js');

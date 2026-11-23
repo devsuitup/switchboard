@@ -34,6 +34,17 @@ test('background fallback displays the reason without claiming the run failed', 
   assert.doesNotMatch(h.document.body.textContent, /exited with code|failed/);
 });
 
+for (const [outcome, text] of [['timed-out', /timed out/], ['stopped', /stopped before it finished/], ['job-missing', /lost its background job/], ['spawn-error', /failed to start \(Workspace not trusted\)/]]) {
+  test(`a background ${outcome} notice names what happened, not a null exit code`, t => {
+    const h = setup(t);
+    h.exit({ name: 'Nightly', projectPath: '/p', sessionId: 'bg', code: null, signal: null, failure: 'exit', outcome, error: 'Workspace not trusted' });
+    const alert = h.document.querySelector('[role="alert"]');
+    assert.ok(alert, 'a background failure leaves an error notice');
+    assert.match(alert.textContent, text);
+    assert.doesNotMatch(alert.textContent, /code null/);
+  });
+}
+
 for (const code of [0, 42]) {
   test(`schedule exit ${code} queues a schedules reload`, t => {
     const h = setup(t);

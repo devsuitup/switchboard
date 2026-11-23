@@ -49,7 +49,7 @@ test('VM loader rejects an unused lazy stub key after the operation', () => {
   assert.throws(() => assertLazyStubsLoaded(api), /lazy stubs must be loaded/);
 });
 
-function setup(t, { sandbox = false, platform = 'linux', refused = false, spawnError, syncError, archived = false, noReply = false, deferSpawn = false, windowState = 'open' } = {}) {
+function setup(t, { sandbox = false, platform = 'linux', refused = false, spawnError, syncError, archived = false, noReply = false, deferSpawn = false, windowState = 'open', frontmatter = '', captureOnly = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-run-result-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const previousTriggers = process.env.SWITCHBOARD_TRIGGERS_DIR;
@@ -60,7 +60,7 @@ function setup(t, { sandbox = false, platform = 'linux', refused = false, spawnE
   });
   const file = path.join(root, '.claude', 'commands', 'schedule-test.md');
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, '---\nname: test\n---\nDo the task');
+  fs.writeFileSync(file, `---\nname: test\n${frontmatter}---\nDo the task`);
   const handlers = new Map(), children = [], events = [], messages = [], logs = [], activities = [], created = [];
   const log = { info: (...args) => logs.push(args), warn: (...args) => logs.push(args), error: (...args) => logs.push(args) };
   const ctx = vm.createContext({
@@ -101,13 +101,16 @@ function setup(t, { sandbox = false, platform = 'linux', refused = false, spawnE
     electron: { ipcMain: { handle: (name, handler) => handlers.set(name, handler) } },
     [SCHEDULE_RUNNER]: {
       parseFrontmatter: require('../src/main/schedules/schedule-runner').parseFrontmatter,
-      createScheduleSession: schedule => { created.push(schedule); return { sessionId: 'manual-session' }; },
+      scheduleFields: require('../src/main/schedules/schedule-runner').scheduleFields,
+      createScheduleSession: schedule => { created.push(schedule); return { sessionId: 'manual-session', jsonlPath: path.join(root, 'seed', 'manual-session.jsonl') }; },
       buildScheduleCommand: () => ({ claudeArgs: ['--resume', 'manual-session', '--add-dir', refused ? path.join(root, '.claude') : '/refused'] }),
     },
   }, [SCHEDULE_RUNNER]);
   ctx.scheduleIpc = ipc;
   let identity;
-  ipc.init(log, noReply ? async () => undefined : (...args) => { identity = args[4]; return ctx.runScheduleCommand(...args); }, () => true, () => false);
+  ipc.init(log, noReply ? async () => undefined
+    : captureOnly ? async (...args) => { identity = args[4]; return { ok: true, sessionId: 'actual-session' }; }
+      : (...args) => { identity = args[4]; return ctx.runScheduleCommand(...args); }, () => true, () => false);
   return { run: async () => {
     const result = await handlers.get('run-schedule-now')(null, file);
     assertLazyStubsLoaded(ipc);
@@ -161,6 +164,19 @@ test('Run now passes the resolved schedule identity as the fifth launcher argume
   assert.equal(h.identity.slug, 'test');
   assert.equal(h.identity.filePath, fs.realpathSync(path.join(h.root, '.claude', 'commands', 'schedule-test.md')));
 });
+
+for (const [frontmatter, background] of [['', false], ['run-as-background: true\n', true], ['run-as-background: "TRUE"\n', true], ['runAsBackground: true\ntimeoutMs: soon\n', false]]) {
+  test(`Run now passes the background flag through the shared parser: ${JSON.stringify(frontmatter)}`, async t => {
+    const h = setup(t, { frontmatter, captureOnly: true });
+    const result = await h.run();
+    assert.equal(result.ok, true);
+    assert.equal(h.created[0].runAsBackground, background);
+    assert.equal('timeoutMs' in h.created[0], false, 'no timeout is read from the file');
+    assert.deepEqual(h.identity.background && { ...h.identity.background }, background ? { seedPath: path.join(h.root, 'seed', 'manual-session.jsonl') } : undefined,
+      'the launcher gets the seed createScheduleSession wrote');
+    assert.equal(result.sessionId, 'actual-session', 'Run now answers with the session the launcher reports');
+  });
+}
 
 test('Run now returns a Linux sandbox refusal with recovery and never spawns', async t => {
   const h = setup(t, { sandbox: true, platform: 'win32' });

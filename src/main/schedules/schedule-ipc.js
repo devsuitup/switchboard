@@ -151,7 +151,7 @@ function ensureScheduleCreatorCommand() {
 }
 
 function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
-  const { parseFrontmatter, createScheduleSession, buildScheduleCommand } = require('./schedule-runner');
+  const { parseFrontmatter, scheduleFields, createScheduleSession, buildScheduleCommand } = require('./schedule-runner');
 
   ipcMain.handle('get-schedule-creator-command', () => {
     try {
@@ -232,19 +232,16 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
       const schedule = {
         file: path.basename(realPath),
         filePath: realPath, projectPath, folder,
-        name: meta.name || path.basename(realPath),
+        ...scheduleFields(path.basename(realPath), meta),
         cron: meta.cron || '* * * * *',
-        slug: meta.slug || path.basename(realPath, '.md').replace(/^schedule-/, ''),
         cli: meta.cli || {},
         prompt: body,
-        runAsBackground: meta.runAsBackground === 'true',
-        timeoutMs: Number(meta.timeoutMs),
       };
 
-      const { sessionId } = createScheduleSession(schedule);
+      const { sessionId, jsonlPath } = createScheduleSession(schedule);
       const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
 
-      const result = await runCommand(claudeArgs, projectPath, schedule.name, () => {}, { manual: true, filePath: realPath, slug: schedule.slug, ...(schedule.runAsBackground ? { background: schedule } : {}) });
+      const result = await runCommand(claudeArgs, projectPath, schedule.name, () => {}, { manual: true, filePath: realPath, slug: schedule.slug, ...(schedule.runAsBackground ? { background: { seedPath: jsonlPath } } : {}) });
       if (!result?.ok) return { ok: false, error: result?.error || 'The schedule launcher returned no result. Check the shell settings and project folder, then try Run now again.' };
 
       log.info(`[schedule] Manual run triggered: ${schedule.name} (session ${sessionId})`);
@@ -256,12 +253,13 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
   });
 }
 
-function reportRunExit(window, { name, projectPath, sessionId, manual = false, code, signal, sandbox, stderr, backgroundFallback }) {
+function reportRunExit(window, { name, projectPath, sessionId, manual = false, code, signal, sandbox, stderr, backgroundFallback, outcome, error }) {
   if ((code === 0 && !backgroundFallback) || !window || window.isDestroyed() || window.webContents.isDestroyed()) return;
   window.webContents.send('schedule-run-exit', {
     name, projectPath, sessionId, manual, code, signal: signal || null,
     failure: classifyRunExit({ code, sandbox, stderr }),
     ...(backgroundFallback ? { backgroundFallback } : {}),
+    ...(outcome && outcome !== 'exited' ? { outcome, error: error || null } : {}),
   });
 }
 

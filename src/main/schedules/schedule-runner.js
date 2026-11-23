@@ -401,7 +401,7 @@ async function createScheduleFile(projectPath, fields, deps) {
     if (slug.length > 64 || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) return fail('slug', 'Use at most 64 lowercase letters, digits and single hyphens');
     const cron = scalar('cron', fields.cron, true);
     if (!cronCanMatch(cron)) return fail('cron', 'cron can never match');
-    for (const key of ['enabled', 'catch-up', 'runAsBackground']) {
+    for (const key of ['enabled', 'catch-up', 'run-as-background']) {
       if (fields[key] !== undefined && typeof fields[key] !== 'boolean') return fail(key, 'Choose on or off');
     }
     const cli = {};
@@ -422,16 +422,17 @@ async function createScheduleFile(projectPath, fields, deps) {
     field = 'prompt';
     if (typeof fields.prompt !== 'string' || !fields.prompt.trim()) return fail(field, 'Enter a prompt');
     const prompt = fields.prompt.replace(/\r\n?/g, '\n').trim();
-    if (fields.runAsBackground && resolveScheduleSandbox(projectPath, getSetting, defaultSandbox)) return fail('runAsBackground', 'Background sessions cannot run under the sandbox wrapper.');
+    if (fields['run-as-background'] && resolveScheduleSandbox(projectPath, getSetting, defaultSandbox)) return fail('run-as-background', 'Background sessions cannot run under the sandbox wrapper.');
     const refusal = scheduleLaunchRefusal({ sandbox: resolveScheduleSandbox(projectPath, getSetting, defaultSandbox), platform, addDirs, projectPaths, home, cwd: projectPath });
     if (refusal) return fail(refusal.problem === 'sandbox needs Linux' ? 'projectPath' : 'cli.add-dirs', refusal.error);
     if (listScheduleFiles([projectPath]).some(schedule => schedule.slug === slug)) return fail('slug', 'A schedule with this slug already exists');
     const lines = ['---', `name: ${name}`, `cron: ${cron}`, `slug: ${slug}`, `enabled: ${fields.enabled !== false}`, `catch-up: ${fields['catch-up'] === true}`];
-    if (fields.runAsBackground) lines.push('runAsBackground: true');
+    if (fields['run-as-background']) lines.push('run-as-background: true');
     if (Object.keys(cli).length) lines.push('cli:', ...Object.entries(cli).map(([key, value]) => `  ${key}: ${value}`));
     const content = lines.join('\n') + '\n---\n\n' + prompt + '\n';
     const parsed = parseFrontmatter(content);
-    for (const [key, value] of Object.entries({ name, cron, slug, enabled: String(fields.enabled !== false), 'catch-up': String(fields['catch-up'] === true) })) {
+    for (const [key, value] of Object.entries({ name, cron, slug, enabled: String(fields.enabled !== false), 'catch-up': String(fields['catch-up'] === true),
+      ...(fields['run-as-background'] ? { 'run-as-background': 'true' } : {}) })) {
       if (parsed.meta[key] !== value) return fail(key, 'This value cannot round trip through the schedule parser');
     }
     if (parsed.body !== prompt) return fail('prompt', 'This prompt cannot round trip through the schedule parser');
@@ -469,13 +470,16 @@ async function createScheduleFile(projectPath, fields, deps) {
   }
 }
 
+function frontmatterFlag(value) {
+  return typeof value === 'string' && /^(["']?)true\1$/i.test(value);
+}
+
 function scheduleFields(file, meta) {
   return {
     name: meta.name || file,
     slug: meta.slug || file.replace(/^schedule-/, '').replace(/\.md$/, ''),
-    catchUp: /^(["']?)true\1$/i.test(meta['catch-up'] || ''),
-    runAsBackground: meta.runAsBackground === 'true',
-    ...(meta.timeoutMs ? { timeoutMs: Number(meta.timeoutMs) } : {}),
+    catchUp: frontmatterFlag(meta['catch-up']),
+    runAsBackground: frontmatterFlag(meta['run-as-background']),
   };
 }
 
@@ -698,7 +702,7 @@ async function setListedScheduleEnabled(filePath, enabled, { scheduleProjects, s
  * @param {string} [opts.stateDir] - This instance's catch-up record directory; without it, catch-up schedules run on cron only
  * @returns {function} stop - Call to stop the scheduler
  */
-function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = {}) {
+function startScheduler(log, runCommand, { resumeSource, stateDir, projects, resumeBackgroundRuns } = {}) {
   let running = true;
   let lastTickMinute = null;
   const runningTasks = new Set();
@@ -719,13 +723,13 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
       log.info(`[schedule] Catching up: ${schedule.name} (${schedule.cron}), due ${new Date(dueMs).toISOString()}`);
     }
     try {
-      const { sessionId } = createScheduleSession(schedule, dueMs);
+      const { sessionId, jsonlPath } = createScheduleSession(schedule, dueMs);
       const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
 
       runningTasks.add(taskKey);
       const launched = runCommand(claudeArgs, schedule.projectPath, schedule.name, () => {
         runningTasks.delete(taskKey);
-      }, { filePath: schedule.filePath, slug: schedule.slug, dueMs, ...(schedule.runAsBackground ? { background: schedule } : {}) });
+      }, { filePath: schedule.filePath, slug: schedule.slug, dueMs, ...(schedule.runAsBackground ? { background: { seedPath: jsonlPath } } : {}) });
       if (launched?.catch) launched.catch(err => {
         runningTasks.delete(taskKey);
         log.error(`[schedule] Failed to run ${schedule.name}:`, err);
@@ -818,6 +822,15 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
   const tick = () => runCheck(true);
   const onResume = () => runCheck(false);
 
+  if (resumeBackgroundRuns) {
+    const claim = run => {
+      const key = `${encodeProjectPath(run.cwd)}:${run.slug}`;
+      runningTasks.add(key);
+      return () => runningTasks.delete(key);
+    };
+    try { Promise.resolve(resumeBackgroundRuns(claim)).catch(err => log.error('[schedule] Cannot resume background runs:', err)); }
+    catch (err) { log.error('[schedule] Cannot resume background runs:', err); }
+  }
   runCheck(false);
   if (resumeSource) resumeSource.on('resume', onResume);
 

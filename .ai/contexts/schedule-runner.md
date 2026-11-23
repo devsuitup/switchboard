@@ -2,49 +2,90 @@
 
 ## Opt-in background runs (#611)
 
-`runAsBackground: true` is opt-in and local only. Both cron and Run now pass the
-parsed schedule as optional launcher metadata; the headless argv builder remains
-unchanged. `schedule-background.js` creates a new job using
-`claude --bg --name <name> <options> -- <prompt>`. The delimiter protects the last
-prompt from variadic add-dir and allowedTools flags. The app's existing
-`runClaudeCommand` supplies sanitized child env and shell quoting.
+`run-as-background: true` is opt-in and local only. It is kebab-case like
+`catch-up`, and both read through `frontmatterFlag` in `scheduleFields`
+(quotes and any case accepted), which cron (`scanSchedules`) and Run now
+(`schedule-ipc.js`) share, so the two cannot disagree on a file. The flag is the
+only front matter #611 adds: the issue rules out other format changes, so there
+is no timeout key; background runs use the internal one-hour
+`BACKGROUND_RUN_LIMIT_MS`. Both callers pass `background: { seedPath }`, the
+path `createScheduleSession` returned, so the launcher never re-derives it. The
+headless argv builder is unchanged. `schedule-background.js` creates a new job
+using `claude --bg --name <name> <options> -- <seed message>`: the prompt is the
+seed's full first message, `Scheduled Task:` or catch-up heading included, as
+the headless run sees it. The delimiter protects that last argument from
+variadic add-dir and allowedTools flags. The app's existing `runClaudeCommand`
+supplies sanitized child env and shell quoting.
+
+Refusal falls back to headless with the existing fallback notice: a sandbox or
+a project `preLaunchCmd` (the predicate is bg-agents' `dispatchRefusal`, looked
+up on the resolved cwd like `dispatchSettings`), a WSL shell, and a
+`max-budget-usd` cap, which the CLI documents as `--print`-only. A global
+`preLaunchCmd` does not refuse: headless schedules never apply one either.
+`dispatchArgs` is not reused: it builds dispatch-form fields (agent, newline
+add-dirs) and refuses a leading `-`, while the schedule forwards its own
+validated headless options.
 
 CLI 2.1.302 measurements in #611 establish that flagless resume continues a
 previously created job, while resume with options forks it. They do not establish
 resume of a newly pre-seeded transcript with no job directory. We therefore keep
 the existing provisional seed, obtain the actual UUID from the launched job's
 state (checking its first eight hex characters against stdout), append a
-`schedule-provenance` record with that UUID to the actual transcript, then remove
-the provisional file. This record carries metadata without a user message,
+`schedule-provenance` record with that UUID to the actual transcript (the job's
+`linkScanPath` when it names that UUID, else beside the seed), then remove the
+provisional file. This record carries metadata without a user message,
 parentUuid or uuid, so it cannot introduce a second conversation root. The full
 and display-header readers accept its scheduleSlug alongside legacy user seeds.
-Append preserves any daemon records already written. The seed's scheduleSlug,
-timestamp, prompt and catch-up provenance survive. Run now and result records use
-the actual UUID. This transfer relies on the CLI's append-based transcript writer;
-it is covered with disposable files, not a live daemon integration measurement.
+A transfer error does not abandon the live job: it is logged, monitoring
+continues, and the result record carries it as `warning`, shown in the
+schedule's history.
+
+Launch: the launcher call has its own 30 s bound (`LAUNCH_TIMEOUT_MS`),
+independent of the run limit, and so does the wait for the job's identity. The
+job id comes from `parseDispatchOutput` and errors from `stripShellNoise`. When
+no id is printed, the jobs directory is scanned (at most 200 entries) for the
+one job named like the schedule, created after launch, whose `cwd` matches when
+state.json records one; it is stopped and removed, and the failure recorded.
+Without exactly one match nothing is cleaned.
 
 The launcher acknowledgement does not complete a run. A synthetic lifetime emits
 exit only after state monitoring and cleanup; trackScheduleRun stores kind bg and
 jobId, so the existing resume guard returns attach even before the descriptor is
-published. The in-flight key stays held until onDone. Catch-up claims and
-skipMissedRuns remain unchanged. Agents discovers the daemon's regular job files.
+published. It has no pid, so the delete guard names none. The in-flight key
+stays held until onDone. Catch-up claims and skipMissedRuns remain unchanged.
+Agents discovers the daemon's regular job files.
 
-Completion requires done/failed and lastTerminalAt (or updatedAt if absent)
-strictly after launch; stale done and firstTerminalAt alone do not count. Polling
-is 500 ms. This checkout had no schedule timeout, so background runs introduce a
-one-hour default, overridable by positive timeoutMs; headless runs are unchanged.
-Timeout persists outcome timed-out. stop then rm are bounded CLI calls; failed
-stop prevents rm. Own active attach PTYs and other live non-bg descriptors prevent
-cleanup and yield "left running, joined". Cleanup errors are retained in history.
-The attachment check and daemon stop cannot be atomic, and app shutdown/restart
-does not recover monitors. Those limits require live/CI follow-up.
+Terminal states, read through `parseJobState`: done/failed with lastTerminalAt
+(or updatedAt if absent) strictly after launch end the run as `exited` 0/1;
+stale done and firstTerminalAt alone do not count. `stopped` ends it as
+`stopped` (fresh timestamp, or none at all) and is removed without a second
+stop. state.json missing on two consecutive polls ends it as `job-missing` with
+nothing to clean. The limit ends it as `timed-out`. Polling is 500 ms. stop then
+rm are bounded CLI calls; rm runs from the home directory (bg-agents rule);
+failed stop prevents rm. Own active attach PTYs and other live non-bg
+descriptors prevent cleanup and yield "left running, joined". Cleanup errors
+are retained in history. The attachment check and daemon stop cannot be atomic.
+Every background outcome, launch failures included, goes through
+`reportRunExit` with its `outcome`, so the notice says timed out, stopped, lost
+its job or failed to start rather than an exit code.
 
-Sandbox, remote and configured pre-launch/WSL wrappers refuse background mode and
-log and display the headless fallback reason. Arbitrary wrappers hidden behind a
-shell alias are not discoverable. Create disables remote/sandbox selection and
-the backend refuses sandbox opt-in creation. Existing saved files still fall back.
-Tests: schedule-background, dom-schedule-create, schedule-create-file,
-schedule-run-results and dom-schedule-run-exit; all use injected CLI boundaries.
+Restart: once identity is known, `{ jobId, actualId, cwd, name, filePath, slug,
+manual, dueMs, startedAtMs, deadline }` is written to
+`<data>/schedule-state/background/<jobId>.json` (the catch-up reader ignores the
+subdirectory) and deleted after the result is written. `startScheduler` calls
+`resumeBackgroundRuns` at start without awaiting it; each valid record (at most
+64) resumes polling and cleanup against its saved deadline, is tracked again
+for the resume guard, and holds its schedule's in-flight key, so a cron tick
+does not start a second run beside it. A run past its deadline times out at
+once. A launch interrupted before identity is not recorded and stays a leak.
+A resumed run reports no ActivityWatch span.
+
+Create disables remote/sandbox selection and the backend refuses sandbox opt-in
+creation. Existing saved files still fall back.
+Tests: schedule-background (main extraction with the real module and disposable
+job files), schedule-catch-up, run-schedule-now-result, dom-schedule-create,
+schedule-create-file, schedule-run-results and dom-schedule-run-exit; all use
+injected CLI boundaries.
 
 Project launch admission is shared with terminal, background and remote launches;
 see [project-operation-gate.md](project-operation-gate.md). Scheduler admission

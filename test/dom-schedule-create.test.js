@@ -34,14 +34,14 @@ function setup(t) {
 
 test('background checkbox defaults off, persists opt in and disables with a reason for remote or sandbox', async t => {
   const h = setup(t);
-  const control = h.field('runAsBackground');
+  const control = h.field('run-as-background');
   assert.ok(control, 'background opt-in control exists');
   assert.equal(control.checked, false);
   control.checked = true; h.fill(); h.submit(); await settle();
-  assert.equal(h.calls[0][1].runAsBackground, true);
+  assert.equal(h.calls[0][1]['run-as-background'], true);
   for (const extra of [{ remoteAlias: 'vps' }, { sandboxed: true }]) {
     h.w.openScheduleCreateForm([{ ...h.data.projects[0], ...extra }]);
-    const field = h.w.document.querySelector('[name="runAsBackground"]');
+    const field = h.w.document.querySelector('[name="run-as-background"]');
     assert.equal(field.disabled, true);
     assert.match(field.parentElement.textContent, /local only|sandbox/i);
     h.w.document.dispatchEvent(new h.w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));

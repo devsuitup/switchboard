@@ -14,7 +14,7 @@ function scheduleRunFailureHint(failure) {
       : 'See the log for details, then try Run now again.';
 }
 
-function showScheduleRunExit({ name, projectPath, sessionId, manual = false, code, signal, failure, backgroundFallback }) {
+function showScheduleRunExit({ name, projectPath, sessionId, manual = false, code, signal, failure, backgroundFallback, outcome, error }) {
   if (backgroundFallback) {
     showAppNotice({ id: `ScheduleBackground:${projectPath}:${name}`, kind: 'info', message: `Schedule ${name}: ${backgroundFallback}` });
     return;
@@ -23,7 +23,11 @@ function showScheduleRunExit({ name, projectPath, sessionId, manual = false, cod
   const id = manual ? `ScheduleRun:${sessionId}` : `ScheduleRun:${projectPath}:${name}`;
   const count = manual ? 1 : (scheduleRunFailureCounts.get(id) || 0) + 1;
   if (!manual) scheduleRunFailureCounts.set(id, count);
-  const result = signal ? `terminated by ${signal}` : `exited with code ${code}`;
+  const result = outcome === 'timed-out' ? 'timed out'
+    : outcome === 'stopped' ? 'was stopped before it finished'
+      : outcome === 'job-missing' ? 'lost its background job'
+        : outcome === 'spawn-error' ? `failed to start${error ? ` (${error})` : ''}`
+          : signal ? `terminated by ${signal}` : `exited with code ${code}`;
   const hint = scheduleRunFailureHint(failure);
   const subject = manual ? `Manual run of schedule ${name}` : `Schedule ${name}`;
   const repeats = count > 1 ? `failed ${count} times, last: ` : '';
