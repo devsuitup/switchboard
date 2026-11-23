@@ -12,7 +12,18 @@ const day = 86400000;
 
 function setup(t, io = fs) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-diagnostics-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const links = [];
+  t.after(() => {
+    for (const link of links) {
+      if (process.platform === 'win32') fs.rmdirSync(link);
+      else fs.unlinkSync(link);
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const linkDir = (target, link) => {
+    fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+    links.push(link);
+  };
   const logs = path.join(dir, 'logs');
   const traces = path.join(dir, 'data');
   fs.mkdirSync(logs); fs.mkdirSync(traces);
@@ -29,7 +40,7 @@ function setup(t, io = fs) {
   const trace = put(traces, 'activity-trace-20260102-000000.001.jsonl');
   const service = createDiagnosticFiles({ mainLogFile: () => fs.realpathSync.native(main), traceDir: traces,
     currentTrace: () => fs.realpathSync.native(active), io, now: () => now });
-  return { service, dir, logs, traces, main, old, active, trace, put, now };
+  return { service, dir, logs, traces, main, old, active, trace, put, now, linkDir };
 }
 
 test('inventory groups owned files and pruning respects age and both active writers across real path spellings', t => {
@@ -55,12 +66,50 @@ test('escape, symlink and junction paths cannot enter the deletion allowlist', t
   const h = setup(t);
   const outside = h.put(h.dir, 'main.old.log');
   const link = path.join(h.logs, 'linked');
+  h.linkDir(h.dir, link);
+  assert.ok(fs.lstatSync(link).isSymbolicLink(), 'fixture is a real directory link');
   const result = h.service.prune(14, [{ filePath: outside }, { filePath: path.join(link, 'main.old.log') }]);
   assert.equal(result.skipped.length, 2, 'outside and junction candidates are refused');
   assert.ok(fs.existsSync(outside));
-  const redirected = createDiagnosticFiles({ mainLogFile: () => path.join(link, 'main.log'), traceDir: h.traces, currentTrace: () => h.active,
-    io: { ...fs, lstatSync: file => file === link ? { isSymbolicLink: () => true } : fs.lstatSync(file) } });
+  const redirected = createDiagnosticFiles({ mainLogFile: () => path.join(link, 'main.log'), traceDir: h.traces, currentTrace: () => h.active });
   assert.equal(redirected.inventory(14).groups.find(g => g.kind === 'main').count, 0, 'a linked root is refused');
+});
+
+test('a diagnostic folder beneath a linked parent uses its canonical deletion path', t => {
+  const h = setup(t);
+  const link = path.join(h.dir, 'parent-link');
+  h.linkDir(h.logs, link);
+  const nested = path.join(h.logs, 'nested');
+  fs.mkdirSync(nested);
+  const main = h.put(nested, 'main.log');
+  const old = h.put(nested, 'main.old.log');
+  const service = createDiagnosticFiles({ mainLogFile: () => path.join(link, 'nested', 'main.log'),
+    traceDir: h.traces, currentTrace: () => h.active });
+  const plan = service.inventory(14);
+  assert.equal(plan.errors.length, 0, 'linked ancestors do not block diagnostics');
+  const candidate = plan.files.find(f => f.name === 'main.old.log');
+  assert.ok(candidate, 'old log beneath a linked parent is inventoried');
+  assert.equal(candidate.filePath, fs.realpathSync.native(old));
+  const result = service.prune(14, [candidate]);
+  assert.equal(result.deleted.length, 1, 'old log beneath a linked parent is pruned');
+  assert.equal(fs.existsSync(old), false);
+  assert.ok(fs.existsSync(main), 'current log is preserved');
+});
+
+test('an equally old replacement after preview is skipped', t => {
+  const h = setup(t);
+  const candidate = h.service.inventory(14).files.find(f => f.name === 'main.old.log');
+  const replacement = path.join(h.logs, 'replacement');
+  fs.writeFileSync(replacement, 'different replacement content');
+  fs.utimesSync(replacement, new Date(candidate.mtimeMs), new Date(candidate.mtimeMs));
+  fs.unlinkSync(h.old);
+  fs.renameSync(replacement, h.old);
+  assert.ok(fs.statSync(h.old).mtimeMs < h.now - 14 * day, 'replacement remains eligible by age');
+  assert.notEqual(fs.statSync(h.old).size, candidate.size, 'replacement differs from the preview');
+  const result = h.service.prune(14, [candidate]);
+  assert.equal(result.skipped.length, 1, 'equally old replacement is skipped');
+  assert.equal(result.deleted.length, 0);
+  assert.equal(fs.readFileSync(h.old, 'utf8'), 'different replacement content');
 });
 
 test('per-file deletion failures are returned while other deletions continue', t => {
@@ -117,7 +166,7 @@ test('main diagnostics IPC delegates inventory and deletion with the app-owned p
     log: { transports: { file: { getFile: () => ({ path: h.main }) } } },
     activityTrace: { currentFile: () => h.active }, ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
   });
-  vm.runInContext(source.slice(start, end), ctx, { filename });
+  vm.runInContext(source.slice(start, end), ctx, { filename, lineOffset: source.slice(0, start).split('\n').length - 1 });
   assert.equal(typeof handlers.get('get-diagnostic-files'), 'function', 'inventory IPC is registered');
   assert.equal(typeof handlers.get('prune-diagnostic-files'), 'function');
   const plan = handlers.get('get-diagnostic-files')({}, 14);

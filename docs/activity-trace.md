@@ -42,7 +42,8 @@ the selected number of days.
 The current main log and recording trace are kept. Files changed since the
 confirmation preview are skipped. Only the logger's current and rotated log
 names and the activity-trace filename pattern in their own directories are
-eligible. Linked directories and linked files are refused; sessions, the
+eligible. Diagnostic folders that are themselves links and linked files are
+refused; linked parent directories are supported. Sessions, the
 database and CLI folders are excluded.
 
 ### From the environment

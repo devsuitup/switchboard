@@ -11,13 +11,17 @@ the renderer cannot select a directory. The allowlist is the transport's base
 filename and its `.old` rotation, plus `activityTrace.TRACE_FILE_RE`.
 
 The module canonicalizes paths (including Windows short TEMP spellings),
-rejects linked files and linked ancestors, and rechecks age, active paths and
+rejects linked files and diagnostic roots that are themselves links, permits
+linked ancestors, and rechecks age, active paths and
 the preview's size/mtime/device/inode before each synchronous unlink. It does
 not recurse. Missing files are skipped; filesystem failures are returned per
 file. Inventory errors are displayed without hiding readable groups.
 `appConfirm` receives the eligible count and bytes; only its accepted snapshot
 is submitted. `logRetentionDays` defaults to 14 in `SETTING_DEFAULTS`, is saved
-with global Settings, and accepts whole days from 1 to 36500. No startup job.
+with global Settings, and accepts whole days from 1 to 36500. Save resets an
+invalid retention input to its last saved value without blocking other settings,
+including when Diagnostics is hidden. Deletion paths are re-derived from the
+canonical root plus the allowlisted basename. No startup job.
 
 For the synchronous appearance bootstrap (`get-initial-theme`), shared default,
 and live window/renderer updates, see [theme.md](theme.md).

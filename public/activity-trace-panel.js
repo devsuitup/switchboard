@@ -200,7 +200,7 @@ function wireDiagnosticFiles(container, traceList) {
     try {
       const plan = await refresh(days);
       if (!plan.count) { status.textContent = 'No eligible files to delete.'; return; }
-      if (!await appConfirm({ title: 'Delete old log files?', message: `Delete ${plan.count} files (${formatTraceSize(plan.size)}) older than ${days} days?\n\nCurrent files are kept. This cannot be undone.`, confirmLabel: 'Delete', danger: true })) return;
+      if (!await appConfirm({ title: 'Delete old log files?', message: `Delete ${plan.count} ${plan.count === 1 ? 'file' : 'files'} (${formatTraceSize(plan.size)}) older than ${days} days?\n\nCurrent files are kept. This cannot be undone.`, confirmLabel: 'Delete', danger: true })) return;
       const result = await window.api.pruneDiagnosticFiles(days, plan.files.filter(f => f.eligible));
       status.textContent = `${result.deleted.length} deleted · ${result.skipped.length} skipped · ${result.failed.length} failed`;
       for (const file of [...result.skipped, ...result.failed]) {

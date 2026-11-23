@@ -10,7 +10,7 @@ const { loadAppFunctions } = require('./app-source');
 const root = path.join(__dirname, '..');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-test('Diagnostics previews counts and bytes, confirms, reports failures and saves retention', async t => {
+function setup(t) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'public/index.html'), 'utf8'), { url: 'http://localhost', runScripts: 'outside-only' });
   t.after(() => dom.window.close());
   const w = dom.window;
@@ -36,18 +36,24 @@ test('Diagnostics previews counts and bytes, confirms, reports failures and save
     const filename = path.join(root, 'public', file);
     vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx, { filename });
   }
+  return { w, saved, requests, plan, question: () => question, confirm: () => { confirm = true; },
+    q: selector => w.document.querySelector(selector) };
+}
+
+test('Diagnostics previews counts and bytes, confirms, reports failures and saves retention', async t => {
+  const h = setup(t);
+  const { w, saved, requests, q } = h;
   await w.openSettingsViewer('global', null, null, { section: 'advanced' });
   await settle();
-  const q = selector => w.document.querySelector(selector);
   assert.ok(q('#sv-log-retention-days'), 'Diagnostics exposes the retention control');
   assert.equal(q('#sv-log-retention-days').value, '14');
   assert.match(q('#sv-diagnostic-inventory').textContent, /Main logs: 2 files.*2.0 KB/);
   q('#sv-prune-logs').click(); await settle();
-  assert.ok(question, 'deletion must ask for confirmation');
-  assert.match(question.message, /1 files.*1.0 KB/);
-  assert.equal(question.danger, true);
+  assert.ok(h.question(), 'deletion must ask for confirmation');
+  assert.match(h.question().message, /1 file \(1.0 KB\)/, 'one eligible file uses the singular');
+  assert.equal(h.question().danger, true);
   assert.equal(requests.filter(r => r[0] === 'delete').length, 0, 'Cancel never deletes');
-  confirm = true;
+  h.confirm();
   q('#sv-log-retention-days').value = '30';
   q('#sv-prune-logs').click(); await settle(); await settle();
   assert.equal(requests.find(r => r[0] === 'delete')[1], 30);
@@ -56,4 +62,28 @@ test('Diagnostics previews counts and bytes, confirms, reports failures and save
   assert.equal(q('#sv-prune-result locked'), null);
   q('#sv-save-btn').click(); await settle(); await settle();
   assert.equal(saved.global.logRetentionDays, 30);
+});
+
+test('invalid retention on a hidden page resets to the saved value without blocking other settings', async t => {
+  const { w, saved, q } = setup(t);
+  saved.global = { logRetentionDays: 30 };
+  await w.openSettingsViewer('global', null, null, { section: 'advanced' });
+  await settle();
+  const days = q('#sv-log-retention-days');
+  days.value = '0';
+  q('.settings-nav [data-section="sessions"]').click();
+  assert.equal(q('#settings-page-advanced').hidden, true, 'invalid input is on a hidden page');
+  const count = q('#sv-visible-count');
+  count.value = '17';
+  count.dispatchEvent(new w.Event('input', { bubbles: true }));
+  q('#sv-save-btn').click(); await settle(); await settle();
+  assert.equal(saved.global.visibleSessionCount, 17, 'unrelated settings are saved');
+  assert.equal(saved.global.logRetentionDays, 30, 'saved retention is preserved');
+  assert.equal(days.value, '30', 'invalid input visibly resets to the saved retention');
+});
+
+test('retention uses the shared numeric input classes', async t => {
+  const { w, q } = setup(t);
+  await w.openSettingsViewer('global', null, null, { section: 'advanced' });
+  assert.equal(q('#sv-log-retention-days').className, q('#sv-visible-count').className);
 });

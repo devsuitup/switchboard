@@ -9,13 +9,7 @@ function createDiagnosticFiles({ mainLogFile, traceDir, currentTrace, io = fs, n
   const same = (a, b) => process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
   const validDays = days => Number.isInteger(days) && days >= 1 && days <= 36500;
   function root(dir) {
-    let cursor = path.resolve(dir);
-    for (;;) {
-      if (io.lstatSync(cursor).isSymbolicLink()) throw new Error('Linked diagnostic directory refused');
-      const parent = path.dirname(cursor);
-      if (parent === cursor) break;
-      cursor = parent;
-    }
+    if (io.lstatSync(path.resolve(dir)).isSymbolicLink()) throw new Error('Linked diagnostic directory refused');
     return real(dir);
   }
   function sources() {
