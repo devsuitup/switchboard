@@ -38,7 +38,7 @@ Deleting a session deletes its subagent transcripts with it — see
 
 Claude workflow agents are nested under the session that started them and
 grouped by workflow run, rather than listed as independent top-level sessions.
-Codex subagent grouping is not supported.
+Codex subagent rollouts are not listed at all: the index skips them.
 
 ## Search
 

@@ -1,14 +1,16 @@
 # Live Testing with a Throwaway HOME
 
 An instance with its own `SWITCHBOARD_DATA_DIR` has its own database and its own
-single-instance lock, but it still reads Claude and Codex transcript directories: it can list
-one of your sessions, and a click, a reload or a restore can resume one of them
+single-instance lock, but it still reads Claude and Codex transcript directories: it lists
+every one of your sessions, and a click, a reload or a restore can resume one of them
 (see [Testing a PR live](testing-a-pr.md#4-sessions--the-transcripts-are-shared)).
 
 Use a temporary `HOME` and `USERPROFILE`, and point `CODEX_HOME` inside it
 as well. This isolates both CLI transcript locations, including when your
 normal environment sets `CODEX_HOME` to an absolute path. The sample creates
 only a fixture Claude transcript in that temporary home.
+Launched that way, the instance cannot list, open or resume any of your
+sessions, nor touch your `~/.claude` settings, memory or IDE lock files.
 
 ## What the environment needs
 

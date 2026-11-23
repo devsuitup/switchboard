@@ -47,8 +47,8 @@ open but is not linked to a guessed sidebar row.
 
 Codex sessions support search, the message viewer, Changes, the panel shell,
 activity states and statistics. Switchboard does not provide Codex background
-jobs, schedules, SSH sessions, IDE emulation, subagent grouping or detection
-of a Codex process already running elsewhere. Deleting a Codex transcript
+jobs, schedules, SSH sessions, IDE emulation or detection of a Codex process
+already running elsewhere. Codex subagent rollouts are not listed at all. Deleting a Codex transcript
 from Switchboard is refused. The Claude options below apply to Claude launches.
 
 ## New Session dialog

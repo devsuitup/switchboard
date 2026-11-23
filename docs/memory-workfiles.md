@@ -20,8 +20,9 @@ they live:
 
 No directory is scanned recursively. Archived and deleted projects are left out.
 This listing scans Claude instruction locations, not `$CODEX_HOME`. The
-project-root filename `agents.md` is case-sensitive on Linux and macOS, so
-uppercase `AGENTS.md` is not included there.
+project-root file is looked up by the literal name `agents.md`. On a
+case-sensitive filesystem (Linux by default), uppercase `AGENTS.md` is not
+listed; on Windows and on default (case-insensitive) macOS volumes it is.
 
 With **Schedules tab** off in Global Settings (the default), project command
 files named `schedule-*.md` stay in Agent Files and its search results, with

@@ -266,9 +266,11 @@ is archived. Shared path-only settings cannot be deleted. Only confirmed,
 available choices are remembered; Cancel changes nothing.
 
 The preview shows the full host and path, counts, and expandable complete
-targets and effects. Project files, transcripts, schedules, memory and `.work-files` stay on disk
-unless you explicitly select a linked worktree folder for removal. Those
-folder choices start unchecked; the main checkout is always kept. Kept schedules may reactivate on re-add;
+targets and effects. Project files, schedules, memory and `.work-files` stay on
+disk, except inside a linked worktree folder you explicitly select for removal:
+that folder is removed together with its ignored files (`.work-files`, `.env`,
+and so on). Those folder choices start unchecked; the main checkout is always
+kept. Transcripts under `~/.claude/projects` are never removed. Kept schedules may reactivate on re-add;
 retained transcripts can restore their titles. Background jobs must be stopped
 from the Agents view first. Local terminal stopping for deletion requires Windows;
 on other platforms stop the terminals first and reopen the preview.
