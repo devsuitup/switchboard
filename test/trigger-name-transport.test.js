@@ -122,9 +122,9 @@ test('PowerShell off Windows keeps the bare claude and plain single-quoted token
 const helperSource = () => profiles.shellArgs(PWSH, '__switchboard_launch x', [], { windows: true })[2].slice(0, -'__switchboard_launch x'.length);
 test('the PowerShell helper falls back to the command PowerShell resolves and never shadows claude', () => {
   const source = helperSource();
-  assert.ok(source.startsWith('function __switchboard_launch{param([string]$n)'), source);
+  assert.ok(source.startsWith('function __switchboard_launch{param([string]$__sbCmd)'), source);
   assert.ok(!source.includes('function claude'));
-  assert.ok(source.includes("Get-Command $n -ErrorAction Stop|Select-Object -First 1;$f=$c.Source;$t='';if($c.CommandType -eq 'ExternalScript'){"), source);
+  assert.ok(source.includes("Get-Command $__sbCmd -ErrorAction Stop|Select-Object -First 1;$f=$c.Source;$t='';if($c.CommandType -eq 'ExternalScript'){"), source);
   assert.ok(source.includes("[IO.Path]::GetDirectoryName($_.Source) -eq [IO.Path]::GetDirectoryName($c.Source) -and $_.Source -match '\\.(cmd|bat)$'}|Select-Object -First 1;$f=if($a){$a.Source}else{''}}"), source);
   assert.ok(source.includes("elseif($c.CommandType -ne 'Application'){& $c @args;return};"), source);
   assert.ok(source.includes("'" + require('../claude-binary').SHIM_INVOCATION.source + "','IgnoreCase,Multiline');"), source);
