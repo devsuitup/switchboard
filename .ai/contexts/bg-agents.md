@@ -118,7 +118,12 @@ or cwd equality alone never supersedes a job. Unreadable, unrelated and
 undated candidates cannot establish supersession. Superseded entries retire
 with dead or unknown worker liveness, even with pending task evidence. Live
 workers always follow the attach path, including idle `done` workers. Without
-supersession, dead `done` jobs retain automatic recovery. Legacy lookups retain
+supersession, dead `done` jobs retain automatic recovery except when valid task
+evidence has queued tasks: these jobs retire with an informational reason
+because no worker remains to run their queue (#1191). Unknown worker liveness
+still requires the empty, terminal task evidence introduced by #1065; live
+workers still attach. The exception does not infer worker death from `done`,
+and does not change recovery for other states. Legacy lookups retain
 their unique-match requirement. Explicit-id restore lookups share directory names
 and parsed state records for a fixed one-second window, including calls separated
 by asynchronous settings reads. The snapshot is keyed by jobs directory; a directory
@@ -133,6 +138,34 @@ without opening a terminal or displaying a failure during startup. On a user
 click, retirement instead continues the ordinary guarded open in the same click.
 The transcript and Agents record remain available for an explicit user open or
 Respawn. Retirement never calls Respawn, including attach-only retries.
+
+Background restore outcomes share one persistent `Restore:background` notice
+with one Dismiss (#1191). Its members retain session name/id, cwd, job id and
+final reason. A later successful open removes its member through the existing
+`clearAppNotice` member handling; an empty group disappears. An ended queued
+job is an informational member and is released from the saved working set.
+Other retirement remains silent. With one failed member, Attach or Respawn
+remains available where appropriate; with several members the notice directs
+the user to the Agents view or the sidebar rather than choosing a job for them.
+
+`prepareBackgroundRestore` retries worker-liveness-unknown and unavailable
+background-descriptor outcomes twice, with a one-second backoff before each
+retry. Both retries pass `attachOnly: true`; they cannot invoke Respawn (#785).
+Each attempt, including the descriptor recheck, has a 30-second renderer bound:
+at most 92 seconds per preparation, excluding time waiting for a background
+slot and the subsequent terminal open. The existing two-slot queue and active
+tab's 20-second gate remain unchanged. A timeout is final and does not cancel
+an outstanding main-process operation; a late result cannot open a terminal
+through the expired preparation. Only the final outcome is reported.
+
+Each failed preparation or subsequent terminal attach emits one `console.warn` line with `[restore-bg]`,
+session id, job id, outcome and attempt count. The existing `main.js`
+`console-message` bridge writes warning/error levels to `main.log`. The line
+omits names, cwd, reason text and prompts; identifiers are character-filtered
+and length-bounded. Successful retries and informational retirement do not log
+a failure. The returned `onOpenError` callback moves a terminal-attach failure
+into the same notice group and records `attach-failed`. Tests capture that warning and inspect the bridge without executing
+Electron; the physical log transport is not exercised by these Node tests.
 
 `conversationCheck(id, { workerLiveness: 'all' })` requests S1a's classifier
 for terminal states too. Live attaches; dead `working`, `done`, `running` and `failed` jobs go through

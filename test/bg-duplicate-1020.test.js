@@ -502,6 +502,7 @@ test('1020fix blocked restore notice Respawn click reaches the verb and attaches
   let notice;
   const opened = [];
   const ctx = require('node:vm').createContext({
+    setTimeout, clearTimeout,
     window: { api: {
       restoreBackgroundJob: (sid, options) => h.handlers.get('restore-background-job')({}, sid, options),
       bgAgentVerb: (verb, id) => h.handlers.get('bg-agent-verb')({}, verb, id),

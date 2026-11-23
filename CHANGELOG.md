@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- Background sessions retry temporary attachment failures at startup and share one dismissible notice; finished jobs with abandoned queued tasks no longer return at every launch. (#1191)
+
 ## v0.0.109 — 2026-11-22
 
 ### New

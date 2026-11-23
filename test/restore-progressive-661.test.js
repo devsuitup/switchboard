@@ -38,7 +38,7 @@ function setup({ savedSet, activeWaitMs = 20000, fresh = false }) {
     restoreBackgroundJob: (id) => new Promise((resolve) => {
       events.push(['restore', id]);
       pendingRestores.push({ id, resolve: () => resolve({ action: 'attach', sessionId: id, jobId: '1234abcd' }),
-        refuse: () => resolve({ action: 'refuse', reason: 'worker liveness unknown', jobId: '1234abcd' }) });
+        refuse: () => resolve({ action: 'refuse', reason: 'stopped job was not respawned automatically', jobId: '1234abcd' }) });
     }),
     getSessionContinuations: async () => ({ candidates: [], unresolved: false, continued: false }),
     getSetting: async (key) => JSON.parse(JSON.stringify(settings[key] || null)),

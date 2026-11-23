@@ -267,6 +267,9 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       const check = await bgAgents.conversationCheck(job.id, { workerLiveness: 'all' });
       if (!check.known) return refuse(check.reason || 'conversation liveness unknown');
       job.state = check.state;
+      if (job.state === 'done' && check.workerLiveness === 'dead' && tasks?.valid && tasks.queued > 0) {
+        return { action: 'retire', jobId: job.id, reason: 'The background session ended; its queued tasks can no longer run' };
+      }
       if (lookup.supersededBy && ['dead', 'unknown'].includes(check.workerLiveness)
         || job.state === 'done' && check.workerLiveness === 'unknown' && tasks?.valid && tasks.terminal
           && tasks.inFlight === 0 && tasks.queued === 0 && tasks.tasks.every(task => task.doneAt !== null)) {
