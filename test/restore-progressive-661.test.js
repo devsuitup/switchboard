@@ -38,7 +38,8 @@ function setup({ savedSet, activeWaitMs = 20000, fresh = false }) {
     restoreBackgroundJob: (id) => new Promise((resolve) => {
       events.push(['restore', id]);
       pendingRestores.push({ id, resolve: () => resolve({ action: 'attach', sessionId: id, jobId: '1234abcd' }),
-        refuse: () => resolve({ action: 'refuse', reason: 'worker liveness unknown', jobId: '1234abcd' }) });
+        transient: () => resolve({ action: 'refuse', reason: 'worker liveness unknown', jobId: '1234abcd' }),
+        refuse: () => resolve({ action: 'refuse', reason: 'stopped job was not respawned automatically', jobId: '1234abcd' }) });
     }),
     getSessionContinuations: async () => ({ candidates: [], unresolved: false, continued: false }),
     getSetting: async (key) => JSON.parse(JSON.stringify(settings[key] || null)),
@@ -206,6 +207,48 @@ async function drain(h, done) {
   }
   await done;
 }
+
+test('M4 active background retries retain a queue slot when the active gate expires', async t => {
+  const h = setup({ savedSet: [
+    { sessionId: 'active', projectPath: '/p', bg: true, active: true },
+    { sessionId: 'interactive', projectPath: '/p' },
+    { sessionId: 'b2', projectPath: '/p', bg: true },
+    { sessionId: 'b3', projectPath: '/p', bg: true },
+  ] });
+  const schedule = h.dom.window.setTimeout.bind(h.dom.window);
+  let backoff, gate;
+  h.dom.window.setTimeout = (fn, ms) => {
+    if (ms === 1000) { backoff = fn; return 0; }
+    if (ms === 20000) { gate = fn; return 0; }
+    return schedule(fn, ms);
+  };
+  const calls = [];
+  const restoreJob = h.dom.window.api.restoreBackgroundJob;
+  h.dom.window.api.restoreBackgroundJob = (id, options) => { calls.push([id, options?.attachOnly === true]); return restoreJob(id); };
+  const done = h.restore();
+  t.after(() => h.dom.window.close());
+  await h.settle();
+  h.pendingRestores.shift().transient();
+  await h.settle();
+  assert.deepEqual(h.events, [['restore', 'active']], 'retry backoff still holds the active gate');
+  gate();
+  await h.settle();
+  assert.equal(h.pendingOpens[0]?.sessionId, 'interactive');
+  h.pendingOpens.shift().resolve();
+  await h.settle();
+  assert.deepEqual(h.pendingRestores.map(p => p.id), ['b2'], 'backoff retains one of the two queue slots');
+  backoff();
+  await h.settle();
+  assert.deepEqual(calls, [['active', false], ['b2', false], ['active', true]]);
+  h.pendingRestores.splice(1, 1)[0].resolve();
+  await h.settle();
+  h.pendingOpens.shift().resolve();
+  await h.settle();
+  assert.deepEqual(h.pendingRestores.map(p => p.id), ['b2', 'b3'], 'completed retry releases exactly one slot');
+  await drain(h, done);
+  assert.deepEqual(h.shown(), ['interactive'], 'late active retry cannot steal focus');
+  assert.equal(h.events.filter(e => e[0] === 'open' && e[1] === 'active').length, 1);
+});
 
 test('a saved active background entry opens before an interactive sibling', async (t) => {
   const h = setup({ savedSet: [

@@ -3511,6 +3511,14 @@ ipcMain.on('activity-trace', (_event, cat, sid, fields) => {
 // see docs/activity-trace.md "Toggling it at runtime"
 const TRACE_FILE_RE = activityTrace.TRACE_FILE_RE;
 const TRACE_READ_CAP = 4 * 1024 * 1024;
+const diagnosticFiles = require('./src/main/shared/diagnostic-files').createDiagnosticFiles({
+  mainLogFile: () => log.transports.file.getFile().path,
+  traceDir: TRACE_DIR,
+  currentTrace: () => activityTrace.currentFile(),
+});
+
+ipcMain.handle('get-diagnostic-files', (_event, days) => diagnosticFiles.inventory(days));
+ipcMain.handle('prune-diagnostic-files', (_event, days, files) => diagnosticFiles.prune(days, files));
 
 function listActivityTraceFiles() {
   let names;
