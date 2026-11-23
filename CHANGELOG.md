@@ -12,6 +12,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Footer usage gauges are grouped under Claude and Codex, share Week and 5h window labels, and hide with their CLI setting. (#1208)
 
 ### Fixed
+- A conversation changed before startup no longer keeps a stale sidebar row for the whole run when another part of the conversation cannot be read. (#1213)
 - Session triggers now retry temporary project lookup conflicts within their timeout instead of refusing immediately during startup. (#1215)
 - Background sessions retry temporary attachment failures at startup and share one dismissible notice with recovery actions. Finished jobs with queued tasks first try to recover; if respawn completes but their worker is confirmed dead, they no longer return at every launch. Timeouts and daemon errors keep them saved for another attempt at the next launch. (#1191)
 - With sessions active, Switchboard no longer reloads the project list in a loop, which kept the main process busy and logged spurious refresh errors; a project change that loses a race with indexing is now retried instead of dropped. (#1194)

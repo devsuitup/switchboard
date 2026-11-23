@@ -1,0 +1,93 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { Worker } = require('node:worker_threads');
+const openStore = require('./fixtures/conversation-store.cjs');
+const { timers, setup, failReads } = require('./fixtures/deferred-1193.cjs');
+const options = { skip: !openStore.supported && 'SQLite fixture unavailable on Node 20' };
+require('./fixtures/isolated-codex-home.cjs')(test);
+
+async function bridgeFixture(t) {
+  const state = await setup(t);
+  const { f } = state;
+  const bridge = [{ type: 'bridge-session', bridgeSessionId: 'bridge-1213' }];
+  const bad = f.write('bridge-bad', 'bad', bridge);
+  const sibling = f.write('bridge-sibling', 'sibling', bridge);
+  assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+  assert.equal(f.db.getCachedSession('bridge-sibling').bridgeSessionId, 'bridge-1213');
+  f.logs.length = 0;
+  state.warnings.length = 0;
+  return { ...state, bad, sibling };
+}
+
+for (const error of ['ERR_STRING_TOO_LONG', 'TypeError', 'SyntaxError']) {
+  test(`${error}: a sibling changed before startup is refreshed by reconcile in the same run`, options, async t => {
+    const { f, folder, bad, sibling } = await bridgeFixture(t);
+    const before = f.db.getCachedSession('bridge-sibling').messageCount;
+    fs.appendFileSync(bad, '\n');
+    fs.appendFileSync(sibling, JSON.stringify({ type: 'user', uuid: 'changed-sibling', cwd: f.root,
+      timestamp: '2024-01-02T00:00:00.000Z', message: { content: 'changed before startup' } }) + '\n');
+    const clock = timers(t);
+    failReads(t, f, [bad], error);
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    assert.equal(clock.pending.size, 0, 'deterministic failures and their siblings do not arm retries');
+    assert.equal(f.db.getCachedSession('bridge-sibling').messageCount, before, 'startup withholds the bridge sibling');
+    f.cache.init({ PROJECTS_DIR: f.projects, activeSessions: f.activeSessions, getMainWindow: () => null,
+      db: f.db, log: { info() {}, warn() {}, error() {} } });
+    await f.cache.reconcileCacheFromFilesystemAsync({ throttle: false });
+    assert.equal(f.db.getCachedSession('bridge-sibling').messageCount, before + 1,
+      'reconcile must publish the sibling changed before startup without another filesystem change');
+    assert.equal(f.scans().find(scan => scan.folder === folder).filesDeferred, 1, 'the withheld sibling remains counted');
+  });
+}
+
+for (const phase of ['read', 'publication']) {
+  test(`${phase}: an unchanged bridge sibling has its own deferral cause`, options, async t => {
+    const { f, folder, bad, sibling, warnings } = await bridgeFixture(t);
+    fs.appendFileSync(bad, '\n');
+    const clock = timers(t);
+    const siblingBefore = fs.readFileSync(sibling);
+    if (phase === 'read') failReads(t, f, [bad], 'changed', 1);
+    else {
+      const emit = Worker.prototype.emit;
+      let appended = false;
+      t.mock.method(Worker.prototype, 'emit', function (event, msg, ...args) {
+        if (event === 'message' && msg?.result?.folder === folder && !appended) {
+          appended = true;
+          fs.appendFileSync(bad, '\n');
+        }
+        return emit.call(this, event, msg, ...args);
+      });
+    }
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    assert.deepEqual(fs.readFileSync(sibling), siblingBefore);
+    assert.deepEqual(warnings.filter(line => line.includes('file=bridge-sibling.jsonl ')),
+      [`[index] read failed folder=${folder} file=bridge-sibling.jsonl size=${siblingBefore.length} error=bridge-sibling`],
+      'bridge expansion must not report a race on an unchanged sibling');
+    assert.equal(clock.pending.size, 0, 'bridge-sibling is not a retryable read error');
+  });
+}
+
+test('the final stale replan logs its read errors once before failing the folder', options, async t => {
+  const { f, file, folder, warnings } = await setup(t);
+  timers(t);
+  const emit = Worker.prototype.emit;
+  let attempts = 0;
+  t.mock.method(Worker.prototype, 'emit', function (event, msg, ...args) {
+    if (event === 'message' && msg?.result?.folder === folder) {
+      attempts++;
+      msg.replan = true;
+    }
+    return emit.call(this, event, msg, ...args);
+  });
+  failReads(t, f, [file]);
+  const result = await f.cache.populateCacheViaWorker();
+  assert.equal(result.ok, false);
+  assert.match(result.error, /replan limit reached/);
+  assert.equal(attempts, 3, 'initial attempt plus two replans');
+  assert.deepEqual(warnings,
+    [`[index] read failed folder=${folder} file=${path.basename(file)} size=${fs.statSync(file).size} error=EBUSY`],
+    'the rejected final attempt must retain its read-error diagnostic without duplicates');
+});

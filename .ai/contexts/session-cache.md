@@ -91,11 +91,15 @@ removes the witness after a successful read. Claude sidecars and Codex
 effective titles remain dependencies. Transient I/O errors (including EBUSY,
 EACCES, EPERM, EMFILE, ENFILE, EIO, EAGAIN), short reads and raced failures have
 no durable negative witness. Only deferrals with read error codes enter the
-in-run retry queue; changed-during-read and publication races wait for the next
-startup. Legacy
-transient witnesses are ignored. A folder with only deterministic witnesses
+in-run retry queue; changed-during-read, publication races and bridge-sibling
+deferrals do not arm that queue. They remain eligible for filesystem reconcile
+and the next startup. Legacy transient witnesses are ignored. A folder with only deterministic witnesses
 retains its actual index mtime; only outstanding deferrals zero it. Publication
-checks contain one stamp per source. Directory and title-snapshot failures
+excludes a deterministic failure's bridge siblings too, so those siblings stay
+deferred, count in `filesDeferred` and keep the folder mtime at zero until
+reconcile can publish their changed content. Only the witnessed source itself
+is removed from the deferred set. Publication checks contain one stamp per source.
+Directory and title-snapshot failures
 still fail or replan the scope.
 
 The scan worker sends one diagnostic per failed or deferred source in a folder
@@ -104,11 +108,15 @@ separately from durable negative witnesses. Main adds publication races and logs
 each source once after replan checks, even if the writer subsequently fails, at warn as
 `[index] read failed folder=<key> file=<basename> size=<bytes> error=<code|type>`.
 Missing stamps use `changed-during-read`; main-side races use
-`raced-before-publication`. Subagent names include their parent session ID:
+`raced-before-publication`. Sources withheld only by bridge-group expansion use
+`bridge-sibling`, at either stage, without claiming that their files changed.
+Subagent names include their parent session ID:
 `file=<parentSessionId>/agent-<id>.jsonl`. The size is the pre-read observation
 (or the checked stamp for a publication race, zero if unavailable); no absolute source
 path, transcript content or exception message is included. Diagnostics are
-emitted even when subsequent publication fails. Unchanged negative witnesses
+emitted even when subsequent publication fails. Intermediate stale attempts do
+not duplicate warnings; if the second replan is also stale, its read errors are
+logged before the folder fails at the replan limit. Unchanged negative witnesses
 do not log again because their bodies are not retried. Read/failed counters remain
 truthful even when the folder publishes successfully; `filesDeferred` separately
 counts deferred sources after main-side validation. All startup publications
@@ -129,16 +137,18 @@ clears retry state and admits later non-forced populations; failed populations
 retain their exhausted latch. Force resets both, and shutdown
 cancels the timer. A source that remains inaccessible cannot be guaranteed to
 recover during the run, but each folder with a retryable error participates in
-each scheduled attempt. Live-write deferrals remain uncertified for the next
-startup and do not arm a timer. Stable deterministic negative witnesses and
-their bridge siblings remain excluded under #1180.
+each scheduled attempt. Live-write deferrals remain uncertified for reconcile
+or the next startup and do not arm a timer. Stable deterministic negative
+witnesses and their bridge siblings do not arm a timer either; withheld siblings
+remain deferred so that reconcile does not skip their folder.
 
 Each scoped retry sets `populatePromise`, so `isIndexingFinished()` is false
 during it. A Projects reconcile requested then is dropped by the current
 `main.js` get-projects handler: it waits on population and clears
 `projectsReconcileAfterPopulate` on success. This limitation also affects a
-successful partial retry. PR #1210 reworks that handler; #1193 fix1 does not
-change it.
+successful partial retry. A subsequent Projects request becomes eligible for
+reconcile after the five-second throttle; withheld sources must therefore keep
+their folder's mtime at zero until they are accounted for.
 
 Partial progress already persists through the existing folder version/configuration
 seal, per-row full-read certificates and negative witnesses; no new journal or

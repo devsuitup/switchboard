@@ -1593,7 +1593,7 @@ function stripBridgeEvidence(rows) {
   }
 }
 
-async function publishScannedFolder(msg) {
+async function publishScannedFolder(msg, logRejectedReads = false) {
   const result = msg.result;
   const started = performance.now();
   let ok = false;
@@ -1625,7 +1625,7 @@ async function publishScannedFolder(msg) {
       for (const relativePath of result.deferred || []) if (!diagnostics.has(relativePath)) {
         const file = startupSourcePath(PROJECTS_DIR, result.folder, relativePath);
         diagnostics.set(relativePath, { size: JSON.parse(checks.get(relativePath) || 'null')?.size || (file && observation(file)?.size) || '0',
-          error: 'raced-before-publication' });
+          error: raced.includes(relativePath) ? 'raced-before-publication' : 'bridge-sibling' });
       }
       result.readErrors = [...diagnostics];
       if (result.deferredIds?.length) result.sessions = result.sessions.filter(row => {
@@ -1668,7 +1668,7 @@ async function publishScannedFolder(msg) {
     if (result?.startup && ok && !result.deferred?.length && pendingRepairFolders().includes(result.folder)) await writer.completeRepairFolders([result.folder]);
     return written;
   } finally {
-    if (logReads) for (const [relativePath, failure] of new Map(result?.readErrors || [])) {
+    if (logReads || logRejectedReads) for (const [relativePath, failure] of new Map(result?.readErrors || [])) {
       const parent = classifyTranscriptPath(relativePath)?.parentSessionId;
       const name = (parent ? parent + '/' : '') + path.posix.basename(relativePath);
       log?.warn(`[index] read failed folder=${result.folder} file=${name} size=${failure.size} error=${failure.error}`);
@@ -1766,10 +1766,10 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
         if (msg.type === 'folder') {
           scanned++;
           try {
-            const written = await publishScannedFolder(msg);
+            const written = await publishScannedFolder(msg, (startup?.attempt || 0) >= 2);
             const folder = msg.folder || msg.result?.folder;
             if (msg.result?.startup && msg.result.readErrors?.some(([file, failure]) => msg.result.deferred?.includes(file)
-              && failure.error && !['changed-during-read', 'raced-before-publication'].includes(failure.error))) deferredFolders.add(folder);
+              && failure.error && !['changed-during-read', 'raced-before-publication', 'bridge-sibling'].includes(failure.error))) deferredFolders.add(folder);
             else deferredFolders.delete(folder);
             sessionCounts.total += written - (sessionCounts.folders.get(folder) || 0);
             sessionCounts.folders.set(folder, written);
