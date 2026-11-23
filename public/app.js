@@ -601,6 +601,8 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
   let result;
   let attempts = 0;
   let live;
+  let recovery;
+  let respawned = false;
   for (; attempts < 3;) {
     if (attempts) await new Promise(resolve => setTimeout(resolve, 1000));
     attempts++;
@@ -608,6 +610,9 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
     try {
       result = await Promise.race([(async () => {
         const outcome = await window.api.restoreBackgroundJob(item.sessionId, attachOnly || attempts > 1 ? { attachOnly: true } : undefined);
+        if (outcome?.action === 'respawned-not-attached') respawned = true;
+        if (outcome?.recovery === 'respawn') recovery = 'respawn';
+        else if (!recovery && ['attach', 'respawned-not-attached'].includes(outcome?.action)) recovery = 'attach';
         if (outcome?.action === 'attach' && outcome.sessionId === item.sessionId && typeof outcome.jobId === 'string' && outcome.jobId) {
           let descriptor;
           try { descriptor = await window.api.getSessionLiveElsewhere(outcome.sessionId); } catch {}
@@ -615,23 +620,27 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
           return { ...outcome, action: 'refuse', reason: 'The background descriptor is no longer available — not attached' };
         }
         return outcome;
-      })(), new Promise(resolve => { timer = setTimeout(() => resolve({ action: 'refuse', reason: 'Background restore timed out — check the Agents view before retrying' }), 30000); })]);
+      })(), new Promise(resolve => { timer = setTimeout(() => resolve({ action: 'refuse', reason: 'Background restore timed out — check the Agents view before retrying' }), 60000 + 20000 + 15000 + 25000); })]);
     } catch (err) { result = { action: 'refuse', reason: err.message || String(err) }; }
     finally { clearTimeout(timer); }
     live = result?.live;
     const transient = result?.action === 'respawned-not-attached'
-      || result?.action === 'refuse' && /worker liveness unknown|no live background descriptor within 15 seconds|background descriptor is no longer available|live worker has no attachable background descriptor/i.test(result.reason || '');
+      || result?.action === 'refuse' && (/worker liveness unknown|background descriptor is no longer available|live worker has no attachable background descriptor/i.test(result.reason || '')
+        || recovery && /worker is not live/i.test(result.reason || ''));
     if (!transient) break;
   }
   const id = sessionActionNoticeId('Restore', session);
   const report = (reason, actionLabel, onAction, kind = 'error') => {
-    const member = { id, kind, text: `${sessionActionDescription(session)}, job ${result?.jobId || item.attachJobId || 'unknown'}: ${reason}` };
-    const previous = typeof appNoticeEntries === 'undefined' ? [] : appNoticeEntries.get('Restore:background')?.options.members || [];
-    const members = [...new Map([...previous, member].map(value => [value.id, value])).values()];
-    showAppNotice({ id: 'Restore:background', kind: members.some(value => value.kind === 'error') ? 'error' : 'info',
+    const member = { id, kind, actionLabel, onAction, text: `${sessionActionDescription(session)}, job ${result?.jobId || item.attachJobId || 'unknown'}: ${reason}` };
+    showAppNotice({ id: 'Restore:background',
       members: [member], mergeMembers: true, persistent: true,
+      memberOptions: members => {
+        const errors = members.filter(value => value.kind === 'error');
+        return { kind: errors.length ? 'error' : 'info', actionLabel: errors.length === 1 ? errors[0].actionLabel : undefined,
+          onAction: errors.length === 1 ? errors[0].onAction : undefined };
+      },
       message: current => `Background session restore: ${current.map(value => value.text).join('; ')}. Check the Agents view. Open a conversation from the sidebar to retry attaching or resume an ended session.`,
-      actionLabel: members.length === 1 ? actionLabel : undefined, onAction: members.length === 1 ? onAction : undefined, dismissOnAction: false });
+      dismissOnAction: false });
   };
   const logFailure = outcome => {
     const logId = value => String(value || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 100);
@@ -656,11 +665,10 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
     const background = await prepareBackgroundRestore(session, item, { attachOnly: true });
     if (background) await openSession(session, undefined, { automatic: true, fromRestore: true, allowBgAttach: true, continuationResolved: true, ...background });
   };
-  if (result?.action === 'attach' && result.sessionId === item.sessionId && typeof result.jobId === 'string' && result.jobId) {
-    if (live?.kind === 'bg' && live.jobId === result.jobId) return { live, backgroundRestoreJobId: result.jobId,
+  if (result?.action === 'attach' && result.sessionId === item.sessionId && typeof result.jobId === 'string' && result.jobId
+    && live?.kind === 'bg' && live.jobId === result.jobId) {
+    return { live, backgroundRestoreJobId: result.jobId,
       onOpenError: error => { clearAppNotice(id); report(error); logFailure('attach-failed'); } };
-    report('The background descriptor is no longer available — not attached', 'Attach', () => retry(false));
-    return null;
   }
   logFailure(result?.action === 'respawned-not-attached' ? 'respawned-not-attached' : 'refuse');
   if (result?.action === 'respawned-not-attached') report('Respawned, not attached: no live background descriptor within 15 seconds', 'Attach', () => retry(false));
@@ -672,6 +680,9 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
     schedulePersistWorkingSet();
   }
   else if (result?.recovery === 'respawn') report(result.reason, 'Respawn', () => retry(true));
+  else if (recovery && result?.action === 'refuse' && /worker liveness unknown|background descriptor|worker is not live/i.test(result.reason || '')) {
+    report(`${respawned ? 'Respawned, not attached: ' : ''}${result.reason}`, recovery === 'respawn' ? 'Respawn' : 'Attach', () => retry(recovery === 'respawn'));
+  }
   else report(result?.reason || 'The background restore backend is unavailable or returned no result');
   return null;
 }

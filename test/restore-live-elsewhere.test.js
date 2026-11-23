@@ -275,6 +275,7 @@ for (const transient of ['unknown', 'respawned', 'disappeared', 'live-descriptor
     if (!succeeds) {
       assert.match(logs[0], /\[restore-bg\].*session=x.*job=1234abcd.*outcome=.*attempts=3/);
       if (transient === 'unknown') assert.match(h.dom.window.document.querySelector('#app-notices').textContent, /sample 3/);
+      if (transient === 'disappeared') assert.equal(h.dom.window.document.querySelector('.app-notice-action')?.textContent, 'Attach', 'M1 descriptor loss keeps Attach');
     }
   });
 }
@@ -306,7 +307,82 @@ test('1191 final background failure logs identifiers and outcome without session
   assert.match(logs[0], /\[restore-bg\].*session=x.*job=1234abcd.*outcome=refuse.*attempts=1/);
   assert.doesNotMatch(logs[0], /SECRET|secret-cwd|name-x/);
   const main = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  assert.match(main, /if \(level >= 2\) log\.error\(`/, 'existing renderer warning bridge writes to main.log');
+  const start = main.indexOf("  mainWindow.webContents.on('console-message',");
+  assert.ok(start >= 0);
+  const end = main.indexOf('\n  });', start) + '\n  });'.length;
+  let forward;
+  const forwarded = [];
+  vm.runInNewContext(main.slice(start, end), {
+    mainWindow: { webContents: { on: (event, handler) => { assert.equal(event, 'console-message'); forward = handler; } } },
+    log: { error: message => forwarded.push(message) },
+  }, { filename: path.join(__dirname, '../main.js') });
+  forward({}, 2, logs[0], 42, 'app.js');
+  assert.deepEqual(forwarded, [`[renderer:2] app.js:42 ${logs[0]}`]);
+  forward({}, 1, 'info', 1, 'app.js');
+  assert.equal(forwarded.length, 1);
+});
+
+test('M1 respawn followed by dead-worker retries keeps Attach and Respawned information', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true }], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  const schedule = h.dom.window.setTimeout.bind(h.dom.window);
+  h.dom.window.setTimeout = (fn, ms) => schedule(fn, ms === 1000 ? 0 : ms);
+  const calls = [];
+  h.dom.window.api.restoreBackgroundJob = async (_id, options) => {
+    calls.push(options?.attachOnly === true);
+    return calls.length === 1 ? { action: 'respawned-not-attached', jobId: '1234abcd' }
+      : { action: 'refuse', jobId: '1234abcd', reason: 'worker is not live — not attached' };
+  };
+  await h.restore();
+  const notice = h.dom.window.document.querySelector('#app-notices');
+  assert.equal(notice.querySelector('.app-notice-action')?.textContent, 'Attach', 'M1 dead-worker retry keeps Attach');
+  assert.match(notice.textContent, /Respawned/);
+  assert.deepEqual(calls, [false, true, true]);
+});
+
+for (const late of [false, true]) test(`M2 main may finish after 80 seconds; expired result never opens a tab: late=${late}`, async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true }], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  const timers = new Map();
+  let clock = 0, serial = 0, release;
+  const schedule = h.dom.window.setTimeout.bind(h.dom.window);
+  h.dom.window.setTimeout = (fn, ms) => {
+    if (ms < 1000) return schedule(fn, 0);
+    const id = ++serial; timers.set(id, { fn, at: clock + ms }); return id;
+  };
+  h.dom.window.clearTimeout = id => timers.delete(id);
+  const tick = ms => {
+    clock += ms;
+    for (const [id, timer] of timers) if (timer.at <= clock) { timers.delete(id); timer.fn(); }
+  };
+  h.dom.window.api.restoreBackgroundJob = () => new Promise(resolve => { release = resolve; });
+  h.dom.window.api.getSessionLiveElsewhere = async () => ({ kind: 'bg', jobId: '1234abcd', cwd: '/px' });
+  const done = h.restore();
+  await new Promise(resolve => setImmediate(resolve));
+  tick(80000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.dom.window.document.querySelector('#app-notices').children.length, 0, 'M2 watchdog must cover main recovery bounds');
+  if (late) { tick(120000); await done; }
+  release({ action: 'attach', sessionId: 'x', jobId: '1234abcd' });
+  await done;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(h.openTerminalCalls, late ? [] : ['x'], 'late completion cannot open another tab');
+});
+
+test('NIT removing group members recomputes severity and the one error action', async t => {
+  const h = setup({ savedSet: ['a', 'b', 'c'].map(sessionId => ({ sessionId, projectPath: '/p', bg: true })), liveIds: [] });
+  t.after(() => h.dom.window.close());
+  h.dom.window.api.restoreBackgroundJob = async id => id === 'c'
+    ? { action: 'retire', reason: 'ended queue' }
+    : { action: 'refuse', jobId: '1234abcd', reason: 'stopped', recovery: 'respawn' };
+  await h.restore();
+  vm.runInContext("clearAppNotice('Restore:local:a')", h.ctx);
+  let notice = h.dom.window.document.querySelector('.app-notice');
+  assert.equal(notice.querySelector('.app-notice-action')?.textContent, 'Respawn', 'one error keeps its action alongside retired info');
+  vm.runInContext("clearAppNotice('Restore:local:b')", h.ctx);
+  notice = h.dom.window.document.querySelector('.app-notice');
+  assert.equal(notice.getAttribute('role'), 'status', 'info-only group changes role');
+  assert.equal(notice.querySelector('.app-notice-action'), null);
 });
 
 test('1191 ended background job releases its saved slots with an informational member', async t => {

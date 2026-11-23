@@ -26,24 +26,29 @@ function fixture(t) {
   return write;
 }
 
-for (const attachOnly of [false, true]) test(`1191 done job with stranded queue retires without respawn; attachOnly=${attachOnly}`, async t => {
+for (const outcome of ['attached', 'dead', 'unknown', 'failed', 'refused', 'attach-only']) test(`M3 queued done job first recovers and retires only after failed recovery: ${outcome}`, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const write = fixture(t);
   write('aaaaaaaa', { state: 'done', updatedAt: '2026-11-23T01:00:00Z', inFlight: { tasks: 0, kinds: [], queued: 1 } });
   const handlers = new Map(), calls = [];
-  t.mock.method(bg, 'conversationCheck', async () => ({ known: true, state: 'done', workerLiveness: 'dead', sessionIds: [SID] }));
-  t.mock.method(bg, 'runVerb', async (...args) => { calls.push(args); return { ok: true }; });
+  t.mock.method(bg, 'conversationCheck', async () => ({ known: true, state: 'done', workerLiveness: calls.length && outcome === 'unknown' ? 'unknown' : 'dead', sessionIds: [SID] }));
+  t.mock.method(bg, 'runVerb', async (...args) => { calls.push(args); return ['failed', 'refused'].includes(outcome) ? { ok: false, refused: outcome === 'refused', error: 'respawn failed' } : { ok: true }; });
   require('../src/main/bg-agents/bg-agents-ipc').init({
     ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, bgAgents: bg,
     getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map(),
     getSetting: () => ({ openWorkingSet: [{ sessionId: SID, bg: true, attachJobId: 'aaaaaaaa' }] }),
     sessionHasPty: () => false, ptyPids: () => [],
-    cliSessionState: { readAllDescriptors: () => [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID }], onDescriptorsChanged: () => () => {},
+    cliSessionState: { readAllDescriptors: () => outcome === 'attached' && calls.length ? [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID, pid: 123 }] : [], onDescriptorsChanged: () => () => {},
       liveElsewhereChecked: async () => ({ known: true, live: null }) },
   });
-  const result = await handlers.get('restore-background-job')({}, SID, { attachOnly });
-  assert.equal(result.action, 'retire', 'dead done job with stranded queue must reach a terminal outcome');
-  assert.match(result.reason, /ended.*queued/);
-  assert.deepEqual(calls, [], 'retirement must never respawn');
+  const pending = handlers.get('restore-background-job')({}, SID, { attachOnly: outcome === 'attach-only' });
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(15000);
+  const result = await pending;
+  assert.deepEqual(calls, outcome === 'attach-only' ? [] : [['respawn', 'aaaaaaaa']], 'M3 first sight must preserve automatic respawn');
+  const expected = { attached: 'attach', dead: 'retire', unknown: 'respawned-not-attached', failed: 'retire', refused: 'refuse', 'attach-only': 'refuse' };
+  assert.equal(result.action, expected[outcome]);
+  if (outcome === 'dead') assert.match(result.reason, /ended.*queued/);
 });
 
 for (const state of ['done', 'failed', 'stopped']) {

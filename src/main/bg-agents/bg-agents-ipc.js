@@ -267,9 +267,6 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       const check = await bgAgents.conversationCheck(job.id, { workerLiveness: 'all' });
       if (!check.known) return refuse(check.reason || 'conversation liveness unknown');
       job.state = check.state;
-      if (job.state === 'done' && check.workerLiveness === 'dead' && tasks?.valid && tasks.queued > 0) {
-        return { action: 'retire', jobId: job.id, reason: 'The background session ended; its queued tasks can no longer run' };
-      }
       if (lookup.supersededBy && ['dead', 'unknown'].includes(check.workerLiveness)
         || job.state === 'done' && check.workerLiveness === 'unknown' && tasks?.valid && tasks.terminal
           && tasks.inFlight === 0 && tasks.queued === 0 && tasks.tasks.every(task => task.doneAt !== null)) {
@@ -285,6 +282,12 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
         if (attachOnly) return refuse('worker is not live — not attached');
         if (!['working', 'done', 'running', 'failed'].includes(check.state)) return refuse(check.state + ' job was not respawned automatically', 'respawn');
         const result = await respawnForHandoff(job);
+        if (!result.refused && !result.attached && job.state === 'done' && tasks?.valid && tasks.queued > 0) {
+          const after = await bgAgents.conversationCheck(job.id, { workerLiveness: 'all' });
+          if (after.known && after.workerLiveness === 'dead') {
+            return { action: 'retire', jobId: job.id, reason: 'The background session ended; its queued tasks can no longer run after recovery failed' };
+          }
+        }
         if (!result.ok) return refuse(result.error);
         return result.attached ? { action: 'attach', sessionId, jobId: job.id }
           : { action: 'respawned-not-attached', jobId: job.id };
