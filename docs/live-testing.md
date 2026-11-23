@@ -1,14 +1,16 @@
 # Live Testing with a Throwaway HOME
 
 An instance with its own `SWITCHBOARD_DATA_DIR` has its own database and its own
-single-instance lock, but it still reads `~/.claude/projects`: it lists every
-one of your sessions, and a click, a reload or a restore can resume one of them
+single-instance lock, but it still reads Claude and Codex transcript directories: it lists
+every one of your sessions, and a click, a reload or a restore can resume one of them
 (see [Testing a PR live](testing-a-pr.md#4-sessions--the-transcripts-are-shared)).
 
-Launched with a temporary `HOME`, the instance has an empty `~/.claude`. It can
-not list, open or resume any of your sessions, nor touch your `~/.claude`
-settings, memory or IDE lock files. Everything it needs is built inside that
-directory, and deleted with it.
+Use a temporary `HOME` and `USERPROFILE`, and point `CODEX_HOME` inside it
+as well. This isolates both CLI transcript locations, including when your
+normal environment sets `CODEX_HOME` to an absolute path. The sample creates
+only a fixture Claude transcript in that temporary home.
+Launched that way, the instance cannot list, open or resume any of your
+sessions, nor touch your `~/.claude` settings, memory or IDE lock files.
 
 ## What the environment needs
 
@@ -95,9 +97,11 @@ async function main(appDir) {
     const data = path.join(home, '.switchboard-test');
     const env = {
       // Drop the variables of any Claude session this script runs under.
-      ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CLAUDE|GIT_)/.test(k))),
+      ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CLAUDE|GIT_)/.test(k) && !['HISTFILE', 'ELECTRON_RUN_AS_NODE'].includes(k))),
       HOME: home,
       USERPROFILE: home,
+      CODEX_HOME: path.join(home, '.codex'),
+      ELECTRON_IS_DEV: '0',
       XDG_CONFIG_HOME: path.join(home, '.config'),
       SWITCHBOARD_DATA_DIR: data,
       SWITCHBOARD_TRIGGERS_DIR: path.join(data, 'triggers'),
@@ -109,7 +113,7 @@ async function main(appDir) {
     app = await electron.launch({
       executablePath: require(path.join(appDir, 'node_modules', 'electron')),
       args: [appDir, '--no-sandbox'],
-      cwd: appDir,
+      cwd: home,
       env,
     });
     const page = await app.firstWindow();

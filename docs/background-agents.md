@@ -203,63 +203,24 @@ continuation; unobserved slash-menu/history input and genuinely ambiguous
 branches retain their existing limits. The button's automatic conversion to an
 attach tab remains a separate attachment behavior.
 
-Use **Send to background** in a running session's header or its sidebar
-right-click menu to move it to the Claude daemon. The tab becomes an attached
-tab. If this conversation already has a background job that resumes the same
-conversation, Switchboard types `/exit`, waits for the terminal to exit, then
-relaunches that job and attaches it in the same tab position. Its job id,
-conversation id and job name stay the same, without a new `(2)` suffix.
-A conversation with no job record still uses `/bg` and a new continuation id;
-that path can still gain a name suffix when another record holds the name.
-Closing the attached tab detaches it;
-the session keeps running. While the tab stays open it is saved for restore,
-so Switchboard reattaches it after each restart.
+Use **Send to background** in a running Claude session's header or sidebar
+menu. Switchboard types the CLI's own `/bg`, waits for a confirmed background
+continuation, and attaches it in the same tab. Closing that attached tab
+detaches it; the job keeps running. While the tab stays open, it is saved for
+restore at the next start.
 
-Send or clear any unsubmitted prompt first, and answer any open terminal
-dialog. The action is unavailable for plain terminals, remote sessions,
-sandboxed sessions and sessions started through a pre-launch command.
-Switchboard also refuses when it cannot read Claude's state, and while Claude
-is working: send it to the background once it is idle. If subagents are running,
-Switchboard asks before sending: Claude may stop them during the move.
-If Claude asks for confirmation in the terminal, answer Background or Stay
-there; Switchboard does not answer that dialog for you.
+Send or clear an unsubmitted prompt and answer any terminal dialog first.
+Plain terminals, Codex, remote sessions, sandboxed sessions and sessions
+started through a pre-launch command cannot use this action. An unreadable
+state or a shell command running in the prompt also refuses the move.
+While Claude is working, **Send to background now?** offers **Send now**:
+`/bg` interrupts the running tool and finishes the turn in the background.
+Switchboard also asks when subagents are running, since Claude may stop them.
+If Claude asks **Background** or **Stay** in the terminal, answer there.
 
-If a live continuation already runs in the background, Switchboard refuses the
-move and asks you to open it from the sidebar, leaving this tab and its CLI untouched.
-
-Before typing, Switchboard refuses an ambiguous or unreadable job lookup,
-a job that would resume another conversation, an unknown conversation or job
-owner, a worker that is live (or may be live in a running, working or blocked
-job), or a conversation running elsewhere. The notice names the reason and
-what to check. A stopped, failed or finished job can be relaunched unless its
-worker is live.
-
-When there is no matching job, Switchboard identifies each readable record by
-its session id, resume id and transcript-path id, plus the session id the Agents view last listed for that job; if Switchboard has no such list yet, a record that does not name its conversation refuses — open the Agents view, then retry.
-This uses the cached roster and makes no CLI call on the decision path.
-A valid or invalid record identified only as another
-conversation's is ignored. An invalid record naming this conversation, or any
-readable record with no identity even after consulting the list, refuses before
-writing. A record that cannot be read or parsed, including a job directory with
-no state file, also refuses when no readable match exists; the notice says that
-a job record could not be read.
-
-When relaunching an existing job, an unidentifiable directory without a readable
-state file does not block a unique readable match at lookup. A missing state
-file also passes the owner check, so the existing job can be relaunched. An
-unparsable or unknown-state record can still make that owner check unknown, so
-Switchboard refuses before typing /exit, just as the respawn command would.
-A valid record identified by the cached Agents-view list is treated as an existing job, but
-relaunch still requires a valid session or resume id in the job file naming
-this conversation; the list alone does not authorize a resume target.
-The source conversation, raw resume target and all checked conversation ids
-are checked for other processes before /exit and again before relaunching.
-
-If `/exit` does not close the terminal within 15 seconds, nothing is relaunched
-and the terminal is not killed. If the checked respawn is refused after exit,
-the notice says the terminal has exited and the job was not relaunched; use
-Respawn in Agents or open the conversation from the sidebar. A failed or timed
-out respawn may still start, so check Agents before trying Respawn again.
+If a live continuation already runs in the background, the move is refused
+with a pointer to the sidebar, leaving this tab untouched. The button does
+not exit and respawn an old job.
 
 An unconfirmed move displays a notice with what to check. If the terminal
 has exited, open the conversation from the sidebar to check where it runs.
