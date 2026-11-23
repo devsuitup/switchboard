@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 
-module.exports = function openStore({ readonly = false } = {}) {
+module.exports = function openStore({ readonly = false, onPinChange } = {}) {
   const filename = path.join(__dirname, '../../session-index-store.js');
   const nativeRequire = createRequire(filename);
   let Database;
@@ -46,7 +46,7 @@ module.exports = function openStore({ readonly = false } = {}) {
     process, performance, Buffer, console, module, exports: module.exports,
     require: id => id === 'better-sqlite3' ? Database : nativeRequire(id),
   }, { filename });
-  return module.exports.openSessionIndexStore({ readonly });
+  return module.exports.openSessionIndexStore({ readonly, onPinChange });
 };
 
 module.exports.supported = (() => {

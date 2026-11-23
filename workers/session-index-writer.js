@@ -11,7 +11,7 @@ const { completeProjectDeletion, bindDeletionProducer, assertDeletionProducer } 
 const { folderReadWitness } = require('../src/main/session-index/full-read-state');
 
 // see .ai/contexts/session-index-writer.md
-const db = openSessionIndexStore({ readonly: false });
+const db = openSessionIndexStore({ readonly: false, onPinChange: pinChange => parentPort.postMessage({ pinChange }) });
 const commands = createWriterCommands(db);
 const deletionProgress = createProjectDeleteProgress(db);
 const rawCommands = new Set(['setSetting', 'deleteSetting', 'toggleStar', 'setStarred', 'setArchived', 'setName',

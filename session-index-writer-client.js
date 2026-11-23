@@ -143,6 +143,10 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
     current.on('message', message => {
       if (worker !== current) return;
       heartbeat();
+      if (message.pinChange) {
+        log.info(message.pinChange);
+        return;
+      }
       if (message.busyCounts) {
         log.info('[session-index-writer] SQLITE_BUSY ' + JSON.stringify(message.busyCounts));
         onBusyCounts(message.busyCounts);
