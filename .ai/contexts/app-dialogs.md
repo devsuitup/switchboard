@@ -25,13 +25,22 @@ questions log only when mounted. Dynamic checkbox labels and checked states
 are recorded on acceptance; opaque preview plans and tokens are not serialized.
 Configuration forms and informational modals are not question helpers.
 
-For this channel, session titles and prompts are not recorded. Session-bearing
+For this channel, eligible session labels are replaced by short identities. Session-bearing
 callers pass `sessions` to the question/notice helper (or a `session` on each
 notice member); `showRestoreNotice` accepts the session as its third argument.
 `sessionNoticeLog` in modal-stack replaces names, generated titles, summaries
 and full session IDs with the first eight hexadecimal ID characters in logged
 text, title, ID, choices and answers. The visible DOM is unchanged. Callers must
 pass every session whose label they render, including continuation alternatives.
+Question text is read from a detached DOM copy with separators after blocks,
+so a multiline label split into paragraphs still matches. Replacement keys and
+observed fields collapse whitespace; keys include the `cleanDisplayName` form.
+Matches require word boundaries and never touch a non-whitespace token containing
+`/` or `\`. Keys shorter than three characters are deliberately skipped, leaving
+those short labels visible in the log without corrupting ordinary prose. This
+bounded fallback keeps the existing shared notice/question caller contract;
+paths (including project names that also name sessions) take precedence over
+label replacement.
 
 Main writes single-line JSON with a `[ui-notice]` prefix at info level, independent
 of Debug Mode. Each field is cut to its cap plus 128 characters before redaction
@@ -46,7 +55,9 @@ helper protects the new channel, and does not claim to sanitize other log writer
 Identical consecutive normalized events are counted as additional occurrences
 (`repeated N×`) when the run changes or once per minute, without repeating the
 original text. Identity survives window rollover and resets after 60 seconds
-without an event. Event/repeat writes are limited to 20 per second, 60 per minute
+without an event. A rate-limited event clears the consecutive identity: its
+following copies count toward suppression rather than repeating a different
+last emitted line. Event/repeat writes are limited to 20 per second, 60 per minute
 and 64 KiB per minute, plus one small suppression-count summary per minute.
 These bounds also cover alternating IDs and large payloads. The fixed deadline
 is not extended by new events. Its timer is unreferenced, cleared on disposal, and pending counts flush

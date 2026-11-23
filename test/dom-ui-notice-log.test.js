@@ -127,6 +127,77 @@ test('M4 restore toast logs short identity while keeping its title visible', asy
   assert.equal(events[1].reason, 'user');
 });
 
+test('R1 multiline unnamed session is redacted across question paragraphs', async t => {
+  const { window, document, events } = setup(t);
+  const session = { sessionId: 'abcdef12-2345-6789', summary: 'please fix the bug\n  in my secret-project payroll module' };
+  const pending = window.appConfirm({ title: 'Stop?', message: `Stop background job "${session.summary}"`, sessions: [session] });
+  assert.equal(document.querySelectorAll('.choice-dialog-body p').length, 2);
+  document.querySelector('.choice-dialog-cancel').click();
+  await pending;
+  assert.equal(events.length, 2);
+  for (const event of events) {
+    assert.match(event.text, /Stop background job "abcdef12"/);
+    assert.doesNotMatch(event.text, /secret-project|payroll|please fix/);
+  }
+});
+
+test('R1 delete-session redacts the cleaned multiline unnamed label and preserves its project', async t => {
+  const { window, document, events } = setup(t);
+  const session = { sessionId: 'abcdef12-2345-6789', summary: 'Implement the following plan:\n<command>please fix the bug\n  in my secret-project payroll module</command>', projectPath: '/repo/secret-project' };
+  const pending = window.showDeleteSessionDialog(session);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(document.querySelector('h3').textContent, 'Delete session "please fix the bug in my secret-project payroll module"?');
+  document.querySelector('#dss-cancel').click();
+  await pending;
+  assert.equal(events.length, 2);
+  for (const event of events) {
+    assert.equal(event.title, 'Delete session "abcdef12"?');
+    assert.match(event.text, /Project: \/repo\/secret-project/);
+    assert.doesNotMatch(JSON.stringify(event), /payroll|please fix|<command>/);
+  }
+});
+
+test('R2 one-letter names do not rewrite prose or path tokens', async t => {
+  const { window, document, events } = setup(t);
+  const message = 'Stop a session named "a" at /repo/a';
+  const pending = window.appConfirm({ title: 'Stop?', message, sessions: [{ sessionId: 'abcdef12-2345-6789', name: 'a' }] });
+  document.querySelector('.choice-dialog-cancel').click();
+  await pending;
+  assert.equal(events.length, 2);
+  for (const event of events) assert.ok(event.text.includes(message), event.text);
+});
+
+test('R2 project label becomes the id without changing paths or larger words', async t => {
+  const { window, document, events } = setup(t);
+  const session = { sessionId: 'abcdef12-2345-6789', name: 'switchboard' };
+  const message = 'Stop "switchboard" at C:\\Serveur\\switchboard\\file.txt or /repo/switchboard; switchboardish stays.';
+  const pending = window.appConfirm({ title: 'Stop?', message, sessions: [session] });
+  assert.equal(document.querySelector('.choice-dialog-body p').textContent, message);
+  document.querySelector('.choice-dialog-cancel').click();
+  await pending;
+  assert.equal(events.length, 2);
+  for (const event of events) {
+    assert.match(event.text, /Stop "abcdef12"/);
+    assert.ok(event.text.includes('C:\\Serveur\\switchboard\\file.txt'), event.text);
+    assert.ok(event.text.includes('/repo/switchboard; switchboardish stays.'), event.text);
+  }
+});
+
+test('a first-prompt label that contains a path is replaced as a whole', async t => {
+  const { window, document, events } = setup(t);
+  const session = { sessionId: 'abcdef12-2345-6789', summary: 'fix src/main.js for the payroll export' };
+  const message = 'Delete session "fix src/main.js for the payroll export"? Its files stay in /repo/src.';
+  const pending = window.appConfirm({ title: 'Delete?', message, sessions: [session] });
+  document.querySelector('.choice-dialog-cancel').click();
+  await pending;
+  assert.ok(events.length > 0);
+  for (const event of events) {
+    assert.match(event.text, /Delete session "abcdef12"\?/);
+    assert.ok(!event.text.includes('payroll'), event.text);
+    assert.ok(event.text.includes('/repo/src.'), event.text);
+  }
+});
+
 test('notice dismissals distinguish expiry and programmatic clearing', t => {
   const { window, events } = setup(t);
   let expire;

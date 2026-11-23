@@ -30,11 +30,12 @@ function installUiNoticeLog({ ipcMain, log, getWindow, now = Date.now, setTimer 
   function emit(line, count = 1) {
     if (now() - secondStarted >= 1000) { secondStarted = now(); secondWrites = 0; }
     const size = Buffer.byteLength(`[ui-notice] ${line}\n`);
-    if (writes >= 60 || secondWrites >= 20 || bytes + size > 65536) { suppressed += count; return; }
+    if (writes >= 60 || secondWrites >= 20 || bytes + size > 65536) { suppressed += count; return false; }
     write(line);
     writes++;
     secondWrites++;
     bytes += size;
+    return true;
   }
 
   function flush() {
@@ -75,8 +76,7 @@ function installUiNoticeLog({ ipcMain, log, getWindow, now = Date.now, setTimer 
       lastSeen = now();
       if (line === last) { repeats++; return; }
       flushRepeats();
-      emit(line);
-      last = line;
+      last = emit(line) ? line : null;
     } catch {}
   }
 

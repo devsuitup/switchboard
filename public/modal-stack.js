@@ -7,20 +7,28 @@ let modalIdleTimer = null;
 
 window.sessionNoticeLog = function (entry, sessions = []) {
   const replacements = new Map();
+  const normalize = value => value.replace(/\s+/g, ' ').trim();
   for (const session of (Array.isArray(sessions) ? sessions : [sessions])) {
     if (!session) continue;
     const id = session.sessionId?.match(/^[a-f0-9]{8}/i)?.[0] || 'session';
     for (const value of [session.name, session.aiTitle, session.summary, session.title, session.sessionId]) {
       if (typeof value !== 'string' || !value) continue;
-      replacements.set(value, id);
-      if (value.trim()) replacements.set(value.trim(), id);
       const clean = typeof cleanDisplayName === 'function' ? cleanDisplayName(value) : value;
-      if (clean) replacements.set(clean, id);
+      for (const key of [normalize(value), normalize(clean)]) {
+        if (key.length >= 3) replacements.set(key, id);
+      }
     }
   }
   if (!replacements.size) return entry;
-  const pattern = new RegExp([...replacements.keys()].sort((a, b) => b.length - a.length).map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
-  const redact = value => typeof value === 'string' ? value.replace(pattern, match => replacements.get(match)) : value;
+  const pattern = new RegExp('(?<![\\p{L}\\p{N}_])(?:' + [...replacements.keys()].sort((a, b) => b.length - a.length).map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')(?![\\p{L}\\p{N}_])', 'gu');
+  const spanning = [...replacements.keys()].filter(key => /[\\/]/.test(key)).sort((a, b) => b.length - a.length);
+  const redact = value => {
+    if (typeof value !== 'string') return value;
+    let text = normalize(value);
+    for (const key of spanning) text = text.split(key).join(replacements.get(key));
+    return text.split(/(\S*[\\/]\S*)/g)
+      .map((part, index) => index % 2 ? part : part.replace(pattern, match => replacements.get(match))).join('');
+  };
   return { ...entry, id: redact(entry.id), title: redact(entry.title), text: redact(entry.text),
     choice: redact(entry.choice), choices: entry.choices?.map(redact) };
 };
@@ -31,8 +39,10 @@ window.observeModalQuestion = function (dialog, source, sessions) {
   function report(event, choice = '') {
     try {
       const choices = [...dialog.querySelectorAll('button:not([hidden]), label')].map(control => control.textContent).filter(label => label && label !== '×');
+      const text = dialog.cloneNode(true);
+      for (const block of text.querySelectorAll('h2, h3, p, div, pre, li, button, label, br')) block.after('\n');
       window.api?.logUiNotice?.(window.sessionNoticeLog({ event, kind: 'info', id, source, title, choices, choice,
-        text: dialog.textContent }, sessions))?.catch?.(() => {});
+        text: text.textContent }, sessions))?.catch?.(() => {});
     } catch {}
   }
   report('dialog-show');

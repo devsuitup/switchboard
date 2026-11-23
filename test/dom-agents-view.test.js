@@ -159,6 +159,34 @@ const ROSTER = [
   { id: null, sessionId: 's-i', name: 'lvds-1b', cwd: '/w/l', kind: 'interactive', state: null, status: 'busy', pid: 30, startedAt: Date.now() - 10_000, agent: null, model: null, detail: null, tempo: null, tokens: null, fan: [], children: [], result: null, attachedHere: false },
 ];
 
+test('R1 agents Stop logs identity for a multiline unnamed session without its first prompt', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  for (const file of ['modal-stack.js', 'choice-dialog.js', 'app-dialogs.js']) {
+    vm.runInContext(fs.readFileSync(path.join(PUBLIC, file), 'utf8'), h.ctx, { filename: file });
+  }
+  const events = [];
+  h.window.api.logUiNotice = event => events.push(JSON.parse(JSON.stringify(event)));
+  const summary = 'please fix the bug\nin my secret-project payroll module';
+  const entry = { ...ROSTER[0], sessionId: 'abcdef12-2345-6789', name: '' };
+  h.window.sessionMap.set(entry.sessionId, { sessionId: entry.sessionId, summary });
+  h.setSnapshot({ roster: [entry], daemonReachable: true });
+  await h.window.showAgentsView();
+  h.document.querySelector('.agents-row').click();
+  const pending = h.window.runAgentVerb('stop', entry);
+  await new Promise(resolve => setImmediate(resolve));
+  const paragraphs = [...h.document.querySelectorAll('.choice-dialog-body p')];
+  assert.ok(paragraphs.map(p => p.textContent).join('\n').includes(summary));
+  h.document.querySelector('.choice-dialog-confirm').click();
+  await pending;
+  assert.deepEqual(h.calls.verbs, [['stop', entry.id]]);
+  assert.deepEqual(events.map(event => event.event), ['dialog-show', 'dialog-choice']);
+  for (const event of events) {
+    assert.match(event.text, /Stop background job "abcdef12"/);
+    assert.doesNotMatch(event.text, /secret-project|payroll|please fix/);
+  }
+  assert.equal(events[1].choice, 'Stop');
+});
+
 test('882 selected background job retains selection when promoted to interactive', async t => {
   const h = setup(); t.after(() => h.destroy());
   const { mergeRoster, parseJobState } = require('../src/main/bg-agents/bg-agents-roster');

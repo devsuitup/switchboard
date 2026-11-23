@@ -75,6 +75,19 @@ test('alternating-event loops have a bounded write rate and counted suppressed e
   assert.match(lines.at(-1), /suppressed 980 events/);
 });
 
+test('m-A repeats of a rate-limited event are suppressed instead of attributed to line 20', t => {
+  const { send, lines, clock } = setup(t);
+  for (let i = 1; i <= 20; i++) send({ event: 'show', text: `line ${i}` });
+  for (let i = 0; i < 6; i++) send({ event: 'show', text: 'new suppressed line' });
+  assert.equal(lines.length, 20);
+  assert.equal(JSON.parse(lines[19].slice('[ui-notice] '.length)).text, 'line 20');
+  clock.advance(60000);
+  assert.doesNotMatch(lines.join('\n'), /repeated/, 'suppressed copies must not repeat the last emitted line');
+  assert.equal(lines.at(-1), '[ui-notice] suppressed 6 events (rate limit)');
+  send({ event: 'show', text: 'new suppressed line' });
+  assert.equal(JSON.parse(lines.at(-1).slice('[ui-notice] '.length)).text, 'new suppressed line');
+});
+
 test('M1 adversarial URL fields finish within 50ms', t => {
   const { send } = setup(t);
   const text = 'http://' + 'a:'.repeat(8190);
