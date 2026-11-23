@@ -3501,20 +3501,28 @@ const quotaGaugeEl = document.getElementById('status-bar-quota');
 let quotaRequest = 0;
 let codexQuotaRequest = 0;
 let codexQuotaEnabled = true;
+let disabledQuotaRuntimes = null;
 
-// Full labels ("Week (all models)") are too long for a status bar; the tooltip
-// carries them in full.
+function quotaWindowLabel(minutes) {
+  if (!Number.isFinite(minutes) || minutes <= 0) return 'Usage';
+  minutes = Math.round(minutes);
+  if (minutes === 10080) return 'Week';
+  if (minutes > 1440 && minutes % 1440 === 0) return `${minutes / 1440}d`;
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}m`;
+}
+
 function shortQuotaLabel(row) {
-  if (row.kind === 'codex') return row.label || 'Codex ' + row.short;
-  if (row.kind === 'session') return '5h';
-  if (row.kind === 'weekly_all') return 'Week';
-  return row.model || 'Week';
+  const minutes = Object.hasOwn(row, 'windowMinutes') ? row.windowMinutes
+    : row.kind === 'session' ? 300 : row.kind?.startsWith('weekly') ? 10080 : null;
+  const windowLabel = quotaWindowLabel(minutes);
+  if (row.model) return row.kind === 'codex' ? `${row.model} (${windowLabel})` : row.model;
+  return windowLabel;
 }
 
 function buildQuotaBar(row) {
   const wrap = document.createElement('span');
   wrap.className = 'quota-item';
-  wrap.dataset.runtime = row.kind === 'codex' ? 'codex' : 'claude';
 
   const label = document.createElement('span');
   label.className = 'quota-label';
@@ -3535,12 +3543,21 @@ function buildQuotaBar(row) {
   pctEl.textContent = pct + '%';
   wrap.appendChild(pctEl);
 
-  wrap.title = `${row.label}: ${pct}%` + (row.reset ? ` \u2014 resets ${row.reset}` : '');
+  const runtime = row.kind === 'codex' ? 'Codex' : 'Claude';
+  const title = row.label?.startsWith(runtime) ? row.label : `${runtime} · ${row.label}`;
+  wrap.title = `${title}: ${pct}%` + (row.reset ? ` \u2014 resets ${row.reset}` : '');
   return wrap;
 }
 
 async function refreshQuotaGauge() {
   const request = ++quotaRequest;
+  if (disabledQuotaRuntimes === null) {
+    try {
+      const settings = await window.api.getSetting?.('global');
+      if (disabledQuotaRuntimes === null) applyUsageHarnesses(settings?.disabledHarnesses);
+    } catch {}
+  }
+  if (request !== quotaRequest) return;
   const codexRefresh = refreshCodexQuotaGauge();
   try {
     const usage = await window.api.getUsage().catch(() => ({}));
@@ -3558,12 +3575,31 @@ async function refreshQuotaGauge() {
 }
 
 function replaceQuotaRows(rows, runtime) {
-  [...quotaGaugeEl.children].filter(el => !el.matches('.quota-item')).forEach(el => el.remove());
-  quotaGaugeEl.querySelectorAll(`[data-runtime="${runtime}"]`).forEach(el => el.remove());
-  const bars = rows.map(buildQuotaBar);
-  if (runtime === 'claude') quotaGaugeEl.prepend(...bars);
-  else quotaGaugeEl.append(...bars);
-  quotaGaugeEl.style.display = quotaGaugeEl.children.length ? '' : 'none';
+  let group = quotaGaugeEl.querySelector(`[data-runtime="${runtime}"]`);
+  if (rows.length) {
+    if (!group) {
+      group = document.createElement('span');
+      group.className = 'quota-group';
+      group.dataset.runtime = runtime;
+      group.setAttribute('role', 'group');
+      group.setAttribute('aria-label', runtime === 'claude' ? 'Claude usage' : 'Codex usage');
+      if (runtime === 'claude') quotaGaugeEl.prepend(group);
+      else quotaGaugeEl.append(group);
+    }
+    const label = document.createElement('span');
+    label.className = 'quota-group-label';
+    label.textContent = runtime === 'claude' ? 'Claude' : 'Codex';
+    group.replaceChildren(label, ...rows.map(buildQuotaBar));
+  } else group?.remove();
+  const disabled = disabledQuotaRuntimes ?? SETTING_DEFAULTS.disabledHarnesses;
+  for (const group of quotaGaugeEl.children) group.hidden = disabled.includes(group.dataset.runtime);
+  quotaGaugeEl.style.display = [...quotaGaugeEl.children].some(group => !group.hidden) ? '' : 'none';
+}
+
+function applyUsageHarnesses(disabled) {
+  disabledQuotaRuntimes = Array.isArray(disabled) ? disabled : SETTING_DEFAULTS.disabledHarnesses;
+  for (const group of quotaGaugeEl.children) group.hidden = disabledQuotaRuntimes.includes(group.dataset.runtime);
+  quotaGaugeEl.style.display = [...quotaGaugeEl.children].some(group => !group.hidden) ? '' : 'none';
 }
 
 async function refreshCodexQuotaGauge() {
@@ -3590,6 +3626,7 @@ function refreshCodexUsage() {
   ]);
 }
 window._applyCodexUsage = applyCodexUsage;
+window._applyUsageHarnesses = applyUsageHarnesses;
 refreshQuotaGauge();
 setInterval(refreshQuotaGauge, 5 * 60 * 1000);
 quotaGaugeEl.addEventListener('click', () => {

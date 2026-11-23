@@ -51,6 +51,25 @@ test('off never reads even a throwing auth file and never fetches', async t => {
   assert.equal(calls, 0);
 });
 
+test('non-minute Codex durations round to whole minutes', async t => {
+  const h = setup(t, { fetch: async () => ({ ok: true, json: async () => ({ rate_limit: {
+    primary_window: { used_percent: 42, limit_window_seconds: 5424 },
+    secondary_window: { used_percent: 23, limit_window_seconds: 5436 },
+  } }) }) });
+  assert.deepEqual((await h.service.getUsage()).limits.map(row => row.windowMinutes), [90, 91]);
+});
+
+test('a secondary-only Codex payload preserves its window without inventing a primary', async t => {
+  const h = setup(t, { fetch: async () => ({ ok: true, json: async () => ({ rate_limit: {
+    secondary_window: { used_percent: 23, limit_window_seconds: 604800 },
+  } }) }) });
+  const rows = (await h.service.getUsage()).limits;
+  assert.equal(rows?.length, 1, 'secondary-only payload must produce exactly one row');
+  assert.equal(rows[0].windowMinutes, 10080);
+  assert.equal(rows[0].percent, 23);
+  assert.equal(rows[0].label, 'Codex 1wk');
+});
+
 test('on uses the fake CODEX_HOME and sends only renderable rows across IPC', async t => {
   const h = setup(t);
   const usage = await h.service.getUsage();
@@ -69,6 +88,8 @@ test('on uses the fake CODEX_HOME and sends only renderable rows across IPC', as
   assert.deepEqual(Object.keys(usage), ['limits']);
   assert.deepEqual(usage.limits.map(row => row.percent), [8, 92, 12]);
   assert.deepEqual(usage.limits.map(row => row.short), ['5h', '1wk', '1wk']);
+  assert.deepEqual(usage.limits.map(row => row.windowMinutes), [300, 10080, 10080], 'raw durations reach the renderer');
+  assert.equal(usage.limits[2].model, 'Spark', 'model identity is separate from the duration label');
   assert.equal(usage.limits[2].label, 'Codex Spark (1wk)');
   assert.ok(usage.limits[0].reset);
   assert.equal(usage.limits[1].severity, 'high');
