@@ -94,12 +94,13 @@ conservatively; `bypass` and `compass` remain ordinary keys. AWS
 `X-Amz-Signature`/`X-Amz-Credential`, equals/space-separated
 `--token`/`--api-key`/`--password`/`--auth-token`, and
 passwords in any `scheme://user:password@host` URL are covered. Usernames and
-hosts are retained. `sk-` tokens allow up to three hyphenated ASCII alphanumeric
-prefix segments, followed by at least 20 ASCII letters/digits/underscores including
-a digit, covering proj, ant, svcacct, admin, None and or-v1. Kebab names such as
-`sk-learn-experiments-2024` are preserved. Key scans exclude POSIX separators at
-their left boundary, but accept backslashes so literal escape sequences do not
-hide credentials. Windows credential-like path segments are conservatively masked.
+hosts are retained. `sk-` tokens are matched in full, including base64url hyphens
+and underscores. Prefixes proj, ant, svcacct, admin, None and or are masked;
+other `sk-` tokens require a digit and at least one hyphen-separated segment
+of 20 characters after `sk-`. Kebab names such as `sk-learn-experiments-2024`
+are preserved. Key and CLI scans accept slashes and backslashes at their left
+boundary, so POSIX and Windows credential-like path segments are conservatively
+masked. When path preservation conflicts with credential masking, masking wins.
 Quoted values, including ones truncated before a closing quote, are masked as
 values; subsequent lines stay intact. Key and URL scans guard their left token
 boundary to prevent rescanning long suffixes, and cookie/value scans advance

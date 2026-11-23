@@ -40,11 +40,17 @@ const cases = [
   ['bare cookie', 'Cookie: abc123secret\nnext line', 'Cookie: [REDACTED]\nnext line'],
   ['bare Set-Cookie', 'Set-Cookie: abc123secret', 'Set-Cookie: [REDACTED]'],
   ['Windows credential path', 'C:\\Users\\jb\\password=1\\x', 'C:\\Users\\jb\\password=[REDACTED]'],
-  ['POSIX credential path', '/repo/password=1/x', '/repo/password=1/x'],
+  ['POSIX credential path', '/repo/password=1/x', '/repo/password=[REDACTED]'],
+  ['POSIX token path', '/tmp/token=abc123secret', '/tmp/token=[REDACTED]'],
+  ['POSIX token path with suffix', '/home/jb/token=abc/file', '/home/jb/token=[REDACTED]'],
+  ['slash CLI equals credential', 'x/--token=abc123secret', 'x/--token=[REDACTED]'],
+  ['slash CLI space credential', 'x/--token abc123secret', 'x/--token [REDACTED]'],
   ['long sk path', 'C:\\work\\sk-learn-experiments-2024\\run', 'C:\\work\\sk-learn-experiments-2024\\run'],
   ['sk letters only', 'sk-abcdefghijklmnopqrstuvwxyz', 'sk-abcdefghijklmnopqrstuvwxyz'],
   ['sk project key', 'sk-proj-abc123_abcdefghijklmnopqrstuvwxyz', '[REDACTED]'],
   ['sk Anthropic key', 'sk-ant-api03-abc123_abcdefghijklmnopqrstuvwxyz', '[REDACTED]'],
+  ['sk Anthropic OAuth letters only', 'sk-ant-oat01-ABCDEFGHIJKLMNOPQRSTUVWX', '[REDACTED]'],
+  ['forward slash sk path', 'C:/work/sk-learn-experiments-2024/run', 'C:/work/sk-learn-experiments-2024/run'],
   ...['clientsecret=', 'apitoken=', 'authtoken:', 'AUTHTOKEN=', 'APITOKEN=', 'accesstoken=', 'refreshtoken=', 'dbpassword=', 'userpassword:', 'mysqlpassword=', 'githubtoken=', 'appsecret='].map(key =>
     [`compound ${key}`, `${key}abc123secret`, `${key}[REDACTED]`]),
   ...['bypass', 'compass', 'trespass', 'tokens', 'max_tokens', 'secretary', 'passive'].map(key =>
@@ -61,8 +67,44 @@ for (const [name, input, expected] of cases) test(name, () => {
   assert.equal(redactLogText(input), expected);
 });
 
+function seededBase64url(seed) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
+  return length => Array.from({ length }, () => {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    return alphabet[(seed >>> 0) % alphabet.length];
+  }).join('');
+}
+
+const generatedShapes = [
+  ['sk-proj-156', body => 'sk-proj-' + body(156)],
+  ['sk-ant-api03-95-AA', body => 'sk-ant-api03-' + body(95) + 'AA'],
+  ['sk-ant-oat01-95-AA', body => 'sk-ant-oat01-' + body(95) + 'AA'],
+  ['sk-svcacct-156', body => 'sk-svcacct-' + body(156)],
+  ['sk-admin-156', body => 'sk-admin-' + body(156)],
+  ['sk-None-156', body => 'sk-None-' + body(156)],
+  ['sk-or-v1-156', body => 'sk-or-v1-' + body(156)],
+  ['sk-proj-30-short-segments', body => 'sk-proj-' + Array.from({ length: 30 }, () => body(4)).join('-')],
+  ['sk-generic-segmented', body => 'sk-' + body(30).replace(/-/g, '_') + '1_' + body(30) + '-' + body(30)],
+];
+for (const [name, makeKey] of generatedShapes) test(`whole generated ${name} keys are redacted`, t => {
+  const body = seededBase64url(0x1214f3);
+  const counts = { whole: 0, partial: 0, none: 0 };
+  for (let i = 0; i < 2000; i++) {
+    const key = makeKey(body);
+    const input = `before ${key} after`;
+    const output = redactLogText(input);
+    if (output === 'before [REDACTED] after') counts.whole++;
+    else if (output === input) counts.none++;
+    else counts.partial++;
+  }
+  t.diagnostic(`${name}: ${JSON.stringify(counts)}`);
+  assert.deepEqual(counts, { whole: 2000, partial: 0, none: 0 }, 'every generated key must be replaced in full, without secret fragments');
+});
+
 test('100 KB adversarial lines finish within 100 ms each without changing ordinary text', t => {
-  for (const input of ['a'.repeat(102400), 'a-'.repeat(51200), 'a_'.repeat(51200), 'http://' + 'a:'.repeat(51200), 'eyJ' + 'a'.repeat(102400), ' '.repeat(102400), '"'.repeat(102400), 'sk-' + 'a'.repeat(102400), 'C:\\' + 'password\\'.repeat(12000), '--' + 'accessToken'.repeat(10000)]) {
+  for (const input of ['a'.repeat(102400), 'a-'.repeat(51200), 'a_'.repeat(51200), 'http://' + 'a:'.repeat(51200), 'eyJ' + 'a'.repeat(102400), ' '.repeat(102400), '"'.repeat(102400), 'sk-' + 'a'.repeat(102400), 'sk-' + 'a-'.repeat(51200), 'C:\\' + 'password\\'.repeat(12000), '--' + 'accessToken'.repeat(10000)]) {
     const start = performance.now();
     assert.equal(redactLogText(input), input);
     const elapsed = performance.now() - start;
