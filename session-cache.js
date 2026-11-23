@@ -1597,6 +1597,7 @@ async function publishScannedFolder(msg) {
   const result = msg.result;
   const started = performance.now();
   let ok = false;
+  let logReads = false;
   try {
     if (msg.replan) throw Object.assign(new Error('Startup title snapshot changed'), { code: 'WRITER_STALE' });
     if (msg.error) throw new Error(msg.error);
@@ -1618,7 +1619,15 @@ async function publishScannedFolder(msg) {
         const relativePath = sourceRelativePath(row);
         if (current && previous && relativePath && !current.fullReadStamp && JSON.stringify(current) !== JSON.stringify(previous)) raced.push(relativePath);
       }
+      const checks = new Map(result.checks);
       deferStartupSources(result, raced);
+      const diagnostics = new Map(result.readErrors || []);
+      for (const relativePath of result.deferred || []) if (!diagnostics.has(relativePath)) {
+        const file = startupSourcePath(PROJECTS_DIR, result.folder, relativePath);
+        diagnostics.set(relativePath, { size: JSON.parse(checks.get(relativePath) || 'null')?.size || (file && observation(file)?.size) || '0',
+          error: 'raced-before-publication' });
+      }
+      result.readErrors = [...diagnostics];
       if (result.deferredIds?.length) result.sessions = result.sessions.filter(row => {
         if (!result.deferredIds.includes(row.sessionId)) return true;
         const current = getCachedSession(row.sessionId);
@@ -1630,16 +1639,10 @@ async function publishScannedFolder(msg) {
         throw Object.assign(new Error('Startup inventory changed before publication'), { code: 'WRITER_STALE' });
       }
     }
+    logReads = true;
     const written = result?.partial ? await writer.writeScannedFolderPartial(result)
       : await writer.writeScannedFolder(result, msg.unverifiedLocalFolder);
     ok = result?.fullIndexOutcome !== false && (result?.startup || !(result?.counters || msg.counters)?.filesFailed);
-    if (result?.startup && ok) {
-      const previous = readFailures(result.inventory.meta);
-      for (const [relativePath, failure] of result.readFailures || []) {
-        if (previous.get(relativePath)?.stamp === failure.stamp) continue;
-        log?.info('[session-cache] transcript-read-failed ' + JSON.stringify({ path: startupSourcePath(PROJECTS_DIR, result.folder, relativePath), error: failure.error }));
-      }
-    }
     if (result?.startup && (result.fullIndexOutcome !== false || result.fullIndexDeferred)) {
       const names = [];
       for (const row of getCachedByFolder(result.folder)) {
@@ -1665,13 +1668,18 @@ async function publishScannedFolder(msg) {
     if (result?.startup && ok && !result.deferred?.length && pendingRepairFolders().includes(result.folder)) await writer.completeRepairFolders([result.folder]);
     return written;
   } finally {
+    if (logReads) for (const [relativePath, failure] of new Map(result?.readErrors || [])) {
+      const parent = classifyTranscriptPath(relativePath)?.parentSessionId;
+      const name = (parent ? parent + '/' : '') + path.posix.basename(relativePath);
+      log?.warn(`[index] read failed folder=${result.folder} file=${name} size=${failure.size} error=${failure.error}`);
+    }
     log?.info('[session-cache] folder-indexed ' + JSON.stringify({
       folder: result?.folder || msg.folder || msg.unverifiedLocalFolder || null,
       runtime: result?.sessions?.[0]?.runtime || (result?.folder?.startsWith('codex/') ? 'codex' : 'claude'),
       mode: result?.partial ? 'partial' : 'full', reason: result?.reason || 'scan',
       filesEnumerated: 0, filesRead: 0, filesSkipped: 0, filesDeleted: 0, filesFailed: 0,
       readOperations: 0, bytesRead: 0, bytesSkipped: 0, auxiliaryBytesRead: 0, scanMs: 0,
-      ...msg.counters, ...result?.counters, writeMs: performance.now() - started, ok,
+      ...msg.counters, ...result?.counters, filesDeferred: result?.deferred?.length || 0, writeMs: performance.now() - started, ok,
     }));
   }
 }
@@ -1701,7 +1709,7 @@ function scanFoldersViaWorker(options) {
   return promise;
 }
 function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, fileSubsets, startup, onFolder,
-  sessionCounts = { folders: new Map(), total: 0 } }) {
+  sessionCounts = { folders: new Map(), total: 0 }, deferredFolders = new Set() }) {
   if (stopping) return Promise.resolve({ ok: false, error: 'indexer shutting down' });
   return new Promise((resolve) => {
     const hasFolders = Array.isArray(folders) && folders.length > 0;
@@ -1736,7 +1744,7 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
       settled = true;
       clearTimeout(timer);
       try { if (!workerExited) worker?.terminate(); } catch {}
-      resolve(value);
+      resolve({ ...value, deferredFolders: [...deferredFolders] });
     };
     const timer = startup ? null : setTimeout(() => {
       settle({ ok: false, error: 'folder scan timed out', folders: scanned, sessions: sessionCounts.total });
@@ -1760,6 +1768,9 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
           try {
             const written = await publishScannedFolder(msg);
             const folder = msg.folder || msg.result?.folder;
+            if (msg.result?.startup && msg.result.readErrors?.some(([file, failure]) => msg.result.deferred?.includes(file)
+              && failure.error && !['changed-during-read', 'raced-before-publication'].includes(failure.error))) deferredFolders.add(folder);
+            else deferredFolders.delete(folder);
             sessionCounts.total += written - (sessionCounts.folders.get(folder) || 0);
             sessionCounts.folders.set(folder, written);
           } catch (err) {
@@ -1784,7 +1795,7 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
             try {
               const retry = await scanFoldersViaWorker({ projectsDir, folderPrefix, folders: [],
                 startup: { ...startupSnapshot(startup.force, [...replanFolders]), attempt: (startup.attempt || 0) + 1 },
-                onFolder, sessionCounts });
+                onFolder, sessionCounts, deferredFolders });
               if (!retry.ok) {
                 writeError ||= retry.error || 'Startup replan failed';
                 unknownFailure ||= retry.unknownFailure;
@@ -1901,7 +1912,9 @@ function populateCacheViaWorker({ force = false } = {}, retryTimerFired = false)
       }
       if (result.ok) {
         if (setInitialScanComplete) await writer.setInitialScanComplete();
-        populateRetry = null;
+        const backoff = [30000, 120000, 600000][retryAttempt];
+        populateRetry = result.deferredFolders?.length && backoff !== undefined ? { folders: result.deferredFolders,
+          attempt: retryAttempt + 1, at: populateNow() + backoff } : null;
         sendStatus(populateFull ? `Indexed ${sessions} sessions across ${indexedProjects} projects` : 'Indexed session changes', 'done');
         setTimeout(() => sendStatus(''), 5000).unref?.();
         progress(true);
@@ -1910,7 +1923,7 @@ function populateCacheViaWorker({ force = false } = {}, retryTimerFired = false)
       }
     } catch (error) { result = { ok: false, error: error.message }; }
     const backoff = [30000, 120000, 600000][retryAttempt];
-    populateRetry = { folders: !result.unknownFailure && result.failedFolders?.length ? result.failedFolders : null,
+    populateRetry = { folders: !result.unknownFailure && result.failedFolders?.length ? [...new Set([...result.failedFolders, ...(result.deferredFolders || [])])] : null,
       attempt: retryAttempt + 1, at: backoff === undefined ? Infinity : populateNow() + backoff };
     const failed = result.failedFolders || [];
     const scope = failed.length ? ` for ${failed[0]}${failed.length > 1 ? ` (+${failed.length - 1})` : ''}` : '';

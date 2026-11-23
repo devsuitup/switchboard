@@ -258,7 +258,7 @@ test('an undelivered reconcile notifies the renderer once, a delivered one never
   assert.deepEqual(notifications, ['reconcile'], 'a delivered result or a plain build never notifies');
 });
 
-test('a stale delivery returns both views, projectsStale: true, and schedules a conflict notification', async () => {
+test('a stale delivery returns both views, projectsStale: true, without an immediate conflict notification', async () => {
   const notifications = [];
   const projects = [{ projectPath: '/fixture', sessions: [] }];
   const invoke = handler({
@@ -270,22 +270,22 @@ test('a stale delivery returns both views, projectsStale: true, and schedules a 
   assert.deepEqual(reply.allProjects, projects);
   assert.equal(reply.projectsStale, true);
   assert.equal(reply.projectsError, undefined);
-  assert.deepEqual(notifications, ['conflict']);
+  assert.deepEqual(notifications, []);
   const fresh = handler({
     notifyRendererProjectsChanged: cause => notifications.push(cause),
     projectsClient: { request: async () => ({ defaultProjects: projects, allProjects: projects }) },
   });
   const accepted = await fresh(null, 'both');
   assert.equal(accepted.projectsStale, undefined);
-  assert.deepEqual(notifications, ['conflict'], 'an accepted reply never notifies');
+  assert.deepEqual(notifications, [], 'an accepted reply never notifies');
 });
 
-test('a terminal conflict logs the changed live component', async () => {
+test('a terminal conflict logs the changed live component at info and returns an unavailable envelope without a consistent result', async () => {
   const warnings = [];
   const conflict = fields => Object.assign(new Error('Projects changed while loading; reload to retry.'),
     { code: 'PROJECTS_SNAPSHOT_CONFLICT', dispatches: 3, reconcile: false, ...fields });
   let error;
-  const invoke = handler({ log: { warn: line => warnings.push(line) }, projectsClient: { request: async () => { throw error; } } });
+  const invoke = handler({ log: { info: line => warnings.push(line) }, projectsClient: { request: async () => { throw error; } } });
   const same = { activeSessions: [], remoteRoots: [], localJobs: [] };
   error = conflict({ reason: 'live', before: JSON.stringify({ ...same, localDescriptors: [] }), after: JSON.stringify({ ...same, localDescriptors: [{ sessionId: 'new' }] }) });
   assert.deepEqual(JSON.parse(JSON.stringify(await invoke(null, 'both'))), { projectsError: { code: 'PROJECTS_SNAPSHOT_CONFLICT', message: 'Projects changed while loading; reload to retry.' } });
