@@ -1,10 +1,29 @@
-# Managed browser lifecycle (#812, S2)
+# Managed browser lifecycle (#812)
 
 `src/main/browser/managed-browser.js` exports `createManager` and
 `cleanupDataDir`. It is CommonJS and Electron-free. Requiring it or constructing
 a manager does no filesystem, socket, HTTP or process work. No renderer, IPC,
-settings or session-launch path calls Open/ensureStarted in this slice. There
-is no MCP dependency or configuration writer yet; that belongs to S3.
+settings or session-launch path calls Open/ensureStarted yet, and there is no
+MCP dependency or configuration writer.
+
+| File | Role |
+|---|---|
+| `src/main/browser/managed-browser.js` | `createManager`, `cleanupDataDir`: the queued operations, roles, quit. |
+| `src/main/browser/discovery.js` | `discoverBrowser`: the Chromium ELF / cache-revision lookup. |
+| `src/main/browser/linux-process.js` | `parseStat`, `matchesArgv`, `createProc`: procfs identity of the spawned browser. |
+| `src/main/browser/owner-lock.js` | `createLock`: the owner lock. |
+| `src/main/browser/storage.js` | `createStorage`: the private data directory and its state files. |
+| `src/main/browser/transport.js` | `request`, `portFree`, `allocatePort`, `closeBrowser`: loopback CDP HTTP and port allocation. |
+
+The **Browser** setting (`browserMode`, default `off`, `public/setting-defaults.js`)
+is what users see of #812. `BROWSER_MODES` lists `off`, `claude-in-chrome` and
+`managed`; `normalizeBrowserSettings` maps a legacy `chrome: true` to
+`claude-in-chrome`, an invalid value to `off` (main logs the warning once per
+scope and value, `normalizeStoredBrowserSettings`), and drops `chrome`. The
+Claude adapter adds `--chrome` only for `claude-in-chrome`
+(`harnesses/claude.js`). `managed` is filtered out of the Settings, New Session
+and Resume pickers, and a stored `managed` shows and saves as Off: nothing
+launches the managed browser from the UI.
 
 The main process constructs the manager using the directory of DB_PATH.
 `shutdownForExit` calls `stopForQuit` synchronously immediately after its
@@ -131,7 +150,7 @@ an unexpected existing browser directory rather than guessing at Linux PIDs.
 Tests use real disposable files, fake process/clock/lock boundaries, injected
 procfs/net fixtures and a Node HTTP/WebSocket fake browser. Windows tests prove
 the unsupported policy; Linux mode/permissions/process behavior still requires
-Linux execution. No real browser, Electron or Playwright is needed for S2.
+Linux execution. No real browser, Electron or Playwright is needed.
 
 Loopback CDP has no user/session authentication. Other local processes can
 control the signed-in browser; this library is not a filesystem or network

@@ -59,21 +59,25 @@ execution environment. Rules of thumb:
 
 - **No heredocs** (`<< EOF`) — treat multi-line content as data to write to a file, not to
   inline into a shell command.
-- **No `cd <path> && git ...`** and **no `git -C <path> ...`** for a repo other than the
-  current one — these patterns are commonly blocked by permission guards against
-  cross-repo/bare-repo mistakes. If you need another repo's state, `git fetch` into the
-  current one, or work from a separate worktree/checkout.
+- **No `cd <path> && git ...`** — a permission guard cannot resolve a relative operand after
+  a `cd`, so the command waits on a human. Use `git -C <absolute path> ...` and absolute
+  operands instead (the form this workstation's harness guard asks for). `git -C` on a
+  directory that is not a registered worktree acts on the enclosing checkout: check
+  `git worktree list` first.
 - **Avoid shell loops** (`for`/`while`/`until`) in a single command — prefer separate
   commands, or `xargs` for a single-command iteration.
-- **Use `jq` for JSON parsing**, not inline `python3 -c "import json; ..."` — cleaner and less
-  fragile to quote.
+- **Parse JSON with the tool's own filter or with node**, not inline
+  `python3 -c "import json; ..."` — `gh ... --jq '<expr>'` covers GitHub output. `jq` is not
+  installed on every host (it is absent from the Windows workstation), and a pipe into a
+  missing `jq` fails quietly.
 - **Use `.work-files/`, not `/tmp/`, for scratch files** — it's gitignored, project-scoped scratch space. Open reports through Touched or terminal path links.
 - **No `sleep N && command` to wait for background work** — if a task runs in the background,
   react to its completion signal; don't poll with a fixed sleep.
 - **`test/trigger-watcher.test.js` flaking under load is a known, tolerated pattern, not a
-  regression to chase** — it uses real timers and real `fs.watch`; `npm test` already runs it
-  serially and after everything else (see `.ai/contexts/trigger-watcher.md`, "timing tests and
-  host load"). If it still fails under a genuinely loaded machine, rerun with
+  regression to chase** — it uses real timers and real `fs.watch`; `npm test` already runs it,
+  with `test/trigger-delivery.test.js` and `test/trigger-continuation-delivery.test.js`,
+  serially and after everything else (`ISOLATED_FILES` in `scripts/run-tests.js`; see
+  `.ai/contexts/trigger-watcher.md`, "Timing tests and host load"). If it still fails under a genuinely loaded machine, rerun with
   `SWITCHBOARD_TEST_TIME_SCALE=<n> node --test test/trigger-watcher.test.js` (env, default 1)
   before assuming the code broke.
 
@@ -92,13 +96,15 @@ SWITCHBOARD_TEST_CONCURRENCY=12 npm test
 ```
 
 A value that is not a positive integer is ignored with a message on stderr, and
-the cap applies. The cap is also bounded by what the machine actually has, so a
-2-core CI runner still gets 2.
+the cap applies. The default cap is also bounded by what the machine actually
+has, so a 2-core CI runner still gets 2; a valid explicit value is used as given,
+unclamped (`stageOneConcurrency()` in `scripts/run-tests.js`).
 
 When several agents run the suite at once, cap the whole process tree instead —
 `taskset -c 0-3 npm test` on Linux, which node's `availableParallelism()`
 honours, so it reduces the number of workers rather than crowding them onto
-fewer cores.
+fewer cores. Windows has no `taskset`: set `SWITCHBOARD_TEST_CONCURRENCY`
+explicitly there (for example `1`).
 
 ## 6. Memory / notes hygiene
 

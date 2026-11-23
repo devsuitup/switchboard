@@ -666,8 +666,13 @@ Issue #246 is closed.
 - **Lifecycle decisions (2026-09-11): done.** The two verbs — detach and
   stop — are both real now; see "The two lifecycle verbs: detach and stop"
   below.
-- **The local-pty adapter: done** (this pass, closing #246). See "The
+- **The local-pty adapter: done** (closed #246). See "The
   local-pty adapter" below.
+- **Codex tabs** (#823) use the same local-pty adapter: their title and
+  notification activity reaches `setActivity`/`setAttention` through the
+  per-harness classifiers, so they get the same busy, needs-you and
+  response-ready states as a Claude tab. The classifiers are documented in
+  `.ai/contexts/cli-harnesses.md` ("Busy and attention per harness (#823)").
 
 ## The two lifecycle verbs: detach and stop
 
@@ -1639,9 +1644,11 @@ clears `headTurns.ended` without creating adapter state.
 | `waitingForInput` | adapter prompt hint and OSC-observed turn end; projected waiting uses head and ordered idle evidence and, for an id with a PTY here, an observed turn end since that PTY started |
 | `attention` | OSC 9 — needs the user right now (permission/approval/plan) |
 | `responseReady` | subset of `waitingForInput`: idle **and** unseen when it went idle (the legacy "Claude finished, you haven't looked" rung). Not in the issue's original field list — added because the priority order names it as its own rung, distinct from plain `waitingForInput`; see "Design notes" below. |
+| `manualUnread` | set with `responseReady` by `markUnread` (Mark as unread); cleared by `clearUnread`, real busy edges and `clearExclusive()` — see "Manual unread and older-session Archive (#819)" above |
 | `agentsBusy` | subagents running under this session |
 | `lastActivityAt` / `lastActivitySource` | last touch — `transcriptTouched`/`descriptorStatus` events carry `at`/`source`; local-pty now feeds `descriptorStatus` too (`snapshotForLocal`'s seed from `session.status`), so this is populated on all three kinds. Not read by `renderSessionIcon` on any kind today. |
-| `idleHintAt` / `promptHint` | latest idle descriptor or explicit OSC idle timestamp, and known prompt hint |
+| `idleHintAt` / `promptHint` / `promptHintAt` | latest idle descriptor or explicit OSC idle timestamp, the known prompt hint, and the latest `promptHint` event timestamp; a `busy` or `transcriptTouched` event newer than both timestamps clears `promptHint` (`clearPromptHint`) |
+| `writtenWatermark` / `seenWrittenWatermark` / `unseenWrittenActivity` | monotonic written and seen watermarks (`writtenActivity` / `writtenActivitySeen` events; the seen one never passes the written one) and their derived `written > seen` flag — see "Written output and title colour (#626)" above |
 | `label` / `labelConfidence` | reserved, unused |
 | `attachable` | reserved, unused |
 | `archived` / `stale` | reserved, unused |
@@ -1945,7 +1952,7 @@ the others assert on the dot/slot element itself, only on row classes and
   first turned the three top-rung priority tests red; reverted), and
   `renderSessionIcon` per rung.
 
-## Ports table (target shape, not all wired yet)
+## Ports table
 
 | event | local-pty | local-transcript | remote-ssh |
 |---|---|---|---|

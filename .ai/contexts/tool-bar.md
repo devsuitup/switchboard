@@ -108,8 +108,11 @@ rounding allowance. The 20 px terminal negative margin is included.
 ## Verification
 
 `test/tool-bar.test.js`: D0, Da1-Da3, session group and factory, owner
-transitions, shortcut dispatch and roving focus. Existing panel suites retain
-the shell sizing and tool state regressions.
+transitions, shortcut dispatch and roving focus. `test/tool-bar-layout.test.js`:
+no `:has()` selector on terminal ancestors, both `#main` min-width floors and
+their classes, and `syncToolBar`'s class mirroring from the style observer and
+the panel's open/close. Existing panel suites retain the shell sizing and tool
+state regressions.
 `e2e/tool-bar.spec.js`: E1-E8, including the 32-case overflow matrix and
 width restoration. These Electron journeys run only in CI; local jsdom tests
 do not prove rendered geometry or native Tab traversal.
