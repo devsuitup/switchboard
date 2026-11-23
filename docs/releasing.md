@@ -18,13 +18,18 @@ gh's default here is the upstream repository, `doctly/switchboard`.
    git checkout -b release/v0.1.0 origin/main
    npm version --no-git-tag-version 0.1.0   # package.json and package-lock.json
    # edit CHANGELOG.md as above
-   git commit -am v0.1.0
+   git commit -am "chore(release): v0.1.0"
    git push origin release/v0.1.0
-   gh pr create --repo devsuitup/switchboard --base main --title v0.1.0 --fill
+   gh pr create --repo devsuitup/switchboard --base main --title "chore(release): v0.1.0" --fill
    ```
 
    `test/changelog.test.js` fails when `CHANGELOG.md` has no section for the
    version in `package.json`, so a bump without its section does not pass CI.
+
+   Commit subjects and PR titles use `type(area): subject`; the release title
+   is `chore(release): v0.1.0`. The PR title becomes the squash commit title
+   (`PR_TITLE`). The separate `pr-title` check is advisory during rollout and
+   is not a required release check.
 
    The required PR checks for this workflow are `lint`,
    `test (20, ubuntu-latest)`, `test (22, ubuntu-latest)`,

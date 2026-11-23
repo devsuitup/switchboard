@@ -146,11 +146,11 @@
         </div>
         <div class="settings-field">
           <div class="settings-field-info"><span class="settings-label">Codex sandbox</span><div class="settings-description">Passed as <code>--sandbox</code>; empty leaves codex's own config</div></div>
-          <div class="settings-field-control">${codexSelect('sv-codex-sandbox', 'codexSandbox', [['', 'Codex default'], ['read-only', 'Read-only'], ['workspace-write', 'Workspace write'], ['danger-full-access', 'Full access (danger)']])}</div>
+          <div class="settings-field-control">${codexSelect('sv-codex-sandbox', 'codexSandbox', CODEX_CHOICES.codexSandbox)}</div>
         </div>
         <div class="settings-field">
           <div class="settings-field-info"><span class="settings-label">Codex approval</span><div class="settings-description">Passed as <code>--ask-for-approval</code></div></div>
-          <div class="settings-field-control">${codexSelect('sv-codex-approval', 'codexApproval', [['', 'Codex default'], ['on-request', 'On request'], ['never', 'Never']])}</div>
+          <div class="settings-field-control">${codexSelect('sv-codex-approval', 'codexApproval', CODEX_CHOICES.codexApproval)}</div>
         </div>
         <div class="settings-field">
           <div class="settings-field-info"><span class="settings-label">Codex model</span><div class="settings-description">From codex's own model cache</div></div>
@@ -158,7 +158,7 @@
         </div>
         <div class="settings-field">
           <div class="settings-field-info"><span class="settings-label">Codex reasoning effort</span><div class="settings-description">Passed as <code>model_reasoning_effort</code></div></div>
-          <div class="settings-field-control">${codexSelect('sv-codex-effort', 'codexEffort', [['', 'Codex default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max'], ['ultra', 'Ultra']])}</div>
+          <div class="settings-field-control">${codexSelect('sv-codex-effort', 'codexEffort', CODEX_CHOICES.codexEffort)}</div>
         </div>
         <div class="settings-field settings-field-wide">
           <div class="settings-field-info"><label class="settings-label" for="sv-codex-custom-args">Custom arguments</label><div class="settings-description">Appended to Codex commands. Use your selected shell's quoting. One line, no control characters.</div></div>
