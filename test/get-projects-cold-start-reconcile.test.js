@@ -83,7 +83,9 @@ test('get-projects on a warm cache still reconciles (stat-gated, cheap when noth
 
 test('get-projects cannot turn a one-time warm repair into a full cache scan when all rows were invalidated', { timeout: 9000 }, async () => {
   const calls = [];
+  let now = 100000;
   const handler = makeHandler({
+    Date: { now: () => now },
     isCachePopulated: () => false,
     isSearchIndexPopulated: () => false,
     isInitialScanComplete: () => true,
@@ -94,7 +96,10 @@ test('get-projects cannot turn a one-time warm repair into a full cache scan whe
   });
   await handler();
   await handler();
-  assert.deepEqual(calls, ['reconcile', 'build', 'reconcile', 'build']);
+  assert.deepEqual(calls, ['reconcile', 'build', 'build']);
+  now += 5000;
+  await handler();
+  assert.deepEqual(calls, ['reconcile', 'build', 'build', 'reconcile', 'build']);
 });
 
 test('pending unreachable remote repairs cannot block empty local cache or search population', { timeout: 9000 }, async () => {

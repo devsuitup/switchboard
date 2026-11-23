@@ -71,13 +71,15 @@ test('T5.3 the reconciliation hard ceiling is not reset by a conflict retry', as
 });
 
 test('T5.2 actual main ACK adapter retains the committed baseline across an external DB write', async t => {
-  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  const start = source.indexOf('  apply: async result => {'), end = source.indexOf('\n  accepted:', start);
+  const filename = path.join(__dirname, '../main.js'), source = fs.readFileSync(filename, 'utf8');
+  const start = source.indexOf('async result => {', source.indexOf('const projectsClient'));
+  const end = source.indexOf('\n  },', start) + 4;
+  assert.ok(start >= 0 && end > start);
   let release, version = 0;
   const ack = new Promise(resolve => { release = resolve; });
   const snapshot = () => ({ version, liveVersion: 0, writerRevision: version });
-  const apply = vm.runInNewContext('({' + source.slice(start, end) + '}).apply', {
-    writer: { applyProjectsWorkerEffects: () => { version = 1; return ack; } }, projectsSnapshot: snapshot });
+  const apply = vm.runInNewContext(source.slice(start, end), {
+    writer: { applyProjectsWorkerEffects: () => { version = 1; return ack; } }, projectsSnapshot: snapshot }, { filename });
   const worker = new EventEmitter(), messages = []; worker.postMessage = m => messages.push(m); worker.terminate = async () => {};
   const client = createProjectsWorkerClient({ workerFactory: () => worker, snapshot, apply }); t.after(() => client.shutdown());
   const pending = client.request(); pending.catch(() => {});
@@ -123,31 +125,37 @@ test('T5.2 persisted writer revision bypasses the settings ACK mirror', () => {
   const store = { listSettingKeys: () => ['_writer_revision'], getSetting: () => current };
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../db.js'), 'utf8'), {
-    require: () => ({ openSessionIndexStore: () => store }), module, structuredClone });
+    require: () => ({ openSessionIndexStore: () => store }), module, structuredClone }, { filename: path.join(__dirname, '../db.js') });
   current = 2;
   assert.equal(module.exports.getSetting('_writer_revision'), 1);
   assert.equal(module.exports.getSetting('_writer_revision', { fresh: true }), 2);
 });
 
-for (const away of [false, true]) test(`T5.5/T5.6 main conflict envelope survives IPC and the existing event route recovers accepted lists, away=${away}`, async t => {
+for (const away of [false, true]) test(`T5.5/T5.6 stale fallback crosses the bridge and delayed recovery refreshes accepted lists, away=${away}`, async t => {
   const { setupSidebarDom } = require('./dom-setup');
   const { loadAppFunctions } = require('./app-source');
   const h = setupSidebarDom(); t.after(() => h.destroy());
   const f = fixture(); t.after(() => f.client.shutdown());
-  let event, notifications = 0, assemblies = 0, bridge;
+  let event, notifications = 0, assemblies = 0;
+  const mainTimers = [];
   const invoke = loadGetProjectsHandler({
     TRACE: { on: false }, console,
     getSetting: () => null, isInitialScanComplete: () => true, isCachePopulated: () => true, isSearchIndexPopulated: () => true,
     backfillEntrypoints() {}, backfillCustomTitles() {}, projectsReconciledAt: 0, projectsClient: f.client,
     mergePlaceholderSessions: rows => { assemblies++; return rows; },
+    lastKnownProjects: { load: async () => ({ defaultProjects: [{ projectPath: 'accepted', sessions: [] }], allProjects: [{ projectPath: 'accepted', sessions: [] }] }), remember() {} },
+    setTimeout: (fn, delay) => { assert.equal(delay, 5000); mainTimers.push(fn); return { unref() {} }; },
     writer: { applyAndPersistArchived: async rows => rows }, annotateRemoteAttachable: rows => rows,
-    notifyRendererProjectsChanged: cause => { assert.equal(cause, 'conflict'); notifications++; event(); } });
+    notifyRendererProjectsChanged: cause => { assert.equal(cause, 'reconcile'); notifications++; event(); } });
   const transport = { invoke: async (_channel, mode) => {
     try { return JSON.parse(JSON.stringify(await invoke(null, mode))); }
     catch (error) { throw new Error(error.message); }
   }, send() {}, on() {} };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../preload.js'), 'utf8'), { process,
-    require: () => ({ contextBridge: { exposeInMainWorld: (_key, value) => { bridge = value; } }, ipcRenderer: transport }) });
+  const preloadFile = path.join(__dirname, '../preload.js'), preload = fs.readFileSync(preloadFile, 'utf8');
+  const bridgeStart = preload.indexOf('async (showArchived) => {');
+  const bridgeEnd = preload.indexOf('\n  },', bridgeStart) + 4;
+  assert.ok(bridgeStart >= 0 && bridgeEnd > bridgeStart);
+  const bridge = { getProjects: vm.runInNewContext(preload.slice(bridgeStart, bridgeEnd), { ipcRenderer: transport }, { filename: preloadFile }) };
   const w = h.window, timers = [];
   const schedulesContent = w.document.createElement('div');
   schedulesContent.id = 'schedules-content';
@@ -173,8 +181,16 @@ for (const away of [false, true]) test(`T5.5/T5.6 main conflict envelope survive
   vm.runInContext(app.slice(eventStart, app.indexOf('\n});', eventStart) + 4), h.context, { filename: appFilename });
   const initial = w.reloadProjects();
   for (let i = 0; i < 3; i++) { await flush(); f.change(); f.reply(i, effectful); }
-  assert.equal(await initial, false); assert.equal(w.cachedProjects[0].projectPath, 'accepted');
-  assert.equal(assemblies, 0); assert.equal(notifications, 1); assert.equal(timers.length, away ? 0 : 1);
+  assert.equal(await initial, true); assert.equal(w.cachedProjects[0].projectPath, 'accepted');
+  assert.equal(assemblies, 2); assert.equal(notifications, 0); assert.equal(timers.length, 0);
+  assert.equal(mainTimers.length, 1);
+  const recovered = mainTimers.shift()();
+  await flush();
+  assert.equal(f.messages.length, 4, 'delayed recovery requires no unrelated source event');
+  const fresh = { ...readonly, defaultProjects: [{ projectPath: 'fresh', sessions: [] }], allProjects: [{ projectPath: 'fresh', sessions: [] }] };
+  f.reply(3, fresh);
+  await recovered;
+  assert.equal(notifications, 1);
   if (away) {
     const tab = w.document.createElement('button'); tab.className = 'sidebar-tab'; tab.dataset.tab = 'sessions'; w.document.body.append(tab);
     for (const name of ['searchBar', 'sessionFilters', 'placeholder']) w[name] = w.document.createElement('div');
@@ -183,18 +199,21 @@ for (const away of [false, true]) test(`T5.5/T5.6 main conflict envelope survive
     vm.runInContext(app.slice(tabsStart, app.indexOf('\n// Grid view →', tabsStart)), h.context, { filename: appFilename });
     tab.click(); await flush(); assert.equal(w.activeTab, 'sessions');
   } else { timers.shift()(); await flush(); }
-  assert.equal(f.messages.length, 4, 'recovery dispatch requires no unrelated source event');
-  f.reply(3, { ...readonly, defaultProjects: [{ projectPath: 'fresh', sessions: [] }], allProjects: [{ projectPath: 'fresh', sessions: [] }] });
-  await flush(); assert.equal(w.cachedProjects[0].projectPath, 'fresh'); assert.equal(assemblies, 2);
-  const coded = bridge.getProjects('both'); const rejected = assert.rejects(coded, { code: 'PROJECTS_SNAPSHOT_CONFLICT' });
-  for (let i = 4; i < 7; i++) { await flush(); f.change(); f.reply(i, effectful); }
-  await rejected;
+  assert.equal(f.messages.length, 5);
+  f.reply(4, fresh);
+  await flush(); assert.equal(w.cachedProjects[0].projectPath, 'fresh'); assert.equal(assemblies, 6);
+  const coded = bridge.getProjects('both');
+  for (let i = 5; i < 8; i++) { await flush(); f.change(); f.reply(i, effectful); }
+  const fallback = await coded;
+  assert.equal(fallback.projectsStale, true);
+  assert.equal(fallback.defaultProjects[0].projectPath, 'fresh');
   const stale = bridge.getProjects('both');
-  for (let i = 7; i < 10; i++) { await flush(); f.change(); f.reply(i, { ...readonly, defaultProjects: [{ projectPath: 'stale', sessions: [] }], allProjects: [] }); }
+  for (let i = 8; i < 11; i++) { await flush(); f.change(); f.reply(i, { ...readonly, defaultProjects: [{ projectPath: 'stale', sessions: [] }], allProjects: [] }); }
   const delivered = await stale;
   assert.equal(delivered.projectsStale, true, 'a stale delivery crosses IPC flagged');
-  assert.equal(delivered.defaultProjects[0].projectPath, 'stale');
-  assert.equal(notifications, 3, 'a stale delivery schedules one conflict notification');
+  assert.equal(delivered.defaultProjects[0].projectPath, 'fresh', 'keep the last consistent result');
+  assert.equal(notifications, 1, 'stale deliveries never immediately re-notify');
+  assert.equal(mainTimers.length, 1, 'stale deliveries share one delayed refresh');
 });
 
 test('T5.5 repeated conflict notifications coalesce under the shipped throttle and stop after draining', () => {

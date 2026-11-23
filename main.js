@@ -658,6 +658,7 @@ function projectsSnapshot() {
     writerRevision: typeof getSetting === 'function' ? getSetting('_writer_revision', { fresh: true }) || 0 : undefined };
 }
 const projectsClient = createProjectsWorkerClient({
+  maxDiscards: 1,
   canReconcile: isIndexingFinished,
   workerFactory: () => new Worker(path.join(__dirname, 'workers', 'projects-query.js'), { workerData: { dbPath: DB_PATH, projectsDir: PROJECTS_DIR } }),
   snapshot: projectsSnapshot,
@@ -1434,6 +1435,28 @@ ipcMain.handle('get-last-known-projects', () => lastKnownProjects.load());
 
 let projectsReconcileAfterPopulate = false;
 let projectsReconciling = false;
+let projectsReconcileAttemptedAt = -Infinity;
+let projectsLastResult = null;
+let projectsRetryTimer = null;
+let projectsRetryRunning = false;
+
+function queueProjectsRetry() {
+  if (projectsRetryTimer || projectsRetryRunning || appQuitting) return;
+  projectsRetryTimer = setTimeout(async () => {
+    projectsRetryTimer = null;
+    if (appQuitting) return;
+    projectsRetryRunning = true;
+    let stale = false;
+    try {
+      const reply = await getProjectsSnapshot('both');
+      stale = !!reply.projectsStale;
+      if (!stale) notifyRendererProjectsChanged('reconcile');
+    } catch (error) { log.error('[projects] retry failed:', error.message); }
+    finally { projectsRetryRunning = false; }
+    if (stale) queueProjectsRetry();
+  }, 5000);
+  projectsRetryTimer.unref?.();
+}
 
 async function getProjectsSnapshot(showArchived) {
   const started = TRACE.on ? performance.now() : null;
@@ -1462,8 +1485,12 @@ async function getProjectsSnapshot(showArchived) {
     const populating = !isIndexingFinished();
     if (populating) projectsReconcileAfterPopulate = true;
     const reconcile = !needsPopulate && !populating && !projectsReconciling
+      && Date.now() - projectsReconcileAttemptedAt >= 5000
       && (projectsReconcileAfterPopulate || Date.now() - projectsReconciledAt >= 5000);
-    if (reconcile) projectsReconciling = true;
+    if (reconcile) {
+      projectsReconciling = true;
+      projectsReconcileAttemptedAt = Date.now();
+    }
     let result;
     try {
       result = await projectsClient.request({ reconcile: !!reconcile, measureBytes: TRACE.on });
@@ -1471,7 +1498,14 @@ async function getProjectsSnapshot(showArchived) {
         projectsReconcileAfterPopulate = false;
         projectsReconciledAt = Date.now();
       }
+    } catch (err) {
+      if (err.code !== 'PROJECTS_SNAPSHOT_CONFLICT') throw err;
+      const changed = err.reason === 'live' ? ` changed=${changedLiveComponents(err.before, err.after)}` : '';
+      log.info(`[projects] snapshot conflict after ${err.dispatches ?? 'unknown'} dispatches: reason=${err.reason ?? 'unknown'}${changed} reconcile=${err.reconcile ?? 'unknown'}`);
+      projectsLastResult ||= await lastKnownProjects.load?.() || { defaultProjects: [], allProjects: [] };
+      result = { ...projectsLastResult, stale: true };
     } finally { if (reconcile) projectsReconciling = false; }
+    if (result.stale && projectsLastResult) result = { ...projectsLastResult, stale: true };
     const projection = result.projection
       ? { ...result.projection, removedInputs: structuredClone(result.projection.removedInputs) }
       : undefined;
@@ -1502,17 +1536,14 @@ async function getProjectsSnapshot(showArchived) {
       if (started !== null) trace('ipc.get-projects', null, { totalMs: performance.now() - started, rows: result.rows, replyBytes: result.replyBytes?.[showArchived === 'both' ? 'both' : showArchived ? 'all' : 'default'] ?? null });
     }
     if (result.stale) {
-      notifyRendererProjectsChanged('conflict');
+      queueProjectsRetry();
       if (showArchived === 'both') reply.projectsStale = true;
-    } else if (showArchived === 'both') lastKnownProjects.remember({ defaultProjects: reply.defaultProjects, allProjects: reply.allProjects });
+    } else {
+      projectsLastResult = result;
+      if (showArchived === 'both') lastKnownProjects.remember({ defaultProjects: reply.defaultProjects, allProjects: reply.allProjects });
+    }
     return reply;
   } catch (err) {
-    if (err.code === 'PROJECTS_SNAPSHOT_CONFLICT') {
-      const changed = err.reason === 'live' ? ` changed=${changedLiveComponents(err.before, err.after)}` : '';
-      log.warn(`[projects] snapshot conflict after ${err.dispatches ?? 'unknown'} dispatches: reason=${err.reason ?? 'unknown'}${changed} reconcile=${err.reconcile ?? 'unknown'}`);
-      notifyRendererProjectsChanged('conflict');
-      return { projectsError: { code: err.code, message: 'Projects changed while loading; reload to retry.' } };
-    }
     if (err.code === 'PROJECTS_WORKER_TIMEOUT') log.warn(`[projects] get-projects timed out after ${err.timeoutMs} ms: reconcile=${err.reconcile ?? 'unknown'} dispatches=${err.dispatches ?? 'unknown'}`);
     console.error('Error listing projects:', err);
     throw err;
@@ -3956,6 +3987,7 @@ function startProjectsWatcher() {
   const pendingWorkflowTitles = new Set();
   const workflowTitles = new Map();
   let debounceTimer = null;
+  let retryAt = 0;
   let watcher = null;
 
   flushProjectsBeforeExit = async () => {
@@ -3971,6 +4003,7 @@ function startProjectsWatcher() {
 
   async function applyChanges() {
     debounceTimer = null;
+    retryAt = 0;
     if (projectsWatcher !== watcher) return;
     // Drain pendingChanges into a local copy so events arriving during the
     // synchronous flush land in a fresh batch for the next tick.
@@ -4007,13 +4040,23 @@ function startProjectsWatcher() {
       if (projectsWatcher !== watcher) return;
       const folderPath = path.join(PROJECTS_DIR, folder);
       let folderChanged;
-      if (fs.existsSync(folderPath)) {
-        detectSessionTransitions(folder);
-        if (!claudeIndexing()) continue;
-        folderChanged = await writer.refreshFolder(folder, scope === true ? undefined : { files: scope });
-      } else {
-        if (!claudeIndexing()) continue;
-        folderChanged = await writer.dropFolderRows(folder);
+      try {
+        if (fs.existsSync(folderPath)) {
+          detectSessionTransitions(folder);
+          if (!claudeIndexing()) continue;
+          folderChanged = await writer.refreshFolder(folder, scope === true ? undefined : { files: scope });
+        } else {
+          if (!claudeIndexing()) continue;
+          folderChanged = await writer.dropFolderRows(folder);
+        }
+      } catch (error) {
+        if (scope === true) recordChange(folder, null);
+        else for (const file of scope) recordChange(folder, file);
+        if (error.code === 'WRITER_STALE') log.info('[projects] watcher refresh deferred:', error.message);
+        else log.error('[projects] watcher refresh failed:', error.message);
+        retryAt = Date.now() + 5000;
+        scheduleChanges(true);
+        continue;
       }
       changed = folderChanged === true || changed;
       activityChanged = folderChanged === 'activity' || activityChanged;
@@ -4024,6 +4067,12 @@ function startProjectsWatcher() {
     } else if (activityChanged) {
       notifyRendererProjectsChanged('activity');
     }
+  }
+
+  function scheduleChanges(retry = false) {
+    if (debounceTimer && retryAt && !retry) return;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => flushChanges().catch(err => log.error('[projects] watcher refresh failed:', err.message)), Math.max(500, retryAt - Date.now()));
   }
 
   function recordChange(folder, relPath) {
@@ -4066,8 +4115,7 @@ function startProjectsWatcher() {
         return;
       }
 
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => flushChanges().catch(err => log.error('[projects] watcher refresh failed:', err.message)), 500);
+      scheduleChanges();
     });
 
     watcher = projectsWatcher;

@@ -475,7 +475,53 @@ Async reconciliation logs a missing projects directory and resolves, matching th
 
 The projects worker never writes: main relays its effects to the writer worker ([session-index-writer.md](session-index-writer.md)). Before applying effects without an intervening await, the relay checks the request token against SQLite total_changes/data_version, the writer's `_writer_revision` and the current projected activeSessions/remoteRoots. The worker sends ordered effects after each completed folder only when effects exist or retained live rows changed; unchanged folders send no progress message. Main validates the version before each batch and refreshes the token after its own writes; a watcher/scan/settings/live-session change stops further writes from that snapshot and retries with a fresh snapshot. Worker reconciles bypass the synchronous helper's throttle because main owns their five-second throttle. A read-only reply with no retained-row changes and no reconciliation may publish its partial snapshot during cold-scan writes, so first paint never waits for the background scan to settle. Retained live rows are copied back for releaseLiveSession on exit. The worker skips reconciliation while the completeness marker is absent and excludes pending repair folders. An accepted reconciliation advances main's five-second throttle, and so does a completed cold scan whose completeness marker is set (#1125): the scan just read every file, so the first post-scan load is a plain build rather than a full stat sweep that could outlive the caller's deadline. Cold-start population stays fire-and-forget; the existing entrypoint backfill, archive state persistence, remote placeholders and attachability annotation stay on main.
 
-There is one in-flight job and at most one pending job. Each dispatch owns its callers; a valid result resolves them even when newer callers are pending. Pending options retain reconcile and byte-measurement requests with logical OR. Each caller has a fixed 30-second deadline from registration, including queue and retries. The third conflicting dispatch has two outcomes (#1125). When the reply is effect-free — no effects, no retained live rows, not a reconciliation — the client delivers it to its callers flagged `stale: true` without applying anything; main schedules the throttled projects-changed notification with cause conflict and sets `projectsStale: true` on the paired reply, so the sidebar always paints and converges at the next reload while the live inputs keep moving (this reverses the #719 rejection for that case: the cold-scan log showed eight rejections in a row, each one feeding the next through the conflict notification). Any other reply rejects with PROJECTS_SNAPSHOT_CONFLICT and no arrays or remaining effects, and main emits the same conflict notification; the renderer debounce recovers without an unrelated event. The conflict error carries `reason` (`live`, `db`, `writer` or `deletion`, the first stale cause of the terminal dispatch), `dispatches`, `reconcile` and, for `live`, the two serialized snapshots; main logs `[projects] snapshot conflict after <n> dispatches: reason=<reason> changed=<keys> reconcile=<bool>`, where `changed` lists the top-level live-snapshot keys that differ (activeSessions, remoteRoots, localDescriptors, localJobs) or `unknown` when a snapshot cannot be parsed — never a favourable default. Already accepted folder batches remain valid. Errors/exits reject waiters and reset the worker. An expired build with no remaining callers resets the worker; the timeout error carries `code: 'PROJECTS_WORKER_TIMEOUT'`, `timeoutMs` and the active job's `reconcile` and `dispatches`, which main logs as `[projects] get-projects timed out after <ms> ms: reconcile=<bool|unknown> dispatches=<n|unknown>`. A reconcile keeps running after caller deadlines so completed folders persist and successful completion advances main's throttle; `accepted(result, { delivered })` says whether a caller was still waiting, and an undelivered reconciliation notifies the renderer with cause reconcile so its result reaches the sidebar — a delivered one never notifies, so no five-second reconcile loop can form. Each reconciliation retains its five-minute hard ceiling across retries (RECONCILE_TIMEOUT_MS). At that ceiling main rejects all outstanding waiters and resets the worker; a later request starts a fresh worker. Already applied folder batches remain in SQLite. The hard timer is cleared on completion, retry, error and shutdown. There is no synchronous main-thread fallback. Quit rejects pending work and terminates the worker. Structured-clone costs and actual main-side DB writes remain. External data-directory sharing is still forbidden.
+There is one in-flight job and at most one pending job. Each dispatch owns its
+callers; pending options retain reconcile and byte-measurement requests with
+logical OR. Caller deadlines remain 30 seconds including queue time. The generic
+client retains its three-dispatch default, but main selects one dispatch for
+snapshot races (#1194). A deletion epoch conflict still gets one additional
+read-only build, preserving the deletion fence without replaying old effects.
+Effect-free conflicted replies can be delivered stale; effect-bearing replies
+still reject internally without publishing their remaining effects.
+
+Main catches that internal conflict and returns the last consistent result,
+using the persisted last-known lists once if no in-process result exists, or
+empty lists if neither exists. Current archive/hidden and live annotations
+still apply. Paired replies carry projectsStale: true and never overwrite the
+persisted last-known lists. There is no immediate conflict notification or
+projectsError envelope. One unrefed five-second timer retries the snapshot in
+main, independently of renderer visibility. Concurrent failures share it; while
+it runs they cannot arm another timer. A stale retry arms one further interval;
+a successful retry emits one reconcile notification. Persistent contention
+therefore costs at most one background refresh per five seconds, without a
+renderer feedback loop. Quitting prevents new retries and makes the timer inert.
+Real errors still follow the error path. Expected conflicts log at info with
+dispatch count, reason and changed live components.
+
+projectsReconciledAt continues to mean accepted reconciliation or successful
+population, preserving #1185's startup rule. A separate
+projectsReconcileAttemptedAt records admission, including failed attempts.
+Both the usual five-second interval and post-populate reconciliation debt
+respect that attempt interval. A failed/partial populate still forces the first
+eligible reconciliation; a failed attempt does not clear that debt.
+
+The filesystem watcher drains events into a batch but returns failed folder
+scopes to pendingChanges. Targeted scopes union with new files; a full-folder
+event dominates. Later folders in the batch still run and successful changes
+still notify. WRITER_STALE logs at info, other failures at error. One timer
+retries after five seconds without needing another filesystem event; incoming
+events do not postpone a conflict retry. The ordinary 500 ms debounce remains
+for uncontended batches. Retry work always re-reads current files rather than
+replaying rejected effects. This is an in-process retry guarantee; process
+exit still relies on the next startup scan.
+
+test/projects-conflict-loop.test.js executes the shipped handler, client and
+watcher with a synthetic writer admission race, controlled timers and disposable
+files. Across ten immediate requests it measures 30 builds / 30 reconciliations /
+10 notifications before #1194, and 10 / 1 / 0 after, with one pending retry.
+It covers continued contention, eventual convergence, deferred population,
+lost watcher events, scope merging and error classification. These are pass
+counts, not live CPU measurements.
 
 getProjects(false/true) still returns its existing array. loadProjects calls getProjects('both') once per reload and receives {defaultProjects, allProjects}; the false view is assembled before the true view, preserving archive reappearance writes. The renderer samples global settings after the worker reply, preventing a pending session from reappearing when its project was archived during that fetch. Each view retains its own project/session arrays until the renderer's existing dedup joins session identities. Search, archived parents/subagents, SDK filtering, hidden repositories, remote placeholders, pending sessions and plain/panel terminals keep their policies. Worker failure rejects IPC. Event reloads catch rejection and retain the previous sidebar lists; there is no S3 persistent-notice surface in this slice, and an empty list uses the loading status for an error. Startup first paints the previous run's last accepted paired reply as inert provisional rows while the real load runs ([ipc-bridge.md](ipc-bridge.md), "Last known projects"), then retries the load once and runs working-set restore even when both attempts fail. After both immediate attempts fail, three additional reloads run one second apart, stopping at the first success without waiting for a filesystem event. Scheduled persistence is guarded until restoreWorkingSet has read global.openWorkingSet, matching the exit-flush guard.
 
