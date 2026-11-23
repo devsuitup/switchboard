@@ -69,6 +69,8 @@ test('on uses the fake CODEX_HOME and sends only renderable rows across IPC', as
   assert.deepEqual(Object.keys(usage), ['limits']);
   assert.deepEqual(usage.limits.map(row => row.percent), [8, 92, 12]);
   assert.deepEqual(usage.limits.map(row => row.short), ['5h', '1wk', '1wk']);
+  assert.deepEqual(usage.limits.map(row => row.windowMinutes), [300, 10080, 10080], 'raw durations reach the renderer');
+  assert.equal(usage.limits[2].model, 'Spark', 'model identity is separate from the duration label');
   assert.equal(usage.limits[2].label, 'Codex Spark (1wk)');
   assert.ok(usage.limits[0].reset);
   assert.equal(usage.limits[1].severity, 'high');
