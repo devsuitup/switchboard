@@ -22,14 +22,16 @@ test('notices report shown text, source, merge, replace and dismissal, including
   window.showAppNotice({ id: 'restore:jobs', kind: 'warning', mergeMembers: true, members: [{ id: 'b', text: 'Two' }], message: members => members.map(m => m.text).join('\n') });
   window.showAppNotice({ id: 'restore:jobs', kind: 'error', source: 'remote', message: 'Replacement' });
   document.querySelector('.app-notice-dismiss').click();
-  assert.deepEqual(events.map(e => e.event), ['show', 'merge', 'show', 'replace', 'show', 'dismiss']);
+  assert.deepEqual(events.map(e => e.event), ['show', 'merge', 'replace', 'dismiss']);
   assert.equal(events[0].source, 'restore');
-  assert.equal(events[2].text, 'One\nTwo');
-  assert.equal(events[4].source, 'remote');
+  assert.equal(events[1].text, 'One\nTwo');
+  assert.equal(events[2].source, 'remote');
+  assert.equal(events[3].reason, 'user');
   window.api._mainProcessErrorCb({ id: 'a', count: 1, message: 'Failure' });
   window.api._mainProcessErrorCb({ id: 'a', count: 2, message: 'Failure' });
-  assert.deepEqual(events.slice(-2).map(e => e.event), ['merge', 'show']);
-  assert.match(events.at(-1).text, /2 occurrences/);
+  assert.equal(events.at(-1).event, 'merge');
+  assert.deepEqual(events.at(-1).counts, [{ id: 'a', count: 2 }]);
+  assert.equal(events.at(-1).text, '');
 });
 
 test('queued questions log when mounted and their real confirm, radio, secondary and cancel choices', async t => {
@@ -88,11 +90,71 @@ test('restore toasts and updater status report show and dismiss through the ship
   window.showRestoreNotice('restore-legacy', 'Still running elsewhere');
   document.querySelector('.restore-toast-dismiss').click();
   await Promise.resolve();
-  window.setUpdaterStatus('Update check failed');
+  window.setUpdaterStatus('Update check failed', undefined, { kind: 'error' });
   window.setUpdaterStatus('');
   assert.deepEqual(events.map(e => e.event), ['show', 'dismiss', 'show', 'dismiss']);
   assert.equal(events[0].text, 'Still running elsewhere');
   assert.equal(events[2].kind, 'error');
+});
+
+test('M4 delete-session logs short identity while keeping its prompt visible', async t => {
+  const { window, document, events } = setup(t);
+  const pending = window.showDeleteSessionDialog({ sessionId: 'abcdef01-2345-6789', summary: 'PRIVATE FIRST PROMPT', projectPath: '/project' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(document.querySelector('h3').textContent, /PRIVATE FIRST PROMPT/);
+  document.querySelector('#dss-cancel').click();
+  await pending;
+  assert.doesNotMatch(JSON.stringify(events), /PRIVATE FIRST PROMPT/);
+  for (const event of events) {
+    assert.match(event.title, /abcdef01/);
+    assert.match(event.id, /abcdef01/);
+    assert.match(event.text, /abcdef01/);
+  }
+});
+
+test('M4 restore toast logs short identity while keeping its title visible', async t => {
+  const { window, document, context, events } = setup(t);
+  window.LIVE_ELSEWHERE_NOTICE_MS = 60000;
+  loadAppFunctions(context, { functions: ['showRestoreNotice'] });
+  const session = { sessionId: 'abcdef01-2345-6789', summary: 'PRIVATE FIRST PROMPT' };
+  window.showRestoreNotice('background-info:' + session.sessionId, `${session.summary} now runs in the background.`, session);
+  assert.match(document.querySelector('.restore-toast-msg').textContent, /PRIVATE FIRST PROMPT/);
+  document.querySelector('.restore-toast-dismiss').click();
+  await Promise.resolve();
+  assert.equal(events.length, 2);
+  assert.doesNotMatch(JSON.stringify(events), /PRIVATE FIRST PROMPT/);
+  assert.match(events[0].text, /abcdef01 now runs/);
+  assert.equal(events[1].reason, 'user');
+});
+
+test('notice dismissals distinguish expiry and programmatic clearing', t => {
+  const { window, events } = setup(t);
+  let expire;
+  window.setTimeout = callback => { expire = callback; return 1; };
+  window.showAppNotice({ id: 'expires', message: 'Transient' });
+  expire();
+  assert.equal(events.at(-1).reason, 'expired');
+  window.showAppNotice({ id: 'clear', message: 'Cleared' });
+  window.clearAppNotice('clear');
+  assert.equal(events.at(-1).reason, 'cleared');
+});
+
+test('updater progress logs only start and end, with caller-provided severity', async t => {
+  const { window, document, context, events } = setup(t);
+  const status = document.createElement('span');
+  status.id = 'status-bar-updater';
+  document.body.append(status);
+  loadAppFunctions(context, { functions: ['setUpdaterStatus'], declarations: ['statusBarUpdater', 'updaterStatusTimer'] });
+  window.setUpdaterStatus('Downloading v1…');
+  for (let percent = 0; percent <= 100; percent++) {
+    window.setUpdaterStatus(`Updating… ${percent}%`, undefined, { progress: true });
+    await Promise.resolve();
+  }
+  window.setUpdaterStatus('Ready');
+  await Promise.resolve();
+  assert.deepEqual(events.map(event => event.text), ['Downloading v1…', 'Ready']);
+  window.setUpdaterStatus('Localized failure', undefined, { kind: 'error' });
+  assert.equal(events.at(-1).kind, 'error');
 });
 
 test('missing, throwing and rejected IPC APIs leave notices and questions usable', async t => {

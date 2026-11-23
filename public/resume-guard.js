@@ -63,11 +63,11 @@ async function guardResume(session, { automatic = false, api, confirm, name, not
       return false;
     }
     if (typeof notify !== 'function') throw new TypeError('guardResume requires a notify adapter for a background refusal');
-    notify({ id: `resume-background:${session.sessionId}`, kind: 'error',
+    notify({ id: `resume-background:${session.sessionId}`, kind: 'error', sessions: [{ ...session, name }],
       message: `Cannot open "${name || 'Untitled conversation'}" here: it runs as a background session whose job Switchboard cannot identify, so it cannot be attached. Find it in the Agents view.` });
     return false;
   }
-  return !!(await confirm(liveElsewhereQuestion(live, name)));
+  return !!(await confirm({ ...liveElsewhereQuestion(live, name), sessions: [{ ...session, name }] }));
 }
 
 // see .ai/contexts/cli-session-state.md ("Conversation continuations")
@@ -110,7 +110,7 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
   };
   const label = part => (part.name || part.aiTitle || part.summary || part.title || '').trim() || 'Untitled conversation';
   const conversationName = () => label(partInfo(session));
-  const openAsWas = async message => await confirm({ title: 'Open this conversation?', message,
+  const openAsWas = async message => await confirm({ title: 'Open this conversation?', message, sessions: [partInfo(session)],
     confirmLabel: 'Open as it was' }) ? session : null;
   let result;
   try {
@@ -129,7 +129,7 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
   const missing = result?.missing || (result?.missingAt?.length && result.missingAt.every(id => rowIds.has(id)));
   if ((result && !result.unresolved || missing) && !candidates.length && choices?.has(key)) remember(null);
   if (missing && !candidates.length) {
-    notify?.({ id: `continuation-missing:${session.sessionId}`,
+    notify?.({ id: `continuation-missing:${session.sessionId}`, sessions: [partInfo(session)],
       message: '"' + conversationName() + '" continued in a part that no longer exists on disk, so it was opened as it was.' });
     const head = session.headSessionId || session.sessionId;
     return head === session.sessionId ? session
@@ -205,7 +205,7 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
   if (liveFailed) message.push('Switchboard could not check which parts are running.');
   const rememberedId = record?.chosen === null ? session.sessionId : record?.chosen;
   const selectedId = options.find(option => option.id === rememberedId && !option.disabled)?.id || options.find(option => !option.disabled)?.id;
-  const answer = await choose({ title: 'Open which part?', message, options, selectedId, confirmLabel: 'Open' });
+  const answer = await choose({ title: 'Open which part?', message, options, selectedId, confirmLabel: 'Open', sessions: parts });
   const selected = options.find(option => option.id === answer?.choice && !option.disabled);
   if (!selected) return null;
   if (result && !result.unresolved) remember({ chosen: selected.id === session.sessionId ? null : selected.id, candidates: candidateIds });

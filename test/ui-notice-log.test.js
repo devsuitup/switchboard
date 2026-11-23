@@ -57,7 +57,7 @@ test('identical consecutive events are counted until transition or deadline, wit
   assert.match(lines[2], /dismiss/);
   send(event);
   send(event);
-  clock.advance(1000);
+  clock.advance(60000);
   assert.match(lines.at(-1), /repeated 1×/);
   assert.equal(clock.size, 0);
   send(event);
@@ -71,8 +71,55 @@ test('alternating-event loops have a bounded write rate and counted suppressed e
   const { send, lines, clock } = setup(t);
   for (let i = 0; i < 1000; i++) send({ event: i % 2 ? 'replace' : 'show', kind: 'error', id: 'loop', text: String(i) });
   assert.ok(lines.length <= 20, 'a changing loop cannot flood main.log');
-  clock.advance(1000);
+  clock.advance(60000);
   assert.match(lines.at(-1), /suppressed 980 events/);
+});
+
+test('M1 adversarial URL fields finish within 50ms', t => {
+  const { send } = setup(t);
+  const text = 'http://' + 'a:'.repeat(8190);
+  const start = performance.now();
+  send({ event: 'show', text, id: text, source: text, title: text, choice: text, choices: Array(20).fill(text) });
+  assert.ok(performance.now() - start < 50, 'worst-case IPC redaction must finish under 50 ms');
+});
+
+const secretProbes = [
+  ...['ANTHROPIC_API_KEY', 'GITHUB_TOKEN', 'client_secret', 'DB_PASSWORD', 'private_key', 'pass', 'access-key'].map(key => `${key}=probe-secret`),
+  'Authorization: Basic probe-secret', 'Proxy-Authorization: Token probe-secret',
+  'Cookie: a=probe-secret; b=other', 'Set-Cookie: a=probe-secret; HttpOnly',
+  ...['xoxa', 'xoxb', 'xoxp', 'xoxr', 'xoxs'].map(prefix => `${prefix}-probe-secret`),
+  'eyJhbGciOiJIUzI1NiJ9.payload.signature', 'glpat-probe-secret', 'AKIA1234567890ABCDEF', 'npm_probe_secret',
+  ...['sig', 'key', 'signature', 'code', 'auth', 'token', 'access_token'].map(key => `https://example.test/?${key}=probe-secret&next=ok`),
+  'sk-probe-secret', 'ghp_probe_secret', 'github_pat_probe_secret', 'Bearer probe-secret', 'https://user:probe-secret@example.test',
+];
+for (const probe of secretProbes) test(`M2 masks ${probe.split(/[=:]/)[0]}`, t => {
+  const { send, lines } = setup(t);
+  send({ event: 'show', text: probe });
+  const text = JSON.parse(lines[0].slice('[ui-notice] '.length)).text;
+  assert.match(text, /\[REDACTED\]/, `secret probe must be redacted: ${probe}`);
+  assert.doesNotMatch(text, /probe.secret|eyJhbGci|AKIA123/);
+});
+
+test('M2 every redactor stays bounded on 16KB adversarial fields', () => {
+  const { redactLogText } = require('../src/main/shared/redact-log-text');
+  for (const input of ['a'.repeat(16384), 'a_'.repeat(8192), 'http://' + 'a:'.repeat(8190), 'eyJ' + 'a'.repeat(16381), 'a'.repeat(16370) + 'token=', '"'.repeat(16384)]) {
+    const start = performance.now();
+    redactLogText(input);
+    assert.ok(performance.now() - start < 50, `adversarial redactor under 50ms: ${input.slice(0, 20)}`);
+  }
+});
+
+for (const alternating of [false, true]) test(`M3 ten-minute ${alternating ? 'alternating' : 'identical'} loop is bounded`, t => {
+  const { send, lines, clock, sink } = setup(t);
+  const step = alternating ? 20 : 2000;
+  for (let time = 0; time < 600000; time += step) {
+    send({ event: 'show', id: alternating ? String(time % 40) : 'same', text: 'x'.repeat(4096) });
+    clock.advance(step);
+  }
+  sink.dispose();
+  assert.ok(lines.length <= (alternating ? 610 : 11), `fixed line bound, got ${lines.length}`);
+  assert.ok(Buffer.byteLength(lines.join('\n')) <= (alternating ? 2600000 : 6000), 'fixed byte bound');
+  assert.match(lines.join('\n'), alternating ? /suppressed \d+ events/ : /repeated \d+×/);
 });
 
 test('timers are unreferenced and logging errors never escape IPC handling', t => {

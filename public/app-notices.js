@@ -2,38 +2,42 @@
 const appNoticeEntries = new Map();
 const transientNoticeEntries = new WeakMap();
 
-window.trackUiNotice = function (element, source) {
-  if (transientNoticeEntries.has(element)) { transientNoticeEntries.get(element)(); return; }
+window.trackUiNotice = function (element, source, options = {}) {
+  if (transientNoticeEntries.has(element)) { transientNoticeEntries.get(element)(options); return; }
   let previous = null;
-  function report(event, text) {
+  function report(event, text, reason) {
     try {
-      window.api?.logUiNotice?.({ event, id: element.id, source, text,
-        kind: text === 'Update check failed' ? 'error' : 'info' })?.catch?.(() => {});
+      window.api?.logUiNotice?.(window.sessionNoticeLog({ event, id: element.id, source, text, reason,
+        kind: options.kind || 'info' }, options.sessions))?.catch?.(() => {});
     } catch {}
   }
   function sync() {
+    if (options.progress) return;
     const text = element.querySelector('.restore-toast-msg, #update-toast-msg')?.textContent ?? element.textContent;
     const visible = element.isConnected && !element.hidden && !element.classList.contains('hidden') && !!text;
-    if (!visible && previous !== null) { report('dismiss', previous); previous = null; }
+    if (!visible && previous !== null) { report('dismiss', previous, element.dataset.uiNoticeDismissReason || 'cleared'); previous = null; }
     if (visible && previous !== text) {
-      if (previous !== null) report('replace', text);
-      report('show', text);
+      report(previous === null ? 'show' : 'replace', text);
       previous = text;
+      delete element.dataset.uiNoticeDismissReason;
     }
     if (!element.isConnected) { observer.disconnect(); transientNoticeEntries.delete(element); }
   }
   const observer = new MutationObserver(sync);
   observer.observe(element, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'hidden'] });
   if (element.parentNode) observer.observe(element.parentNode, { childList: true });
-  transientNoticeEntries.set(element, sync);
+  element.addEventListener('click', () => { element.dataset.uiNoticeDismissReason = 'user'; }, true);
+  transientNoticeEntries.set(element, next => { options = next; sync(); });
   sync();
 };
 
-function reportAppNotice(event, options, notice) {
+function reportAppNotice(event, options, notice, reason) {
   try {
-    window.api?.logUiNotice?.({ event, kind: options.kind === 'error' || options.kind === 'warning' ? options.kind : 'info',
+    const counts = options.id === 'main-process-errors' && event === 'merge' ? options.members.map(({ id, count }) => ({ id, count })) : undefined;
+    const sessions = [options.sessions || [], (options.members || []).map(member => member.session)].flat();
+    window.api?.logUiNotice?.(window.sessionNoticeLog({ event, reason, counts, kind: options.kind === 'error' || options.kind === 'warning' ? options.kind : 'info',
       id: options.id, source: options.source || String(options.id || 'notice').split(/[:-]/)[0],
-      text: notice.querySelector('.app-notice-message').textContent })?.catch?.(() => {});
+      text: counts ? '' : notice.querySelector('.app-notice-message').textContent }, sessions))?.catch?.(() => {});
   } catch {}
 }
 
@@ -55,7 +59,6 @@ window.api?.onMainProcessError?.(notice => {
     previous.options = options;
     previous.notice.querySelector('.app-notice-message').textContent = options.message(members);
     reportAppNotice('merge', options, previous.notice);
-    reportAppNotice('show', options, previous.notice);
   }
   const group = previous?.notice || showAppNotice(options);
   let announcement = group.querySelector('.app-notice-announcement');
@@ -93,19 +96,19 @@ function sessionActionDescription(session) {
   return `${identity} at ${location}`;
 }
 
-function showSessionActionFailure(operation, session, error, recovery, onRetry, { headline = `${operation} failed`, kind = 'error' } = {}) {
+function showSessionActionFailure(operation, session, error, recovery, onRetry, { headline = `${operation} failed`, kind = 'error', sessions = [session] } = {}) {
   const reason = error?.message || error || 'The backend is unavailable or returned no result';
   showAppNotice({
-    id: sessionActionNoticeId(operation, session), kind,
+    id: sessionActionNoticeId(operation, session), kind, sessions,
     message: `${headline} for ${sessionActionDescription(session)}: ${reason}.${recovery ? ' ' + recovery : ''}`,
     actionLabel: onRetry ? 'Retry' : undefined, onAction: onRetry, dismissOnAction: false,
   });
 }
 
-function clearAppNotice(id, { membersOnly = false, exceptGroup } = {}) {
+function clearAppNotice(id, { membersOnly = false, exceptGroup, reason = 'cleared' } = {}) {
   const entry = appNoticeEntries.get(id);
   if (entry && !membersOnly) {
-    reportAppNotice('dismiss', entry.options, entry.notice);
+    reportAppNotice('dismiss', entry.options, entry.notice, reason);
     clearTimeout(entry.timer);
     const restoreFocus = entry.notice.contains(document.activeElement);
     entry.notice.remove();
@@ -150,7 +153,7 @@ function showAppNotice(options) {
     action.textContent = actionLabel;
     action.addEventListener('click', () => {
       if (appNoticeEntries.get(id)?.notice !== notice) return;
-      if (dismissOnAction) clearAppNotice(id);
+      if (dismissOnAction) clearAppNotice(id, { reason: 'user' });
       onAction();
     });
     notice.append(action);
@@ -163,7 +166,7 @@ function showAppNotice(options) {
     dismiss.addEventListener('click', () => {
       if (appNoticeEntries.get(id)?.notice !== notice) return;
       const onDismiss = appNoticeEntries.get(id).options.onDismiss;
-      clearAppNotice(id);
+      clearAppNotice(id, { reason: 'user' });
       onDismiss?.();
     });
     notice.append(dismiss);
@@ -175,8 +178,7 @@ function showAppNotice(options) {
   if (previous) previous.notice.replaceWith(notice);
   else container.append(notice);
   appNoticeEntries.set(id, entry);
-  if (previous) reportAppNotice(options.mergeMembers ? 'merge' : 'replace', options, notice);
-  reportAppNotice('show', options, notice);
+  reportAppNotice(previous ? options.mergeMembers ? 'merge' : 'replace' : 'show', options, notice);
   if (kind !== 'error' && !persistent) {
     let remaining = kind === 'undo' ? 10_000 : 15_000;
     let started;
@@ -185,7 +187,7 @@ function showAppNotice(options) {
     const resume = () => {
       if (focused || hovered || !notice.isConnected) return;
       started = Date.now();
-      entry.timer = setTimeout(() => clearAppNotice(id), remaining);
+      entry.timer = setTimeout(() => clearAppNotice(id, { reason: 'expired' }), remaining);
     };
     const pause = () => {
       if (entry.timer === null) return;

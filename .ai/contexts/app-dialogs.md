@@ -9,10 +9,13 @@ Only that window's main frame is accepted. Missing, throwing or rejected APIs
 never prevent showing, answering or dismissing UI.
 
 `app-notices.js` reports `show`, `dismiss`, `replace` and `merge`, including the
-in-place main-process error group update. `show` records the rendered message,
+in-place main-process error group update (IDs and counts only on merge). Each
+replacement or merge writes one event, without an additional `show`. `show` records the rendered message,
 the notice ID, info/warning/error severity and an explicit source or ID prefix.
 Undo notices use info. Legacy restore toasts and updater notices/status use the
-same channel. The existing `[restore-bg]` diagnostic remains unchanged.
+same channel. Dismissals carry `user`, `expired` or `cleared`. Updater percentage
+changes stay visible but are not logged; start, completion and failures are logged,
+with severity supplied by the caller. The existing `[restore-bg]` diagnostic remains unchanged.
 
 `observeModalQuestion` in `modal-stack.js` records the title, displayed text and
 offered labels at mount, then the actual answer or `cancel`. It is used by
@@ -22,20 +25,31 @@ questions log only when mounted. Dynamic checkbox labels and checked states
 are recorded on acceptance; opaque preview plans and tokens are not serialized.
 Configuration forms and informational modals are not question helpers.
 
+For this channel, session titles and prompts are not recorded. Session-bearing
+callers pass `sessions` to the question/notice helper (or a `session` on each
+notice member); `showRestoreNotice` accepts the session as its third argument.
+`sessionNoticeLog` in modal-stack replaces names, generated titles, summaries
+and full session IDs with the first eight hexadecimal ID characters in logged
+text, title, ID, choices and answers. The visible DOM is unchanged. Callers must
+pass every session whose label they render, including continuation alternatives.
+
 Main writes single-line JSON with a `[ui-notice]` prefix at info level, independent
-of Debug Mode. Each field is redacted through `shared/redact-log-text.js`, then
+of Debug Mode. Each field is cut to its cap plus 128 characters before redaction
+through `shared/redact-log-text.js`, then
 capped: ID 160, source 80, text 4096, title 256, answer 1024 characters, and at
-most 20 choice labels of 256 characters. Input text processing caps at 16384
-characters per field. Paths are preserved; common bearer credentials, named
-token/password/secret/API-key values, provider token prefixes and URL credentials
+most 20 choice labels of 256 characters. Paths are preserved; bearer credentials,
+credential-suffixed variable names, authorization and cookie headers, JWTs,
+provider token prefixes, URL credentials and credential query parameters
 are masked. No main.log redaction helper existed at this revision: this shared
 helper protects the new channel, and does not claim to sanitize other log writers.
 
 Identical consecutive normalized events are counted as additional occurrences
-(`repeated N×`) when the run changes or within one second. At most 20 event/repeat
-lines plus one suppression summary are written per one-second window, so even
-alternating IDs cannot flood the log. The fixed deadline is not extended by new
-events. Its timer is unreferenced, cleared on disposal, and pending counts flush
+(`repeated N×`) when the run changes or once per minute, without repeating the
+original text. Identity survives window rollover and resets after 60 seconds
+without an event. Event/repeat writes are limited to 20 per second, 60 per minute
+and 64 KiB per minute, plus one small suppression-count summary per minute.
+These bounds also cover alternating IDs and large payloads. The fixed deadline
+is not extended by new events. Its timer is unreferenced, cleared on disposal, and pending counts flush
 on graceful quit. Abrupt termination can lose the final partial window.
 
 Project deletion uses `showChoiceDialog` with `onChange`, `planDetails` and

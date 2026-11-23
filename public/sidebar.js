@@ -74,7 +74,7 @@ function announceNotStopped(entries) {
   }
   for (const [alias, rows] of hosts) {
     const members = [...new Map(rows.map(({ session, error }) => [sessionActionNoticeId('Archive', session),
-      { id: sessionActionNoticeId('Archive', session), text: sessionActionDescription(session), error }])).values()];
+      { id: sessionActionNoticeId('Archive', session), text: sessionActionDescription(session), error, session }])).values()];
     showAppNotice({
       id: `Archive:${alias}:not-stopped`, kind: 'error', members, mergeMembers: true,
       message: current => `Archived, but not stopped: ${remoteHostLabel(alias)} did not answer (${[...new Set(current.map(member => member.error))].join('; ')}). ${current.map(member => member.text).join('; ')}. The sessions may still be running there; unarchive them to try again once the host is back.`,
@@ -201,7 +201,7 @@ async function archiveSessionRows(rows, olderRule) {
   const prepare = olderRule ? prepareOlderArchive : window.planSessionArchive;
   const confirmed = await confirmSessionArchivePlan(rows, await prepare(rows), async prepared => {
     if (olderRule && !prepared.plans.length) {
-      showAppNotice({ id: 'archive-older-empty', kind: 'error', message: ['Nothing eligible to archive.',
+      showAppNotice({ id: 'archive-older-empty', kind: 'error', sessions: rows, message: ['Nothing eligible to archive.',
         olderArchiveList('Kept:', prepared.kept), olderArchiveList('Refused:', prepared.refusals)].filter(Boolean).join('\n') });
       return null;
     }
@@ -211,7 +211,7 @@ async function archiveSessionRows(rows, olderRule) {
     const question = olderRule ? `Archive ${prepared.plans.length} older session${prepared.plans.length === 1 ? '' : 's'}?`
       : rows.length === 1 ? 'Archive this session?' : `Archive ${rows.length} sessions?`;
     if (!await appConfirm({
-      title: question, confirmLabel: 'Archive', danger: targets.length > 0,
+      title: question, confirmLabel: 'Archive', danger: targets.length > 0, sessions: rows,
       message: [question, ...(olderRule ? [olderRule, olderArchiveList('To archive:', prepared.plans),
         olderArchiveList('Kept:', prepared.kept), olderArchiveList('Refused:', prepared.refusals),
         'Kept and refused sessions stay unarchived. Undo restores archived rows.'] : []), ...(running ? [`${running} running process${running === 1 ? '' : 'es'} will be stopped first.`] : []),
@@ -252,7 +252,7 @@ async function archiveSessionRows(rows, olderRule) {
   }
   announceNotStopped(notStopped);
   if (archived.length) showSessionArchiveUndo(archived, stoppedAny);
-  if (kept.length) showAppNotice({ id: 'archive-older-kept', kind: 'info',
+  if (kept.length) showAppNotice({ id: 'archive-older-kept', kind: 'info', sessions: rows,
     message: olderArchiveList(`${kept.length} kept because:`, kept) });
   pollActiveSessions();
   Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
@@ -2040,7 +2040,7 @@ async function archiveProjectFolder(project, button) {
 
       if (!choices.length && !running.length) return {};
       return showChoiceDialog({
-        title: `Archive ${shortProjectPath(parent.projectPath)}?`,
+        title: `Archive ${shortProjectPath(parent.projectPath)}?`, sessions,
         message,
         choices,
         confirmLabel: 'Archive folder',
@@ -3145,7 +3145,7 @@ async function showDeleteSessionDialog(session) {
     if (p.subagents > 0) parts.push(`${p.subagents} subagent transcript${p.subagents !== 1 ? 's' : ''}`);
     statusEl.innerHTML = projectLine + `<pre class="dwt-dirty-list">${escapeHtml(parts.join('\n'))}</pre>`;
 
-    const reportChoice = window.observeModalQuestion(dialog, 'delete-session');
+    const reportChoice = window.observeModalQuestion(dialog, 'delete-session', session);
 
     function close(confirmed) {
       reportChoice(confirmed ? 'Delete permanently' : 'cancel');

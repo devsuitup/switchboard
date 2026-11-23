@@ -923,6 +923,7 @@ async function confirmSessionExit(detail, changed) {
   if (moving.length) message.push('Moved sessions keep running in the background; Switchboard reattaches them at the next start.');
   if (mac && action === 'close') message.push('Switchboard stays in the Dock.');
   const result = await showChoiceDialog({ title: 'Stop ' + total + ' and ' + verb + '?', message,
+    sessions: snapshot.rows.map(row => ({ sessionId: row.owner || row.id, name: displayName(row.owner || row.id) })),
     confirmLabel: 'Stop and ' + label, initialFocus: 'cancel', danger: true,
     secondaryAction: moving.length ? { id: 'background', label: 'Move ' + words(moving) + ' to background' + (stopping.length ? ', stop ' + words(stopping) + ', and ' : ' and ') + label, danger: stopping.length > 0 } : null,
     returnFocus: document.activeElement, replace: true, closeWith: changed && changed.then(() => null) });

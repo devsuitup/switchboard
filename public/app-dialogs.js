@@ -1,16 +1,16 @@
 // see .ai/contexts/app-dialogs.md
-async function appConfirm({ title = 'Confirm', message, confirmLabel = 'OK', danger = false } = {}) {
+async function appConfirm({ title = 'Confirm', message, confirmLabel = 'OK', danger = false, sessions } = {}) {
   return (await showChoiceDialog({
-    title, message: appDialogMessage(message), confirmLabel, danger,
+    title, message: appDialogMessage(message), confirmLabel, danger, sessions,
     initialFocus: danger ? 'cancel' : 'confirm',
   })) !== null;
 }
-async function appAlert({ title = 'Switchboard', message } = {}) {
-  await showChoiceDialog({ title, message: appDialogMessage(message), confirmLabel: 'OK', cancelLabel: null });
+async function appAlert({ title = 'Switchboard', message, sessions } = {}) {
+  await showChoiceDialog({ title, message: appDialogMessage(message), confirmLabel: 'OK', cancelLabel: null, sessions });
 }
 
-async function appChoose({ title = 'Choose', message, options = [], selectedId, confirmLabel = 'Open' } = {}) {
-  return showChoiceDialog({ title, message: appDialogMessage(message), options, selectedId, confirmLabel });
+async function appChoose({ title = 'Choose', message, options = [], selectedId, confirmLabel = 'Open', sessions } = {}) {
+  return showChoiceDialog({ title, message: appDialogMessage(message), options, selectedId, confirmLabel, sessions });
 }
 
 function appDialogMessage(message) {

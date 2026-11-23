@@ -29,6 +29,7 @@ function showChoiceDialog(options = {}) {
 }
 
 function openChoiceDialog({
+  sessions,
   title,
   message,
   choices = [],
@@ -312,7 +313,7 @@ function openChoiceDialog({
     overlay.addEventListener('click', (event) => { if (event.target === overlay) close(null); });
 
     document.body.appendChild(overlay);
-    const reportChoice = window.observeModalQuestion(dialog, 'dialog');
+    const reportChoice = window.observeModalQuestion(dialog, 'dialog', sessions);
     const unregister = registerModal({ overlay, cancel: () => close(null), enter, restoreFocus: false });
     closeOpenChoiceDialog = close;
     if (closeWith) closeWith.then(close, () => {});

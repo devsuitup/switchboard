@@ -5,14 +5,34 @@ const modalIdleQuestions = [];
 let modalQuestionActive = false;
 let modalIdleTimer = null;
 
-window.observeModalQuestion = function (dialog, source) {
+window.sessionNoticeLog = function (entry, sessions = []) {
+  const replacements = new Map();
+  for (const session of (Array.isArray(sessions) ? sessions : [sessions])) {
+    if (!session) continue;
+    const id = session.sessionId?.match(/^[a-f0-9]{8}/i)?.[0] || 'session';
+    for (const value of [session.name, session.aiTitle, session.summary, session.title, session.sessionId]) {
+      if (typeof value !== 'string' || !value) continue;
+      replacements.set(value, id);
+      if (value.trim()) replacements.set(value.trim(), id);
+      const clean = typeof cleanDisplayName === 'function' ? cleanDisplayName(value) : value;
+      if (clean) replacements.set(clean, id);
+    }
+  }
+  if (!replacements.size) return entry;
+  const pattern = new RegExp([...replacements.keys()].sort((a, b) => b.length - a.length).map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
+  const redact = value => typeof value === 'string' ? value.replace(pattern, match => replacements.get(match)) : value;
+  return { ...entry, id: redact(entry.id), title: redact(entry.title), text: redact(entry.text),
+    choice: redact(entry.choice), choices: entry.choices?.map(redact) };
+};
+
+window.observeModalQuestion = function (dialog, source, sessions) {
   const title = dialog.querySelector('h2, h3')?.textContent || '';
   const id = `${source}:${title}`;
   function report(event, choice = '') {
     try {
       const choices = [...dialog.querySelectorAll('button:not([hidden]), label')].map(control => control.textContent).filter(label => label && label !== '×');
-      window.api?.logUiNotice?.({ event, kind: 'info', id, source, title, choices, choice,
-        text: dialog.textContent })?.catch?.(() => {});
+      window.api?.logUiNotice?.(window.sessionNoticeLog({ event, kind: 'info', id, source, title, choices, choice,
+        text: dialog.textContent }, sessions))?.catch?.(() => {});
     } catch {}
   }
   report('dialog-show');

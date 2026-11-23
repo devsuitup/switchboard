@@ -348,12 +348,13 @@ async function executeSessionStopTargets(targets, unreachable = new Map()) {
 async function confirmAndStopProjectFolder(project, retryRows) {
   const operation = 'Stop all';
   const noticeId = sessionActionNoticeId(operation, project);
+  let rows = [];
   try {
     const alias = project.remoteAlias || null;
     const groups = cachedAllProjects.filter(p => (p.remoteAlias || null) === alias
       && (p.projectPath === project.projectPath || worktreeParentPath(p.projectPath) === project.projectPath));
     if (!groups.some(p => p.projectPath === project.projectPath)) throw new Error('The folder is no longer in the index');
-    const rows = groups.flatMap(p => p.sessions.filter(row => !row.parentSessionId));
+    rows = groups.flatMap(p => p.sessions.filter(row => !row.parentSessionId));
     const backgroundJobs = new Map();
     const entries = [];
     for (const row of rows) {
@@ -384,14 +385,14 @@ async function confirmAndStopProjectFolder(project, retryRows) {
     ];
     let force = false;
     if (hasBackground) {
-      const answer = await showChoiceDialog({ title: 'Stop all?', message, danger: true, initialFocus: 'cancel',
+      const answer = await showChoiceDialog({ title: 'Stop all?', message, danger: true, initialFocus: 'cancel', sessions: rows,
         confirmLabel: 'Stop', selectedId: retryRows?.some(entry => entry.targets.some(target => target.job && !target.notHosted && !target.jobStopped)) ? 'force' : 'others', options: [
           { id: 'force', label: 'Stop all including background jobs' },
           { id: 'others', label: 'Stop the others only' },
         ] });
       if (!answer) return;
       force = answer.choice === 'force';
-    } else if (!await appConfirm({ title: 'Stop all?', message, confirmLabel: 'Stop', danger: true })) return;
+    } else if (!await appConfirm({ title: 'Stop all?', message, confirmLabel: 'Stop', danger: true, sessions: rows })) return;
     const failures = [];
     const failedRows = [];
     const unreachable = new Map();
@@ -406,13 +407,13 @@ async function confirmAndStopProjectFolder(project, retryRows) {
     if (failures.length) {
       showSessionActionFailure(operation, project, failures.join('\n'),
         'Check the connection or the session in its own terminal (the Agents view for a background session), then retry Stop all.',
-        () => confirmAndStopProjectFolder(project, failedRows));
+        () => confirmAndStopProjectFolder(project, failedRows), { sessions: rows });
     } else if (!force && candidates.every(entry => entry.background)) {
       showAppNotice({ id: noticeId, message: `Kept ${candidates.length} conversation${candidates.length === 1 ? '' : 's'} with background jobs; nothing else was running.` });
     } else clearAppNotice(noticeId);
     if (stopped) refreshSidebar();
   } catch (error) {
     showSessionActionFailure(operation, project, error, 'Check the folder and its sessions, then retry Stop all.',
-      () => confirmAndStopProjectFolder(project, retryRows));
+      () => confirmAndStopProjectFolder(project, retryRows), { sessions: rows });
   }
 }

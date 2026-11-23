@@ -1554,7 +1554,11 @@ for (const { merged, liveId, accept } of [
     h.document.querySelector('[data-verb="resume"]')?.click();
     await finished;
     assert.equal(questions.length, 1);
-    assert.deepEqual(JSON.parse(JSON.stringify(questions[0])), JSON.parse(JSON.stringify(w.liveElsewhereQuestion(live, 'lvds-1b'))));
+    const { sessions, ...question } = JSON.parse(JSON.stringify(questions[0]));
+    assert.deepEqual(question, JSON.parse(JSON.stringify(w.liveElsewhereQuestion(live, 'lvds-1b'))));
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0].sessionId, liveId);
+    assert.equal(sessions[0].name, 'lvds-1b');
     assert.equal(spawned.length, accept ? 1 : 0);
     if (accept) {
       assert.equal(spawned[0][0], merged ? 's-c' : 's-i');
