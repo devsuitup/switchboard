@@ -23,6 +23,12 @@ invalid retention input to its last saved value without blocking other settings,
 including when Diagnostics is hidden. Deletion paths are re-derived from the
 canonical root plus the allowlisted basename. No startup job.
 
+Age eligibility is strictly older than the retention cutoff (`mtimeMs < cutoff`);
+an exact-boundary file is kept. The diagnostic tests use a whole-second clock
+for both `utimesSync` and the injected current time so fractional-second storage
+rounding cannot move the boundary fixture across the cutoff. Real-file tests
+also pin eligibility and pruning one second on either side of the cutoff.
+
 For the synchronous appearance bootstrap (`get-initial-theme`), shared default,
 and live window/renderer updates, see [theme.md](theme.md).
 

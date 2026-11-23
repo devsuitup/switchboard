@@ -27,7 +27,7 @@ function setup(t, io = fs) {
   const logs = path.join(dir, 'logs');
   const traces = path.join(dir, 'data');
   fs.mkdirSync(logs); fs.mkdirSync(traces);
-  const now = Date.now();
+  const now = Math.floor(Date.now() / 1000) * 1000;
   const put = (folder, name, age = 20) => {
     const file = path.join(folder, name);
     fs.writeFileSync(file, '1234');
@@ -60,6 +60,22 @@ test('inventory groups owned files and pruning respects age and both active writ
   for (const file of [h.main, h.active, recent, boundary, db, foreign]) assert.ok(fs.existsSync(file), file);
   assert.equal(fs.existsSync(h.old), false);
   assert.equal(fs.existsSync(h.trace), false);
+});
+
+test('retention keeps files one second younger than the cutoff and prunes files one second older', t => {
+  const h = setup(t);
+  const younger = h.put(h.traces, 'activity-trace-20260105-000000.jsonl', 14 - 1000 / day);
+  const older = h.put(h.traces, 'activity-trace-20260106-000000.jsonl', 14 + 1000 / day);
+  const plan = h.service.inventory(14);
+  assert.equal(plan.files.find(f => f.name === path.basename(younger)).eligible, false,
+    'a file one second younger than the cutoff is kept');
+  assert.equal(plan.files.find(f => f.name === path.basename(older)).eligible, true,
+    'a file one second older than the cutoff is eligible');
+  const result = h.service.prune(14, plan.files.filter(f => [path.basename(younger), path.basename(older)].includes(f.name)));
+  assert.equal(result.deleted.length, 1);
+  assert.equal(result.skipped.length, 1);
+  assert.ok(fs.existsSync(younger), 'the younger file survives pruning');
+  assert.equal(fs.existsSync(older), false, 'the older file is pruned');
 });
 
 test('escape, symlink and junction paths cannot enter the deletion allowlist', t => {
