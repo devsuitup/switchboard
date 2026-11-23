@@ -19,6 +19,9 @@ they live:
     `<project>/.claude/commands/`.
 
 No directory is scanned recursively. Archived and deleted projects are left out.
+This listing scans Claude instruction locations, not `$CODEX_HOME`. The
+project-root filename `agents.md` is case-sensitive on Linux and macOS, so
+uppercase `AGENTS.md` is not included there.
 
 With **Schedules tab** off in Global Settings (the default), project command
 files named `schedule-*.md` stay in Agent Files and its search results, with

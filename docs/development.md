@@ -94,8 +94,10 @@ To time the check without changing files or staging anything, run
 relative to the repository root).
 This overrides only the input list; lint and selected tests still execute.
 
-CI (`.github/workflows/test.yml`) runs ESLint, and the suite under coverage on
-Node 20 and 22, on Ubuntu and Windows. On pull requests, lines a change adds or
+CI (`.github/workflows/test.yml`) runs ESLint in its own job. Pull requests run
+coverage on Ubuntu with Node 20 and 22, plus platform-specific tests on Windows
+with Node 22. Pushes to main use Node 22 on both platforms. On pull requests,
+lines a change adds or
 modifies must be 80 % covered (`diff-cover`), `main.js`, `preload.js`, the MCP
 bridge, `claude-auth.js`, `public/app.js`, `public/terminal-manager.js`, the
 CodeMirror and Mermaid files, workers, scripts, tests and `e2e/` excepted. The
@@ -114,9 +116,10 @@ window.
 
 What the data directory does not isolate:
 
-- **Transcripts.** Both instances read `~/.claude/projects`, list the same
-  sessions, and can resume them. Switchboard refuses an automatic resume of a
-  session live in another process and asks before a click does one (see
+- **Transcripts.** Both instances read `~/.claude/projects` and the Codex
+  sessions directory (`$CODEX_HOME/sessions` or `~/.codex/sessions`), list
+  the same sessions, and can resume them. For Claude, Switchboard refuses an
+  automatic resume of a session live in another process and asks before a click does one (see
   [Launching sessions](launching-sessions.md#sessions-live-in-another-process)).
   For an instance that cannot see your sessions at all, see
   [Live testing with a throwaway HOME](live-testing.md).
@@ -197,9 +200,15 @@ db.js               SQLite: session cache, metadata, settings, FTS search
 session-cache.js    Transcript indexer and ~/.claude/projects watcher
 src/main/schedules/ Cron scheduler and schedule IPC for schedule-*.md files
 src/main/triggers/  The file-based trigger API and delivery context
-remote-*.js         Remote hosts: inventory, mirror, watch, attach, stop
-mcp-bridge.js       The IDE emulation MCP server
-window-frame.js     Window options, the application menu, zoom keys
+src/main/remote/   Remote inventory, mirror, watch, attach and stop
+src/main/integrations/mcp/  The IDE emulation MCP server
+src/main/app/      Window, menu, zoom, shutdown and changelog
+src/main/          Other contexts: bg-agents, browser, changes, cli, files,
+                   projects, session-index, shared, terminals, usage, viewer
+harnesses/         Claude and Codex CLI adapters
+remote-activity.js Remote activity state (still at root)
+e2e/               Playwright journeys
+resources/         Packaged runtime resources
 workers/            Worker threads (indexing, the session index writer, search, file lists, task records)
 public/             Renderer (HTML, CSS, JS); app.js is the entry point
 scripts/            Postinstall, test runner, sandbox wrapper, build helpers

@@ -501,8 +501,7 @@ differently by the two launch paths:
 
 - **Interactive sessions** run unsandboxed: the renderer only asks for the
   sandbox on Linux, so the setting is ignored.
-- **Scheduled runs** are skipped, with *sandbox is enabled but requires Linux
-  (bubblewrap)* in the main log: an unattended run is not downgraded to no
+- **Scheduled runs** are skipped, with *sandbox needs Linux* in the main log: an unattended run is not downgraded to no
   isolation.
 
 ## Debugging

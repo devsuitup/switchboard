@@ -18,24 +18,25 @@ gh's default here is the upstream repository, `doctly/switchboard`.
    git checkout -b release/v0.1.0 origin/main
    npm version --no-git-tag-version 0.1.0   # package.json and package-lock.json
    # edit CHANGELOG.md as above
-   git commit -am v0.1.0
+   git commit -am "chore(release): v0.1.0"
    git push origin release/v0.1.0
-   gh pr create --repo devsuitup/switchboard --base main --title v0.1.0 --fill
+   gh pr create --repo devsuitup/switchboard --base main --title "chore(release): v0.1.0" --fill
    ```
 
    `test/changelog.test.js` fails when `CHANGELOG.md` has no section for the
    version in `package.json`, so a bump without its section does not pass CI.
 
-   The required PR checks for this workflow are `lint`,
+   PR titles use `type(area): subject`, for example `chore(release): v0.1.0`.
+   The separate **PR title** workflow checks this format in advisory mode.
+   It does not replace the checks below.
+
+   The PR checks emitted by this workflow are `lint`,
    `test (20, ubuntu-latest)`, `test (22, ubuntu-latest)`,
-   `test (22, windows-2022)`, `changelog` and `e2e`. Build is not required.
-   JB must remove the obsolete `test (20, windows-2022)` context from both
-   places that require it: ruleset 17240725 (`main-protection`) and the classic
-   branch protection on `main` (`required_status_checks.contexts`). Both must
-   be updated together whenever the test matrix changes; workflow changes do
-   not change repository settings. The documented ruleset requires
-   no approving review, so `gh pr merge --repo devsuitup/switchboard --auto --squash` can be armed once the
-   required checks run. CI-only PRs use the `no-changelog` label.
+   `test (22, windows-2022)`, `changelog` and `e2e`. Required checks and review
+   requirements are GitHub repository settings, separate from these workflow
+   definitions. Inspect the current ruleset and branch protection before
+   arming auto-merge; keep both aligned when changing the test matrix.
+   CI-only PRs use the `no-changelog` label.
 
 2. **Run the app before tagging.** The tag is what publishes, and nothing
    between the merge and the tag looks at the assembled whole; the test suite
