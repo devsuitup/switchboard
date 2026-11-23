@@ -346,7 +346,7 @@ restoreTriggerActions = win => triggerRendererBridge.restore(win);
 
 function triggerLifecycleDeps() {
   const { resolveLocalTarget, resolveProject } = require('./src/main/triggers/trigger-actions');
-  return { activeSessions, broker: triggerRendererBridge, launchAllowed: () => unsavedGuard.launchAllowed(), captureAuthority: () => unsavedGuard.capture(),
+  return { activeSessions, log, broker: triggerRendererBridge, launchAllowed: () => unsavedGuard.launchAllowed(), captureAuthority: () => unsavedGuard.capture(),
     getProjectSnapshot: getTriggerProjectSnapshot, getCachedSession, getCachedFolder, projectsDir: PROJECTS_DIR,
     resolveTarget: resolveLocalTarget, resolveProject,
     liveElsewhere: (id, deadline) => cliSessionState.liveElsewhereV1Checked(id, () => false, cliSessionState.makePtyPids(activeSessions), { deadline }),
@@ -1465,7 +1465,7 @@ function queueProjectsRetry(delay = 5000) {
   projectsRetryTimer.unref?.();
 }
 
-async function getProjectsSnapshot(showArchived, retry = false) {
+async function getProjectsSnapshot(showArchived, retry = false, { logConflict = true } = {}) {
   const started = TRACE.on ? performance.now() : null;
   try {
     const repairFolders = getSetting('bridge_uuid_reindex_folders');
@@ -1508,7 +1508,7 @@ async function getProjectsSnapshot(showArchived, retry = false) {
     } catch (err) {
       if (err.code !== 'PROJECTS_SNAPSHOT_CONFLICT') throw err;
       const changed = err.reason === 'live' ? ` changed=${changedLiveComponents(err.before, err.after)}` : '';
-      log.info(`[projects] snapshot conflict after ${err.dispatches ?? 'unknown'} dispatches: reason=${err.reason ?? 'unknown'}${changed} reconcile=${err.reconcile ?? 'unknown'}`);
+      if (logConflict) log.info(`[projects] snapshot conflict after ${err.dispatches ?? 'unknown'} dispatches: reason=${err.reason ?? 'unknown'}${changed} reconcile=${err.reconcile ?? 'unknown'}`);
       queueProjectsRetry();
       throw err;
     } finally { if (reconcile) projectsReconciling = false; }
@@ -1550,7 +1550,8 @@ async function getProjectsSnapshot(showArchived, retry = false) {
     }
     return reply;
   } catch (err) {
-    if (err.code === 'PROJECTS_SNAPSHOT_CONFLICT') return { projectsError: { code: err.code, message: 'Projects changed while loading; reload to retry.' } };
+    if (err.code === 'PROJECTS_SNAPSHOT_CONFLICT') return { projectsError: Object.defineProperty({ code: err.code,
+      message: 'Projects changed while loading; reload to retry.' }, 'reason', { value: err.reason }) };
     if (!retry || projectsRetryFailures < 3) {
       if (err.code === 'PROJECTS_WORKER_TIMEOUT') log.warn(`[projects] get-projects timed out after ${err.timeoutMs} ms: reconcile=${err.reconcile ?? 'unknown'} dispatches=${err.dispatches ?? 'unknown'}`);
       else console.error('Error listing projects:', err);
@@ -1568,12 +1569,18 @@ function changedLiveComponents(before, after) {
   return changed.length ? changed.join(',') : 'none';
 }
 
-async function getTriggerProjectSnapshot() {
+async function getTriggerProjectSnapshot(options = {}) {
   const before = structuredClone(getSetting('global') || {});
-  const reply = await getProjectsSnapshot('both');
+  const reply = await getProjectsSnapshot('both', false, options);
   const after = getSetting('global') || {};
   const provenance = value => JSON.stringify([value.hiddenProjects || [], value.hiddenProjectKinds || {}, value.hiddenProjectScopes || {}]);
-  if (reply.projectsError || reply.projectsStale || provenance(before) !== provenance(after)) throw new Error('project lookup unavailable');
+  if (reply.projectsError || reply.projectsStale || provenance(before) !== provenance(after)) {
+    const error = reply.projectsError;
+    throw Object.assign(new Error('project lookup unavailable'), {
+      transient: !!reply.projectsStale || !error || error.transient === true || error.code === 'PROJECTS_SNAPSHOT_CONFLICT',
+      reason: error?.reason || (reply.projectsStale ? 'stale' : error?.code || (error ? 'unknown' : 'settings')),
+    });
+  }
   return { ...reply, hiddenProjects: before.hiddenProjects || [], hiddenProjectKinds: before.hiddenProjectKinds || {}, hiddenProjectScopes: before.hiddenProjectScopes || {} };
 }
 

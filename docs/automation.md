@@ -377,6 +377,27 @@ The one deadline covers queueing, opening, startup and delivery (default 300000
 ms, explicit 1–600000 ms). An optional `expectedCwd` for resume must match the
 actual cwd, including a worktree.
 
+If the project list changes during lookup, is still being reconciled, or reports
+a transient error, the action retries after 250 ms, 500 ms, 1 s, then at most
+every 2 s until the earlier of that `timeout_ms` deadline and the trigger max age.
+It never uses an inconsistent project list.
+If lookup remains unavailable until the deadline, the result is refused with
+`project lookup unavailable`; `main.log` records one line with the number of
+lookups and the last conflict reason. An unresponsive read still reports
+`session action timed out`. A consistent list that does not contain the project
+refuses immediately with `unknown project`; malformed snapshots and errors not
+marked transient also refuse immediately. A waiting action holds one of the 8
+in-flight slots, so enough waiting opens can queue other triggers. A waiting
+resume also holds its session lock, so a stop for that session queues behind it.
+During backoff, shutdown is checked at intervals of at most 50 ms; replacing or removing the
+input stops retries with `trigger changed or was cancelled`. These input checks
+apply only to the project-lookup wait. Final launch validation makes one lookup;
+a transient conflict there immediately refuses with `project lookup unavailable`
+and its diagnostic, before any spawn. Post-spawn joined-session verification
+also makes a single lookup and immediately refuses a transient conflict as
+`project lookup unavailable`. It does not receive the lookup-wait staleness or
+input-identity checks.
+
 If startup, saving the name or delivery fails after spawn, the session remains
 open and the refusal retains its ID and true `created`/`resumed` evidence.
 `uncertain:true` means an interrupted action may have taken effect: do not retry
