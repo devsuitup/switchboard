@@ -1,5 +1,44 @@
 # Build and release workflow
 
+## Advisory PR title check
+
+`.github/workflows/pr-title.yml` runs on PRs to `main` when opened, edited,
+synchronized or reopened. Its separate workflow refreshes title diagnostics
+on edits without restarting the test/build workflows. It cancels older runs
+for the same PR, uses Node 22, read-only contents permission, no persisted
+checkout credentials and no dependency install. The job has a five-minute
+timeout and `continue-on-error: true`; no required checks or repository
+protection settings change.
+
+`scripts/lint-pr-title.js` enforces `type(area): subject`. Allowed types are
+`feat fix perf refactor docs test build ci chore revert`; the area is a
+non-empty token without whitespace or parentheses, and the subject starts
+with a non-whitespace character after the colon and space. Titles must be
+one line. `type(area)!: subject` marks a breaking change. The former
+`(area): subject` format is invalid. Release titles use
+`chore(release): v0.1.0` (or a candidate such as `v0.1.0-beta.1`).
+
+The workflow passes the title through `PR_TITLE`, never a shell expression.
+`node scripts/lint-pr-title.js --advisory` exits zero on an invalid title,
+writes a warning annotation and appends guidance to `GITHUB_STEP_SUMMARY`.
+Valid titles also get a summary. Diagnostics contain fixed guidance rather
+than the untrusted title, preventing command or Markdown injection. Job-level
+continue-on-error also keeps operational failures advisory. Running without
+`--advisory` exits one on an invalid title; exported `lintPrTitle(title)`
+returns `null` or a diagnostic so a future commit-msg hook can share the rule.
+No hook is installed by this change. This dependency-free check implements
+the agreed format while commitlint tooling remains a later integration.
+
+`test/lint-pr-title.test.js` loads the actual module, exercises its CLI entry
+in a VM without source wrapping, and parses the actual workflow. It covers
+valid/invalid titles, missing input, breaking markers, warning/summary output
+and advisory versus strict exit codes. It does not prove GitHub's check-run
+UI or repository settings; those need verification on a real PR. The
+maintainer recorded `PR_TITLE` squash-title selection in issue #1199.
+Making the check required is a separate maintainer decision after rollout.
+
+## Packaging and test workflows
+
 `.github/workflows/build.yml` runs on version-tag pushes, manual dispatches
 and packaging-related PRs to `main`. PRs and dispatches include Windows,
 Linux x64 and Linux arm64. Only a `push` whose ref starts with `refs/tags/v`
