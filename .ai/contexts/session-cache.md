@@ -90,37 +90,55 @@ invalidate them. An explicit folder refresh retries witnessed sources and
 removes the witness after a successful read. Claude sidecars and Codex
 effective titles remain dependencies. Transient I/O errors (including EBUSY,
 EACCES, EPERM, EMFILE, ENFILE, EIO, EAGAIN), short reads and raced failures have
-no durable negative witness and enter the in-run deferred retry queue. Legacy
+no durable negative witness. Only deferrals with read error codes enter the
+in-run retry queue; changed-during-read and publication races wait for the next
+startup. Legacy
 transient witnesses are ignored. A folder with only deterministic witnesses
 retains its actual index mtime; only outstanding deferrals zero it. Publication
 checks contain one stamp per source. Directory and title-snapshot failures
 still fail or replan the scope.
 
-The scan worker sends one diagnostic per failed source read in a folder attempt,
-including transient I/O and short reads, separately from durable negative
-witnesses. Main logs it at warn as
+The scan worker sends one diagnostic per failed or deferred source in a folder
+attempt, including transient I/O, short reads and missing full-read stamps,
+separately from durable negative witnesses. Main adds publication races and logs
+each source once after replan checks, even if the writer subsequently fails, at warn as
 `[index] read failed folder=<key> file=<basename> size=<bytes> error=<code|type>`.
-The size is the pre-read observation (zero if unavailable); no absolute source
+Missing stamps use `changed-during-read`; main-side races use
+`raced-before-publication`. Subagent names include their parent session ID:
+`file=<parentSessionId>/agent-<id>.jsonl`. The size is the pre-read observation
+(or the checked stamp for a publication race, zero if unavailable); no absolute source
 path, transcript content or exception message is included. Diagnostics are
 emitted even when subsequent publication fails. Unchanged negative witnesses
 do not log again because their bodies are not retried. Read/failed counters remain
-truthful even when the folder publishes successfully. All startup publications
+truthful even when the folder publishes successfully; `filesDeferred` separately
+counts deferred sources after main-side validation. All startup publications
 can seal their folder version/configuration; deferred or failed existing rows
 remain uncertified. A failed writer ACK still leaves conservative pending state.
 
 ## Deferred retries and durable partial progress (#1193)
 
 A successfully published startup folder may still contain deferred sources.
-The coordinator collects those folders separately from publication failures,
-including main-side races and scoped replans, and retries the union through the
+The coordinator collects folders with retryable read errors separately from
+publication failures and retries the union through the
 existing single-flight population timer. Successful publication still completes
 initial population and permits Projects reconciliation (#1185). It no longer
 discards the deferred retry scope. Delays are 30 seconds, 120 seconds and 600
 seconds after each completed attempt; retries stop after those three attempts.
-Automatic callers respect backoff and exhaustion; force resets both, and shutdown
+Automatic callers respect backoff. Exhaustion after a successful population
+clears retry state and admits later non-forced populations; failed populations
+retain their exhausted latch. Force resets both, and shutdown
 cancels the timer. A source that remains inaccessible cannot be guaranteed to
-recover during the run, but each deferred folder participates in each scheduled
-attempt. Stable deterministic negative witnesses remain excluded under #1180.
+recover during the run, but each folder with a retryable error participates in
+each scheduled attempt. Live-write deferrals remain uncertified for the next
+startup and do not arm a timer. Stable deterministic negative witnesses and
+their bridge siblings remain excluded under #1180.
+
+Each scoped retry sets `populatePromise`, so `isIndexingFinished()` is false
+during it. A Projects reconcile requested then is dropped by the current
+`main.js` get-projects handler: it waits on population and clears
+`projectsReconcileAfterPopulate` on success. This limitation also affects a
+successful partial retry. PR #1210 reworks that handler; #1193 fix1 does not
+change it.
 
 Partial progress already persists through the existing folder version/configuration
 seal, per-row full-read certificates and negative witnesses; no new journal or

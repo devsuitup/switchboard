@@ -46,7 +46,11 @@ function readForScan(file, key, projectPath, opts = {}) {
   const stamp = row?.fullReadStamp || (readObservation.before && fullReadStamp(file, 'claude', relativePath,
     readObservation.before, readObservation.bytes,
     opts.parentSessionId ? { meta: observation(file.replace(/\.jsonl$/, '.meta.json')) } : {}, readObservation.dependencies));
-  if (!stamp || (row && !row.fullReadStamp)) { startupRead.failed.add(relativePath); return row; }
+  if (!stamp || (row && !row.fullReadStamp)) {
+    startupRead.errors.set(relativePath, { size: before?.size || '0', error: 'changed-during-read' });
+    startupRead.failed.add(relativePath);
+    return row;
+  }
   startupRead.checks.set(relativePath, stamp);
   return row;
 }
@@ -210,17 +214,25 @@ function readStartupFolder(folder) {
       const file = path.join(folderPath, relativePath);
       if (stamp === null ? observation(file) !== null : !matchesFullRead(file, stamp, 'claude', relativePath)) {
         deferred.push(relativePath);
+        if (!startupRead.errors.has(relativePath)) startupRead.errors.set(relativePath,
+          { size: JSON.parse(stamp)?.size || observation(file)?.size || '0', error: 'changed-during-read' });
       }
     }
     Object.assign(result, { startup: true, reason: reason || (selected.size ? 'changed' : 'unchanged'),
       checks: [...startupRead.checks], deferred, goneFolder, inventory: entry, metadataIds: rows.map(row => row.sessionId) });
     const indexMtimeMs = result.indexMtimeMs;
+    const bridgeRows = [...rows, ...result.sessions];
+    const failedGroups = new Set(bridgeRows.filter(row => startupRead.failedSources.has(sourceRelativePath(row) || row.sessionId + '.jsonl'))
+      .map(row => row.bridgeSessionId).filter(Boolean));
+    const excluded = new Set([...startupRead.failedSources, ...bridgeRows.filter(row => failedGroups.has(row.bridgeSessionId))
+      .map(row => sourceRelativePath(row) || row.sessionId + '.jsonl')]);
     deferStartupSources(result, [...deferred, ...startupRead.failedSources]);
-    result.deferred = result.deferred?.filter(relativePath => !startupRead.failedSources.has(relativePath)) || [];
+    result.deferred = result.deferred?.filter(relativePath => !excluded.has(relativePath) || deferred.includes(relativePath)) || [];
     if (!result.deferred.length) result.indexMtimeMs = indexMtimeMs;
     result.readFailures = [...failures].filter(([relativePath, failure]) => matchesFullRead(path.join(folderPath, relativePath), failure.stamp, 'claude', relativePath));
     result.checks = [...new Map([...result.checks, ...result.readFailures.map(([relativePath, failure]) => [relativePath, failure.stamp])])];
     result.readErrors = [...startupRead.errors];
+    completeStartupDiagnostics(result, folderPath);
     return result;
   } finally { startupRead = null; }
 }
@@ -304,7 +316,10 @@ function readStartupCodexFolder(harness, folder, state) {
       } else deferred.push(relativePath);
       continue;
     }
-    if (outcome.status === 'absent' || outcome.status === 'deferred' || !outcome.stamp) deferred.push(relativePath);
+    if (outcome.status === 'absent' || outcome.status === 'deferred' || !outcome.stamp) {
+      deferred.push(relativePath);
+      readErrors.push([relativePath, { size: before.size, error: 'changed-during-read' }]);
+    }
     else {
       checks.set(relativePath, outcome.stamp);
       if (!row && byPath.has(relativePath)) toDelete.push(byPath.get(relativePath).sessionId);
@@ -313,7 +328,11 @@ function readStartupCodexFolder(harness, folder, state) {
   }
   for (const [relativePath, stamp] of checks) {
     const file = path.join(dir, relativePath);
-    if (stamp === null ? observation(file) !== null : !matchesFullRead(file, stamp, 'codex', relativePath, titleSnapshot)) deferred.push(relativePath);
+    if (stamp === null ? observation(file) !== null : !matchesFullRead(file, stamp, 'codex', relativePath, titleSnapshot)) {
+      deferred.push(relativePath);
+      if (!readErrors.some(([rel]) => rel === relativePath)) readErrors.push([relativePath,
+        { size: JSON.parse(stamp)?.size || observation(file)?.size || '0', error: 'changed-during-read' }]);
+    }
   }
   if (!harness.matchesTitleSnapshot(titleSnapshot)) throw Object.assign(new Error('Codex title snapshot changed during scan'), { code: 'WRITER_STALE' });
   const result = { folder, projectPath: null, sessions, toDelete: [...new Set(toDelete)],
@@ -327,7 +346,16 @@ function readStartupCodexFolder(harness, folder, state) {
   if (!result.deferred.length) result.indexMtimeMs = indexMtimeMs;
   result.readFailures = [...failures].filter(([relativePath, failure]) => matchesFullRead(path.join(dir, relativePath), failure.stamp, 'codex', relativePath, titleSnapshot));
   result.checks = [...new Map([...result.checks, ...result.readFailures.map(([relativePath, failure]) => [relativePath, failure.stamp])])];
+  completeStartupDiagnostics(result, dir);
   return result;
+}
+
+function completeStartupDiagnostics(result, dir) {
+  const errors = new Map(result.readErrors);
+  for (const relativePath of result.deferred) if (!errors.has(relativePath)) {
+    errors.set(relativePath, { size: observation(path.join(dir, relativePath))?.size || '0', error: 'changed-during-read' });
+  }
+  result.readErrors = [...errors];
 }
 
 function startupHarnessState(harness, folders) {
