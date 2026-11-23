@@ -27,12 +27,12 @@ test('the conversation store uses node:sqlite after a native self-registration f
   };
   const requireStore = id => id === 'better-sqlite3' ? BrokenDatabase : nativeRequire(id);
   const module = { exports: {} };
-  vm.runInNewContext('(function(require,module,__dirname){' + fs.readFileSync(filename, 'utf8') + '\n})',
-    { process, performance, Buffer, console }, { filename })(id => id === 'node:module'
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'),
+    { process, performance, Buffer, console, module, __dirname: path.dirname(filename), require: id => id === 'node:module'
       ? { createRequire: target => {
         const load = createRequire(target);
         return name => name === 'better-sqlite3' ? BrokenDatabase : load(name);
-      } } : requireStore(id), module, path.dirname(filename));
+      } } : requireStore(id) }, { filename });
   assert.equal(module.exports.supported, true);
   db = module.exports();
   db.setStarred(['a', 'b'], true);

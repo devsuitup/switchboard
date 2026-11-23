@@ -2,7 +2,7 @@
 const { applySessionName, establishTranscriptBaseline } = require('./session-name');
 
 // see .ai/contexts/session-index-writer.md
-function openSessionIndexStore({ readonly = true, clock = () => performance.now() } = {}) {
+function openSessionIndexStore({ readonly = true, clock = () => performance.now(), onPinChange = () => {} } = {}) {
 const Database = require('better-sqlite3');
 const path = require('path');
 const os = require('os');
@@ -63,16 +63,29 @@ const db = new Proxy(raw, {
     return typeof value === 'function' ? value.bind(target) : value;
   },
 });
+if (!readonly) raw.exec('CREATE TEMP TABLE pin_changes (line TEXT NOT NULL)');
+const pinChangesSelect = readonly ? null : raw.prepare('SELECT line FROM pin_changes ORDER BY rowid');
+const pinChangesDelete = readonly ? null : raw.prepare('DELETE FROM pin_changes');
+function recordPinChange(ids, before, after, source) {
+  if (before === after || !ids.length) return;
+  const prefixes = ids.map(id => String(id).slice(0, 8).replace(/[^a-zA-Z0-9-]/g, '?')).join(',');
+  raw.prepare('INSERT INTO pin_changes (line) VALUES (?)').run(`[pin] ids=${prefixes} ${before}→${after} source=${source}`);
+}
 function transact(command) {
-  let sample;
+  let sample, pinLines;
   const result = raw.transaction(() => {
     budget = { bytes: 0, statements: [], ms: 0, rows: 0 };
     try {
       const value = command();
       sample = { ms: budget.ms, rows: budget.rows, bytes: budget.bytes, statements: budget.statements };
+      pinLines = pinChangesSelect.all();
+      if (pinLines.length) pinChangesDelete.run();
       return value;
     } finally { budget = null; }
   }).immediate();
+  for (const { line } of pinLines) {
+    try { onPinChange(line); } catch {}
+  }
   measured.push(sample);
   if (measured.length > 256) measured.shift();
   if (sample.ms > 10) chunkSize = Math.max(1, Math.floor(chunkSize / Math.max(2, Math.ceil(sample.ms / 10))));
@@ -158,6 +171,9 @@ db.exec(`CREATE TABLE IF NOT EXISTS session_meta_fields (
 db.exec('CREATE INDEX IF NOT EXISTS idx_session_meta_fields_revision ON session_meta_fields(revision)');
 if (!db.prepare('PRAGMA table_info(session_meta_fields)').all().some(c => c.name === 'transcriptTitle')) {
   db.exec('ALTER TABLE session_meta_fields ADD COLUMN transcriptTitle TEXT');
+}
+if (!db.prepare('PRAGMA table_info(session_meta_fields)').all().some(c => c.name === 'updatedAt')) {
+  db.exec('ALTER TABLE session_meta_fields ADD COLUMN updatedAt INTEGER');
 }
 
 db.exec(`
@@ -540,12 +556,15 @@ const stmts = {
   `),
 };
 
-const metaFieldGet = db.prepare('SELECT revision, source, transcriptTitle FROM session_meta_fields WHERE sessionId = ? AND field = ?');
+const metaFieldGet = db.prepare('SELECT revision, source, transcriptTitle, updatedAt FROM session_meta_fields WHERE sessionId = ? AND field = ?');
 const metaGetWithNameSource = db.prepare(`SELECT m.*, f.source AS nameSource, f.revision AS nameRevision, f.transcriptTitle AS nameTranscriptTitle FROM session_meta m
   LEFT JOIN session_meta_fields f ON f.sessionId = m.sessionId AND f.field = 'name' WHERE m.sessionId = ?`);
 const metaFieldNext = db.prepare('SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM session_meta_fields');
-const metaFieldSet = db.prepare(`INSERT INTO session_meta_fields (sessionId, field, revision, source, transcriptTitle) VALUES (?, ?, ?, ?, ?)
-  ON CONFLICT(sessionId, field) DO UPDATE SET revision = excluded.revision, source = excluded.source, transcriptTitle = excluded.transcriptTitle`);
+const metaFieldSet = db.prepare(`INSERT INTO session_meta_fields (sessionId, field, revision, source, transcriptTitle, updatedAt) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(sessionId, field) DO UPDATE SET revision = excluded.revision, source = excluded.source, transcriptTitle = excluded.transcriptTitle, updatedAt = excluded.updatedAt`);
+function setMetaField(sessionId, field, revision, source, transcriptTitle, updatedAt = Date.now()) {
+  metaFieldSet.run(sessionId, field, revision, source, transcriptTitle, updatedAt);
+}
 
 const rekeySessionMeta = db.transaction((oldId, newId, title) => {
   if (oldId === newId) return;
@@ -559,11 +578,12 @@ const rekeySessionMeta = db.transaction((oldId, newId, title) => {
     const keepTarget = field !== 'name' || (to ? to.source === 'user' : target?.name !== stmts.cacheGetSession.get(newId)?.customTitle);
     const useOriginal = copy && (!target || !keepTarget || (from?.revision || 0) > (to?.revision || 0));
     values[field] = useOriginal ? original[field] : (keepTarget ? target?.[field] : null) ?? (field === 'name' ? null : 0);
-    if (useOriginal) metaFieldSet.run(newId, field, from?.revision ?? 0, from?.source || 'user', from?.transcriptTitle ?? null);
+    if (useOriginal) setMetaField(newId, field, from?.revision ?? 0, from?.source || 'user', from?.transcriptTitle ?? null, from?.updatedAt ?? null);
   }
   db.prepare(`INSERT INTO session_meta (sessionId, name, starred, archived) VALUES (?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET name = excluded.name, starred = excluded.starred, archived = excluded.archived`)
     .run(newId, values.name, values.starred, values.archived);
+  recordPinChange([oldId, newId], target?.starred ? 1 : 0, values.starred ? 1 : 0, 'rekey');
 });
 
 function getMeta(sessionId, withNameSource = false) {
@@ -586,29 +606,34 @@ const setName = db.transaction((ids, name, source = 'user') => {
     const next = applySessionName(previous, sessionId, name, source, stmts.cacheGetSession.get(sessionId)?.customTitle ?? null);
     if (next === previous) continue;
     stmts.upsertName.run(sessionId, name);
-    metaFieldSet.run(sessionId, 'name', metaFieldNext.get().revision, source, next.nameTranscriptTitle);
+    setMetaField(sessionId, 'name', metaFieldNext.get().revision, source, next.nameTranscriptTitle);
   }
 });
 
 const toggleStar = db.transaction(sessionId => {
+  const before = getMeta(sessionId)?.starred ? 1 : 0;
   stmts.upsertStar.run(sessionId);
-  metaFieldSet.run(sessionId, 'starred', metaFieldNext.get().revision, 'user', null);
+  setMetaField(sessionId, 'starred', metaFieldNext.get().revision, 'user', null);
   const row = stmts.get.get(sessionId);
+  recordPinChange([sessionId], before, row.starred, 'icon');
   return row.starred;
 });
 
 const setStarred = db.transaction((ids, starred) => {
+  const changed = [];
   for (const sessionId of partIds(ids)) {
+    if (!!getMeta(sessionId)?.starred !== !!starred) changed.push(sessionId);
     stmts.setStar.run(sessionId, starred ? 1 : 0);
-    metaFieldSet.run(sessionId, 'starred', metaFieldNext.get().revision, 'user', null);
+    setMetaField(sessionId, 'starred', metaFieldNext.get().revision, 'user', null);
   }
+  recordPinChange(changed, starred ? 0 : 1, starred ? 1 : 0, 'icon');
   return starred ? 1 : 0;
 });
 
 const setArchived = db.transaction((ids, archived) => {
   for (const sessionId of partIds(ids)) {
     stmts.upsertArchived.run(sessionId, archived ? 1 : 0);
-    metaFieldSet.run(sessionId, 'archived', metaFieldNext.get().revision, 'user', null);
+    setMetaField(sessionId, 'archived', metaFieldNext.get().revision, 'user', null);
   }
 });
 
@@ -640,7 +665,7 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
       s.scheduleSlug || null, s.continuationIndex || null, s.customTitle ?? null, s.fileSize ?? null, s.workflowRunId || null, s.messageCountIndex || null,
       s.runtime || null, s.sessionFile || null, s.fullReadStamp ?? null, s.runtime || null
     );
-    if (next !== previous) metaFieldSet.run(s.sessionId, 'name', previous.nameRevision ?? 0, 'user', next.nameTranscriptTitle);
+    if (next !== previous) setMetaField(s.sessionId, 'name', previous.nameRevision ?? 0, 'user', next.nameTranscriptTitle, metaFieldGet.get(s.sessionId, 'name')?.updatedAt ?? null);
   }
 });
 
@@ -664,7 +689,7 @@ const setCachedCustomTitles = db.transaction((pairs) => {
     const changed = stmts.cacheSetCustomTitle.run(customTitle || '', sessionId, fileMtime || null).changes;
     const field = metaFieldGet.get(sessionId, 'name');
     if (changed && (!field || field.source === 'user') && field?.transcriptTitle == null && getMeta(sessionId)?.name) {
-      metaFieldSet.run(sessionId, 'name', field?.revision ?? 0, 'user', customTitle || '');
+      setMetaField(sessionId, 'name', field?.revision ?? 0, 'user', customTitle || '', field?.updatedAt ?? null);
     }
     if (changed && promoteName && customTitle && field?.source === 'transcript') setName(sessionId, customTitle, 'transcript');
   }
@@ -1110,8 +1135,10 @@ return preparedDeletionStatements ??= {
 }
 const projectDeletion = {
   eraseMetadata: id => {
+    const before = getMeta(id)?.starred ? 1 : 0;
     db.prepare('DELETE FROM session_meta WHERE sessionId=?').run(id);
     db.prepare('DELETE FROM session_meta_fields WHERE sessionId=?').run(id);
+    recordPinChange([id], before, 0, 'delete');
   },
   clearSearchStaging: id => db.prepare("DELETE FROM search_staging WHERE id=? AND type='session'").run(id),
   deleteFolderMeta: folder => stmts.metaDelete.run(folder),

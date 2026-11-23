@@ -2,6 +2,52 @@
 
 **Purpose**: index every Claude session JSONL on disk into a queryable SQLite cache so the sidebar renders without re-scanning `~/.claude/projects/` and so search is full-text. Watches the projects directory for changes and refreshes incrementally.
 
+## Pin storage and diagnostics (#1207)
+
+Pins live in `session_meta.starred`, keyed by the full session UUID, independently
+of the rebuildable `session_cache`. `session_meta_fields` keeps the latest
+revision and source for each `(sessionId, field)`, including `starred`. Every
+writable open checks for nullable `updatedAt` (Unix epoch milliseconds) and adds
+it if absent, independently of `db_version`. The migration version remains 9;
+databases already at a higher version keep that version.
+Existing field rows retain null; new field revisions record wall-clock time.
+No-op `setStarred` writes also refresh the revision and timestamp: `updatedAt`
+means last write, not last value change. The `[pin]` log line records real changes.
+Rekey copies the winning revision and its timestamp, including a legacy null.
+Transcript-baseline repairs that retain a name revision retain its timestamp.
+This table is latest-state provenance, not a history of earlier unpins.
+
+The pin icon's `set-star` IPC resolves conversation part UUIDs and sends them to
+the writer's `setStarred`. A background job has a short job ID used for attach
+and a full `sessionId` identifying its current transcript. Continuation groups
+connect that current UUID to the original conversation and earlier parts;
+`conversationMeta` displays a pin if any part is pinned. The job ID itself is
+not a metadata key. With an empty cache, a descriptor-only row reads metadata
+at the descriptor's full session UUID. Without cached continuation evidence it
+cannot infer an older conversation UUID. Background identity transitions call
+`rekeySessionMeta(fromId, toId)` through the writer, copying metadata according
+to revision precedence while retaining the source row.
+
+Every actual star transition from `setStarred`/`toggleStar`, metadata rekey, or
+project deletion's `eraseMetadata` goes through `recordPinChange` in the store.
+It stages one line in a connection-local temporary table within the same
+transaction. Rollback, BUSY retry and deferred savepoint units discard their
+staged lines. `transact` uses cached SELECT and DELETE statements, skips the
+DELETE when no lines were selected, drains them within the transaction and publishes them
+only after commit. The worker sends `{pinChange}`; `session-index-writer-client`
+writes it with the main process's injected `electron-log` logger to `main.log`:
+`[pin] ids=11111111,22222222 0→1 source=icon`.
+Only eight-character prefixes appear, never names or paths. Multi-part icon
+writes list only changed IDs in one line; rekey lists source and target IDs and
+the target's old/new value. Delete reports `1→0`. No-op values produce no line.
+The log is diagnostic, not a durable audit journal: a process crash between
+commit and log delivery can lose a line. No writable main connection is added.
+
+`pin-display-1207.test.js` exercises the real sidebar projection and jsdom pin
+icon for an empty cache, job-session-only metadata and conversation-only
+metadata. All three pass without a renderer change. It rebuilds the projection;
+it does not launch or relaunch Electron.
+
 ## Full-content observations (#1144 A1)
 
 `fullReadStamp` is a nullable
