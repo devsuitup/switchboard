@@ -103,7 +103,7 @@ const secretProbes = [
   ...['xoxa', 'xoxb', 'xoxp', 'xoxr', 'xoxs'].map(prefix => `${prefix}-probe-secret`),
   'eyJhbGciOiJIUzI1NiJ9.payload.signature', 'glpat-probe-secret', 'AKIA1234567890ABCDEF', 'npm_probe_secret',
   ...['sig', 'key', 'signature', 'code', 'auth', 'token', 'access_token'].map(key => `https://example.test/?${key}=probe-secret&next=ok`),
-  'sk-probe-secret', 'ghp_probe_secret', 'github_pat_probe_secret', 'Bearer probe-secret', 'https://user:probe-secret@example.test',
+  'sk-probe-secret0123456789abcdef', 'ghp_probe_secret', 'github_pat_probe_secret', 'Bearer probe-secret', 'https://user:probe-secret@example.test',
 ];
 for (const probe of secretProbes) test(`M2 masks ${probe.split(/[=:]/)[0]}`, t => {
   const { send, lines } = setup(t);
@@ -131,8 +131,66 @@ for (const alternating of [false, true]) test(`M3 ten-minute ${alternating ? 'al
   }
   sink.dispose();
   assert.ok(lines.length <= (alternating ? 610 : 11), `fixed line bound, got ${lines.length}`);
-  assert.ok(Buffer.byteLength(lines.join('\n')) <= (alternating ? 2600000 : 6000), 'fixed byte bound');
+  assert.ok(Buffer.byteLength(lines.join('\n')) <= (alternating ? 256 * 1024 : 6000), 'fixed byte bound: 256 KiB per hour including summaries');
   assert.match(lines.join('\n'), alternating ? /suppressed \d+ events/ : /repeated \d+×/);
+});
+
+test('hourly cap announces dropping once, stays silent across minute flushes and resumes with the exact count', t => {
+  const { send, lines, clock, sink } = setup(t);
+  let sent = 0;
+  for (let minute = 0; minute < 60; minute++) {
+    for (let i = 0; i < 15; i++) {
+      send({ event: 'show', id: String(sent++), text: '😀'.repeat(1024) });
+      clock.advance(1000);
+    }
+    clock.advance(minute === 59 ? 44999 : 45000);
+  }
+  const stopped = lines.findIndex(line => line.includes('hourly byte limit reached'));
+  assert.ok(stopped >= 0, 'hourly limit must announce the first dropped notice');
+  assert.equal(lines.filter(line => line.includes('hourly byte limit reached')).length, 1);
+  assert.equal(lines.length, stopped + 1, 'minute flushes must not write while hourly-limited');
+  assert.ok(Buffer.byteLength(lines.join('\n') + '\n') <= 256 * 1024, 'hourly bytes include all summaries and UTF-8 text');
+  const emitted = lines.filter(line => line.startsWith('[ui-notice] {')).length;
+  clock.advance(1);
+  send({ event: 'show', text: 'resumed' });
+  assert.equal(lines.at(-2), `[ui-notice] resumed after hourly byte limit; dropped ${sent - emitted} notices`);
+  assert.equal(JSON.parse(lines.at(-1).slice('[ui-notice] '.length)).text, 'resumed');
+  sink.dispose();
+  assert.equal(clock.size, 0);
+});
+
+test('dispose while hour-limited reports the exact dropped count once within the reserve', t => {
+  const { send, lines, clock, sink } = setup(t);
+  let sent = 0;
+  for (let minute = 0; minute < 6; minute++) {
+    for (let i = 0; i < 15; i++) {
+      send({ event: 'show', id: String(sent++), text: 'x'.repeat(4096) });
+      clock.advance(1000);
+    }
+    clock.advance(45000);
+  }
+  assert.match(lines.at(-1), /hourly byte limit reached/);
+  const emitted = lines.filter(line => line.startsWith('[ui-notice] {')).length;
+  const perMinuteDrops = lines.reduce((sum, line) => sum + Number(line.match(/suppressed (\d+) events/)?.[1] || 0), 0);
+  sink.dispose();
+  assert.equal(lines.at(-1), `[ui-notice] disposed after hourly byte limit; dropped ${sent - emitted - perMinuteDrops} notices`);
+  assert.ok(Buffer.byteLength(lines.join('\n') + '\n') <= 256 * 1024);
+  const length = lines.length;
+  sink.dispose();
+  assert.equal(lines.length, length);
+  assert.equal(clock.size, 0);
+});
+
+test('action dismissal reasons are bounded and redacted at the sink', t => {
+  const { send, lines } = setup(t);
+  send({ event: 'dismiss', reason: 'action:Restore' });
+  assert.equal(JSON.parse(lines.at(-1).slice('[ui-notice] '.length)).reason, 'action:Restore');
+  send({ event: 'dismiss', reason: 'action:--token abc123 ' + 'x'.repeat(1000) });
+  const reason = JSON.parse(lines.at(-1).slice('[ui-notice] '.length)).reason;
+  assert.match(reason, /^action:--token \[REDACTED\]/);
+  assert.ok(reason.length <= 256);
+  send({ event: 'dismiss', reason: 'arbitrary' });
+  assert.equal(JSON.parse(lines.at(-1).slice('[ui-notice] '.length)).reason, '');
 });
 
 test('timers are unreferenced and logging errors never escape IPC handling', t => {

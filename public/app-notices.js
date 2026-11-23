@@ -26,7 +26,14 @@ window.trackUiNotice = function (element, source, options = {}) {
   const observer = new MutationObserver(sync);
   observer.observe(element, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'hidden'] });
   if (element.parentNode) observer.observe(element.parentNode, { childList: true });
-  element.addEventListener('click', () => { element.dataset.uiNoticeDismissReason = 'user'; }, true);
+  element.addEventListener('click', event => {
+    const button = event.target.closest('button');
+    element.dataset.uiNoticeDismissReason = button?.matches('.restore-toast-restore, #update-restart-btn')
+      ? `action:${button.textContent.trim()}` : 'user';
+    if (previous !== null && element.dataset.uiNoticeDismissReason.startsWith('action:')) {
+      report('action', previous, element.dataset.uiNoticeDismissReason);
+    }
+  }, true);
   transientNoticeEntries.set(element, next => { options = next; sync(); });
   sync();
 };
@@ -156,7 +163,7 @@ function showAppNotice(options) {
     action.textContent = actionLabel;
     action.addEventListener('click', () => {
       if (appNoticeEntries.get(id)?.notice !== notice) return;
-      if (dismissOnAction) clearAppNotice(id, { reason: 'user' });
+      if (dismissOnAction) clearAppNotice(id, { reason: `action:${action.textContent.trim()}` });
       onAction();
     });
     notice.append(action);

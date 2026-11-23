@@ -12,6 +12,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Footer usage gauges are grouped under Claude and Codex, share Week and 5h window labels, and hide with their CLI setting. (#1208)
 
 ### Fixed
+- More credentials are masked in notice logs, and notice loops now have an hourly limit so they cannot quickly rotate away log history. Restore and Restart clicks are identified in the notice history. (#1214)
 - A conversation changed before startup no longer keeps a stale sidebar row for the whole run when another part of the conversation cannot be read. Unchanged parts no longer keep index repairs pending or trigger repeated reads at every launch. (#1213)
 - Session triggers now retry temporary project lookup conflicts within their timeout instead of refusing immediately during startup. (#1215)
 - Background sessions retry temporary attachment failures at startup and share one dismissible notice with recovery actions. Finished jobs with queued tasks first try to recover; if respawn completes but their worker is confirmed dead, they no longer return at every launch. Timeouts and daemon errors keep them saved for another attempt at the next launch. (#1191)
