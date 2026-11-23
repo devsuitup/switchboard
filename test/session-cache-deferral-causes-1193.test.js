@@ -56,11 +56,11 @@ test('deterministic bridge failure and its siblings arm no retry, including afte
   failReads(t, f, [bad], 'ERR_STRING_TOO_LONG');
   assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
   assert.equal(clock.pending.size, 0, 'deterministic bridge siblings must not arm retries');
-  assert.ok(f.db.getFolderMeta(folder).indexMtimeMs > 0);
+  assert.equal(f.db.getFolderMeta(folder).indexMtimeMs, require('../folder-index-state').getFolderIndexMtimeMs(f.dir), 'unchanged siblings keep the real mtime');
   await f.reopen();
   assert.equal((await f.restart()).ok, true);
   assert.equal(clock.pending.size, 0, 'persisted deterministic bridge failure must not arm retries');
-  assert.ok(f.db.getFolderMeta(folder).indexMtimeMs > 0);
+  assert.equal(f.db.getFolderMeta(folder).indexMtimeMs, require('../folder-index-state').getFolderIndexMtimeMs(f.dir), 'persisted failures do not defer unchanged siblings');
 });
 
 test('a replanned result logs each source only on the accepted attempt', options, async t => {

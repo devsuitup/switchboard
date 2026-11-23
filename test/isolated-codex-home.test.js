@@ -172,7 +172,7 @@ test('scan callers opt into the shared Codex home isolation fixture', () => {
     ['projects-worker-client.test.js', 'injected EventEmitter worker; never runs projects-query'],
     ['worker-exit-grace.test.js', 'injected EventEmitter worker; never runs projects-query'],
     ['session-index-writer-guard.test.js', 'source-only writer boundary guard'],
-    ['fixtures/deferred-1193.cjs', 'helpers for guarded session-cache-deferred-1193 and deferral-causes-1193 callers'],
+    ['fixtures/deferred-1193.cjs', 'helpers for guarded session-cache-deferred-1193, deferral-causes-1193 and bridge-deferred-1213 callers'],
     ['fixtures/projects-worker-718.cjs', 'VM adapter inherits caller environment; caller files are guarded'],
     ['fixtures/projects-worker-delayed.cjs', 'worker inherits environment from guarded equivalence/slow-reconcile callers'],
     ['fixtures/projects-worker-equivalence.cjs', 'child inherits environment from guarded projects-worker-equivalence.test.js'],

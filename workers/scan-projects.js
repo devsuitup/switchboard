@@ -6,6 +6,7 @@ const { deriveProjectPath, resolveWorktreePath } = require('../derive-project-pa
 const { setRemappedProjectReader } = require('../encode-project-path');
 const { readSessionFile, enumerateSessionFiles, mergeBridgeGroups, subagentSessionId, isCanonicalWorkflowPath } = require('../read-session-file');
 const { classifyTranscriptPath } = require('../subagent-attribution');
+const { continuationMtime } = require('../session-continuations');
 const { prefixedHarnesses, readHarnessFolder, harnessFolderIndexMtimeMs } = require('../harnesses');
 const { enumerateReads, measureFolder } = require('../src/main/session-index/read-counters');
 const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, observation, fullReadStamp, matchesFullRead, sourceRelativePath, safeRelativePath, deferStartupSources, readFailures, failureStamp, deterministicReadFailure } = require('../src/main/session-index/full-read-state');
@@ -221,13 +222,25 @@ function readStartupFolder(folder) {
     Object.assign(result, { startup: true, reason: reason || (selected.size ? 'changed' : 'unchanged'),
       checks: [...startupRead.checks], deferred, goneFolder, inventory: entry, metadataIds: rows.map(row => row.sessionId) });
     const indexMtimeMs = result.indexMtimeMs;
-    const bridgeRows = [...rows, ...result.sessions];
-    const failedGroups = new Set(bridgeRows.filter(row => startupRead.failedSources.has(sourceRelativePath(row) || row.sessionId + '.jsonl'))
+    const transientGroups = new Set([...rows, ...result.sessions]
+      .filter(row => deferred.includes(sourceRelativePath(row) || row.sessionId + '.jsonl'))
       .map(row => row.bridgeSessionId).filter(Boolean));
-    const excluded = new Set([...startupRead.failedSources, ...bridgeRows.filter(row => failedGroups.has(row.bridgeSessionId))
-      .map(row => sourceRelativePath(row) || row.sessionId + '.jsonl')]);
+    const failedGroups = new Set([...rows, ...result.sessions]
+      .filter(row => startupRead.failedSources.has(sourceRelativePath(row) || row.sessionId + '.jsonl'))
+      .map(row => row.bridgeSessionId).filter(Boolean));
+    const unchangedSiblings = new Set(startupRead.failedSources.size ? rows.filter(row => {
+      if (!failedGroups.has(row.bridgeSessionId) || transientGroups.has(row.bridgeSessionId)) return false;
+      try {
+        const stat = fs.statSync(path.join(folderPath, sourceRelativePath(row) || row.sessionId + '.jsonl'), { bigint: true });
+        return row.fileMtime === continuationMtime(stat) && (row.fileSize == null || row.fileSize === Number(stat.size));
+      } catch {
+        return false;
+      }
+    })
+      .map(row => sourceRelativePath(row) || row.sessionId + '.jsonl') : []);
     deferStartupSources(result, [...deferred, ...startupRead.failedSources]);
-    result.deferred = result.deferred?.filter(relativePath => !excluded.has(relativePath) || deferred.includes(relativePath)) || [];
+    result.deferred = result.deferred?.filter(relativePath => deferred.includes(relativePath)
+      || (!startupRead.failedSources.has(relativePath) && !unchangedSiblings.has(relativePath))) || [];
     if (!result.deferred.length) result.indexMtimeMs = indexMtimeMs;
     result.readFailures = [...failures].filter(([relativePath, failure]) => matchesFullRead(path.join(folderPath, relativePath), failure.stamp, 'claude', relativePath));
     result.checks = [...new Map([...result.checks, ...result.readFailures.map(([relativePath, failure]) => [relativePath, failure.stamp])])];
@@ -353,7 +366,7 @@ function readStartupCodexFolder(harness, folder, state) {
 function completeStartupDiagnostics(result, dir) {
   const errors = new Map(result.readErrors);
   for (const relativePath of result.deferred) if (!errors.has(relativePath)) {
-    errors.set(relativePath, { size: observation(path.join(dir, relativePath))?.size || '0', error: 'changed-during-read' });
+    errors.set(relativePath, { size: observation(path.join(dir, relativePath))?.size || '0', error: 'bridge-sibling' });
   }
   result.readErrors = [...errors];
 }
