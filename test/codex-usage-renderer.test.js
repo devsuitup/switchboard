@@ -32,6 +32,53 @@ function setup(t) {
 
 test('Codex usage defaults off', () => assert.equal(SETTING_DEFAULTS.showCodexUsage, false));
 
+test('Codex refresh during startup preserves the pending saved CLI visibility read', async t => {
+  const w = setup(t);
+  let resolve;
+  w.api.getSetting = () => new Promise(done => { resolve = done; });
+  const startup = w.refreshQuotaGauge();
+  await w.applyCodexUsage(true);
+  assert.ok(w.document.querySelector('[data-runtime="codex"]'), 'Codex paints before settings resolve');
+  resolve({ disabledHarnesses: ['codex'] });
+  await startup;
+  assert.equal(w.document.querySelector('[data-runtime="codex"]').hidden, true, 'pending saved visibility must win after Codex paints');
+});
+
+test('a failed startup settings read retries on the next quota refresh', async t => {
+  const w = setup(t);
+  let reads = 0;
+  w.api.getSetting = async () => {
+    if (++reads === 1) throw new Error('temporary read failure');
+    return { disabledHarnesses: ['codex'] };
+  };
+  await w.refreshQuotaGauge();
+  assert.equal(w.document.querySelector('[data-runtime="codex"]').hidden, false);
+  await w.refreshQuotaGauge();
+  assert.equal(w.document.querySelector('[data-runtime="codex"]').hidden, true, 'a later successful read must hide Codex');
+  assert.equal(reads, 2);
+});
+
+test('quota tooltips prefix only labels without their CLI name', t => {
+  const w = setup(t);
+  for (const [kind, label, expected] of [
+    ['codex', 'Codex 5h', 'Codex 5h'],
+    ['codex', 'Account limit', 'Codex · Account limit'],
+    ['session', 'Claude 5h', 'Claude 5h'],
+    ['session', 'Current session', 'Claude · Current session'],
+  ]) {
+    assert.equal(w.buildQuotaBar({ kind, label, percent: 42, reset: 'tomorrow' }).title,
+      `${expected}: 42% — resets tomorrow`);
+  }
+});
+
+test('fractional quota minutes render rounded labels', t => {
+  const w = setup(t);
+  for (const [minutes, expected] of [[90.4, '90m'], [90.6, '91m'], [299.6, '5h']]) {
+    assert.equal(w.buildQuotaBar({ kind: 'codex', windowMinutes: minutes, label: 'Codex usage', percent: 42 })
+      .querySelector('.quota-label').textContent, expected);
+  }
+});
+
 test('shipped status bar contains only labelled quota rows after refresh', async t => {
   const w = setup(t);
   await w.refreshQuotaGauge();

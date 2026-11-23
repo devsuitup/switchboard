@@ -22,7 +22,7 @@ function usageRows(raw) {
     const short = windowLabel(win.limit_window_seconds);
     limits.push({
       kind: 'codex', short,
-      windowMinutes: Number.isFinite(win.limit_window_seconds) ? win.limit_window_seconds / 60 : null,
+      windowMinutes: Number.isFinite(win.limit_window_seconds) ? Math.round(win.limit_window_seconds / 60) : null,
       model,
       label: model ? `Codex ${model} (${short})` : `Codex ${short}`,
       percent,

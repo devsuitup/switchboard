@@ -636,7 +636,11 @@ refreshes. A group contains one CLI heading and its quota bars; no empty
 placeholder can keep the gauge visible. `data-runtime` belongs to the group.
 `applyUsageHarnesses` hides whole groups using `disabledHarnesses`, loaded on
 the first quota refresh and applied immediately by Settings on Save. A live
-setting change wins over an in-flight initial settings read. This changes only
+setting change wins over an in-flight initial settings read. Row replacement
+uses default visibility without committing it while that read is pending;
+a rejected read remains uninitialized so the next refresh retries. Settings
+only applies CLI visibility when the saved patch contains an array, preserving
+hidden groups if harness discovery failed. This changes only
 footer visibility, not usage fetching or Stats. `showCodexUsage` keeps its
 existing behavior on both surfaces, including deferred saves.
 Status bar polling remains every five minutes; Stats has its own refresh button.
@@ -646,8 +650,10 @@ rows and error handling. Reset text shares `formatResetTime` from `claude-auth.j
 Model-specific status-bar labels include the limit name. Over-limit percentages
 remain visible; bar widths clamp to 100%.
 For the footer, Codex rows also carry `windowMinutes` (the API's
-`limit_window_seconds` divided by 60) and `model`. Existing API labels remain
-available for tooltips and Stats. The shared renderer `quotaWindowLabel`
+`limit_window_seconds` divided by 60 and rounded to the nearest minute) and `model`.
+Existing API labels remain available for tooltips and Stats. Tooltips add the
+CLI prefix only when the label does not already start with that name.
+The shared renderer `quotaWindowLabel` also rounds incoming minutes, then
 maps 10080 minutes to `Week`, 300 to `5h`, whole days longer than 24 hours to
 `Nd`, whole hours to `Nh`, and other positive durations to `Nm`; absent or
 invalid durations read `Usage`. Claude's legacy `session` and `weekly*` kinds

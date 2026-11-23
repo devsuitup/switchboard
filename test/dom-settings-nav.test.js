@@ -439,6 +439,26 @@ for (const runtime of ['claude', 'codex']) {
   });
 }
 
+test('saving after getHarnesses fails preserves a hidden Codex footer group', async t => {
+  const h = setup(t);
+  loadAppFunctions(h.ctx, {
+    functions: ['quotaWindowLabel', 'shortQuotaLabel', 'buildQuotaBar', 'replaceQuotaRows', 'applyUsageHarnesses'],
+    declarations: ['quotaGaugeEl', 'disabledQuotaRuntimes'],
+  });
+  h.w._applyUsageHarnesses = h.w.applyUsageHarnesses;
+  h.saved.global = { disabledHarnesses: ['codex'] };
+  h.w.applyUsageHarnesses(['codex']);
+  h.w.replaceQuotaRows([{ kind: 'codex', windowMinutes: 300, label: 'Codex 5h', percent: 42 }], 'codex');
+  h.w.api.getHarnesses = async () => { throw new Error('harness listing unavailable'); };
+  await h.open();
+  assert.equal(h.q('.sv-harness-toggle'), null);
+  h.q('#sv-visible-count').value = '42';
+  h.q('#sv-save-btn').click();
+  await settle();
+  assert.equal(h.saved.global.visibleSessionCount, 42, 'unrelated setting was saved');
+  assert.equal(h.q('[data-runtime="codex"]').hidden, true, 'missing harness controls must preserve hidden Codex');
+});
+
 function setup(t) {
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'public/index.html'), 'utf8'), { url: 'http://localhost', runScripts: 'outside-only' });
   t.after(() => dom.window.close());

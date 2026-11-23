@@ -3458,6 +3458,7 @@ let disabledQuotaRuntimes = null;
 
 function quotaWindowLabel(minutes) {
   if (!Number.isFinite(minutes) || minutes <= 0) return 'Usage';
+  minutes = Math.round(minutes);
   if (minutes === 10080) return 'Week';
   if (minutes > 1440 && minutes % 1440 === 0) return `${minutes / 1440}d`;
   if (minutes % 60 === 0) return `${minutes / 60}h`;
@@ -3495,17 +3496,19 @@ function buildQuotaBar(row) {
   pctEl.textContent = pct + '%';
   wrap.appendChild(pctEl);
 
-  wrap.title = `${row.kind === 'codex' ? 'Codex' : 'Claude'} · ${row.label}: ${pct}%`
-    + (row.reset ? ` \u2014 resets ${row.reset}` : '') + (row.source ? ` · ${row.source}` : '');
+  const runtime = row.kind === 'codex' ? 'Codex' : 'Claude';
+  const title = row.label?.startsWith(runtime) ? row.label : `${runtime} · ${row.label}`;
+  wrap.title = `${title}: ${pct}%` + (row.reset ? ` \u2014 resets ${row.reset}` : '');
   return wrap;
 }
 
 async function refreshQuotaGauge() {
   const request = ++quotaRequest;
   if (disabledQuotaRuntimes === null) {
-    let settings;
-    try { settings = await window.api.getSetting?.('global'); } catch {}
-    if (disabledQuotaRuntimes === null) applyUsageHarnesses(settings?.disabledHarnesses);
+    try {
+      const settings = await window.api.getSetting?.('global');
+      if (disabledQuotaRuntimes === null) applyUsageHarnesses(settings?.disabledHarnesses);
+    } catch {}
   }
   if (request !== quotaRequest) return;
   const codexRefresh = refreshCodexQuotaGauge();
@@ -3541,7 +3544,9 @@ function replaceQuotaRows(rows, runtime) {
     label.textContent = runtime === 'claude' ? 'Claude' : 'Codex';
     group.replaceChildren(label, ...rows.map(buildQuotaBar));
   } else group?.remove();
-  applyUsageHarnesses(disabledQuotaRuntimes);
+  const disabled = disabledQuotaRuntimes ?? SETTING_DEFAULTS.disabledHarnesses;
+  for (const group of quotaGaugeEl.children) group.hidden = disabled.includes(group.dataset.runtime);
+  quotaGaugeEl.style.display = [...quotaGaugeEl.children].some(group => !group.hidden) ? '' : 'none';
 }
 
 function applyUsageHarnesses(disabled) {

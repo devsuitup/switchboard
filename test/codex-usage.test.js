@@ -51,6 +51,25 @@ test('off never reads even a throwing auth file and never fetches', async t => {
   assert.equal(calls, 0);
 });
 
+test('non-minute Codex durations round to whole minutes', async t => {
+  const h = setup(t, { fetch: async () => ({ ok: true, json: async () => ({ rate_limit: {
+    primary_window: { used_percent: 42, limit_window_seconds: 5424 },
+    secondary_window: { used_percent: 23, limit_window_seconds: 5436 },
+  } }) }) });
+  assert.deepEqual((await h.service.getUsage()).limits.map(row => row.windowMinutes), [90, 91]);
+});
+
+test('a secondary-only Codex payload preserves its window without inventing a primary', async t => {
+  const h = setup(t, { fetch: async () => ({ ok: true, json: async () => ({ rate_limit: {
+    secondary_window: { used_percent: 23, limit_window_seconds: 604800 },
+  } }) }) });
+  const rows = (await h.service.getUsage()).limits;
+  assert.equal(rows?.length, 1, 'secondary-only payload must produce exactly one row');
+  assert.equal(rows[0].windowMinutes, 10080);
+  assert.equal(rows[0].percent, 23);
+  assert.equal(rows[0].label, 'Codex 1wk');
+});
+
 test('on uses the fake CODEX_HOME and sends only renderable rows across IPC', async t => {
   const h = setup(t);
   const usage = await h.service.getUsage();
