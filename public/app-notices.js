@@ -87,6 +87,7 @@ function showAppNotice(options) {
   if (options.mergeMembers) {
     options = { ...options, members: [...new Map([...(previous?.options.members || []), ...options.members].map(member => [member.id, member])).values()] };
   }
+  if (options.memberOptions) options = { ...options, ...options.memberOptions(options.members) };
   const { id, kind = 'info', message, members, actionLabel, onAction, dismissOnAction = true, dismissible = true, persistent = false } = options;
   clearTimeout(previous?.timer);
   const focusedButton = previous?.notice.contains(document.activeElement) ? document.activeElement.className : null;

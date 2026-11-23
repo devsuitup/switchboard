@@ -1072,6 +1072,7 @@
       // Update visibleSessionCount, sessionMaxAgeDays, and theme
       if (!isProject) {
         window._applySchedulesTab?.(settings.schedulesTab);
+        if (Array.isArray(settings.disabledHarnesses)) window._applyUsageHarnesses?.(settings.disabledHarnesses);
         if (typeof settings.showCodexUsage === 'boolean' && settings.showCodexUsage !== appliedCodexUsage) {
           window._applyCodexUsage?.(settings.showCodexUsage);
           appliedCodexUsage = settings.showCodexUsage;

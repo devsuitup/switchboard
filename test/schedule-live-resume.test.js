@@ -210,7 +210,7 @@ test('background restore without a job id shows only the restore notice', async 
   assert.equal(h.messages.length, 0);
   const notices = h.dom.window.document.querySelectorAll('[data-notice-id]');
   assert.equal(notices.length, 1, 'one skipped entry gets only its restore notice');
-  assert.equal(notices[0].dataset.noticeId, `Restore:local:${SID}`);
+  assert.equal(notices[0].dataset.noticeId, 'Restore:background');
   assert.match(notices[0].textContent, /Scheduled task/);
   assert.equal(h.dom.window.document.querySelector('[data-notice-id^="resume-background:"]'), null);
   assert.equal(h.settings.global.openWorkingSet[0].sessionId, SID);

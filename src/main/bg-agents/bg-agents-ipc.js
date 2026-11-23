@@ -282,6 +282,12 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
         if (attachOnly) return refuse('worker is not live — not attached');
         if (!['working', 'done', 'running', 'failed'].includes(check.state)) return refuse(check.state + ' job was not respawned automatically', 'respawn');
         const result = await respawnForHandoff(job);
+        if (result.ok && !result.attached && job.state === 'done' && tasks?.valid && tasks.queued > 0) {
+          const after = await bgAgents.conversationCheck(job.id, { workerLiveness: 'all' });
+          if (after.known && after.workerLiveness === 'dead') {
+            return { action: 'retire', jobId: job.id, reason: 'The background session ended; its queued tasks can no longer run after recovery failed' };
+          }
+        }
         if (!result.ok) return refuse(result.error);
         return result.attached ? { action: 'attach', sessionId, jobId: job.id }
           : { action: 'respawned-not-attached', jobId: job.id };

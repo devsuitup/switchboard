@@ -499,21 +499,23 @@ test('1020fix dead fork does not refuse its own resume ancestry', async t => {
 test('1020fix blocked restore notice Respawn click reaches the verb and attaches', async t => {
   const h = fixture(t, 'blocked');
   h.delivery.autoAttach = true;
-  let notice;
   const opened = [];
-  const ctx = require('node:vm').createContext({
-    window: { api: {
+  const vm = require('node:vm');
+  const dom = new (require('jsdom').JSDOM)('<div id="app-notices"></div>', { runScripts: 'outside-only' });
+  t.after(() => dom.window.close());
+  const ctx = dom.getInternalVMContext();
+  dom.window.api = {
       restoreBackgroundJob: (sid, options) => h.handlers.get('restore-background-job')({}, sid, options),
       bgAgentVerb: (verb, id) => h.handlers.get('bg-agent-verb')({}, verb, id),
       getSessionLiveElsewhere: async () => h.descriptors[0],
-    } },
-    sessionActionNoticeId: () => 'restore', sessionActionDescription: () => 'fixture',
-    showAppNotice: value => { notice = value; }, openSession: async (...args) => opened.push(args),
-  });
+  };
+  ctx.openSession = async (...args) => opened.push(args);
+  const noticesPath = path.join(__dirname, '../public/app-notices.js');
+  vm.runInContext(fs.readFileSync(noticesPath, 'utf8'), ctx, { filename: noticesPath });
   const { prepareBackgroundRestore } = require('./app-source').loadAppFunctions(ctx, { functions: ['prepareBackgroundRestore'] });
   await prepareBackgroundRestore({ sessionId: SID }, { sessionId: SID });
-  assert.equal(notice.actionLabel, 'Respawn');
-  await notice.onAction();
+  assert.equal(dom.window.document.querySelector('.app-notice-action')?.textContent, 'Respawn');
+  await vm.runInContext("appNoticeEntries.get('Restore:background').options.onAction()", ctx);
   assert.deepEqual(h.calls, [['respawn', 'aaaaaaaa']], 'clicking the notice must invoke respawn');
   assert.equal(opened.length, 1, 'recovery attaches the resulting live fork');
   assert.equal(opened[0][2].backgroundRestoreJobId, 'aaaaaaaa');
