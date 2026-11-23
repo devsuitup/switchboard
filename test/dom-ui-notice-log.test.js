@@ -198,6 +198,21 @@ test('a first-prompt label that contains a path is replaced as a whole', async t
   }
 });
 
+test('a single-token command or path label never rewrites a real path', async t => {
+  const { window, document, events } = setup(t);
+  const sessions = [{ sessionId: 'abcdef12-2345-6789', summary: '/review' },
+    { sessionId: 'bcdef123-2345-6789', name: 'src/main.js' }];
+  const message = 'Read /review/SKILL.md and open C:/repo/src/main.js now.';
+  const pending = window.appConfirm({ title: 'Open?', message, sessions });
+  document.querySelector('.choice-dialog-cancel').click();
+  await pending;
+  assert.ok(events.length > 0);
+  for (const event of events) {
+    assert.ok(event.text.includes('/review/SKILL.md'), event.text);
+    assert.ok(event.text.includes('C:/repo/src/main.js'), event.text);
+  }
+});
+
 test('notice dismissals distinguish expiry and programmatic clearing', t => {
   const { window, events } = setup(t);
   let expire;

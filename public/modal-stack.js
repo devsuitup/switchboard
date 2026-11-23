@@ -21,11 +21,12 @@ window.sessionNoticeLog = function (entry, sessions = []) {
   }
   if (!replacements.size) return entry;
   const pattern = new RegExp('(?<![\\p{L}\\p{N}_])(?:' + [...replacements.keys()].sort((a, b) => b.length - a.length).map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')(?![\\p{L}\\p{N}_])', 'gu');
-  const spanning = [...replacements.keys()].filter(key => /[\\/]/.test(key)).sort((a, b) => b.length - a.length);
+  const spanning = [...replacements.keys()].filter(key => /[\\/]/.test(key) && /\s/.test(key)).sort((a, b) => b.length - a.length);
+  const spanningPattern = spanning.length ? new RegExp('(?<![\\p{L}\\p{N}_])(?:' + spanning.map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')(?![\\p{L}\\p{N}_])', 'gu') : null;
   const redact = value => {
     if (typeof value !== 'string') return value;
     let text = normalize(value);
-    for (const key of spanning) text = text.split(key).join(replacements.get(key));
+    if (spanningPattern) text = text.replace(spanningPattern, match => replacements.get(match));
     return text.split(/(\S*[\\/]\S*)/g)
       .map((part, index) => index % 2 ? part : part.replace(pattern, match => replacements.get(match))).join('');
   };
