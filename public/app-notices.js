@@ -31,8 +31,7 @@ window.trackUiNotice = function (element, source, options = {}) {
     element.dataset.uiNoticeDismissReason = button?.matches('.restore-toast-restore, #update-restart-btn')
       ? `action:${button.textContent.trim()}` : 'user';
     if (previous !== null && element.dataset.uiNoticeDismissReason.startsWith('action:')) {
-      report('dismiss', previous, element.dataset.uiNoticeDismissReason);
-      previous = null;
+      report('action', previous, element.dataset.uiNoticeDismissReason);
     }
   }, true);
   transientNoticeEntries.set(element, next => { options = next; sync(); });

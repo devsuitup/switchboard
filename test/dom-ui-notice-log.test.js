@@ -228,6 +228,24 @@ test('Restart is logged before install without waiting for a DOM removal, and on
   assert.equal(lines.filter(line => line.event === 'dismiss').length, 1);
 });
 
+test('Restart without hiding the toast then Dismiss logs both through the real sink', async t => {
+  const { window, document } = setup(t);
+  const lines = connectSink(t, window);
+  const toast = document.createElement('div');
+  toast.innerHTML = '<span id="update-toast-msg">Update ready</span><button id="update-restart-btn">Restart</button><button id="update-dismiss-btn">Dismiss</button>';
+  document.body.append(toast);
+  window.trackUiNotice(toast, 'updater');
+  toast.querySelector('#update-restart-btn').click();
+  await Promise.resolve();
+  assert.ok(toast.isConnected);
+  assert.equal(lines.at(-1).event, 'action', 'Restart is an action, not a dismissal');
+  assert.equal(lines.at(-1).reason, 'action:Restart');
+  toast.querySelector('#update-dismiss-btn').onclick = () => { toast.hidden = true; };
+  toast.querySelector('#update-dismiss-btn').click();
+  await Promise.resolve();
+  assert.deepEqual(lines.map(line => [line.event, line.reason]), [['show', ''], ['action', 'action:Restart'], ['dismiss', 'user']]);
+});
+
 test('project action failure keeps folder wording in the real log', t => {
   const { window } = setup(t);
   const lines = connectSink(t, window);

@@ -103,7 +103,7 @@ const secretProbes = [
   ...['xoxa', 'xoxb', 'xoxp', 'xoxr', 'xoxs'].map(prefix => `${prefix}-probe-secret`),
   'eyJhbGciOiJIUzI1NiJ9.payload.signature', 'glpat-probe-secret', 'AKIA1234567890ABCDEF', 'npm_probe_secret',
   ...['sig', 'key', 'signature', 'code', 'auth', 'token', 'access_token'].map(key => `https://example.test/?${key}=probe-secret&next=ok`),
-  'sk-probe-secret0123456789abcdef', 'ghp_probe_secret', 'github_pat_probe_secret', 'Bearer probe-secret', 'https://user:probe-secret@example.test',
+  'sk-proj-probe-secret0123456789abcdef', 'ghp_probe_secret', 'github_pat_probe_secret', 'Bearer probe-secret', 'https://user:probe-secret@example.test',
 ];
 for (const probe of secretProbes) test(`M2 masks ${probe.split(/[=:]/)[0]}`, t => {
   const { send, lines } = setup(t);
@@ -156,6 +156,28 @@ test('hourly cap announces dropping once, stays silent across minute flushes and
   assert.equal(lines.at(-2), `[ui-notice] resumed after hourly byte limit; dropped ${sent - emitted} notices`);
   assert.equal(JSON.parse(lines.at(-1).slice('[ui-notice] '.length)).text, 'resumed');
   sink.dispose();
+  assert.equal(clock.size, 0);
+});
+
+test('dispose while hour-limited reports the exact dropped count once within the reserve', t => {
+  const { send, lines, clock, sink } = setup(t);
+  let sent = 0;
+  for (let minute = 0; minute < 6; minute++) {
+    for (let i = 0; i < 15; i++) {
+      send({ event: 'show', id: String(sent++), text: 'x'.repeat(4096) });
+      clock.advance(1000);
+    }
+    clock.advance(45000);
+  }
+  assert.match(lines.at(-1), /hourly byte limit reached/);
+  const emitted = lines.filter(line => line.startsWith('[ui-notice] {')).length;
+  const perMinuteDrops = lines.reduce((sum, line) => sum + Number(line.match(/suppressed (\d+) events/)?.[1] || 0), 0);
+  sink.dispose();
+  assert.equal(lines.at(-1), `[ui-notice] disposed after hourly byte limit; dropped ${sent - emitted - perMinuteDrops} notices`);
+  assert.ok(Buffer.byteLength(lines.join('\n') + '\n') <= 256 * 1024);
+  const length = lines.length;
+  sink.dispose();
+  assert.equal(lines.length, length);
   assert.equal(clock.size, 0);
 });
 

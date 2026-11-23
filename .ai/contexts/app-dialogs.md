@@ -14,9 +14,11 @@ replacement or merge writes one event, without an additional `show`. `show` reco
 the notice ID, info/warning/error severity and an explicit source or ID prefix.
 Undo notices use info. Legacy restore toasts and updater notices/status use the
 same channel. Dismissals carry `user`, `expired`, `cleared`, or `action:<label>`
-for an action button. Restore and Restart in transient toasts report in the
-capture handler, before their action runs; later DOM removal does not duplicate
-that dismissal. Restart does not otherwise remove its toast before installation.
+for an action button. Restore and Restart in transient toasts report a separate
+`action` event in the capture handler, before their action runs. The visible
+notice stays tracked until hidden or removed, when `dismiss` records its reason.
+Restart can return without installing; a subsequent Dismiss or Later therefore
+still reports the real dismissal. Restart does not otherwise remove its toast before installation.
 Dismiss and Later still report `user`. Main bounds action reasons to 256 characters
 and redacts credentials in them. Updater percentage
 changes stay visible but are not logged; start, completion and failures are logged,
@@ -81,14 +83,21 @@ most 20 choice labels of 256 characters. Paths are preserved; bearer credentials
 credential variable names, authorization and cookie values, JWTs,
 provider token prefixes, URL passwords and credential query parameters
 are masked. Authorization accepts `:` and `=`, retaining Basic/Bearer/Token
-and masking only the following value. Cookie/Set-Cookie scans semicolon-separated
-assignments and preserves trailing prose and bare attributes. Credential keys
-are whole words or underscore/hyphen-delimited suffixes (`DB_PASSWORD`,
-`client_secret`); `bypass` and `compass` are ordinary keys. AWS
-`X-Amz-Signature`/`X-Amz-Credential`, space-separated `--token`/`--api-key`, and
+and masking only the following value. Unknown Authorization schemes mask the
+whole line value, or the quoted value, including Digest and AWS4 credentials.
+Cookie/Set-Cookie scans semicolon-separated assignments and preserves trailing
+prose and bare attributes; without an assignment it masks the field value.
+Credential keys are whole words, underscore/hyphen-delimited suffixes
+(`DB_PASSWORD`, `client_secret`), or case-sensitive camel boundaries
+(`accessToken`, `clientSecret`). `secretKey` and `passwordHash` are masked
+conservatively; `bypass` and `compass` remain ordinary keys. AWS
+`X-Amz-Signature`/`X-Amz-Credential`, equals/space-separated
+`--token`/`--api-key`/`--password`/`--auth-token`, and
 passwords in any `scheme://user:password@host` URL are covered. Usernames and
-hosts are retained. Bare `sk-` tokens need at least 20 following characters from
-the ASCII letters/digits/underscore/hyphen alphabet; `sk-learn` is preserved.
+hosts are retained. `sk-proj-` and `sk-ant-` tokens are masked; other bare `sk-`
+tokens need at least 20 ASCII letters/digits including a digit. Kebab names
+such as `sk-learn-experiments-2024` are preserved. Key scans exclude both POSIX
+and Windows path separators at their left boundary.
 Quoted values, including ones truncated before a closing quote, are masked as
 values; subsequent lines stay intact. Key and URL scans guard their left token
 boundary to prevent rescanning long suffixes, and cookie/value scans advance
@@ -109,12 +118,15 @@ suppression summaries (UTF-8 prefix, payload and newline; electron-log's transpo
 timestamp/level formatting is additional). Named constants in `ui-notice-log.js`
 define all time/write/byte limits. The hour begins at installation and resets
 when a write next observes that an hour has elapsed. A 256-byte reserve allows
-one `hourly byte limit reached` line when dropping begins; even smaller notices
+one `hourly byte limit reached` line when dropping begins and a final dropped-count
+summary on disposal; even smaller notices
 are then dropped until rollover. Minute flushes stay silent during that period.
 The next write after rollover first reports `resumed after hourly byte limit;
 dropped N notices`, charging that summary to the new hour. Repeats count as their
 number of occurrences, not one summary. Per-minute drops already summarized
-before the hourly limit are not counted again in the hourly total.
+before the hourly limit are not counted again in the hourly total. Disposal
+flushes pending counts and, if still hour-limited, writes `disposed after hourly
+byte limit; dropped N notices` once from the reserve.
 These bounds also cover alternating IDs and large payloads. The fixed deadline
 is not extended by new events. Its timer is unreferenced, cleared on disposal, and pending counts flush
 on graceful quit. Abrupt termination can lose the final partial window.

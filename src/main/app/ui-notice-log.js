@@ -26,7 +26,7 @@ function installUiNoticeLog({ ipcMain, log, getWindow, now = Date.now, setTimer 
   let last = null;
   let repeats = 0;
   let lastSeen = -Infinity;
-  const events = new Set(['show', 'dismiss', 'replace', 'merge', 'dialog-show', 'dialog-choice']);
+  const events = new Set(['show', 'dismiss', 'action', 'replace', 'merge', 'dialog-show', 'dialog-choice']);
   const bounded = (value, max) => typeof value === 'string' ? redactLogText(value.slice(0, max + 128)).slice(0, max) : '';
 
   function write(line) {
@@ -124,7 +124,15 @@ function installUiNoticeLog({ ipcMain, log, getWindow, now = Date.now, setTimer 
   }
 
   ipcMain.on('ui-notice-log', receive);
-  return { dispose() { ipcMain.removeListener('ui-notice-log', receive); flush(); } };
+  return { dispose() {
+    ipcMain.removeListener('ui-notice-log', receive);
+    flush();
+    if (hourLimited) {
+      write(`disposed after hourly byte limit; dropped ${hourDropped} notices`);
+      hourLimited = false;
+      hourDropped = 0;
+    }
+  } };
 }
 
 module.exports = { installUiNoticeLog };
