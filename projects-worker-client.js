@@ -57,7 +57,8 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted =
   function conflict(job, result) {
     if (active !== job) return;
     clearTimeout(job.timer);
-    if (++job.discards < maxDiscards && (job.options.reconcile || job.waiters.some(waiter => waiters.has(waiter)))) {
+    const limit = job.conflict?.reason === 'deletion' ? Math.max(2, maxDiscards) : maxDiscards;
+    if (++job.discards < limit && (job.options.reconcile || job.waiters.some(waiter => waiters.has(waiter)))) {
       if (!(job.options.readOnly && pending?.options.reconcile)) {
         job.options = mergeOptions(job.options, pending?.options);
         job.waiters.push(...(pending?.waiters || []));
