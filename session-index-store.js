@@ -64,6 +64,8 @@ const db = new Proxy(raw, {
   },
 });
 if (!readonly) raw.exec('CREATE TEMP TABLE pin_changes (line TEXT NOT NULL)');
+const pinChangesSelect = readonly ? null : raw.prepare('SELECT line FROM pin_changes ORDER BY rowid');
+const pinChangesDelete = readonly ? null : raw.prepare('DELETE FROM pin_changes');
 function recordPinChange(ids, before, after, source) {
   if (before === after || !ids.length) return;
   const prefixes = ids.map(id => String(id).slice(0, 8).replace(/[^a-zA-Z0-9-]/g, '?')).join(',');
@@ -76,8 +78,8 @@ function transact(command) {
     try {
       const value = command();
       sample = { ms: budget.ms, rows: budget.rows, bytes: budget.bytes, statements: budget.statements };
-      pinLines = raw.prepare('SELECT line FROM pin_changes ORDER BY rowid').all();
-      raw.prepare('DELETE FROM pin_changes').run();
+      pinLines = pinChangesSelect.all();
+      if (pinLines.length) pinChangesDelete.run();
       return value;
     } finally { budget = null; }
   }).immediate();
@@ -169,6 +171,9 @@ db.exec(`CREATE TABLE IF NOT EXISTS session_meta_fields (
 db.exec('CREATE INDEX IF NOT EXISTS idx_session_meta_fields_revision ON session_meta_fields(revision)');
 if (!db.prepare('PRAGMA table_info(session_meta_fields)').all().some(c => c.name === 'transcriptTitle')) {
   db.exec('ALTER TABLE session_meta_fields ADD COLUMN transcriptTitle TEXT');
+}
+if (!db.prepare('PRAGMA table_info(session_meta_fields)').all().some(c => c.name === 'updatedAt')) {
+  db.exec('ALTER TABLE session_meta_fields ADD COLUMN updatedAt INTEGER');
 }
 
 db.exec(`
@@ -310,11 +315,6 @@ const migrations = [
         } catch {}
       })();
     } catch {}
-  },
-  (db) => {
-    if (!db.prepare('PRAGMA table_info(session_meta_fields)').all().some(column => column.name === 'updatedAt')) {
-      db.exec('ALTER TABLE session_meta_fields ADD COLUMN updatedAt INTEGER');
-    }
   },
 ];
 
@@ -556,20 +556,14 @@ const stmts = {
   `),
 };
 
-const hasMetaTimestamp = db.prepare('PRAGMA table_info(session_meta_fields)').all().some(column => column.name === 'updatedAt');
-const metaFieldGet = db.prepare(hasMetaTimestamp
-  ? 'SELECT revision, source, transcriptTitle, updatedAt FROM session_meta_fields WHERE sessionId = ? AND field = ?'
-  : 'SELECT revision, source, transcriptTitle, NULL AS updatedAt FROM session_meta_fields WHERE sessionId = ? AND field = ?');
+const metaFieldGet = db.prepare('SELECT revision, source, transcriptTitle, updatedAt FROM session_meta_fields WHERE sessionId = ? AND field = ?');
 const metaGetWithNameSource = db.prepare(`SELECT m.*, f.source AS nameSource, f.revision AS nameRevision, f.transcriptTitle AS nameTranscriptTitle FROM session_meta m
   LEFT JOIN session_meta_fields f ON f.sessionId = m.sessionId AND f.field = 'name' WHERE m.sessionId = ?`);
 const metaFieldNext = db.prepare('SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM session_meta_fields');
-const metaFieldSet = db.prepare(hasMetaTimestamp
-  ? `INSERT INTO session_meta_fields (sessionId, field, revision, source, transcriptTitle, updatedAt) VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(sessionId, field) DO UPDATE SET revision = excluded.revision, source = excluded.source, transcriptTitle = excluded.transcriptTitle, updatedAt = excluded.updatedAt`
-  : `INSERT INTO session_meta_fields (sessionId, field, revision, source, transcriptTitle) VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(sessionId, field) DO UPDATE SET revision = excluded.revision, source = excluded.source, transcriptTitle = excluded.transcriptTitle`);
+const metaFieldSet = db.prepare(`INSERT INTO session_meta_fields (sessionId, field, revision, source, transcriptTitle, updatedAt) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(sessionId, field) DO UPDATE SET revision = excluded.revision, source = excluded.source, transcriptTitle = excluded.transcriptTitle, updatedAt = excluded.updatedAt`);
 function setMetaField(sessionId, field, revision, source, transcriptTitle, updatedAt = Date.now()) {
-  metaFieldSet.run(sessionId, field, revision, source, transcriptTitle, ...(hasMetaTimestamp ? [updatedAt] : []));
+  metaFieldSet.run(sessionId, field, revision, source, transcriptTitle, updatedAt);
 }
 
 const rekeySessionMeta = db.transaction((oldId, newId, title) => {

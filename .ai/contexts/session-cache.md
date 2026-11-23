@@ -6,9 +6,13 @@
 
 Pins live in `session_meta.starred`, keyed by the full session UUID, independently
 of the rebuildable `session_cache`. `session_meta_fields` keeps the latest
-revision and source for each `(sessionId, field)`, including `starred`. The next
-`db_version` migration adds nullable `updatedAt` (Unix epoch milliseconds).
+revision and source for each `(sessionId, field)`, including `starred`. Every
+writable open checks for nullable `updatedAt` (Unix epoch milliseconds) and adds
+it if absent, independently of `db_version`. The migration version remains 9;
+databases already at a higher version keep that version.
 Existing field rows retain null; new field revisions record wall-clock time.
+No-op `setStarred` writes also refresh the revision and timestamp: `updatedAt`
+means last write, not last value change. The `[pin]` log line records real changes.
 Rekey copies the winning revision and its timestamp, including a legacy null.
 Transcript-baseline repairs that retain a name revision retain its timestamp.
 This table is latest-state provenance, not a history of earlier unpins.
@@ -28,7 +32,8 @@ Every actual star transition from `setStarred`/`toggleStar`, metadata rekey, or
 project deletion's `eraseMetadata` goes through `recordPinChange` in the store.
 It stages one line in a connection-local temporary table within the same
 transaction. Rollback, BUSY retry and deferred savepoint units discard their
-staged lines. `transact` drains them within the transaction and publishes them
+staged lines. `transact` uses cached SELECT and DELETE statements, skips the
+DELETE when no lines were selected, drains them within the transaction and publishes them
 only after commit. The worker sends `{pinChange}`; `session-index-writer-client`
 writes it with the main process's injected `electron-log` logger to `main.log`:
 `[pin] ids=11111111,22222222 0→1 source=icon`.

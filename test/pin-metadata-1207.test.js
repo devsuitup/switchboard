@@ -92,24 +92,42 @@ test('rollback and deferred savepoint units never produce phantom pin logs', sup
   assert.deepEqual(lines, ['[pin] ids=22222222 0→1 source=icon']);
 });
 
-test('metadata migration keeps old timestamps null and timestamps all new revisions', supported, t => {
+test('fresh metadata schema keeps db_version 9', supported, t => {
+  const cleanup = isolated(t);
+  const db = openStore();
+  t.after(() => { db.closeDb(); cleanup(); });
+  assert.equal(db.getSetting('db_version'), 9, 'adding updatedAt must not bump db_version');
+});
+
+for (const version of [9, 10, 42]) test(`metadata column reconciliation preserves db_version ${version} and old rows`, supported, t => {
   const cleanup = isolated(t);
   let db = openStore();
+  t.after(() => { db.closeDb(); cleanup(); });
   const columns = db.connection.prepare('PRAGMA table_info(session_meta_fields)').all();
   const hasTimestamp = columns.some(column => column.name === 'updatedAt');
-  const oldVersion = db.getSetting('db_version') - (hasTimestamp ? 1 : 0);
   if (hasTimestamp) db.connection.exec('ALTER TABLE session_meta_fields DROP COLUMN updatedAt');
-  db.setSetting('db_version', oldVersion);
+  db.setSetting('db_version', version);
   db.connection.prepare('INSERT INTO session_meta(sessionId, starred) VALUES (?, 1)').run(A);
   db.connection.prepare("INSERT INTO session_meta_fields(sessionId, field, revision, source) VALUES (?, 'starred', 42, 'user')").run(A);
+  db.upsertCachedSessions([{ sessionId: A, folder: 'project', summary: 'Keep cached data' }]);
+  db.setFolderMeta('project', '/project', 123);
+  db.setInitialScanComplete();
   db.closeDb();
   db = openStore();
-  t.after(() => { db.closeDb(); cleanup(); });
   assert.ok(db.connection.prepare('PRAGMA table_info(session_meta_fields)').all().some(column => column.name === 'updatedAt'),
-    'versioned migration adds the metadata timestamp column');
-  assert.equal(db.getSetting('db_version'), oldVersion + 1);
+    'column reconciliation adds updatedAt even when db_version is already current or higher');
+  assert.equal(db.getSetting('db_version'), version, 'column reconciliation preserves db_version');
   const field = (id, name) => db.connection.prepare('SELECT * FROM session_meta_fields WHERE sessionId=? AND field=?').get(id, name);
-  assert.equal(field(A, 'starred').updatedAt, null);
+  const legacy = { ...field(A, 'starred') };
+  assert.deepEqual(legacy, { sessionId: A, field: 'starred', revision: 42, source: 'user', transcriptTitle: null, updatedAt: null });
+  assert.equal(db.getMeta(A).starred, 1);
+  assert.equal(db.getCachedSession(A).summary, 'Keep cached data');
+  assert.equal(db.getFolderMeta('project').indexMtimeMs, 123);
+  assert.equal(db.isInitialScanComplete(), true);
+  db.closeDb();
+  db = openStore();
+  assert.equal(db.getSetting('db_version'), version, 'writable reopen keeps the version');
+  assert.deepEqual({ ...field(A, 'starred') }, legacy, 'writable reopen is idempotent');
   const start = Date.now();
   db.transact(() => { db.setStarred(A, false); db.setName(A, 'private title'); db.setArchived(A, true); });
   for (const name of ['starred', 'name', 'archived']) {
