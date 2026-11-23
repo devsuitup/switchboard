@@ -45,7 +45,7 @@ The Browser default uses the `browserMode` setting (`off` or `claude-in-chrome`)
 A saved `chrome` setting is read as the matching choice: `true` selects
 **Claude in Chrome**, and `false` selects **Off**.
 
-**Start** (or Enter outside a text field) launches; **Cancel** or Esc closes the
+**Start** (or Enter outside a text field or a list) launches; **Cancel** or Esc closes the
 dialog. The values apply to this launch only; they are not saved.
 
 ### Permission modes
@@ -94,10 +94,24 @@ That covers a wrapper (`aws-vault exec profile --`), an environment assignment
 
 ## Resume dialog
 
-**Resume with config** on a session row opens the Resume dialog: Permission
-Mode, Browser (Off / Claude in Chrome), Sandbox (Linux), Pre-launch Command and
-Additional Directories, applied to this resume only. It has no Worktree option: a resumed session keeps
-the directory it was started in.
+**Resume with config** opens the launch form for the session's own CLI. A
+Claude session offers Permission Mode, Browser (Off / Claude in Chrome) and
+Sandbox (Linux). A Codex session offers Sandbox, Approval, Model and Reasoning
+effort. Both offer Pre-launch Command and Additional Directories. The fields
+are shared with New Session, and apply to this launch only.
+
+The dialog displays the recorded working directory, falling back to the
+project directory when unavailable. It has no Worktree option: a resumed
+session keeps its original directory. The form shows the project's effective
+settings for the session's runtime. Codex default leaves a setting to the CLI's
+own configuration.
+The model list comes from Codex's local model cache; a configured model absent
+from that list remains selectable.
+
+Resume runs `claude --resume <id>` or `codex resume <id>` according to the
+session. Codex controls never add Claude permission, browser or bubblewrap
+flags; Claude controls never add Codex sandbox or approval flags. For Codex,
+Additional Directories is passed only with Workspace write or Full access.
 
 ## Fork
 
