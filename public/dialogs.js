@@ -276,15 +276,7 @@ async function showSessionLaunchDialog(project, opener, session = null) {
   const runtimeLabel = codex ? 'Codex' : 'Claude';
   const openerHeaderId = opener?.closest('.project-header, .worktree-header')?.id;
   const defaults = await window.api.getEffectiveSettings(project.projectPath);
-  const recorded = {};
-  const keys = codex
-    ? ['codexModel', 'codexSandbox', 'codexApproval', 'codexEffort', 'preLaunchCmd', 'addDirs']
-    : ['permissionMode', 'dangerouslySkipPermissions', 'browserMode', 'chrome', 'sandbox', 'preLaunchCmd', 'addDirs', 'mcpEmulation'];
-  for (const key of keys) {
-    if (session && session[key] !== undefined) recorded[key] = session[key];
-  }
-  if (!codex && Object.hasOwn(recorded, 'permissionMode') && !Object.hasOwn(recorded, 'dangerouslySkipPermissions')) recorded.dangerouslySkipPermissions = false;
-  const effective = { ...normalizeBrowserSettings(defaults), ...normalizeBrowserSettings(recorded) };
+  const effective = normalizeBrowserSettings(defaults);
   let models = [];
   if (codex && typeof window.api.getHarnessModels === 'function') {
     try {
@@ -330,10 +322,10 @@ async function showSessionLaunchDialog(project, opener, session = null) {
       <input class="settings-input" id="rsd-cwd" readonly value="${escapeHtml(session.cwd || session.projectPath)}">
     </div>` : ''}
     ${codex ? [
-      codexField('codexSandbox', 'sandbox', 'Sandbox', [['', 'Codex default'], ['read-only', 'Read-only'], ['workspace-write', 'Workspace write'], ['danger-full-access', 'Full access (danger)']]),
-      codexField('codexApproval', 'approval', 'Approval', [['', 'Codex default'], ['on-request', 'On request'], ['never', 'Never']]),
+      codexField('codexSandbox', 'sandbox', 'Sandbox', CODEX_CHOICES.codexSandbox),
+      codexField('codexApproval', 'approval', 'Approval', CODEX_CHOICES.codexApproval),
       codexField('codexModel', 'model', 'Model', modelChoices),
-      codexField('codexEffort', 'effort', 'Reasoning effort', [['', 'Codex default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max'], ['ultra', 'Ultra']]),
+      codexField('codexEffort', 'effort', 'Reasoning effort', CODEX_CHOICES.codexEffort),
     ].join('') : `
     <div class="settings-field">
       <div class="settings-label">Permission Mode</div>
@@ -466,7 +458,7 @@ async function showSessionLaunchDialog(project, opener, session = null) {
     const preLaunch = dialog.querySelector(`#${prefix}-pre-launch`).value.trim();
     if (preLaunch) options.preLaunchCmd = preLaunch;
     options.addDirs = dialog.querySelector(`#${prefix}-add-dirs`).value.trim();
-    close(false);
+    close(!!session);
     if (session) openSession(session, options);
     else launchNewSession(project, options);
   }

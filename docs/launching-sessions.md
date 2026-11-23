@@ -45,7 +45,7 @@ The Browser default uses the `browserMode` setting (`off` or `claude-in-chrome`)
 A saved `chrome` setting is read as the matching choice: `true` selects
 **Claude in Chrome**, and `false` selects **Off**.
 
-**Start** (or Enter outside a text field) launches; **Cancel** or Esc closes the
+**Start** (or Enter outside a text field or a list) launches; **Cancel** or Esc closes the
 dialog. The values apply to this launch only; they are not saved.
 
 ### Permission modes
@@ -102,11 +102,9 @@ are shared with New Session, and apply to this launch only.
 
 The dialog displays the recorded working directory, falling back to the
 project directory when unavailable. It has no Worktree option: a resumed
-session keeps its original directory. Available session option values take
-precedence over the project's effective settings, including explicit Off and
-Default choices. The current session index exposes the directory but does not
-retain launch option values; those sessions therefore use effective settings
-for the controls. Codex default leaves a setting to the CLI's own configuration.
+session keeps its original directory. The form shows the project's effective
+settings for the session's runtime. Codex default leaves a setting to the CLI's
+own configuration.
 The model list comes from Codex's local model cache; a configured model absent
 from that list remains selectable.
 

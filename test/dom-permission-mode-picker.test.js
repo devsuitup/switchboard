@@ -154,6 +154,16 @@ test('dialogs.js: New and Resume dialogs share one PERMISSION_MODES list (no re-
   assert.doesNotMatch(src, /const modes = \[/, 'dialogs.js must not re-introduce a literal, divergence-prone modes array');
 });
 
+for (const file of ['dialogs.js', 'settings-panel.js']) {
+  test(`${file}: Codex pickers use shared choices without literal option arrays`, () => {
+    const src = fs.readFileSync(path.join(PUBLIC_DIR, file), 'utf8');
+    for (const key of ['codexSandbox', 'codexApproval', 'codexEffort']) {
+      assert.match(src, new RegExp(`CODEX_CHOICES\\.${key}\\b`), `${file} must use shared ${key} choices`);
+    }
+    assert.doesNotMatch(src, /\[\s*['"](?:read-only|workspace-write|danger-full-access|on-request|never|low|medium|high|xhigh|max|ultra)['"]\s*,/, `${file} must not duplicate Codex choice arrays`);
+  });
+}
+
 // --- Harness for settings-panel.js (project-scope Settings panel) ---
 function setupSettingsPanelDom() {
   const dom = new JSDOM(`<!DOCTYPE html><html><body>
