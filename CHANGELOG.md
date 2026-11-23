@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
+- Notices and question dialogs now leave a bounded history in the application log, including dismissals and answers, with common credentials masked; session titles and prompts are not recorded, and project paths remain intact. (#1196)
 - Settings → Advanced → Diagnostics shows the size of Switchboard's logs and activity traces and lets you delete files older than a chosen number of days, keeping current files. (#1197)
 
 ### Changed

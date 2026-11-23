@@ -74,10 +74,11 @@ function announceNotStopped(entries) {
   }
   for (const [alias, rows] of hosts) {
     const members = [...new Map(rows.map(({ session, error }) => [sessionActionNoticeId('Archive', session),
-      { id: sessionActionNoticeId('Archive', session), text: sessionActionDescription(session), error }])).values()];
+      { id: sessionActionNoticeId('Archive', session), text: sessionActionDescription(session), logText: sessionActionDescription(session, { log: true }), error, session }])).values()];
     showAppNotice({
       id: `Archive:${alias}:not-stopped`, kind: 'error', members, mergeMembers: true,
       message: current => `Archived, but not stopped: ${remoteHostLabel(alias)} did not answer (${[...new Set(current.map(member => member.error))].join('; ')}). ${current.map(member => member.text).join('; ')}. The sessions may still be running there; unarchive them to try again once the host is back.`,
+      logText: current => `Archived, but not stopped: ${remoteHostLabel(alias)} did not answer (${[...new Set(current.map(member => member.error))].join('; ')}). ${current.map(member => member.logText).join('; ')}. The sessions may still be running there; unarchive them to try again once the host is back.`,
     });
   }
 }
@@ -157,10 +158,17 @@ function olderArchiveKeepReason(session) {
   return null;
 }
 
-function olderArchiveList(title, rows) {
+function olderArchiveList(title, rows, { log = false } = {}) {
   if (!rows.length) return '';
-  return [title, ...rows.slice(0, 10).map(({ session, reason }) => `${cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId}${reason ? ': ' + reason : ''}`),
+  return [title, ...rows.slice(0, 10).map(({ session, reason }) => `${log ? session.sessionId.slice(0, 8) : cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId}${reason ? ': ' + reason : ''}`),
     ...(rows.length > 10 ? [`+${rows.length - 10} more`] : [])].join('\n');
+}
+
+function olderArchiveParts(title, rows) {
+  if (!rows.length) return [];
+  return [title, ...rows.slice(0, 10).map(({ session, reason }) => [{ session,
+    label: cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId }, reason ? ': ' + reason : '']),
+  ...(rows.length > 10 ? [`+${rows.length - 10} more`] : [])];
 }
 
 async function prepareOlderArchive(rows) {
@@ -201,7 +209,8 @@ async function archiveSessionRows(rows, olderRule) {
   const prepare = olderRule ? prepareOlderArchive : window.planSessionArchive;
   const confirmed = await confirmSessionArchivePlan(rows, await prepare(rows), async prepared => {
     if (olderRule && !prepared.plans.length) {
-      showAppNotice({ id: 'archive-older-empty', kind: 'error', message: ['Nothing eligible to archive.',
+      showAppNotice({ id: 'archive-older-empty', kind: 'error', sessions: rows,
+        logText: ['Nothing eligible to archive.', olderArchiveList('Kept:', prepared.kept, { log: true }), olderArchiveList('Refused:', prepared.refusals, { log: true })].filter(Boolean).join('\n'), message: ['Nothing eligible to archive.',
         olderArchiveList('Kept:', prepared.kept), olderArchiveList('Refused:', prepared.refusals)].filter(Boolean).join('\n') });
       return null;
     }
@@ -210,12 +219,15 @@ async function archiveSessionRows(rows, olderRule) {
     const running = targets.filter(target => !target.attach).length;
     const question = olderRule ? `Archive ${prepared.plans.length} older session${prepared.plans.length === 1 ? '' : 's'}?`
       : rows.length === 1 ? 'Archive this session?' : `Archive ${rows.length} sessions?`;
+    const messageParts = [question, ...(olderRule ? [olderRule, ...olderArchiveParts('To archive:', prepared.plans),
+        ...olderArchiveParts('Kept:', prepared.kept), ...olderArchiveParts('Refused:', prepared.refusals),
+        'Kept and refused sessions stay unarchived. Undo restores archived rows.'] : []),
+        ...(running ? [`${running} running process${running === 1 ? '' : 'es'} will be stopped first.`] : []),
+        ...prepared.plans.filter(({ plan }) => plan.targets.length).flatMap(({ plan }) => plan.confirmParts.slice(1))];
     if (!await appConfirm({
       title: question, confirmLabel: 'Archive', danger: targets.length > 0,
-      message: [question, ...(olderRule ? [olderRule, olderArchiveList('To archive:', prepared.plans),
-        olderArchiveList('Kept:', prepared.kept), olderArchiveList('Refused:', prepared.refusals),
-        'Kept and refused sessions stay unarchived. Undo restores archived rows.'] : []), ...(running ? [`${running} running process${running === 1 ? '' : 'es'} will be stopped first.`] : []),
-        ...prepared.plans.filter(({ plan }) => plan.targets.length).map(({ plan }) => plan.confirmText.split('\n').slice(1).join('\n'))].join('\n'),
+      sessions: messageParts.flat(Infinity).filter(part => part?.session).map(part => part.session), messageParts,
+      message: messageParts.map(line => [line].flat(Infinity).map(part => part?.session ? part.label : part).join('')).join('\n'),
     })) return null;
     return { archiveSessions: true };
   }, prepare);
@@ -252,7 +264,8 @@ async function archiveSessionRows(rows, olderRule) {
   }
   announceNotStopped(notStopped);
   if (archived.length) showSessionArchiveUndo(archived, stoppedAny);
-  if (kept.length) showAppNotice({ id: 'archive-older-kept', kind: 'info',
+  if (kept.length) showAppNotice({ id: 'archive-older-kept', kind: 'info', sessions: rows,
+    logText: olderArchiveList(`${kept.length} kept because:`, kept, { log: true }),
     message: olderArchiveList(`${kept.length} kept because:`, kept) });
   pollActiveSessions();
   Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
@@ -2021,11 +2034,21 @@ async function archiveProjectFolder(project, button) {
     }
     const confirmed = await confirmSessionArchivePlan(sessions, prepared, async current => {
       const choices = [];
+      const markedSessions = [];
       const running = current.plans.flatMap(({ session, plan }) => plan.targets.filter(target => !target.attach).map(target =>
         `${cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId}${rowSessionIds(session).length > 1 ? ` (part ${target.sessionId})` : ''}${target.possiblyLive ? ' (possibly running)' : ''} ${target.where}`));
       if (sessions.length > 0) {
         const label = checked => `Archive the ${counted(sessions.length, 'session')}${checked && running.length ? ` — stopped first: ${running.slice(0, 5).join('; ')}${running.length > 5 ? `; +${running.length - 5} more` : ''}` : ''}`;
-        choices.push({ id: 'archiveSessions', label, checked: true, rememberKey: 'archiveFolder.archiveSessions' });
+        const runningParts = current.plans.flatMap(({ session, plan }) => plan.targets.filter(target => !target.attach).map(target =>
+          [{ session, label: cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId },
+          `${rowSessionIds(session).length > 1 ? ` (part ${target.sessionId})` : ''}${target.possiblyLive ? ' (possibly running)' : ''} ${target.where}`]));
+        const labelParts = checked => {
+          markedSessions.splice(0, markedSessions.length, ...(checked ? runningParts.slice(0, 5).map(parts => parts[0].session) : []));
+          return [`Archive the ${counted(sessions.length, 'session')}`,
+          ...(checked && running.length ? [' — stopped first: ', ...runningParts.slice(0, 5).flatMap((parts, i) => [i ? '; ' : '', ...parts]),
+            running.length > 5 ? `; +${running.length - 5} more` : ''] : [])];
+        };
+        choices.push({ id: 'archiveSessions', label, labelParts, checked: true, rememberKey: 'archiveFolder.archiveSessions' });
       }
       if (disableable.length > 0) {
         choices.push({
@@ -2040,7 +2063,7 @@ async function archiveProjectFolder(project, button) {
 
       if (!choices.length && !running.length) return {};
       return showChoiceDialog({
-        title: `Archive ${shortProjectPath(parent.projectPath)}?`,
+        title: `Archive ${shortProjectPath(parent.projectPath)}?`, sessions: markedSessions,
         message,
         choices,
         confirmLabel: 'Archive folder',
@@ -3116,7 +3139,7 @@ async function showDeleteSessionDialog(session) {
 
     const label = cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId;
     dialog.innerHTML = `
-      <h3>Delete session "${escapeHtml(label)}"?</h3>
+      <h3></h3>
       <div class="delete-worktree-warning">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
         <span>The transcript is removed from disk permanently. This cannot be undone — use <strong>Archive</strong> instead to hide a session while keeping the file.</span>
@@ -3129,6 +3152,8 @@ async function showDeleteSessionDialog(session) {
         <button class="delete-worktree-confirm-btn" id="dss-confirm">Delete permanently</button>
       </div>
     `;
+
+    window.renderSessionText(dialog.querySelector('h3'), ['Delete session "', { session, label }, '"?']);
 
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
@@ -3145,7 +3170,10 @@ async function showDeleteSessionDialog(session) {
     if (p.subagents > 0) parts.push(`${p.subagents} subagent transcript${p.subagents !== 1 ? 's' : ''}`);
     statusEl.innerHTML = projectLine + `<pre class="dwt-dirty-list">${escapeHtml(parts.join('\n'))}</pre>`;
 
+    const reportChoice = window.observeModalQuestion(dialog, 'delete-session', session);
+
     function close(confirmed) {
+      reportChoice(confirmed ? 'Delete permanently' : 'cancel');
       overlay.remove();
       unregister();
       resolve(confirmed);
@@ -3190,6 +3218,7 @@ async function showDeleteWorktreeDialog(name, worktreePath, freshStatus) {
 
     const statusEl = dialog.querySelector('#dwt-status');
     const confirmBtn = dialog.querySelector('#dwt-confirm');
+    const reportChoice = window.observeModalQuestion(dialog, 'delete-worktree');
     let shown;
 
     Promise.resolve().then(() => freshStatus || window.api.worktreeStatus(worktreePath)).then((status) => {
@@ -3239,6 +3268,7 @@ async function showDeleteWorktreeDialog(name, worktreePath, freshStatus) {
     });
 
     function close(confirmed) {
+      reportChoice(confirmed ? 'Delete worktree' : 'cancel');
       overlay.remove();
       unregister();
       resolve(confirmed);

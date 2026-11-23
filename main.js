@@ -186,6 +186,8 @@ const mainErrorHandlers = require('./src/main/app/main-error-handlers').installM
   },
 });
 let activityFlushedForQuit = false;
+const uiNoticeLog = require('./src/main/app/ui-notice-log').installUiNoticeLog({ ipcMain, log, getWindow: () => mainWindow });
+app.once('will-quit', () => uiNoticeLog.dispose());
 let updateInstalling = false;
 let quitAttemptToken = null;
 let updateInstallPromise = null;

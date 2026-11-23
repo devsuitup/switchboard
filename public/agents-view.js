@@ -625,9 +625,10 @@ async function runAgentVerb(verb, entry) {
         return;
       }
       const confirmation = verb === 'stop'
-        ? { title: 'Stop?', message: `Stop background job "${agentDisplayName(entry)}" (${entry.id})? Its process ends; the conversation is kept.`, confirmLabel: 'Stop', danger: true }
+        ? { title: 'Stop?', message: `Stop background job "${agentDisplayName(entry)}" (${entry.id})? Its process ends; the conversation is kept.`,
+          messageParts: [['Stop background job "', { session: entry, label: agentDisplayName(entry) }, `" (${entry.id})? Its process ends; the conversation is kept.`]], confirmLabel: 'Stop', danger: true }
         : { title: 'Delete?', message: 'Delete this background session? Its conversation goes, and its worktree when that is safe.', confirmLabel: 'Delete', danger: true };
-      if (!await appConfirm(confirmation)) return;
+      if (!await appConfirm({ ...confirmation, sessions: [{ ...entry, name: agentDisplayName(entry) }] })) return;
     }
     agentsPendingVerbs.add(key);
     if (agentsViewActive) renderAgentsView();

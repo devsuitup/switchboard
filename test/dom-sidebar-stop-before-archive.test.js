@@ -279,7 +279,7 @@ test('per-session delete: a local session with an active PTY is refused before p
     ctx.sidebar.renderProjects([{ projectPath: '/home/dev/proj', sessions: [s1] }], true);
     await ctx.document.getElementById('si-s1').querySelector('.session-delete-btn').onclick({ stopPropagation() {} });
     assert.equal(ctx.document.querySelector('#dss-confirm'), null);
-    assert.deepEqual(calls, []);
+    assert.deepEqual(calls.map(c => c.method), ['logUiNotice']);
     assert.match(ctx.document.querySelector('[role="alert"]').textContent, /still running/);
   } finally { ctx.destroy(); }
 });
@@ -326,7 +326,7 @@ test('per-session archive toggle: local session with an active PTY is stopped, t
     const methods = calls.map(c => c.method);
     assert.equal(ctx.confirmations.length, 1);
     assert.match(ctx.confirmations[0].message, /Archive[\s\S]*process[\s\S]*(?:in this window|on vps)/);
-    assert.deepEqual(methods.filter(method => method !== 'bgAgentLiveJob'), ['stopSession', 'archiveSession'], 'stop must precede archive');
+    assert.deepEqual(methods.filter(method => method !== 'bgAgentLiveJob'), ['stopSession', 'archiveSession', 'logUiNotice'], 'stop must precede archive');
   } finally { ctx.destroy(); }
 });
 

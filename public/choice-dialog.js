@@ -29,8 +29,11 @@ function showChoiceDialog(options = {}) {
 }
 
 function openChoiceDialog({
+  sessions,
   title,
   message,
+  messageParts,
+  titleParts,
   choices = [],
   options = null,
   selectedId,
@@ -64,7 +67,7 @@ function openChoiceDialog({
     header.className = 'whats-new-header';
     const heading = document.createElement('h2');
     heading.id = 'choice-dialog-title';
-    heading.textContent = title || '';
+    window.renderSessionText(heading, titleParts || title || '');
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
     closeBtn.className = 'icon-btn choice-dialog-close';
@@ -74,10 +77,10 @@ function openChoiceDialog({
 
     const body = document.createElement('div');
     body.className = 'whats-new-body choice-dialog-body';
-    const lines = Array.isArray(message) ? message : (message ? [message] : []);
+    const lines = messageParts || (Array.isArray(message) ? message : (message ? [message] : []));
     for (const line of lines) {
       const p = document.createElement('p');
-      p.textContent = line;
+      window.renderSessionText(p, line);
       body.appendChild(p);
     }
     const radios = [];
@@ -99,7 +102,7 @@ function openChoiceDialog({
         const text = document.createElement('span');
         const label = document.createElement('label');
         label.htmlFor = radio.id;
-        label.textContent = option.label;
+        window.renderSessionText(label, option.session ? { session: option.session, label: option.label } : option.label);
         text.appendChild(label);
         const description = [option.detail, option.disabled && option.disabledReason].filter(Boolean).join(' · ');
         if (description) {
@@ -115,7 +118,7 @@ function openChoiceDialog({
           if (!radio.disabled && event.target !== radio && !label.contains(event.target)) radio.click();
         });
         group.appendChild(row);
-        radios.push({ option, radio });
+        radios.push({ option, radio, label });
       }
       body.appendChild(group);
     }
@@ -130,7 +133,7 @@ function openChoiceDialog({
       box.disabled = !!choice.disabled;
       box.checked = !box.disabled && (stored === '1' ? true : stored === '0' ? false : !!choice.checked);
       const text = document.createElement('span');
-      text.textContent = typeof choice.label === 'function' ? choice.label(box.checked) : choice.label;
+      window.renderSessionText(text, choice.labelParts ? choice.labelParts(box.checked) : typeof choice.label === 'function' ? choice.label(box.checked) : choice.label);
       label.append(box, text);
       if (box.disabled && choice.disabledReason) {
         const reason = document.createElement('span');
@@ -241,7 +244,8 @@ function openChoiceDialog({
       isDanger = typeof danger === 'function' ? danger(values) : danger;
       confirmBtn.className = (isDanger ? 'delete-worktree-confirm-btn' : 'new-session-start-btn') + ' choice-dialog-confirm';
       for (const { choice, box, text } of boxes) {
-        if (typeof choice.label === 'function') text.textContent = choice.label(box.checked);
+        if (choice.labelParts) window.renderSessionText(text, choice.labelParts(box.checked));
+        else if (typeof choice.label === 'function') text.textContent = choice.label(box.checked);
       }
     }
     function changeChoices() {
@@ -270,6 +274,10 @@ function openChoiceDialog({
     function close(value) {
       if (closed) return;
       closed = true;
+      const selection = value === null ? 'cancel' : value?.action === secondaryAction?.id && secondaryAction ? secondaryBtn
+        : radios.find(({ option }) => option.id === value?.choice)?.label || confirmBtn;
+      const answers = value === null ? [] : boxes.flatMap(({ box, text }) => ['; ', text, '=' + (!box.disabled && box.checked)]);
+      reportChoice([selection, ...answers]);
       if (finishPlanWait) finishPlanWait();
       if (closeOpenChoiceDialog === close) closeOpenChoiceDialog = null;
       overlay.remove();
@@ -308,6 +316,7 @@ function openChoiceDialog({
     overlay.addEventListener('click', (event) => { if (event.target === overlay) close(null); });
 
     document.body.appendChild(overlay);
+    const reportChoice = window.observeModalQuestion(dialog, 'dialog', sessions);
     const unregister = registerModal({ overlay, cancel: () => close(null), enter, restoreFocus: false });
     closeOpenChoiceDialog = close;
     if (closeWith) closeWith.then(close, () => {});

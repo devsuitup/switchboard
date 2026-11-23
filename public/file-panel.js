@@ -808,10 +808,12 @@ function showUnsavedEditsDialog(tabs) {
     document.body.appendChild(overlay);
 
     let finished = false;
+    const reportChoice = window.observeModalQuestion(dialog, 'unsaved-edits');
     cancelUnsavedQuestion = () => finish(false);
-    function finish(proceed) {
+    function finish(proceed, choice = 'cancel') {
       if (finished) return;
       finished = true;
+      reportChoice(choice);
       cancelUnsavedQuestion = null;
       overlay.remove();
       unregister();
@@ -824,7 +826,7 @@ function showUnsavedEditsDialog(tabs) {
     saveBtn.focus();
 
     cancelBtn.onclick = () => finish(false);
-    discardBtn.onclick = () => finish(true);
+    discardBtn.onclick = () => finish(true, 'Discard');
     saveBtn.onclick = async () => {
       for (const btn of [cancelBtn, discardBtn, saveBtn]) btn.disabled = true;
       const failures = [];
@@ -835,7 +837,7 @@ function showUnsavedEditsDialog(tabs) {
         if (reason) failures.push(`${labels[i]} ${reason}`);
       }
       if (!failures.length) {
-        finish(true);
+        finish(true, saveBtn.textContent);
         return;
       }
       errorEl.textContent = failures.join('. ');
@@ -894,11 +896,17 @@ async function confirmSessionExit(detail, changed) {
   };
   const message = [];
   if (snapshot.unknown) message.push('Switchboard could not list the local work that will stop.');
+  const rowParts = new Map();
   const describe = row => {
     const short = String(row.id).slice(0, 8);
     const project = String(row.cwd || '').replace(/\\/g, '/').split('/').filter(Boolean).at(-1) || row.cwd || 'Unknown project';
     let line = row.type === 'panel' ? 'Panel shell of "' + (displayName(row.owner) || row.owner) + '" · ' + short
       : (row.type === 'plain' ? 'Plain terminal' : displayName(row.id) ? '"' + displayName(row.id) + '"' : 'Untitled conversation') + ' · ' + project + ' · ' + short;
+    const session = { sessionId: row.type === 'panel' ? row.owner : row.id };
+    const name = displayName(session.sessionId);
+    const parts = row.type === 'panel' ? ['Panel shell of "', { session, label: name || row.owner }, '" · ' + short]
+      : [row.type === 'plain' ? 'Plain terminal' : name ? ['"', { session, label: name }, '"'] : 'Untitled conversation', ' · ' + project + ' · ' + short];
+    const prefixLength = line.length;
     if (moving.includes(row)) {
       if (row.background === 'busy') line += ' · waits for its turn to end (up to 10 minutes)';
       const n = typeof activeSubagentsByParent !== 'undefined' ? activeSubagentsByParent.get(row.id)?.size || 0 : 0;
@@ -907,6 +915,7 @@ async function confirmSessionExit(detail, changed) {
       const reason = row.reason || (typeof backgroundActionReason === 'function' && backgroundActionReason(row.id));
       if (reason) line += ' · ' + reason;
     }
+    rowParts.set(row, [...parts, line.slice(prefixLength)]);
     return line;
   };
   if (moving.length) {
@@ -920,7 +929,17 @@ async function confirmSessionExit(detail, changed) {
   for (const [alias, n] of Object.entries(snapshot.remote)) if (n) message.push(count(n, 'session') + ' from ' + alias + (n === 1 ? ' keeps' : ' keep') + ' running on ' + alias + '.');
   if (moving.length) message.push('Moved sessions keep running in the background; Switchboard reattaches them at the next start.');
   if (mac && action === 'close') message.push('Switchboard stays in the Dock.');
-  const result = await showChoiceDialog({ title: 'Stop ' + total + ' and ' + verb + '?', message,
+  const listedRows = moving.length ? [...moving, ...stopping] : snapshot.rows;
+  const firstRow = snapshot.unknown ? 1 : 0;
+  const messageParts = [...message];
+  let offset = firstRow;
+  if (moving.length) offset++;
+  for (const row of listedRows) {
+    if (moving.length && row === stopping[0]) offset++;
+    messageParts[offset++] = rowParts.get(row);
+  }
+  const result = await showChoiceDialog({ title: 'Stop ' + total + ' and ' + verb + '?', message, messageParts,
+    sessions: [...rowParts.values()].flat(Infinity).filter(part => part?.session).map(part => part.session),
     confirmLabel: 'Stop and ' + label, initialFocus: 'cancel', danger: true,
     secondaryAction: moving.length ? { id: 'background', label: 'Move ' + words(moving) + ' to background' + (stopping.length ? ', stop ' + words(stopping) + ', and ' : ' and ') + label, danger: stopping.length > 0 } : null,
     returnFocus: document.activeElement, replace: true, closeWith: changed && changed.then(() => null) });

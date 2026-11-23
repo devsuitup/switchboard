@@ -46,6 +46,7 @@ function setup({ savedSet, liveIds, batchFails = false }) {
   const notices = dom.window.document.createElement('div');
   notices.id = 'app-notices';
   dom.window.document.body.append(notices);
+  vm.runInContext(read('modal-stack.js'), ctx, { filename: path.join(__dirname, '../public/modal-stack.js') });
   vm.runInContext(read('app-notices.js'), ctx, { filename: path.join(__dirname, '../public/app-notices.js') });
   const settings = { global: { restoreOnStartup: 'auto', openWorkingSet: savedSet } };
   const openTerminalCalls = [];
@@ -109,8 +110,8 @@ function setup({ savedSet, liveIds, batchFails = false }) {
   loadAppFunctions(ctx, { functions: ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'openSession', 'openSessionNow', 'clearDormantRow', 'dormantRowIds', 'syncDormantRow', 'indexedRowOf',
     ...['prepareBackgroundRestore'].filter(name => APP_SRC.includes(`function ${name}(`))] });
   if (APP_SRC.includes('function showLiveElsewhereNotice(')) {
-    vm.runInContext(functionSource(APP_SRC, 'showRestoreNotice'), ctx);
-    vm.runInContext(functionSource(APP_SRC, 'showLiveElsewhereNotice'), ctx);
+    vm.runInContext(functionSource(APP_SRC, 'showRestoreNotice'), ctx, { filename: 'public/app.js:showRestoreNotice' });
+    vm.runInContext(functionSource(APP_SRC, 'showLiveElsewhereNotice'), ctx, { filename: 'public/app.js:showLiveElsewhereNotice' });
   }
   if (/^let restoreSavedIndex /m.test(APP_SRC)) {
     ctx.restoreSavedIndexFrom = savedSet;

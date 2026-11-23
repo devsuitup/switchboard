@@ -1,5 +1,94 @@
 # Renderer modal stack and questions
 
+## UI notice history (#1196)
+
+`preload.logUiNotice` sends `ui-notice-log` without waiting for a reply.
+`src/main/app/ui-notice-log.js` owns the main-process listener; main only
+composes it with electron-log and the current window and disposes it on quit.
+Only that window's main frame is accepted. Missing, throwing or rejected APIs
+never prevent showing, answering or dismissing UI.
+
+`app-notices.js` reports `show`, `dismiss`, `replace` and `merge`, including the
+in-place main-process error group update (IDs and counts only on merge). Each
+replacement or merge writes one event, without an additional `show`. `show` records the rendered message,
+the notice ID, info/warning/error severity and an explicit source or ID prefix.
+Undo notices use info. Legacy restore toasts and updater notices/status use the
+same channel. Dismissals carry `user`, `expired` or `cleared`. Updater percentage
+changes stay visible but are not logged; start, completion and failures are logged,
+with severity supplied by the caller. The existing `[restore-bg]` diagnostic remains unchanged.
+
+`observeModalQuestion` in `modal-stack.js` records the title, displayed text and
+offered labels at mount, then the actual answer or `cancel`. It is used by
+choice-dialog (appConfirm, appChoose, appAlert and direct showChoiceDialog),
+session/worktree deletion and the unsaved Save/Discard/Cancel question. Queued
+questions log only when mounted. Dynamic checkbox labels and checked states
+are recorded on acceptance; opaque preview plans and tokens are not serialized.
+Configuration forms and informational modals are not question helpers.
+
+Session labels are marked explicitly; no text search or substring replacement is
+allowed. Question callers pass `sessions` and `messageParts` (paragraphs of literal
+strings and `{ session, label }` segments), or `titleParts`. Radio options carry
+`session`; dynamic checkbox labels use `labelParts(checked)`. The shared
+`renderSessionText(element, parts)` helper renders labels as literal text inside
+`span[data-log-session="<8-hex id>"]`; invalid/missing IDs use `00000000`.
+The displayed label remains unchanged, including short names, commands, URLs,
+multiline prompts and labels containing paths. Direct dialogs use the same helper.
+
+`observeModalQuestion` replaces marked labels with their IDs in a detached clone
+before reading title, dialog ID, text and choices. Answers use the selected DOM
+controls and the same cloning rule, including current checkbox labels/states.
+Block separators remain in the clone so adjacent paragraphs never concatenate.
+Ordinary prose and project paths outside the marked segments are untouched.
+
+String notices supply `logText`, built by the caller with the session ID instead
+of each label, and `logId` if their visible ID includes a label. `showAppNotice`
+accepts a `logText(members)` function for merged groups; it is recomputed from
+the current members on every event. `showRestoreNotice(id, text, session,
+{ logText, logId })` forwards those fields to the transient observer, including
+dismissal. Session action descriptions accept `{ log: true }` for the safe form.
+
+`sessions` declares only labels actually rendered, not all rows involved in an
+operation. Session-exit derives it from its marked row parts, excluding plain
+terminals and untitled conversations while marking panel owners. Multi-part
+stop plans contain part IDs rather than row labels; their `sessions` is empty.
+Archive confirmations derive their text and identities from `messageParts`.
+Archive-folder keeps the shared identity array in sync with its checkbox label:
+only the first five displayed running rows when checked, none when unchecked.
+Archived-manager failure paragraphs mark each session label, and single-session
+restore notices supply the short ID in `logText` for both show and dismissal.
+Project action descriptions without a session ID retain their visible wording.
+Resume settings mark their title with `renderSessionText`; this configuration
+form remains outside question logging.
+
+Every session whose label is displayed must be passed in `sessions` (or on notice
+members). Without explicit `logText`, if any supplied session lacks a DOM marker,
+`sessionNoticeLog` emits only event metadata, a source/ID-derived identity,
+`sessions: [<8-hex ids>]` and `unmarked: true`. It omits text, title and choices,
+including the selected answer; main preserves those omissions. This fail-closed
+event makes missed migrations visible without guessing at labels. An unmarked
+caller's original ID is also discarded because it may contain the label.
+
+Main writes single-line JSON with a `[ui-notice]` prefix at info level, independent
+of Debug Mode. Each field is cut to its cap plus 128 characters before redaction
+through `shared/redact-log-text.js`, then
+capped: ID 160, source 80, text 4096, title 256, answer 1024 characters, and at
+most 20 choice labels of 256 characters. Paths are preserved; bearer credentials,
+credential-suffixed variable names, authorization and cookie headers, JWTs,
+provider token prefixes, URL credentials and credential query parameters
+are masked. No main.log redaction helper existed at this revision: this shared
+helper protects the new channel, and does not claim to sanitize other log writers.
+
+Identical consecutive normalized events are counted as additional occurrences
+(`repeated N×`) when the run changes or once per minute, without repeating the
+original text. Identity survives window rollover and resets after 60 seconds
+without an event. A rate-limited event clears the consecutive identity: its
+following copies count toward suppression rather than repeating a different
+last emitted line. Event/repeat writes are limited to 20 per second, 60 per minute
+and 64 KiB per minute, plus one small suppression-count summary per minute.
+These bounds also cover alternating IDs and large payloads. The fixed deadline
+is not extended by new events. Its timer is unreferenced, cleared on disposal, and pending counts flush
+on graceful quit. Abrupt termination can lose the final partial window.
+
 Project deletion uses `showChoiceDialog` with `onChange`, `planDetails` and
 `planUnavailable`. Details are literal text, applied only after request sequence
 and current-answer matching. A reason keeps Confirm disabled while preserving

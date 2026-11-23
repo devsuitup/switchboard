@@ -1,5 +1,13 @@
 # Context: ipc-bridge
 
+## UI notice log (#1196)
+
+`logUiNotice(event)` sends `ui-notice-log` to the module-owned listener in
+`src/main/app/ui-notice-log.js`. It accepts only the current window's main frame,
+bounds and redacts the allowed fields, and writes rate-limited `[ui-notice]`
+lines through electron-log. It returns no value or private emitter. See
+[app-dialogs.md](app-dialogs.md#ui-notice-history-1196) for payloads and limits.
+
 ## Diagnostic log pruning (#1197)
 
 The existing Diagnostics section and `activity-trace-panel.js` own the grouped

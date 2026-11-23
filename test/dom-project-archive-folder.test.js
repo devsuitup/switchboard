@@ -154,7 +154,7 @@ test('archive folder: a folder without sessions or schedules archives without a 
   } finally { ctx.destroy(); }
 });
 
-test('archive folder: Cancel calls nothing but the plan', async () => {
+test('archive folder: Cancel records the decision and only queries the plan', async () => {
   const ctx = setupSidebarDom();
   ctx.window.schedulesTabEnabled = true;
   try {
@@ -164,7 +164,9 @@ test('archive folder: Cancel calls nothing but the plan', async () => {
     render(ctx, [project]);
     await clickArchive(ctx, '/p', { confirm: false });
 
-    assert.deepEqual(calls.map(c => c.method), ['bgAgentLiveJob', 'getProjectArchivePlan']);
+    assert.deepEqual(calls.map(c => c.method), ['bgAgentLiveJob', 'getProjectArchivePlan', 'logUiNotice', 'logUiNotice']);
+    assert.deepEqual(named(calls, 'logUiNotice').map(call => call.args[0].event), ['dialog-show', 'dialog-choice']);
+    assert.equal(named(calls, 'logUiNotice')[1].args[0].choice, 'cancel');
   } finally { ctx.destroy(); }
 });
 
@@ -255,7 +257,8 @@ test('archive folder: while indexing, a persistent notice and no mutation', asyn
 
     assert.match(ctx.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /still indexing/);
     assert.equal(ctx.document.querySelector('.modal-overlay'), null);
-    assert.deepEqual(calls.map(c => c.method), ['bgAgentLiveJob', 'getProjectArchivePlan']);
+    assert.deepEqual(calls.map(c => c.method), ['bgAgentLiveJob', 'getProjectArchivePlan', 'logUiNotice']);
+    assert.equal(named(calls, 'logUiNotice')[0].args[0].event, 'show');
   } finally { ctx.destroy(); }
 });
 
@@ -389,7 +392,8 @@ test('archive folder: a header with no cached group reloads and does nothing els
 
     assert.equal(ctx.document.querySelector('.modal-overlay'), null);
     assert.equal(reloads, 1);
-    assert.deepEqual(calls, []);
+    assert.deepEqual(calls.map(call => call.method), ['logUiNotice']);
+    assert.equal(calls[0].args[0].event, 'show');
   } finally { ctx.destroy(); }
 });
 
