@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- A temporarily unreadable session is retried during the run, and a single failed read no longer makes the next start re-read its whole project folder, including subagent sessions. (#1193)
+
 ## v0.0.109 — 2026-11-22
 
 ### New

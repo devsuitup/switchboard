@@ -34,6 +34,7 @@ function readForScan(file, key, projectPath, opts = {}) {
   const readObservation = {};
   const row = readSessionFile(file, key, projectPath, { ...opts, readObservation });
   if (readObservation.error) {
+    startupRead.errors.set(relativePath, { size: before?.size || '0', error: readObservation.error });
     const failedStamp = deterministicReadFailure(readObservation.error) && failureStamp(file, 'claude', relativePath, before, dependencies);
     if (failedStamp) {
       startupRead.failures.set(relativePath, { stamp: failedStamp, error: readObservation.error });
@@ -169,8 +170,17 @@ function readStartupFolder(folder) {
       : workerData.startup.repairs?.includes(folder) ? 'repair'
         : meta.projectPath !== projectPath || resolveWorktreePath(meta.projectPath) !== meta.projectPath ? 'project-path' : null;
   const byPath = new Map();
+  const pathsById = new Map();
+  for (const { filePath } of files) {
+    const relativePath = path.relative(folderPath, filePath).split(path.sep).join('/');
+    const classified = classifyTranscriptPath(relativePath);
+    if (!classified?.parentSessionId) continue;
+    const id = sessionIdFromRel(relativePath, classified);
+    if (id) pathsById.set(id, pathsById.has(id) ? null : relativePath);
+  }
   for (const row of rows) {
-    const relativePath = sourceRelativePath(row) || (!row.parentSessionId && safeRelativePath(row.sessionId + '.jsonl') ? row.sessionId + '.jsonl' : null);
+    const relativePath = sourceRelativePath(row) || (row.parentSessionId ? pathsById.get(row.sessionId)
+      : safeRelativePath(row.sessionId + '.jsonl') ? row.sessionId + '.jsonl' : null);
     if (!relativePath || byPath.has(relativePath)) { reason ||= 'ambiguous-source'; continue; }
     byPath.set(relativePath, row);
   }
@@ -189,7 +199,7 @@ function readStartupFolder(folder) {
     else reason ||= 'changed-layout';
   }
   for (const relativePath of failures.keys()) if (!existingPaths.has(relativePath)) failures.delete(relativePath);
-  startupRead = { byPath, checks: new Map(), failed: new Set(), failures, failedSources: new Set(failures.keys()) };
+  startupRead = { byPath, checks: new Map(), failed: new Set(), failures, failedSources: new Set(failures.keys()), errors: new Map() };
   try {
     const result = !projectPath ? { folder, projectPath, sessions: [], toDelete: rows.map(row => row.sessionId), unverified: true }
       : reason && files.length ? readFolderFromFilesystem(folder)
@@ -210,6 +220,7 @@ function readStartupFolder(folder) {
     if (!result.deferred.length) result.indexMtimeMs = indexMtimeMs;
     result.readFailures = [...failures].filter(([relativePath, failure]) => matchesFullRead(path.join(folderPath, relativePath), failure.stamp, 'claude', relativePath));
     result.checks = [...new Map([...result.checks, ...result.readFailures.map(([relativePath, failure]) => [relativePath, failure.stamp])])];
+    result.readErrors = [...startupRead.errors];
     return result;
   } finally { startupRead = null; }
 }
@@ -267,7 +278,7 @@ function readStartupCodexFolder(harness, folder, state) {
     else selected.add(relativePath);
   }
   for (const relativePath of failures.keys()) if (!present.has(relativePath)) failures.delete(relativePath);
-  const sessions = [], toDelete = [], deferred = [];
+  const sessions = [], toDelete = [], deferred = [], readErrors = [];
   const paths = reason ? new Set([...present, ...byPath.keys()]) : selected;
   for (const relativePath of paths) {
     if (!safeRelativePath(relativePath) || relativePath.includes('/') || !harness.sessionIdFromPath(relativePath)) throw new Error('Invalid Codex startup source');
@@ -284,6 +295,7 @@ function readStartupCodexFolder(harness, folder, state) {
     const row = harness.readSessionFile(file, folder, { startup: true, outcome, titleSnapshot, allowSubagentEarlyStop: !byPath.has(relativePath) });
     if (outcome.status === 'excluded-early') continue;
     if (outcome.status === 'failed') {
+      readErrors.push([relativePath, { size: before.size, error: outcome.error }]);
       const stamp = deterministicReadFailure(outcome.error) && failureStamp(file, 'codex', relativePath, before, { title: titleSnapshot.titles.get(harness.sessionIdFromPath(file)) || null });
       if (stamp) {
         failures.set(relativePath, { stamp, error: outcome.error });
@@ -307,7 +319,7 @@ function readStartupCodexFolder(harness, folder, state) {
   const result = { folder, projectPath: null, sessions, toDelete: [...new Set(toDelete)],
     indexMtimeMs: harnessFolderIndexMtimeMs(harness, dir, files), partial: !reason,
     startup: true, runtime: 'codex', reason: reason || (selected.size ? 'changed' : 'unchanged'),
-    checks: [...checks], deferred, goneFolder: folderObservation === null, inventory: entry,
+    checks: [...checks], deferred, readErrors, goneFolder: folderObservation === null, inventory: entry,
     metadataIds: rows.map(row => row.sessionId), titleSnapshot };
   const indexMtimeMs = result.indexMtimeMs;
   deferStartupSources(result, [...deferred, ...failedSources]);

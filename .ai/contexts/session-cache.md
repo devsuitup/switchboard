@@ -90,18 +90,50 @@ invalidate them. An explicit folder refresh retries witnessed sources and
 removes the witness after a successful read. Claude sidecars and Codex
 effective titles remain dependencies. Transient I/O errors (including EBUSY,
 EACCES, EPERM, EMFILE, ENFILE, EIO, EAGAIN), short reads and raced failures have
-no durable negative witness and remain deferred until the next start. Legacy
+no durable negative witness and enter the in-run deferred retry queue. Legacy
 transient witnesses are ignored. A folder with only deterministic witnesses
 retains its actual index mtime; only outstanding deferrals zero it. Publication
 checks contain one stamp per source. Directory and title-snapshot failures
 still fail or replan the scope.
 
-After acknowledged publication, a new failure observation logs one
-`[session-cache] transcript-read-failed` record with path and error type/code.
-Unchanged negative witnesses do not log again. Read/failed counters remain
+The scan worker sends one diagnostic per failed source read in a folder attempt,
+including transient I/O and short reads, separately from durable negative
+witnesses. Main logs it at warn as
+`[index] read failed folder=<key> file=<basename> size=<bytes> error=<code|type>`.
+The size is the pre-read observation (zero if unavailable); no absolute source
+path, transcript content or exception message is included. Diagnostics are
+emitted even when subsequent publication fails. Unchanged negative witnesses
+do not log again because their bodies are not retried. Read/failed counters remain
 truthful even when the folder publishes successfully. All startup publications
 can seal their folder version/configuration; deferred or failed existing rows
 remain uncertified. A failed writer ACK still leaves conservative pending state.
+
+## Deferred retries and durable partial progress (#1193)
+
+A successfully published startup folder may still contain deferred sources.
+The coordinator collects those folders separately from publication failures,
+including main-side races and scoped replans, and retries the union through the
+existing single-flight population timer. Successful publication still completes
+initial population and permits Projects reconciliation (#1185). It no longer
+discards the deferred retry scope. Delays are 30 seconds, 120 seconds and 600
+seconds after each completed attempt; retries stop after those three attempts.
+Automatic callers respect backoff and exhaustion; force resets both, and shutdown
+cancels the timer. A source that remains inaccessible cannot be guaranteed to
+recover during the run, but each deferred folder participates in each scheduled
+attempt. Stable deterministic negative witnesses remain excluded under #1180.
+
+Partial progress already persists through the existing folder version/configuration
+seal, per-row full-read certificates and negative witnesses; no new journal or
+schema is needed. Effects and certificate ACKs still precede sealing. A deferred
+row has a null certificate, and an unindexed failed file is rediscovered through
+enumeration. Reopening selects these sources while keeping certified neighbors.
+For an uncertified Claude subagent, selection resolves its persisted session ID
+against the enumerated, classified relative paths. Exactly one matching path
+allows a subset retry without treating that identity as a successful read.
+Missing or duplicate identities still force conservative full validation;
+configuration/version changes, explicit rebuilds, bridge dependencies and unknown
+writer outcomes retain their existing broader-validation rules. A true ambiguous
+layout therefore cannot promise a single-file reread without weakening safety.
 
 ## Local warm startup (#1144 A2, #1152 Codex)
 
