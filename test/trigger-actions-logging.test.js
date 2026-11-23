@@ -60,6 +60,41 @@ function retryRig(t, lookup, timeout = 9000) {
 }
 const conflict = () => { throw Object.assign(new Error('project lookup unavailable'), { code: 'PROJECTS_SNAPSHOT_CONFLICT', reason: 'db', transient: true }); };
 
+test('verifyJoined refuses a conflicting real project lookup immediately and definitively', async t => {
+  const f = retryRig(t, n => n === 1 ? snapshot() : conflict());
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-joined-project-'));
+  t.after(() => fs.rmSync(projectsDir, { recursive: true, force: true }));
+  const folder = path.join(projectsDir, require('../encode-project-path').encodeProjectPath(project));
+  fs.mkdirSync(folder);
+  fs.writeFileSync(path.join(folder, ID + '.jsonl'), JSON.stringify({ type: 'user', sessionId: ID, cwd: project }) + '\n');
+  f.ctx.lifecycle.projectsDir = projectsDir;
+  delete f.ctx.lifecycle.resolveTarget;
+  f.ctx.getPtyForSession = () => null;
+  let joined;
+  f.ctx.lifecycle.broker.request = async (op, save) => {
+    await save();
+    Object.assign(f.session, { launchMode: 'resume', launchSourceId: ID });
+    op.onOpened();
+    joined = await op.verifyJoined(f.session);
+    return { ...joined, resumed: true };
+  };
+  let result;
+  const pending = f.open({ prompt: 'hello' }).then(value => { result = value; });
+  await flush();
+  assert.equal(result?.reason, 'project lookup unavailable', 'post-join conflict must refuse without advancing the clock');
+  await pending;
+  assert.equal(joined.ok, false);
+  assert.equal(result.outcome, 'refused');
+  assert.equal(result.resumed, true);
+  assert.equal(result.uncertain, undefined);
+  assert.equal(result.wrote, false);
+  assert.deepEqual(f.times, [0, 0], 'one initial lookup and exactly one post-join lookup');
+  assert.equal(f.events.filter(([event]) => event === 'release-fifo').length, 1);
+  assert.equal(f.events.some(([event]) => event === 'deliver'), false);
+  await tick(t, 10000);
+  assert.deepEqual(f.times, [0, 0], 'no post-join retries remain scheduled');
+});
+
 for (const kind of ['conflict', 'stale', 'transient error']) {
   test(`${kind} then a consistent project snapshot opens within the action deadline`, async t => {
     const f = retryRig(t, n => n > 1 ? snapshot() : kind === 'conflict' ? conflict()
@@ -147,6 +182,30 @@ function watcherRig(t, f) {
     result(id) { const file = path.join(dir, 'processed', id + '.result.json'); return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null; },
   };
 }
+
+test('the watcher retries an unchanged trigger after backoff and publishes success', async t => {
+  const f = retryRig(t, n => n === 1 ? conflict() : snapshot());
+  f.map.clear();
+  f.ctx.getPtyForSession = id => f.map.has(id)
+    ? { session: f.session, ptyProcess: f.session.pty, cwd: project } : null;
+  f.ctx.lifecycle.resolveTarget = async (id, deps) => ({
+    sessionId: id, cwd: project, ...(await resolveProject(project, deps)),
+  });
+  const w = watcherRig(t, f);
+  w.write(STEM, { version: 1, action: 'open', sessionId: ID, timeout_ms: 9000 });
+  const original = fs.readFileSync(w.input(STEM));
+  await flush();
+  await tick(t, 249);
+  assert.deepEqual(f.times, [0], 'the watcher must respect the first backoff');
+  assert.deepEqual(fs.readFileSync(w.input(STEM)), original);
+  await tick(t, 1);
+  assert.deepEqual(f.times, [0, 250], 'an unchanged input must survive the identity check and retry');
+  const result = w.result(STEM);
+  assert.equal(result?.outcome, 'opened');
+  assert.equal(result.ok, true);
+  assert.equal(result.resumed, true);
+  assert.equal(result.uncertain, undefined);
+});
 
 test('the watcher publishes a second trigger while the first waits for its project', async t => {
   const f = retryRig(t, conflict), w = watcherRig(t, f);

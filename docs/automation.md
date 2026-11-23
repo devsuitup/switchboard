@@ -387,13 +387,16 @@ lookups and the last conflict reason. An unresponsive read still reports
 `session action timed out`. A consistent list that does not contain the project
 refuses immediately with `unknown project`; malformed snapshots and errors not
 marked transient also refuse immediately. A waiting action holds one of the 8
-in-flight slots, so enough waiting opens can queue other triggers. During backoff,
-shutdown is checked at intervals of at most 50 ms; replacing or removing the
+in-flight slots, so enough waiting opens can queue other triggers. A waiting
+resume also holds its session lock, so a stop for that session queues behind it.
+During backoff, shutdown is checked at intervals of at most 50 ms; replacing or removing the
 input stops retries with `trigger changed or was cancelled`. These input checks
 apply only to the project-lookup wait. Final launch validation makes one lookup;
 a transient conflict there immediately refuses with `project lookup unavailable`
 and its diagnostic, before any spawn. Post-spawn joined-session verification
-does not receive the lookup-wait staleness or input-identity checks.
+also makes a single lookup and immediately refuses a transient conflict as
+`project lookup unavailable`. It does not receive the lookup-wait staleness or
+input-identity checks.
 
 If startup, saving the name or delivery fails after spawn, the session remains
 open and the refusal retains its ID and true `created`/`resumed` evidence.

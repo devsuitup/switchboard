@@ -714,6 +714,8 @@ Non-transient snapshot errors/missing provenance still refuse immediately with
 
 Each waiting action holds one of the watcher's 8 in-flight slots. Other free
 slots can run independently, but enough waiting opens can queue other triggers.
+A waiting resume also holds its session lock, so a stop for that session queues
+behind it.
 During backoff, the captured exit authority and request staleness/identity are
 checked at intervals of at most 50 ms, and again between retries. The
 `checkProjectLookup` callback is never consulted for a consistent first lookup.
@@ -721,9 +723,11 @@ A shutdown capture stays invalid after rollback. Production discards `start()`'s
 return value, so it does not call watcher `close()` to abort these waits.
 A replaced or removed input refuses with `trigger changed or was cancelled` only
 during project-lookup waits; its callback is separate from the shared age check
-used after session-lock acquisition. `verifyJoined` retains its original deps,
-clock and deadline, without those lookup-wait callbacks. Final main-process
-launch validation sets `retryProjectLookup: false`: one lookup, with any transient
+used after session-lock acquisition. Post-join verification (`verifyJoined`)
+sets `retryProjectLookup: false`: one lookup, with a transient conflict refused
+immediately as `project lookup unavailable`, without lookup-wait callbacks or
+backoff. Final main-process launch validation sets `retryProjectLookup: false`:
+one lookup, with any transient
 conflict immediately refused as `project lookup unavailable` and logged, before
 the broker's deadline can turn a backoff into an uncertain renderer timeout.
 

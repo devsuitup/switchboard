@@ -723,7 +723,7 @@ async function executeOpen(trigger, execution) {
       if (session.launchMode !== 'resume' || String(session.launchSourceId).toLowerCase() !== id || session.forkFrom
         || session.cwd !== target.cwd || session.projectPath !== target.project) return fail('session target changed');
       const live = await liveness(); if (live) return live;
-      const fresh = await (deps.resolveTarget || resolveLocalTarget)(id, { ...deps, now, deadline });
+      const fresh = await (deps.resolveTarget || resolveLocalTarget)(id, { ...deps, now, deadline, retryProjectLookup: false });
       if (!fresh.ok) return fail(fresh.reason, fresh.error ? { error: fresh.error } : {});
       check();
       if (fresh.transcript !== target.transcript || fresh.transcriptIdentity !== target.transcriptIdentity
