@@ -1402,6 +1402,12 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       const deadline = Date.now() + (trigger.timeout_ms ?? getIdleTimeout());
       await actions.execute(trigger, uuid, { ctx, deadline, acquireSessionLock, acquireTabLock, publish: writeResult,
         checkStale: () => {
+          try {
+            const current = fs.lstatSync(triggerPath);
+            if (!current.isFile() || ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'birthtimeMs'].some(key => current[key] !== stat[key])) {
+              return { reason: 'trigger changed or was cancelled' };
+            }
+          } catch { return { reason: 'trigger changed or was cancelled' }; }
           const age = Date.now() - stat.mtimeMs;
           return age > maxAgeMs ? { error: ERROR_NOT_SENT,
             reason: `trigger is ${Math.round(age)}ms old, older than the ${maxAgeMs}ms staleness limit; refused rather than act on a request that may no longer target the intended session state` } : null;
@@ -2309,6 +2315,7 @@ function start(ctx) {
   return {
     close() {
       closed = true;
+      actions.close();
       for (const timer of retryTimers.values()) clearTimeout(timer);
       retryTimers.clear();
       waitQueue.length = 0;

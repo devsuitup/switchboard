@@ -18,6 +18,10 @@ async function acquireOpen(sessions, id) {
 async function validateTriggerOpen(permit, deps) {
   const fail = reason => ({ ok: false, reason, error: reason });
   const valid = () => deps.launchAllowed() && Date.now() < permit.deadline && deps.broker.checkPermit(permit.requestId);
+  const authority = deps.captureAuthority?.();
+  const lookupDeps = { ...deps, deadline: permit.deadline,
+    checkProjectLookup: () => !deps.launchAllowed() || authority?.valid() === false ? fail('Switchboard is closing.')
+      : !deps.broker.checkPermit(permit.requestId) ? fail('session target changed') : null };
   if (!valid()) return fail(deps.launchAllowed() ? 'session action timed out' : 'Switchboard is closing.');
   if (permit.mode === 'reattach') return { ok: true };
   try {
@@ -28,15 +32,15 @@ async function validateTriggerOpen(permit, deps) {
       if (checked.live) return fail(checked.live.kind === 'schedule' ? 'scheduled session is not supported'
         : checked.live.kind === 'bg' ? 'background session is not supported' : 'session live elsewhere');
       if (!valid()) return fail('session action timed out');
-      const target = await deps.resolveTarget(permit.tabKey, { ...deps, deadline: permit.deadline });
+      const target = await deps.resolveTarget(permit.tabKey, lookupDeps);
       if (!target.ok) return target;
       if (target.cwd !== permit.target?.cwd || target.transcript !== permit.target?.transcript
         || target.transcriptIdentity !== permit.target?.transcriptIdentity || target.project !== permit.project) return fail('session target changed');
       if (!valid()) return fail('session action timed out');
       return { ok: true, cwd: target.cwd };
     }
-    const project = await deps.resolveProject(permit.project, { ...deps, deadline: permit.deadline });
-    return !valid() ? fail('session action timed out') : project;
+    const project = await deps.resolveProject(permit.project, lookupDeps);
+    return !project.ok ? project : !valid() ? fail('session action timed out') : project;
   } catch (error) { return { ...fail('session liveness unavailable'), error: error.message }; }
 }
 

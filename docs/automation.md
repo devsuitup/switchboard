@@ -377,6 +377,18 @@ The one deadline covers queueing, opening, startup and delivery (default 300000
 ms, explicit 1–600000 ms). An optional `expectedCwd` for resume must match the
 actual cwd, including a worktree.
 
+If the project list changes during lookup, is still being reconciled, or reports
+a transient error, the action retries after 250 ms, 500 ms, 1 s, then at most
+every 2 s within that same deadline. It never uses an inconsistent project list.
+If lookup remains unavailable until the deadline, the result is refused with
+`project lookup unavailable`; `main.log` records one line with the number of
+lookups and the last conflict reason. An unresponsive read still reports
+`session action timed out`. A consistent list that does not contain the project
+refuses immediately with `unknown project`; malformed snapshots and errors not
+marked transient also refuse immediately. Other triggers can proceed while an
+action waits. Closing Switchboard cancels its waits; replacing or removing the
+input during a wait stops retries with `trigger changed or was cancelled`.
+
 If startup, saving the name or delivery fails after spawn, the session remains
 open and the refusal retains its ID and true `created`/`resumed` evidence.
 `uncertain:true` means an interrupted action may have taken effect: do not retry

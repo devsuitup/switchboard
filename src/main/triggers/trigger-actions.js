@@ -119,14 +119,59 @@ async function boundedRead(read, deps) {
 async function resolveProject(project, deps) {
   const fs = deps.fs || nativeFs;
   const normalize = deps.normalizeProjectPath || normalizeProjectPath;
+  const now = deps.now || Date.now;
+  const deadline = deps.deadline ?? now() + 300000;
   const fail = reason => ({ ok: false, outcome: 'refused', reason });
-  let snapshot;
-  try {
-    snapshot = await boundedRead(() => deps.getProjectSnapshot(), deps);
-    if (!object(snapshot) || !Array.isArray(snapshot.allProjects) || !Array.isArray(snapshot.hiddenProjects)
-      || !object(snapshot.hiddenProjectKinds)) return fail('project lookup unavailable');
-  } catch (error) { return { ...fail(error.code === 'TRIGGER_DEADLINE' ? 'session action timed out' : 'project lookup unavailable'), error: error.message }; }
-  if (deps.now && deps.now() >= deps.deadline) return fail('session action timed out');
+  const authority = deps.captureAuthority?.();
+  const cancelled = () => deps.signal?.aborted || deps.launchAllowed?.() === false || authority?.valid() === false
+    ? fail('Switchboard is closing.') : deps.checkProjectLookup?.();
+  let snapshot, attempts = 0, lastReason = 'unknown';
+  const unavailable = error => {
+    try { deps.log?.info(`[trigger] project lookup unavailable after ${attempts} lookups (last: ${String(lastReason).replace(/[\r\n]/g, ' ').slice(0, 160)})`); } catch {}
+    return { ...fail('project lookup unavailable'), ...(error ? { error: error.message } : {}) };
+  };
+  async function pause(ms) {
+    const until = Math.min(deadline, now() + ms);
+    const schedule = deps.setTimeout || setTimeout, clear = deps.clearTimeout || clearTimeout;
+    await new Promise(resolve => {
+      let timer;
+      const finish = () => { clear(timer); deps.signal?.removeEventListener('abort', finish); resolve(); };
+      const poll = () => {
+        if (cancelled() || now() >= until) return finish();
+        timer = schedule(poll, Math.min(50, until - now()));
+      };
+      deps.signal?.addEventListener('abort', finish, { once: true });
+      poll();
+    });
+  }
+  for (;;) {
+    const cancellation = cancelled();
+    if (cancellation) return cancellation;
+    if (now() >= deadline) return attempts ? unavailable() : fail('session action timed out');
+    attempts++;
+    try {
+      snapshot = await boundedRead(() => deps.getProjectSnapshot(), { ...deps, now, deadline });
+      if (snapshot?.projectsError || snapshot?.projectsStale) {
+        const error = snapshot.projectsError;
+        throw Object.assign(new Error('project lookup unavailable'), { code: error?.code,
+          transient: !!snapshot.projectsStale || error?.transient === true,
+          reason: error?.reason || (snapshot.projectsStale ? 'stale' : error?.code) });
+      }
+      if (!object(snapshot) || !Array.isArray(snapshot.allProjects) || !Array.isArray(snapshot.hiddenProjects)
+        || !object(snapshot.hiddenProjectKinds)) { lastReason = 'invalid snapshot'; return unavailable(); }
+      break;
+    } catch (error) {
+      const cancellation = cancelled();
+      if (cancellation) return cancellation;
+      if (error.code === 'TRIGGER_DEADLINE') return { ...fail('session action timed out'), error: error.message };
+      lastReason = error.reason || error.code || error.message || 'unknown';
+      if (error.transient !== true && error.code !== 'PROJECTS_SNAPSHOT_CONFLICT') return unavailable(error);
+      await pause([250, 500, 1000, 2000][Math.min(attempts - 1, 3)]);
+    }
+  }
+  const cancellation = cancelled();
+  if (cancellation) return cancellation;
+  if (now() >= deadline) return fail('session action timed out');
   const hidden = projectHiddenMatcher(snapshot.hiddenProjects.filter(entry => typeof entry === 'string' && path.isAbsolute(entry)),
     snapshot.hiddenProjectScopes, normalize, value => value);
   const knownPath = key => snapshot.allProjects.find(entry => object(entry) && !entry.remoteAlias && !entry.host
@@ -227,6 +272,7 @@ async function resolveLocalTarget(sessionId, deps = {}) {
 
 function createTriggerActions({ fs = nativeFs, log, now = Date.now } = {}) {
   const limiter = createNewSessionLimiter({ now });
+  const controller = new AbortController();
   const error = (...args) => { try { log?.error(...args); } catch {} };
   const reportResult = result => {
     if (result.reason === 'renderer not ready') {
@@ -298,12 +344,12 @@ function createTriggerActions({ fs = nativeFs, log, now = Date.now } = {}) {
     }
     return true;
   }
-  return { limiter, readState, publish, refusal,
+  return { limiter, readState, publish, refusal, close: () => controller.abort(),
     execute(trigger, stem, execution) {
       const evidence = { steps_total: 0 };
       const invalid = validateTrigger(trigger, stem, evidence);
       if (!invalid && trigger.action === 'open' && execution?.ctx.lifecycle) {
-        return executeOpen(trigger, { ...execution, limiter, now, evidence, requestId: stem }).then(reportResult);
+        return executeOpen(trigger, { ...execution, limiter, now, log, signal: controller.signal, evidence, requestId: stem }).then(reportResult);
       }
       if (!invalid && trigger.action === 'stop' && execution?.ctx.lifecycle) {
         return executeStop(trigger, { ...execution, now, evidence, requestId: stem }).then(reportResult);
@@ -547,7 +593,9 @@ async function executeOpen(trigger, execution) {
   const names = isNew ? naming.requestedNameFields(trigger) : {};
   const fail = (reason, extra = {}) => refusal(trigger, reason, { ...effects, ...names, sessionId: id, ok: false, outcome: 'refused', reason, ...extra });
   const authority = deps.captureAuthority?.();
-  const allowed = () => deps.launchAllowed() && authority?.valid() !== false;
+  const allowed = () => !execution.signal?.aborted && deps.launchAllowed() && authority?.valid() !== false;
+  const lookupDeps = { ...deps, now, deadline, log: execution.log, signal: execution.signal,
+    checkProjectLookup: () => !allowed() ? { ok: false, reason: 'Switchboard is closing.' } : execution.checkStale?.() };
   const expired = () => now() >= deadline;
   const admitted = () => !expired() && allowed();
   const check = () => {
@@ -605,7 +653,7 @@ async function executeOpen(trigger, execution) {
     let target;
     if (isNew) {
       if (naming.hasLoneSurrogate(names.requestedName)) return fail('session name cannot be transported');
-      target = await resolveProject(trigger.new.project, { ...deps, now, deadline });
+      target = await resolveProject(trigger.new.project, lookupDeps);
       if (!target.ok) return fail(target.reason, target.error ? { error: target.error } : {});
       reservation = limiter.reserve();
       if (!reservation) return fail('new session rate limit exceeded');
@@ -640,7 +688,7 @@ async function executeOpen(trigger, execution) {
     } else if (!isNew) {
       if (await bound(() => deps.remoteTarget(id))) return fail('remote sessions are not supported');
       const live = await liveness(); if (live) return live;
-      target = await (deps.resolveTarget || resolveLocalTarget)(id, { ...deps, now, deadline });
+      target = await (deps.resolveTarget || resolveLocalTarget)(id, lookupDeps);
       if (!target.ok) return fail(target.reason, { outcome: target.outcome || 'refused', ...(target.error ? { error: target.error } : {}) });
       const cwd = cwdFailure(target.cwd); if (cwd) return cwd;
       const again = await liveness(); if (again) return again;
@@ -671,7 +719,7 @@ async function executeOpen(trigger, execution) {
       if (session.launchMode !== 'resume' || String(session.launchSourceId).toLowerCase() !== id || session.forkFrom
         || session.cwd !== target.cwd || session.projectPath !== target.project) return fail('session target changed');
       const live = await liveness(); if (live) return live;
-      const fresh = await (deps.resolveTarget || resolveLocalTarget)(id, { ...deps, now, deadline });
+      const fresh = await (deps.resolveTarget || resolveLocalTarget)(id, lookupDeps);
       if (!fresh.ok) return fail(fresh.reason, fresh.error ? { error: fresh.error } : {});
       check();
       if (fresh.transcript !== target.transcript || fresh.transcriptIdentity !== target.transcriptIdentity
