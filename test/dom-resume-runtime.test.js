@@ -138,3 +138,33 @@ test('New Codex and Resume Codex use the same fields and model defaults', async 
   const resumeFields = [...h.document.querySelectorAll('.new-session-body input, .new-session-body select')].filter(el => el.id !== 'rsd-cwd').map(el => [el.id.replace('rsd-', ''), el.value]);
   assert.deepEqual(resumeFields, fields);
 });
+
+test('Codex resume submits the values picked in the form and the harness turns them into argv', async t => {
+  const h = setup(t, { codexModel: 'configured-model', codexSandbox: 'read-only', codexApproval: 'on-request', codexEffort: 'low' });
+  await h.window.showResumeSessionDialog(session('codex'));
+  const pick = (id, value) => {
+    const el = h.document.querySelector(`#rsd-${id}`);
+    assert.ok([...(el.options || [{ value }])].some(o => o.value === value), `${id} offers ${value}`);
+    el.value = value;
+    el.dispatchEvent(new h.window.Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
+  };
+  assert.equal(h.document.querySelector('#rsd-codex-model').value, 'configured-model', 'the form starts from the effective model');
+  pick('codex-sandbox', 'workspace-write');
+  pick('codex-approval', 'never');
+  pick('codex-model', 'catalog-model');
+  pick('codex-effort', 'high');
+  pick('add-dirs', ' /extra/a, /extra/b ');
+  const [id, , isNew, options] = await h.submit();
+  assert.deepEqual(plain(options), {
+    runtime: 'codex', codexSandbox: 'workspace-write', codexApproval: 'never',
+    codexModel: 'catalog-model', codexEffort: 'high', addDirs: '/extra/a, /extra/b',
+  });
+  const args = getHarness(options.runtime).buildLaunchArgs({ sessionId: id, isNew, options });
+  assert.deepEqual(args.slice(0, 2), ['resume', id]);
+  const flagValue = flag => args[args.indexOf(flag) + 1];
+  assert.equal(flagValue('--model'), 'catalog-model');
+  assert.equal(flagValue('--sandbox'), 'workspace-write');
+  assert.equal(flagValue('--ask-for-approval'), 'never');
+  assert.ok(args.includes('model_reasoning_effort="high"'), 'the picked effort reaches argv');
+  assert.deepEqual(args.flatMap((arg, i) => arg === '--add-dir' ? [args[i + 1]] : []), ['/extra/a', '/extra/b']);
+});

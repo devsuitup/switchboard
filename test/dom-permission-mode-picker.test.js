@@ -164,6 +164,15 @@ for (const file of ['dialogs.js', 'settings-panel.js']) {
   });
 }
 
+test('CODEX_CHOICES is frozen down to each choice, like BROWSER_MODES', () => {
+  const { CODEX_CHOICES } = require('../public/setting-defaults');
+  assert.ok(Object.isFrozen(CODEX_CHOICES));
+  for (const choices of Object.values(CODEX_CHOICES)) {
+    assert.ok(Object.isFrozen(choices));
+    for (const choice of choices) assert.ok(Object.isFrozen(choice));
+  }
+});
+
 // --- Harness for settings-panel.js (project-scope Settings panel) ---
 function setupSettingsPanelDom() {
   const dom = new JSDOM(`<!DOCTYPE html><html><body>

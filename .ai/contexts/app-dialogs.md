@@ -28,13 +28,17 @@ New and Resume use the same modal stack, cancellation/focus restoration and
 permission-button focus behavior. Submitting Resume restores focus to the
 opener before calling `openSession`; New Session keeps its existing submit
 behavior. Enter in a select or text input does not submit in either dialog.
+Enter on a checkbox submits: on Linux, Enter on Resume Claude's Sandbox
+checkbox now resumes, as Enter on New Session's checkboxes starts.
 Session title markers remain outside question logging.
 
 `test/dom-resume-runtime.test.js` loads shipped dialogs in jsdom and the real
 `openSession` via `loadAppFunctions`, observes launch IPC arguments, then calls
 the production harness argument builders. It covers both forms, runtime
 selection, effective settings, cwd display, platform-specific sandboxing,
-Enter on selects and focus restoration on Resume submission.
+Enter on selects, focus restoration on Resume submission, and the Codex
+Resume submit path: values picked in the form reach the IPC options and the
+Codex argv (`--model`, `--sandbox`, `--ask-for-approval`, effort, `--add-dir`).
 
 ## UI notice history (#1196)
 

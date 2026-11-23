@@ -57,11 +57,11 @@ const DIRECTORY_SCAN_MS = 5000;
 
 const THEME_CHOICES = [['dark', 'Dark'], ['light', 'Light'], ['system', 'System']];
 
-const CODEX_CHOICES = {
+const CODEX_CHOICES = Object.freeze(Object.fromEntries(Object.entries({
   codexSandbox: [['', 'Codex default'], ['read-only', 'Read-only'], ['workspace-write', 'Workspace write'], ['danger-full-access', 'Full access (danger)']],
   codexApproval: [['', 'Codex default'], ['on-request', 'On request'], ['never', 'Never']],
   codexEffort: [['', 'Codex default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max'], ['ultra', 'Ultra']],
-};
+}).map(([key, choices]) => [key, Object.freeze(choices.map(choice => Object.freeze(choice)))])));
 
 const BROWSER_MODES = Object.freeze([
   Object.freeze({ value: 'off', label: 'Off' }),
