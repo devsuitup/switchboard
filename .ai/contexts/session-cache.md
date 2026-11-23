@@ -105,6 +105,18 @@ says "Indexed session changes" for both CLIs; full population reports totals.
 
 ## Streaming full reads and stable failures (#1180, #1181)
 
+The full Claude reader decodes each record once and passes the parsed entry to
+`accumulateDailyMetrics` (#1192). It materializes metric buckets only after the
+scan. Previously each line was parsed again by `extractDailyMetrics`, which
+also copied all accumulated buckets for every line: O(lines × buckets), reaching
+quadratic work when each line introduced a bucket. The exported raw-line metrics
+helper retains its contract and shares the same accumulator. Cutoff, UUID and
+signature filtering and the content-version golden output are unchanged.
+`test/read-session-file-work-budget-1192.test.js` counts decodes and bucket
+visits over disposable transcripts, including an incomplete tail, rather than
+asserting wall-clock throughput. The large-history startup incident is not
+fully attributed by this bounded parser correction.
+
 Claude full reads use `jsonl-scan.scanLines` with 256 KiB chunks through the
 observed EOF. Daily metrics accumulate as lines arrive. The reader captures
 64-byte head/tail witnesses and the unterminated tail for both existing indexes.
