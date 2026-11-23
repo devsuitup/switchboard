@@ -6,6 +6,10 @@ addition: a `claude` function that prints *"To start a Claude session, use the
 + button in the sidebar."* and returns 1, so that typing `claude` there does not
 start a session Switchboard does not track.
 
+Only `claude` is shimmed. Typing `codex` (or another CLI) in a plain terminal
+runs the real program, which Switchboard does not track as a session it
+launched.
+
 The shim must be defined without being typed into the shell. A line written
 into the PTY is echoed after the prompt until something clears it, and the
 interactive shell records it in its history like any command the user typed.
@@ -15,8 +19,9 @@ interactive shell records it in its history like any command the user typed.
 | File | Role |
 |---|---|
 | `src/main/terminals/plain-terminal-shell.js` | `plainTerminalLaunch()`: args, env and the fallback line per shell. `ensureInitFiles()`: writes the generated startup files. The files' content. |
-| `main.js` (`open-terminal`, `isPlainTerminal` branch) | Builds the base env, asks `plainTerminalLaunch()`, spawns what it returns, types `launch.typed` 300 ms after the spawn when it is not null. |
-| `src/main/terminals/shell-profiles.js` | `shellArgs()`: the args every other spawn uses (`-l -i` for bash, zsh and fish). |
+| `main.js` (`open-terminal`, `isPlainTerminal` branch) | Builds the base env (`cleanPtyEnv` plus the terminal variables), asks `plainTerminalLaunch()`, spawns what it returns, types `launch.typed` 300 ms after the spawn when it is not null. |
+| `src/main/terminals/shell-profiles.js` | `shellArgs()`: the args every other spawn uses (`-l -i` for bash-like shells — bash, zsh, `sh` — and for fish and nushell; WSL gets `-- bash -l -i`). |
+| `src/main/shared/clean-env.js` | The base env: drops the Claude Code session markers inherited from a parent session and, when one was found, its `GIT_EDITOR=true` residue (see [ipc-bridge](ipc-bridge.md), "Clean child environment"). |
 | `test/plain-terminal-shell.test.js` | Args and env per shell, the generated files run by real bash and zsh, the `main.js` wiring. |
 
 ## Where the generated files live

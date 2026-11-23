@@ -15,6 +15,8 @@ link.
 | `public/terminal-manager.js` | Registers the provider per terminal; routes a click to `openFileInPanel`. |
 | `public/file-panel.js` | `openFileInPanel(sessionId, path, { line })` — hands the path and the line to `openTouchedPath` (`public/touched-files-view.js`). |
 | `public/codemirror-setup.js` | `window.cmRevealLine(view, n)`. |
+| `test/terminal-path-links-wiring.test.js` | What only `terminal-manager.js` decides: the provider is registered, a left click reaches `openFileInPanel` with the session and the line. |
+| `test/terminal-path-target.test.js` | The main-side openability checks and the cwd resolution. |
 
 ## Three decisions this rests on
 

@@ -3,6 +3,8 @@
 `scripts/move-modules.js` plans reference rewrites using `scripts/module-paths.js`.
 The migration procedure and manual checks are in [docs/module-moves.md](../../docs/module-moves.md);
 the layout is defined by [ADR 0005](../../docs/decisions/0005-main-process-context-layout.md).
+`node scripts/move-modules.js --check` lists pending moves and validates `.git-blame-ignore-revs`;
+`node scripts/move-modules.js` applies the rewrites; `--root <repository>` targets another checkout.
 
 Apply refuses pending source moves before scanning or writing. Check can list pending moves.
 Every conflicting VM stub key is collected across the scan; any ambiguity prevents all writes.

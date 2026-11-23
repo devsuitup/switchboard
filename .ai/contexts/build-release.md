@@ -63,6 +63,8 @@ viewer bundles and packaging, including macOS arm64+x64 DMG/ZIP and Windows
 x64+arm64 NSIS. Retaining the existing hour avoids cutting the tag-build
 budget without measured runner timings; it is not a measured duration.
 `publish`, the only downstream job (`needs: build`), has a 10-minute bound.
+Runners: `windows-2022`, `ubuntu-latest` (Linux x64), `ubuntu-24.04-arm`
+(Linux arm64) and, on tag pushes, `macos-15`.
 
 `publish` requires a version-tag **push** and keeps `needs: build` and the
 default success gate. A manual dispatch never publishes, even on a tag ref.
@@ -156,9 +158,8 @@ marker must retain the explicit opt-in: `task-review-regressions.test.js`
 retains the #650 reader/worker regression family, and
 `derive-project-path.test.js` exercises the separator expression in
 `resolveWorktreePath` using real tmpdir paths, without a `process.platform`
-branch. No production-module exclusion list is applied. The selection is 387
-of 570 files at #1029 (379 before the change: 13 added, 5 removed); selection
-above roughly 75% requires reporting contributors before considering justified
+branch. No production-module exclusion list is applied. Selection above
+roughly 75% requires reporting contributors before considering justified
 exclusions.
 
 At #1220, adding the SQLite marker selects 632 of 707 files (622 before),
@@ -173,11 +174,10 @@ direct and transitive selection for each binding. The existing heuristic
 limits still apply to other test families; this is not an all-suite guarantee.
 
 The FILETIME conversion and comparison live in the pure
-`src/main/cli/proc-start.js`, re-exported by `cli-session-state.js`.
-`bg-worker-liveness.js` imports the pure module, so roster/UI tests no longer
-reach process probes just to compare creation timestamps. With only this split,
-selection falls to 341 files; the transitive marker rule brings back 33 and adds
-13. `remote-attach.js` still uses `remote-ssh-binary.js` to resolve the actual SSH
+`src/main/cli/proc-start.js`, re-exported by the root `cli-session-state.js`.
+`src/main/bg-agents/bg-worker-liveness.js` imports the pure module, so roster/UI
+tests no longer reach process probes just to compare creation timestamps.
+`src/main/remote/remote-attach.js` still uses `src/main/remote/remote-ssh-binary.js` to resolve the actual SSH
 executable; its platform-specific executable checks and search paths are not a
 pure-helper dependency and remain selected.
 
@@ -206,7 +206,6 @@ Build is not a required check. JB owns the external settings update that removes
 classic branch protection on `main` (`required_status_checks.contexts`); both
 must be updated together whenever the test matrix changes. Changing these
 workflows does not update those settings.
-This CI-only change takes the `no-changelog` PR label.
 
 To obtain an installer for any branch, dispatch the build and download that
 run's artifacts; see [testing-a-pr.md](../../docs/testing-a-pr.md#obtaining-a-pr-installer).
