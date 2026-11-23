@@ -14,6 +14,25 @@ not a durable acknowledgement or a once-across-restarts guarantee. See
 
 ## Consumed-request journal (#380 S1b1/S1b2)
 
+The journal `waited` diagnostic measures the facade's entire send/ACK interval,
+not just time queued in the writer (#1192 investigation). Transport admission,
+worker work and delays processing the ACK on main all contribute. Journal
+priority applies only between units. `replaceSessionMetrics` replaces a whole
+session's metric rows atomically, so the first oversized-unit exception can
+exceed the 10 ms chunk target; the target cannot interrupt synchronous SQL.
+A synthetic 12,001-bucket session reproduced journal waits above 400 ms with
+the existing priority. This does not establish the cause of the reported 108 s
+wait, nor authorize splitting that atomic replacement without a publication
+protocol. Worker receive/start/finish timestamps and main loop delay are needed
+to distinguish queueing, an indivisible unit and delayed ACK delivery live.
+
+`beginFullIndex` can reject a non-startup producer's global revision after an
+unrelated committed write. The facade reports this as `full index begin outcome
+unknown`; a received `WRITER_STALE` response actually proves this begin was
+refused before mutation. The guard must not be removed. Startup producers use
+an affected-folder witness instead. Any retry change must preserve the effects
+revision checks and certificate/publication fencing.
+
 Main passes the admitted writer facade as `sessionRequests` through
 `createTriggerContext` to the watcher. Existing legacy and action requests now
 claim their lowercase filename namespace before effects and journal terminal
