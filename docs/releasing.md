@@ -6,28 +6,62 @@ request first, because `main` is protected.
 Every `gh` command run by hand in this clone needs `--repo devsuitup/switchboard`:
 gh's default here is the upstream repository, `doctly/switchboard`.
 
+## Betas and finals
+
+Every version ships twice (maintainer decision, #1199):
+
+- **Betas** `vX.Y.Z-beta.N` (N from 1) are GitHub pre-releases. Only installs
+  with **Receive beta versions** on are offered them.
+- The **final** `vX.Y.Z` is rebuilt from a commit that differs from the last
+  beta tag only by `package.json`, `package-lock.json` (their `version` fields)
+  and `CHANGELOG.md`. CI checks this before it publishes
+  ([The tag check](#the-tag-check)). It is published as the latest release,
+  and both channels are offered it.
+
+No other tag shape is accepted: `-rc.N` and other identifiers strand beta
+installs ([Update channels](#update-channels)).
+
+From the last beta tag until the final tag, `main` takes **only the release
+PR**. Anything else merged in between makes the final differ from the beta in
+code, the tag check fails, and the fix is another beta. The final is then cut
+from that beta.
+
 ## Steps
 
+The examples cut `0.1.0-beta.1`, then the final `0.1.0`.
+
 1. **Bump the version and date the changelog** on a branch, and open the PR.
-   In [`CHANGELOG.md`](../CHANGELOG.md) (see [Changelog](changelog.md)),
-   rename `## Unreleased` to `## v0.1.0 — <today, YYYY-MM-DD>`, and open a new,
-   empty `## Unreleased` above it. Read the section once more: it becomes the
-   release notes as it stands.
+   In [`CHANGELOG.md`](../CHANGELOG.md) (see [Changelog](changelog.md)):
+   - for a **beta**, rename `## Unreleased` to
+     `## v0.1.0-beta.1 — <today, YYYY-MM-DD>`, and open a new, empty
+     `## Unreleased` above it. The next beta's section holds only what changed
+     since this one.
+   - for the **final**, `## Unreleased` must be empty (anything in it shipped
+     after the last beta). Fold every `## v0.1.0-beta.N` section into one
+     `## v0.1.0 — <today>` section: merge their entries by group, drop the
+     entries about a problem only a beta ever had, and delete the beta
+     headings. The final section says what changed since the previous final.
+
+   Read the section once more: it becomes the release notes as it stands.
 
    ```bash
-   git checkout -b release/v0.1.0 origin/main
-   npm version --no-git-tag-version 0.1.0   # package.json and package-lock.json
+   git checkout -b release/v0.1.0-beta.1 origin/main
+   npm version --no-git-tag-version 0.1.0-beta.1   # package.json and package-lock.json
    # edit CHANGELOG.md as above
-   git commit -am "chore(release): v0.1.0"
-   git push origin release/v0.1.0
-   gh pr create --repo devsuitup/switchboard --base main --title "chore(release): v0.1.0" --fill
+   git commit -am "chore(release): v0.1.0-beta.1"
+   git push origin release/v0.1.0-beta.1
+   gh pr create --repo devsuitup/switchboard --base main --title "chore(release): v0.1.0-beta.1" --fill
    ```
 
+   For the final, the same with `0.1.0`. Bump `package.json` and the lock only
+   with `npm version`: the tag check refuses any other change to them.
+
    `test/changelog.test.js` fails when `CHANGELOG.md` has no section for the
-   version in `package.json`, so a bump without its section does not pass CI.
+   version in `package.json`, or still has beta sections beside their final,
+   so a bump without its section does not pass CI.
 
    Commit subjects and PR titles use `type(area): subject`; the release title
-   is `chore(release): v0.1.0`. The PR title becomes the squash commit title
+   is `chore(release): v0.1.0` (`chore(release): v0.1.0-beta.1` for a beta). The PR title becomes the squash commit title
    (`PR_TITLE`). The separate `pr-title` check is advisory during rollout and
    is not a required release check.
 
@@ -53,11 +87,13 @@ gh's default here is the upstream repository, `doctly/switchboard`.
 
    ```bash
    git fetch origin
-   git tag v0.1.0 origin/main
-   git push origin v0.1.0
+   git tag v0.1.0-beta.1 origin/main
+   git push origin v0.1.0-beta.1
    ```
 
-4. **Wait for the build.** The tag starts `.github/workflows/build.yml`: macOS
+4. **Wait for the build.** The tag starts `.github/workflows/build.yml`. Its
+   `release-tag` job runs [the tag check](#the-tag-check) while the packages
+   build; publish needs both. The builds run on macOS
    (macos-15), Windows (windows-2022), and Linux x64 and arm64 on separate
    runners. Packaging-related pull requests and manual dispatches build only
    Windows and both Linux architectures; macOS remains part of every tag push
@@ -116,15 +152,19 @@ gh's default here is the upstream repository, `doctly/switchboard`.
    Check those assets against the merged directory and verify the update
    manifests before publishing the draft as described below.
 
-   After all builds succeed, the publish job:
-   - creates a **draft** release named after the version;
+   After all builds and the tag check succeed, the publish job:
+   - creates a **draft** release named after the version, flagged pre-release
+     when the tag has a `-` (a beta) and not otherwise, sets the same flag on a
+     draft a previous run left, and reads the draft back: it uploads nothing
+     unless the release reads back as a draft with that flag;
    - uploads each artifact separately, retrying each up to five times — 20
      assets for a full build (dmg, zip and their blockmaps for arm64 and x64; the
      Windows installer and its blockmap; two AppImages, two debs, two pacman
      packages (`-x64.pacman` and `-aarch64.pacman`); four `latest*.yml` update manifests);
    - writes the release notes: the text of the tag's `CHANGELOG.md` section,
      without its heading (`scripts/changelog-section.js`), then a **Full
-     changelog** link comparing the previous tag with this one. It fails
+     changelog** link comparing the previous tag with this one (for a final,
+     the previous final, skipping its betas). It fails
      rather than publish an empty body when the section is missing or empty.
      The fix is then in `CHANGELOG.md`, through a PR; `gh release edit
      --repo devsuitup/switchboard --notes-file` can fill in the draft by hand meanwhile.
@@ -137,32 +177,89 @@ gh's default here is the upstream repository, `doctly/switchboard`.
    draft. The workflow token has `contents: read`; only the publish job has
    `contents: write`, and no checkout persists credentials.
 
-5. **Publish the draft to beta**, after checking its assets:
+5. **Publish a beta draft**, after checking its assets and its flag:
 
    ```bash
-   gh release view v0.1.0 --repo devsuitup/switchboard --json assets --jq '.assets | length'
-   gh release edit v0.1.0 --repo devsuitup/switchboard --draft=false --prerelease
+   gh release view v0.1.0-beta.1 --repo devsuitup/switchboard --json assets,isPrerelease --jq '{assets: (.assets | length), isPrerelease}'
+   gh release edit v0.1.0-beta.1 --repo devsuitup/switchboard --draft=false --prerelease
+   gh api repos/devsuitup/switchboard/releases/latest --jq .tag_name   # must not contain "-"
    ```
 
    Installed copies with **Receive beta versions** and automatic updates on
    pick the release up from its `latest*.yml` manifests; a draft is invisible
-   to them, and stable installs skip pre-releases. On their first start
-   after the update, the What's new dialog shows this section, and those of
-   any version they skipped.
+   to them. The pre-release flag is the only thing that keeps the beta from
+   stable installs: if the last command prints a `-beta` tag, set the flag
+   again at once (`gh release edit <tag> --prerelease`) and mark the previous
+   final `--latest`. On their first start after the update, the What's new
+   dialog shows this section, and those of any version they skipped.
 
-6. **Promote to stable**, only on the maintainer's go. First require at least
-   24 hours of use on beta and no open issue labelled `regression` for this
-   version. Inspect the open regression issues and confirm which version each
-   affects before promoting:
+   Fixes found on beta ship as `0.1.0-beta.2`, and so on, through steps 1–5.
+
+6. **Cut the final**, only on the maintainer's go. First require at least
+   24 hours of use on the last beta and no open issue labelled `regression`
+   for it. Inspect the open regression issues and confirm which version each
+   affects:
 
    ```bash
    gh issue list --repo devsuitup/switchboard --state open --label regression --limit 1000
-   gh release edit v0.1.0 --repo devsuitup/switchboard --prerelease=false --latest
    ```
 
-   One binary serves both channels: beta is the GitHub pre-release flag.
-   Promotion changes that flag and marks the release latest; keep the same
-   version tag and assets, with no beta tags or rebuild.
+   Then steps 1–4 again with `0.1.0`, `main` having taken nothing since the
+   last beta tag. The tag check compares the tag with `v0.1.0-beta.<last>`
+   and fails the run before publish when anything else differs. Publish the
+   final draft as the latest release:
+
+   ```bash
+   gh release view v0.1.0 --repo devsuitup/switchboard --json assets,isPrerelease --jq '{assets: (.assets | length), isPrerelease}'
+   gh release edit v0.1.0 --repo devsuitup/switchboard --draft=false --prerelease=false --latest
+   gh api repos/devsuitup/switchboard/releases/latest --jq .tag_name   # must print v0.1.0
+   ```
+
+   Stable installs are offered it, and so are beta installs: the beta channel
+   moves from `0.1.0-beta.N` to `0.1.0`.
+
+## The tag check
+
+The `release-tag` job of `build.yml` runs
+`node scripts/check-release-tag.js "$GITHUB_REF_NAME"` on a checkout with
+every tag, on each tag push, and `publish` needs it. It fails (exit 1) when:
+
+- the tag is not `vX.Y.Z` or `vX.Y.Z-beta.N` (N from 1, no leading zero);
+- `package.json` at the tag does not carry the tag's version;
+- for a final `vX.Y.Z`: no `vX.Y.Z-beta.N` tag exists; or
+  `git diff --name-only --no-renames <last beta> <tag>` lists any file besides
+  `CHANGELOG.md`, `package.json` and `package-lock.json`; or `package.json`
+  or the lock differ from the beta's by more than their version fields; or
+  the tag's `CHANGELOG.md` has no `## vX.Y.Z` section, or still has a
+  `## vX.Y.Z-beta.N` one.
+
+The last beta is the highest N among the existing tags, compared as a number.
+The diff compares the two trees, whatever the history between them. Exit 2 is
+a usage error or git failure. `test/check-release-tag.test.js` covers each
+case and runs the script on a temporary repository.
+
+## Update channels
+
+How electron-builder 26.8.1 and electron-updater 6.8.9 treat a `-beta.N`
+version with the GitHub provider (read in their sources, #1199):
+
+- The build writes only `latest*.yml` manifests, for betas too: for the
+  GitHub provider the channel list is always the single `latest` one, so the
+  20 assets keep the same names apart from the version.
+- A **stable** install (`allowPrerelease` false) asks GitHub for its latest
+  release, which is never a pre-release or a draft. It never sees a beta
+  that carries the pre-release flag. An unflagged beta is an ordinary release
+  and does reach stable installs.
+- A **beta** install still on a final version takes the newest entry of the
+  releases feed, beta or final. It first asks for `beta*.yml`, which does not
+  exist, and falls back to `latest*.yml`.
+- A **beta** install on `X.Y.Z-beta.N` takes the newest feed entry whose tag
+  is a final or a `beta` pre-release (`alpha` is skipped), so it moves on to the next beta
+  or to the final `X.Y.Z`. A `-rc.N` tag would be skipped by it, and an
+  install on `-rc.N` would only follow other `-rc` tags: hence `-beta.N` only.
+- Nothing downgrades: Switchboard never sets the updater's `channel`, which
+  would turn `allowDowngrade` on. An install on a beta whose owner turns beta
+  off stays on it until a higher final is published.
 
 `npm run release` builds for the local platform only and publishes through
 electron-builder; it needs `GH_TOKEN` (a token with `repo` scope).
@@ -180,8 +277,8 @@ Stable installs stop being offered the withdrawn version; new installs get the
 previous stable release. A stable install that already downloaded the withdrawn
 version still installs it at its next quit. Installs already on the withdrawn version keep it: never
 downgrade, because the SQLite cache only migrates forward. Fix forward with a
-new version published to beta, then use the same promotion gate. Beta installs
-can still receive a withdrawn pre-release.
+beta of the next version (`v0.1.1-beta.1`), then its final through the same
+gate. Beta installs can still receive a withdrawn release, now a pre-release.
 
 ## Fork release-flow gotchas
 

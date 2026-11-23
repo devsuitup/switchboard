@@ -37,6 +37,48 @@ UI or repository settings; those need verification on a real PR. The
 maintainer recorded `PR_TITLE` squash-title selection in issue #1199.
 Making the check required is a separate maintainer decision after rollout.
 
+## Beta and final tags (#1199)
+
+Tags are `vX.Y.Z-beta.N` or `vX.Y.Z`; the procedure and the channel mechanics
+are in [releasing.md](../../docs/releasing.md) ("Betas and finals", "The tag
+check", "Update channels"). The trigger stays `tags: ['v*']`: GitHub's glob
+already matches `v0.1.0-beta.1`, and the shape is enforced by the check, which
+fails with a message instead of silently not starting a run.
+
+`release-tag` is a separate tag-push-only job (same `if` as `publish`,
+Node 22, full-history checkout without credentials, 10 minutes) running
+`scripts/check-release-tag.js`. It runs beside the matrix rather than before
+it, so a refused tag costs a build but adds no latency to an accepted one;
+`publish` needs `[build, release-tag]`. The script is dependency-free and
+reuses `src/main/app/changelog.js` for the fold check. The `package.json` and
+lock comparison strips `version` (and the lock's `packages[""].version`) and
+compares the rest as JSON, so a dependency change hidden in a "bump" fails.
+That is stricter than the file list the maintainer decided; it can be dropped
+without touching the file-list rule.
+
+`scripts/publish-release.sh` derives the pre-release flag from the tag (any
+`-` means pre-release), passes `--prerelease=<bool>` on create and on an
+existing draft, then re-reads the release list and uploads nothing unless the
+tag's release reads `true <flag>` (draft, pre-release). The read-back uses the
+same `gh api` listing as the first read, because the tag endpoint does not
+return drafts. Publishing the draft stays manual.
+
+The release-notes step compares a final with the previous final
+(`git describe --exclude '*-*'`) and a beta with the previous tag of any kind.
+
+`src/main/app/changelog.js` accepts `-beta.N` (N from 1) in versions and
+headings and orders a beta after the previous final and before its own
+(the fourth compared part is the beta number, `Infinity` for a final). Any
+other pre-release form still throws, as every pre-release did before.
+
+Unverified until a real tag push: GitHub's acceptance of the new job and
+`needs` list, `gh release create/edit --prerelease=<bool>` on a draft keeping
+it a draft, the read-back output shape, `git describe --exclude` on the
+runner, and that electron-builder packages a `-beta.N` version on every target
+(names derive from `${version}`; deb/rpm versions use `~`, pacman `_`, NSIS
+`0.1.0.0`, per app-builder-lib's `LinuxTargetHelper.getSanitizedVersion` and
+`AppInfo.getVersionInWeirdWindowsForm`).
+
 ## Packaging and test workflows
 
 `.github/workflows/build.yml` runs on version-tag pushes, manual dispatches
@@ -62,9 +104,9 @@ dependent stages: the budget must fit installation/native rebuilds, both
 viewer bundles and packaging, including macOS arm64+x64 DMG/ZIP and Windows
 x64+arm64 NSIS. Retaining the existing hour avoids cutting the tag-build
 budget without measured runner timings; it is not a measured duration.
-`publish`, the only downstream job (`needs: build`), has a 10-minute bound.
+`publish`, the only downstream job (`needs: [build, release-tag]`), has a 10-minute bound, as does `release-tag`.
 
-`publish` requires a version-tag **push** and keeps `needs: build` and the
+`publish` requires a version-tag **push** and keeps `needs: [build, release-tag]` and the
 default success gate. A manual dispatch never publishes, even on a tag ref.
 A failed or cancelled macOS tag build blocks automatic publication; no partial-publish or
 `continue-on-error` path exists. Recovery and manifest consistency requirements

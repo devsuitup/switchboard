@@ -34,6 +34,12 @@ Older versions: see [GitHub Releases](…).
 - One `## Unreleased` section, then one `## vX.Y.Z — YYYY-MM-DD` section per
   version, newest first. The separator is an em dash (`—`), and the heading
   has nothing after the date.
+- A beta has its own `## vX.Y.Z-beta.N — YYYY-MM-DD` section, holding what
+  changed since the previous beta. When the final `vX.Y.Z` is cut, its betas'
+  sections are folded into one `## vX.Y.Z — YYYY-MM-DD` section and their
+  headings deleted, so the file never holds a beta beside its final
+  ([Releasing](releasing.md)). `test/changelog.test.js` and the release tag
+  check enforce it.
 - Up to three groups per version, in this order: `### New`, `### Changed`,
   `### Fixed`. A group with no entry is left out.
 - The `---` line closes the last section: the pointer to GitHub Releases below
@@ -103,13 +109,17 @@ settings (default `null`, in `public/setting-defaults.js`):
 
 | Stored `lastSeenVersion` | What happens |
 |---|---|
-| none, or not an `X.Y.Z` version, on a fresh install | No dialog; the running version is recorded |
-| none, or not an `X.Y.Z` version, on an existing install | As if the stored version were `0.0.84` (`VERSION_BEFORE_WHATS_NEW` in `changelog.js`), the last release without the dialog, which never recorded one |
+| none, or not an `X.Y.Z` or `X.Y.Z-beta.N` version, on a fresh install | No dialog; the running version is recorded |
+| none, or not an `X.Y.Z` or `X.Y.Z-beta.N` version, on an existing install | As if the stored version were `0.0.84` (`VERSION_BEFORE_WHATS_NEW` in `changelog.js`), the last release without the dialog, which never recorded one |
 | the running version or a later one | No dialog |
 | an earlier version | The dialog lists every section after the stored version, up to the running one, newest first, skipped versions included. The running version is recorded when the dialog closes |
 | an earlier version, but no section in that range | No dialog; the running version is recorded |
 
-Versions compare numerically, part by part: `0.0.100` is after `0.0.99`.
+Versions compare numerically, part by part: `0.0.100` is after `0.0.99`. A
+beta comes after the previous final and before its own: `0.0.109` <
+`0.1.0-beta.1` < `0.1.0-beta.10` < `0.1.0`. A beta install updated to the
+final is therefore shown the final section, which repeats what its betas
+said. No other pre-release form (`-rc.1`, `-beta`) is a version here.
 
 An install is existing when, as `main.js` loads and before this run writes
 anything, the database already holds a `global` settings row or the
