@@ -632,7 +632,7 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
   }
   const id = sessionActionNoticeId('Restore', session);
   const report = (reason, actionLabel, onAction, kind = 'error') => {
-    const member = { id, kind, actionLabel, onAction, session, text: `${sessionActionDescription(session)}, job ${result?.jobId || item.attachJobId || 'unknown'}: ${reason}` };
+    const member = { id, kind, actionLabel, onAction, session, logText: `${sessionActionDescription(session, { log: true })}, job ${result?.jobId || item.attachJobId || 'unknown'}: ${reason}`, text: `${sessionActionDescription(session)}, job ${result?.jobId || item.attachJobId || 'unknown'}: ${reason}` };
     showAppNotice({ id: 'Restore:background',
       members: [member], mergeMembers: true, persistent: true,
       memberOptions: members => {
@@ -641,6 +641,7 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
           onAction: errors.length === 1 ? errors[0].onAction : undefined };
       },
       message: current => `Background session restore: ${current.map(value => value.text).join('; ')}. Check the Agents view. Open a conversation from the sidebar to retry attaching or resume an ended session.`,
+      logText: current => `Background session restore: ${current.map(value => value.logText).join('; ')}. Check the Agents view. Open a conversation from the sidebar to retry attaching or resume an ended session.`,
       dismissOnAction: false });
   };
   const logFailure = outcome => {
@@ -882,7 +883,7 @@ function showColdCacheNotice(count) {
   window.trackUiNotice?.(toast, 'restore');
 }
 
-function showRestoreNotice(id, text, session) {
+function showRestoreNotice(id, text, session, logOptions = {}) {
   document.getElementById(id)?.remove();
   const toast = document.createElement('div');
   toast.id = id;
@@ -897,18 +898,19 @@ function showRestoreNotice(id, text, session) {
   toast.append(msg, dismiss);
   document.body.appendChild(toast);
   setTimeout(() => { toast.dataset.uiNoticeDismissReason = 'expired'; toast.remove(); }, LIVE_ELSEWHERE_NOTICE_MS);
-  window.trackUiNotice?.(toast, 'restore', { sessions: [session] });
+  window.trackUiNotice?.(toast, 'restore', { sessions: [session], ...logOptions });
 }
 
 function showNotRestoredNotice(unavailable) {
   const members = unavailable.map(item => {
     const session = { ...item, ...sessionMap.get(item.sessionId) };
-    return { id: sessionActionNoticeId('Restore', session), text: sessionActionDescription(session), session };
+    return { id: sessionActionNoticeId('Restore', session), text: sessionActionDescription(session), logText: sessionActionDescription(session, { log: true }), session };
   });
   if (!members.length) return;
   showAppNotice({
     id: 'Restore:unavailable', kind: 'error', members, mergeMembers: true,
     message: current => `Restore failed for ${current.map(member => member.text).join('; ')}: The transcript is not in the index. Check the transcript in the project folder (restore it from backup if missing), then use Reindex all sessions and open the session from the sidebar to retry.`,
+    logText: current => `Restore failed for ${current.map(member => member.logText).join('; ')}: The transcript is not in the index. Check the transcript in the project folder (restore it from backup if missing), then use Reindex all sessions and open the session from the sidebar to retry.`,
   });
 }
 
@@ -927,13 +929,14 @@ function showLiveElsewhereNotice(skipped) {
         : item.lookupFailed ? 'Open it from the sidebar to retry checking and restoring.'
         : item.continuation || waiting ? 'Open it from the sidebar to choose and retry restoring.'
           : 'Return to its own terminal at the location above to continue working or end it there, then open it from the sidebar to retry restoring.');
-      return { id: sessionActionNoticeId('Restore', session), text: `${sessionActionDescription(session)}: ${reason}. ${recovery}`, session };
+      return { id: sessionActionNoticeId('Restore', session), text: `${sessionActionDescription(session)}: ${reason}. ${recovery}`, logText: `${sessionActionDescription(session, { log: true })}: ${reason}. ${recovery}`, session };
     });
     const id = pending ? 'Restore:pending' : 'Restore:batch';
     for (const member of members) clearAppNotice(member.id, { membersOnly: true, exceptGroup: id });
     showAppNotice({
       id, kind: pending ? 'info' : 'error', members, mergeMembers: true,
       message: current => `${pending ? 'Restore pending' : 'Restore failed'} for ${current.map(member => member.text).join('; ')}`,
+      logText: current => `${pending ? 'Restore pending' : 'Restore failed'} for ${current.map(member => member.logText).join('; ')}`,
     });
   }
 }
@@ -1584,10 +1587,11 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
   const { targets, excluded } = plan;
   if (!targets.length) {
     showAppNotice({ id: sessionActionNoticeId('Stop', session), kind: excluded.length ? 'error' : 'info', sessions: [session],
+      logText: excluded.length ? plan.logText : 'Nothing is running to stop.',
       message: excluded.length ? plan.confirmText : 'Nothing is running to stop.' });
     return;
   }
-  if (!await appConfirm({ title: plan.attach ? 'Detach tab?' : 'Stop session?', message: plan.confirmText, sessions: [session],
+  if (!await appConfirm({ title: plan.attach ? 'Detach tab?' : 'Stop session?', message: plan.confirmText, messageParts: plan.confirmParts, sessions: [session],
     confirmLabel: plan.attach ? 'Detach' : 'Stop', danger: !plan.attach })) return;
   const { failures, failedTargets, stopped } = await executeSessionStopTargets(targets);
   if (failures.length) {
@@ -1658,18 +1662,20 @@ async function detachSession(sessionOrId, btn, retryTargets) {
     stopped++;
     if (reattach) {
       const noticeId = sessionActionNoticeId('Detach undo', reattach.session);
+      const logText = `Detached from ${sessionActionDescription(reattach.session, { log: true })}. ${target.remote
+        ? `The session keeps running on ${remoteHostLabel(target.alias)}.` : 'The background session keeps running.'}`;
       const message = `Detached from ${sessionActionDescription(reattach.session)}. ${target.remote
         ? `The session keeps running on ${remoteHostLabel(target.alias)}.` : 'The background session keeps running.'}`;
       if (target.remote ? !reattach.session.remoteAttachable
         : typeof reattach.options.jobId !== 'string' || !/^[0-9a-f]{8}$/.test(reattach.options.jobId)) {
         showAppNotice({ id: noticeId, kind: 'info', sessions: [reattach.session],
-          message });
+          message, logText });
         continue;
       }
       showAppNotice({ id: noticeId, kind: 'undo', sessions: [reattach.session],
-        message,
+        message, logText,
         actionLabel: 'Undo', onAction: async () => {
-          showAppNotice({ id: noticeId, kind: 'info', sessions: [reattach.session], message: `Reattaching to ${sessionActionDescription(reattach.session)}…` });
+          showAppNotice({ id: noticeId, kind: 'info', sessions: [reattach.session], message: `Reattaching to ${sessionActionDescription(reattach.session)}…`, logText: `Reattaching to ${sessionActionDescription(reattach.session, { log: true })}…` });
           if (reattach.entry && !reattach.entry.closed && result?.error !== 'not running') {
             const detachExitTimeoutMs = 3000;
             let detachTimer;
@@ -1683,14 +1689,14 @@ async function detachSession(sessionOrId, btn, retryTargets) {
           }
           if (reattach.entry && openSessions.get(id) === reattach.entry && !reattach.entry.closed) {
             showAppNotice({ id: noticeId, kind: 'error', sessions: [reattach.session],
-              message: `The session is still detaching from ${sessionActionDescription(reattach.session)}. Open it from the sidebar to retry.` });
+              message: `The session is still detaching from ${sessionActionDescription(reattach.session)}. Open it from the sidebar to retry.`, logText: `The session is still detaching from ${sessionActionDescription(reattach.session, { log: true })}. Open it from the sidebar to retry.` });
             return;
           }
           let check;
           try { if (!target.remote) check = await window.api.bgAgentLiveJob?.(id); } catch {}
           if (check?.known === true && !check.job) {
             showAppNotice({ id: noticeId, kind: 'error', sessions: [reattach.session],
-              message: `The background job has ended for ${sessionActionDescription(reattach.session)}; there is nothing to reattach.` });
+              message: `The background job has ended for ${sessionActionDescription(reattach.session)}; there is nothing to reattach.`, logText: `The background job has ended for ${sessionActionDescription(reattach.session, { log: true })}; there is nothing to reattach.` });
             return;
           }
           try {
@@ -1706,11 +1712,11 @@ async function detachSession(sessionOrId, btn, retryTargets) {
               clearAppNotice(noticeId);
               return false;
             }
-            showAppNotice({ id: noticeId, kind: 'info', sessions: [reattach.session], message: `Reattached to ${sessionActionDescription(reattach.session)}.` });
+            showAppNotice({ id: noticeId, kind: 'info', sessions: [reattach.session], message: `Reattached to ${sessionActionDescription(reattach.session)}.`, logText: `Reattached to ${sessionActionDescription(reattach.session, { log: true })}.` });
             return opened;
           } catch (error) {
             showAppNotice({ id: noticeId, kind: 'error', sessions: [reattach.session],
-              message: `Could not reattach to ${sessionActionDescription(reattach.session)}: ${error?.message || error || 'unknown error'}.` });
+              message: `Could not reattach to ${sessionActionDescription(reattach.session)}: ${error?.message || error || 'unknown error'}.`, logText: `Could not reattach to ${sessionActionDescription(reattach.session, { log: true })}: ${error?.message || error || 'unknown error'}.` });
           }
         } });
     }
@@ -1828,14 +1834,19 @@ function showExitBackgroundProgress(batch) {
   const confirmed = [...batch.entries.values()].filter(row => row.result?.ok).length;
   const verb = batch.detail.action === 'update' ? 'update' : batch.detail.action === 'close' ? 'close' : window.api.platform === 'win32' ? 'exit' : 'quit';
   const lines = [`Moving ${batch.entries.size} to background before ${verb}: ${confirmed} of ${batch.entries.size} confirmed`];
+  const logLines = [...lines];
   for (const row of batch.entries.values()) {
     if (row.result && !row.result.ok) lines.push(exitBackgroundFailure(row.name, row.result));
     else if (row.phase === 'waiting') lines.push(row.name + ' waits for its turn to end');
     else if (row.phase === 'confirming') lines.push(row.name + ' asks you to confirm in its terminal');
+    const id = row.id.slice(0, 8);
+    if (row.result && !row.result.ok) logLines.push(exitBackgroundFailure(id, row.result));
+    else if (row.phase === 'waiting') logLines.push(id + ' waits for its turn to end');
+    else if (row.phase === 'confirming') logLines.push(id + ' asks you to confirm in its terminal');
   }
   showAppNotice({ id: 'exit-background', kind: 'info', persistent: true, dismissible: false,
     sessions: [...batch.entries.values()].map(row => ({ sessionId: row.id, name: row.name })),
-    message: lines.join('\n'), actionLabel: 'Cancel', dismissOnAction: false,
+    message: lines.join('\n'), logText: logLines.join('\n'), actionLabel: 'Cancel', dismissOnAction: false,
     onAction: () => {
       batch.cancelled = true;
       window.api.exitBackgroundCancel(batch.checkId, batch.detail);
@@ -1916,7 +1927,9 @@ async function recoverExitBackground(batch) {
   const message = batch.saveError
     ? 'The moved sessions run in the background, but Switchboard could not save them for the next start, so it stayed open: ' + batch.saveError
     : `Switchboard stayed open. ${confirmed.length} of ${batch.entries.size} sessions moved to the background; nothing was stopped.` + (failures.length ? '\n' + failures.map(row => exitBackgroundFailure(row.name, row.result)).join('\n') : '');
-  showAppNotice({ id: 'exit-background-failure', kind: 'error', message,
+  const logText = batch.saveError ? message
+    : `Switchboard stayed open. ${confirmed.length} of ${batch.entries.size} sessions moved to the background; nothing was stopped.` + (failures.length ? '\n' + failures.map(row => exitBackgroundFailure(row.id.slice(0, 8), row.result)).join('\n') : '');
+  showAppNotice({ id: 'exit-background-failure', kind: 'error', message, logText,
     sessions: [...batch.entries.values()].map(row => ({ sessionId: row.id, name: row.name })) });
 }
 
@@ -2008,12 +2021,12 @@ async function sendSessionToBackground(sessionId) {
         'The conversation now runs in the background. Open it from the sidebar to retry attaching.');
       else {
         clearAppNotice(sessionActionNoticeId('Attach background', destination));
-        showRestoreNotice('background-info:' + result.sessionId, `${name} now runs in the background. Closing this tab detaches it; the session keeps running.`, { ...destination, name });
+        showRestoreNotice('background-info:' + result.sessionId, `${name} now runs in the background. Closing this tab detaches it; the session keeps running.`, { ...destination, name }, { logText: `${result.sessionId.slice(0, 8)} now runs in the background. Closing this tab detaches it; the session keeps running.` });
       }
       return;
     }
     if (openSessions.get(sessionId) !== oldEntry || oldEntry.closed) {
-      showRestoreNotice('background-info:' + result.sessionId, `${name} now runs in the background. Open it from the sidebar to attach.`, { ...destination, name });
+      showRestoreNotice('background-info:' + result.sessionId, `${name} now runs in the background. Open it from the sidebar to attach.`, { ...destination, name }, { logText: `${result.sessionId.slice(0, 8)} now runs in the background. Open it from the sidebar to attach.` });
       return;
     }
     const active = activeSessionId === sessionId;
@@ -2047,7 +2060,7 @@ async function sendSessionToBackground(sessionId) {
     refreshSidebar();
     if (entry && !entry.closed) {
       clearAppNotice(sessionActionNoticeId('Attach background', destination));
-      showRestoreNotice('background-info:' + result.sessionId, `${name} now runs in the background. Closing this tab detaches it; the session keeps running.`, { ...destination, name });
+      showRestoreNotice('background-info:' + result.sessionId, `${name} now runs in the background. Closing this tab detaches it; the session keeps running.`, { ...destination, name }, { logText: `${result.sessionId.slice(0, 8)} now runs in the background. Closing this tab detaches it; the session keeps running.` });
     } else showSessionActionFailure('Attach background', destination, attachError || entry?.openError || 'the attach tab did not open',
       'The conversation now runs in the background. Open it from the sidebar to retry attaching.');
   } catch (err) {

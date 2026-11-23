@@ -8,7 +8,7 @@ window.trackUiNotice = function (element, source, options = {}) {
   function report(event, text, reason) {
     try {
       window.api?.logUiNotice?.(window.sessionNoticeLog({ event, id: element.id, source, text, reason,
-        kind: options.kind || 'info' }, options.sessions))?.catch?.(() => {});
+        kind: options.kind || 'info' }, options.sessions, options))?.catch?.(() => {});
     } catch {}
   }
   function sync() {
@@ -36,8 +36,9 @@ function reportAppNotice(event, options, notice, reason) {
     const counts = options.id === 'main-process-errors' && event === 'merge' ? options.members.map(({ id, count }) => ({ id, count })) : undefined;
     const sessions = [options.sessions || [], (options.members || []).map(member => member.session)].flat();
     window.api?.logUiNotice?.(window.sessionNoticeLog({ event, reason, counts, kind: options.kind === 'error' || options.kind === 'warning' ? options.kind : 'info',
-      id: options.id, source: options.source || String(options.id || 'notice').split(/[:-]/)[0],
-      text: counts ? '' : notice.querySelector('.app-notice-message').textContent }, sessions))?.catch?.(() => {});
+      id: options.id, source: options.source || String(options.logId || (sessions.some(Boolean) ? 'session' : options.id) || 'notice').split(/[:-]/)[0],
+      text: counts ? '' : notice.querySelector('.app-notice-message').textContent }, sessions,
+      { logId: options.logId, logText: counts ? '' : typeof options.logText === 'function' ? options.logText(options.members) : options.logText }))?.catch?.(() => {});
   } catch {}
 }
 
@@ -87,8 +88,8 @@ function sessionActionNoticeId(operation, session) {
   return `${operation}:${session?.remoteAlias || 'local'}:${session?.sessionId || session?.projectPath || 'unknown'}`;
 }
 
-function sessionActionDescription(session) {
-  const rawName = session?.name || session?.aiTitle || session?.summary;
+function sessionActionDescription(session, { log = false } = {}) {
+  const rawName = log ? session?.sessionId?.match(/^[a-f0-9]{8}/i)?.[0] || '00000000' : session?.name || session?.aiTitle || session?.summary;
   const name = typeof cleanDisplayName === 'function' ? cleanDisplayName(rawName) : rawName;
   const identity = name ? `"${name}"${session?.sessionId ? ` (${session.sessionId})` : ''}`
     : session?.sessionId ? `"${session.sessionId}"` : 'folder';
@@ -96,10 +97,12 @@ function sessionActionDescription(session) {
   return `${identity} at ${location}`;
 }
 
-function showSessionActionFailure(operation, session, error, recovery, onRetry, { headline = `${operation} failed`, kind = 'error', sessions = [session] } = {}) {
+function showSessionActionFailure(operation, session, error, recovery, onRetry, { headline = `${operation} failed`, kind = 'error', sessions = [session], logReason } = {}) {
   const reason = error?.message || error || 'The backend is unavailable or returned no result';
   showAppNotice({
     id: sessionActionNoticeId(operation, session), kind, sessions,
+    logText: sessions.length <= 1 || logReason !== undefined
+      ? `${headline} for ${sessionActionDescription(session, { log: true })}: ${logReason ?? reason}.${recovery ? ' ' + recovery : ''}` : undefined,
     message: `${headline} for ${sessionActionDescription(session)}: ${reason}.${recovery ? ' ' + recovery : ''}`,
     actionLabel: onRetry ? 'Retry' : undefined, onAction: onRetry, dismissOnAction: false,
   });

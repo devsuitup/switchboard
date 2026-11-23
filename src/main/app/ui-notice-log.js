@@ -65,6 +65,14 @@ function installUiNoticeLog({ ipcMain, log, getWindow, now = Date.now, setTimer 
         reason: ['user', 'expired', 'cleared'].includes(value.reason) ? value.reason : '',
         counts: Array.isArray(value.counts) ? value.counts.slice(0, 5).map(member => ({ id: bounded(member.id, 160), count: Number.isSafeInteger(member.count) && member.count > 0 ? member.count : 1 })) : [],
       };
+      if (value.unmarked === true) {
+        delete entry.text;
+        delete entry.title;
+        delete entry.choice;
+        delete entry.choices;
+        entry.sessions = Array.isArray(value.sessions) ? value.sessions.slice(0, 100).filter(id => typeof id === 'string' && /^[a-f0-9]{8}$/i.test(id)) : [];
+        entry.unmarked = true;
+      }
       const line = JSON.stringify(entry);
       if (timer !== null && now() - started >= 60000) flush();
       if (timer === null) {

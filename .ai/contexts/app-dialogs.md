@@ -25,22 +25,35 @@ questions log only when mounted. Dynamic checkbox labels and checked states
 are recorded on acceptance; opaque preview plans and tokens are not serialized.
 Configuration forms and informational modals are not question helpers.
 
-For this channel, eligible session labels are replaced by short identities. Session-bearing
-callers pass `sessions` to the question/notice helper (or a `session` on each
-notice member); `showRestoreNotice` accepts the session as its third argument.
-`sessionNoticeLog` in modal-stack replaces names, generated titles, summaries
-and full session IDs with the first eight hexadecimal ID characters in logged
-text, title, ID, choices and answers. The visible DOM is unchanged. Callers must
-pass every session whose label they render, including continuation alternatives.
-Question text is read from a detached DOM copy with separators after blocks,
-so a multiline label split into paragraphs still matches. Replacement keys and
-observed fields collapse whitespace; keys include the `cleanDisplayName` form.
-Matches require word boundaries and never touch a non-whitespace token containing
-`/` or `\`. Keys shorter than three characters are deliberately skipped, leaving
-those short labels visible in the log without corrupting ordinary prose. This
-bounded fallback keeps the existing shared notice/question caller contract;
-paths (including project names that also name sessions) take precedence over
-label replacement.
+Session labels are marked explicitly; no text search or substring replacement is
+allowed. Question callers pass `sessions` and `messageParts` (paragraphs of literal
+strings and `{ session, label }` segments), or `titleParts`. Radio options carry
+`session`; dynamic checkbox labels use `labelParts(checked)`. The shared
+`renderSessionText(element, parts)` helper renders labels as literal text inside
+`span[data-log-session="<8-hex id>"]`; invalid/missing IDs use `00000000`.
+The displayed label remains unchanged, including short names, commands, URLs,
+multiline prompts and labels containing paths. Direct dialogs use the same helper.
+
+`observeModalQuestion` replaces marked labels with their IDs in a detached clone
+before reading title, dialog ID, text and choices. Answers use the selected DOM
+controls and the same cloning rule, including current checkbox labels/states.
+Block separators remain in the clone so adjacent paragraphs never concatenate.
+Ordinary prose and project paths outside the marked segments are untouched.
+
+String notices supply `logText`, built by the caller with the session ID instead
+of each label, and `logId` if their visible ID includes a label. `showAppNotice`
+accepts a `logText(members)` function for merged groups; it is recomputed from
+the current members on every event. `showRestoreNotice(id, text, session,
+{ logText, logId })` forwards those fields to the transient observer, including
+dismissal. Session action descriptions accept `{ log: true }` for the safe form.
+
+Every session whose label is displayed must be passed in `sessions` (or on notice
+members). Without explicit `logText`, if any supplied session lacks a DOM marker,
+`sessionNoticeLog` emits only event metadata, a source/ID-derived identity,
+`sessions: [<8-hex ids>]` and `unmarked: true`. It omits text, title and choices,
+including the selected answer; main preserves those omissions. This fail-closed
+event makes missed migrations visible without guessing at labels. An unmarked
+caller's original ID is also discarded because it may contain the label.
 
 Main writes single-line JSON with a `[ui-notice]` prefix at info level, independent
 of Debug Mode. Each field is cut to its cap plus 128 characters before redaction

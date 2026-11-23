@@ -159,14 +159,14 @@ const ROSTER = [
   { id: null, sessionId: 's-i', name: 'lvds-1b', cwd: '/w/l', kind: 'interactive', state: null, status: 'busy', pid: 30, startedAt: Date.now() - 10_000, agent: null, model: null, detail: null, tempo: null, tokens: null, fan: [], children: [], result: null, attachedHere: false },
 ];
 
-test('R1 agents Stop logs identity for a multiline unnamed session without its first prompt', async t => {
+for (const summary of ['/review', 'please fix the bug\nin my secret-project payroll module']) {
+test(`agents Stop logs identity without leaking ${JSON.stringify(summary)}`, async t => {
   const h = setup(); t.after(() => h.destroy());
   for (const file of ['modal-stack.js', 'choice-dialog.js', 'app-dialogs.js']) {
     vm.runInContext(fs.readFileSync(path.join(PUBLIC, file), 'utf8'), h.ctx, { filename: file });
   }
   const events = [];
   h.window.api.logUiNotice = event => events.push(JSON.parse(JSON.stringify(event)));
-  const summary = 'please fix the bug\nin my secret-project payroll module';
   const entry = { ...ROSTER[0], sessionId: 'abcdef12-2345-6789', name: '' };
   h.window.sessionMap.set(entry.sessionId, { sessionId: entry.sessionId, summary });
   h.setSnapshot({ roster: [entry], daemonReachable: true });
@@ -186,6 +186,7 @@ test('R1 agents Stop logs identity for a multiline unnamed session without its f
   }
   assert.equal(events[1].choice, 'Stop');
 });
+}
 
 test('882 selected background job retains selection when promoted to interactive', async t => {
   const h = setup(); t.after(() => h.destroy());
@@ -1582,8 +1583,10 @@ for (const { merged, liveId, accept } of [
     h.document.querySelector('[data-verb="resume"]')?.click();
     await finished;
     assert.equal(questions.length, 1);
-    const { sessions, ...question } = JSON.parse(JSON.stringify(questions[0]));
+    const { sessions, messageParts, ...question } = JSON.parse(JSON.stringify(questions[0]));
     assert.deepEqual(question, JSON.parse(JSON.stringify(w.liveElsewhereQuestion(live, 'lvds-1b'))));
+    assert.equal(messageParts[0][1].session.sessionId, liveId);
+    assert.equal(messageParts[0][1].label, 'lvds-1b');
     assert.equal(sessions.length, 1);
     assert.equal(sessions[0].sessionId, liveId);
     assert.equal(sessions[0].name, 'lvds-1b');

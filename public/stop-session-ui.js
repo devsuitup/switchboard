@@ -97,24 +97,26 @@ function describeSessionStopPlan(row, targets, excluded) {
   const attachOnly = targets.length > 0 && !stopping.length;
   const single = rowSessionIds(row).length === 1;
   const name = cleanDisplayName(row.name || row.aiTitle || row.summary) || 'Untitled conversation';
-  const label = id => single ? `This session "${name}"` : `Part ${id}`;
-  const lines = targets.map(target => target.jobStopped
-    ? `${label(target.sessionId)}: background job ${target.jobId} has stopped; its tab detaches.`
+  const label = id => single ? ['This session "', { session: row, label: name }, '"'] : ['Part ' + id];
+  const lines = targets.map(target => [...label(target.sessionId), target.jobStopped
+    ? `: background job ${target.jobId} has stopped; its tab detaches.`
     : target.notHosted
-    ? `${label(target.sessionId)}: background job ${target.jobId} is not running in the daemon; its tab detaches.`
-    : target.job ? `${label(target.sessionId)}: background job ${target.jobId}; its process ends.`
+    ? `: background job ${target.jobId} is not running in the daemon; its tab detaches.`
+    : target.job ? `: background job ${target.jobId}; its process ends.`
     : target.attach
-    ? `${label(target.sessionId)}: detach its tab in this window; background job ${target.jobId || (single ? 'for this session' : target.sessionId)} keeps running.`
-    : `${label(target.sessionId)}${target.possiblyLive ? ' (possibly running)' : ''} ${target.where}.`);
-  const confirmText = [attachOnly ? targets.some(target => target.notHosted || target.jobStopped)
+    ? `: detach its tab in this window; background job ${target.jobId || (single ? 'for this session' : target.sessionId)} keeps running.`
+    : `${target.possiblyLive ? ' (possibly running)' : ''} ${target.where}.`]);
+  const confirmParts = [attachOnly ? targets.some(target => target.notHosted || target.jobStopped)
     ? single ? 'Detach this tab?' : `Detach ${targets.length} tabs?`
     : 'Detach from this background session. It keeps running.'
     : stopping.length ? single ? 'Stop this session?' : `Stop ${stopping.length} part${stopping.length === 1 ? '' : 's'}?`
       : single ? 'This session cannot be stopped here.' : 'No parts can be stopped here.', ...lines,
     ...(stopping.length ? [single ? 'Its process ends; the conversation is kept and can be resumed.'
       : "Each stopped part's process ends; the conversation is kept and can be resumed."] : []),
-    ...excluded.map(part => `${label(part.sessionId)}: ${part.reason}.`)].join('\n');
-  return { targets, excluded, attach: attachOnly, confirmText };
+    ...excluded.map(part => [...label(part.sessionId), ': ' + part.reason + '.'])];
+  const text = log => confirmParts.map(line => (Array.isArray(line) ? line : [line])
+    .map(part => typeof part === 'object' ? log ? part.session.sessionId?.slice(0, 8) : part.label : part).join('')).join('\n');
+  return { targets, excluded, attach: attachOnly, confirmText: text(false), confirmParts, logText: text(true) };
 }
 
 function planSessionDetach(row, { tabOnly = false, retryTargets } = {}) {
@@ -370,7 +372,11 @@ async function confirmAndStopProjectFolder(project, retryRows) {
     const candidates = entries.filter(entry => entry.plan.targets.length);
     const refused = entries.flatMap(entry => entry.plan.excluded.map(part => `${entry.name} (part ${part.sessionId}): ${part.reason}.`));
     if (!candidates.length) {
-      if (refused.length) throw new Error(refused.join('\n'));
+      if (refused.length) {
+        const error = new Error(refused.join('\n'));
+        error.logText = entries.flatMap(entry => entry.plan.excluded.map(part => `${entry.row.sessionId.slice(0, 8)} (part ${part.sessionId}): ${part.reason}.`)).join('\n');
+        throw error;
+      }
       const unchecked = entries.flatMap(entry => entry.unchecked);
       showAppNotice({ id: noticeId, message: unchecked.length
         ? `Nothing is running to stop. ${unchecked.length} idle part${unchecked.length === 1 ? '' : 's'} could not be checked for background jobs (${[...new Set(unchecked.map(part => part.reason))].join('; ')}).`
@@ -383,17 +389,22 @@ async function confirmAndStopProjectFolder(project, retryRows) {
       ...candidates.map(entry => `${entry.name}${entry.midTurn ? ' (mid-turn)' : ''}: ${entry.plan.targets.map(target => target.where).join(', ')}${entry.background ? '; runs in the background and is refused unless you explicitly include background jobs' : ''}.`),
       ...refused,
     ];
+    const messageParts = [message[0],
+      ...candidates.map(entry => [{ session: entry.row, label: entry.name }, `${entry.midTurn ? ' (mid-turn)' : ''}: ${entry.plan.targets.map(target => target.where).join(', ')}${entry.background ? '; runs in the background and is refused unless you explicitly include background jobs' : ''}.`]),
+      ...entries.flatMap(entry => entry.plan.excluded.map(part => [{ session: entry.row, label: entry.name }, ` (part ${part.sessionId}): ${part.reason}.`])),
+    ];
     let force = false;
     if (hasBackground) {
-      const answer = await showChoiceDialog({ title: 'Stop all?', message, danger: true, initialFocus: 'cancel', sessions: rows,
+      const answer = await showChoiceDialog({ title: 'Stop all?', message, messageParts, danger: true, initialFocus: 'cancel', sessions: rows,
         confirmLabel: 'Stop', selectedId: retryRows?.some(entry => entry.targets.some(target => target.job && !target.notHosted && !target.jobStopped)) ? 'force' : 'others', options: [
           { id: 'force', label: 'Stop all including background jobs' },
           { id: 'others', label: 'Stop the others only' },
         ] });
       if (!answer) return;
       force = answer.choice === 'force';
-    } else if (!await appConfirm({ title: 'Stop all?', message, confirmLabel: 'Stop', danger: true, sessions: rows })) return;
+    } else if (!await appConfirm({ title: 'Stop all?', message, messageParts, confirmLabel: 'Stop', danger: true, sessions: rows })) return;
     const failures = [];
+    const logFailures = [];
     const failedRows = [];
     const unreachable = new Map();
     let stopped = 0;
@@ -402,18 +413,19 @@ async function confirmAndStopProjectFolder(project, retryRows) {
       const result = await executeSessionStopTargets(entry.plan.targets, unreachable);
       stopped += result.stopped;
       failures.push(...result.failures.map(error => `${entry.name}: ${error}`));
+      logFailures.push(...result.failures.map(error => `${entry.row.sessionId.slice(0, 8)}: ${error}`));
       if (result.failedTargets.length) failedRows.push({ row: entry.row, targets: result.failedTargets });
     }
     if (failures.length) {
       showSessionActionFailure(operation, project, failures.join('\n'),
         'Check the connection or the session in its own terminal (the Agents view for a background session), then retry Stop all.',
-        () => confirmAndStopProjectFolder(project, failedRows), { sessions: rows });
+        () => confirmAndStopProjectFolder(project, failedRows), { sessions: rows, logReason: logFailures.join('\n') });
     } else if (!force && candidates.every(entry => entry.background)) {
       showAppNotice({ id: noticeId, message: `Kept ${candidates.length} conversation${candidates.length === 1 ? '' : 's'} with background jobs; nothing else was running.` });
     } else clearAppNotice(noticeId);
     if (stopped) refreshSidebar();
   } catch (error) {
     showSessionActionFailure(operation, project, error, 'Check the folder and its sessions, then retry Stop all.',
-      () => confirmAndStopProjectFolder(project, retryRows), { sessions: rows });
+      () => confirmAndStopProjectFolder(project, retryRows), { sessions: rows, logReason: error.logText });
   }
 }

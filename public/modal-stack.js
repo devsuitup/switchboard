@@ -5,45 +5,46 @@ const modalIdleQuestions = [];
 let modalQuestionActive = false;
 let modalIdleTimer = null;
 
-window.sessionNoticeLog = function (entry, sessions = []) {
-  const replacements = new Map();
-  const normalize = value => value.replace(/\s+/g, ' ').trim();
-  for (const session of (Array.isArray(sessions) ? sessions : [sessions])) {
-    if (!session) continue;
-    const id = session.sessionId?.match(/^[a-f0-9]{8}/i)?.[0] || 'session';
-    for (const value of [session.name, session.aiTitle, session.summary, session.title, session.sessionId]) {
-      if (typeof value !== 'string' || !value) continue;
-      const clean = typeof cleanDisplayName === 'function' ? cleanDisplayName(value) : value;
-      for (const key of [normalize(value), normalize(clean)]) {
-        if (key.length >= 3) replacements.set(key, id);
-      }
-    }
+window.renderSessionText = function (element, parts) {
+  element.replaceChildren();
+  for (const part of (Array.isArray(parts) ? parts.flat(Infinity) : [parts])) {
+    if (part && typeof part === 'object' && part.session) {
+      const label = document.createElement('span');
+      label.dataset.logSession = part.session.sessionId?.match(/^[a-f0-9]{8}/i)?.[0] || '00000000';
+      label.textContent = part.label;
+      label.style.whiteSpace = 'pre-line';
+      element.append(label);
+    } else element.append(part == null ? '' : String(part));
   }
-  if (!replacements.size) return entry;
-  const pattern = new RegExp('(?<![\\p{L}\\p{N}_])(?:' + [...replacements.keys()].sort((a, b) => b.length - a.length).map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')(?![\\p{L}\\p{N}_])', 'gu');
-  const spanning = [...replacements.keys()].filter(key => /[\\/]/.test(key) && /\s/.test(key)).sort((a, b) => b.length - a.length);
-  const spanningPattern = spanning.length ? new RegExp('(?<![\\p{L}\\p{N}_])(?:' + spanning.map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')(?![\\p{L}\\p{N}_])', 'gu') : null;
-  const redact = value => {
-    if (typeof value !== 'string') return value;
-    let text = normalize(value);
-    if (spanningPattern) text = text.replace(spanningPattern, match => replacements.get(match));
-    return text.split(/(\S*[\\/]\S*)/g)
-      .map((part, index) => index % 2 ? part : part.replace(pattern, match => replacements.get(match))).join('');
-  };
-  return { ...entry, id: redact(entry.id), title: redact(entry.title), text: redact(entry.text),
-    choice: redact(entry.choice), choices: entry.choices?.map(redact) };
+};
+
+window.sessionNoticeLog = function (entry, sessions = [], { marked = [], logText, logId } = {}) {
+  const ids = [...new Set((Array.isArray(sessions) ? sessions : [sessions]).filter(Boolean)
+    .map(session => session.sessionId?.match(/^[a-f0-9]{8}/i)?.[0] || '00000000'))];
+  if (ids.length && !ids.every(id => marked.includes(id)) && typeof logText !== 'string') {
+    return { event: entry.event, kind: entry.kind, source: entry.source, reason: entry.reason,
+      id: entry.source + ':' + ids.join(','), sessions: ids, unmarked: true };
+  }
+  return { ...entry, ...(logText !== undefined ? { text: logText } : {}),
+    ...(logId !== undefined ? { id: logId } : {}) };
 };
 
 window.observeModalQuestion = function (dialog, source, sessions) {
-  const title = dialog.querySelector('h2, h3')?.textContent || '';
-  const id = `${source}:${title}`;
+  function logClone(element) {
+    const clone = element.cloneNode(true);
+    if (clone.matches?.('[data-log-session]')) clone.textContent = clone.dataset.logSession;
+    for (const label of clone.querySelectorAll('[data-log-session]')) label.textContent = label.dataset.logSession;
+    return clone;
+  }
   function report(event, choice = '') {
     try {
-      const choices = [...dialog.querySelectorAll('button:not([hidden]), label')].map(control => control.textContent).filter(label => label && label !== '×');
-      const text = dialog.cloneNode(true);
-      for (const block of text.querySelectorAll('h2, h3, p, div, pre, li, button, label, br')) block.after('\n');
-      window.api?.logUiNotice?.(window.sessionNoticeLog({ event, kind: 'info', id, source, title, choices, choice,
-        text: text.textContent }, sessions))?.catch?.(() => {});
+      const clone = logClone(dialog);
+      const title = clone.querySelector('h2, h3')?.textContent || '';
+      const choices = [...clone.querySelectorAll('button:not([hidden]), label')].map(control => control.textContent).filter(label => label && label !== '×');
+      const answer = (Array.isArray(choice) ? choice : [choice]).map(part => part?.nodeType ? logClone(part).textContent : part).join('');
+      for (const block of clone.querySelectorAll('h2, h3, p, div, pre, li, button, label, br')) block.after('\n');
+      window.api?.logUiNotice?.(window.sessionNoticeLog({ event, kind: 'info', id: source + ':' + title, source, title, choices, choice: answer,
+        text: clone.textContent }, sessions, { marked: [...clone.querySelectorAll('[data-log-session]')].map(label => label.dataset.logSession) }))?.catch?.(() => {});
     } catch {}
   }
   report('dialog-show');

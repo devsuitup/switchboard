@@ -7,6 +7,175 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { setupSidebarDom } = require('./dom-setup');
 const { loadAppFunctions } = require('./app-source');
+const { EventEmitter } = require('node:events');
+const { installUiNoticeLog } = require('../src/main/app/ui-notice-log');
+
+function connectSink(t, window) {
+  const ipcMain = new EventEmitter();
+  const lines = [];
+  const webContents = { mainFrame: {}, isDestroyed: () => false };
+  const sink = installUiNoticeLog({ ipcMain, log: { info: line => lines.push(JSON.parse(line.slice('[ui-notice] '.length))) },
+    getWindow: () => ({ webContents, isDestroyed: () => false }), setTimer: () => 1, clearTimer() {} });
+  window.api.logUiNotice = value => ipcMain.emit('ui-notice-log', { sender: webContents, senderFrame: webContents.mainFrame }, value);
+  t.after(() => sink.dispose());
+  return lines;
+}
+
+for (const [summary, projectPath] of [
+  ['/review', '/review/SKILL.md'], ['https://private.example/payroll', '/repo'],
+  ['C:/Secret Project', 'C:/Secret Project/file.txt'], ['Delete', '/repo/Delete'],
+  ['private payroll]/Cancel', '/repo'], ['please fix\nprivate payroll', '/repo'],
+  ['fix src/main.js', '/repo/fix src/main.js'], ['a', '/repo/a'],
+]) {
+  test(`explicit delete-session label: ${JSON.stringify(summary)}`, async t => {
+    const { window, document } = setup(t);
+    const lines = connectSink(t, window);
+    const pending = window.showDeleteSessionDialog({ sessionId: 'abcdef12-2345-6789', summary, projectPath });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(document.querySelector('h3').textContent.startsWith('Delete session "'));
+    const marker = document.querySelector('h3 [data-log-session="abcdef12"]');
+    assert.ok(marker, 'the visible session label has an explicit identity marker');
+    document.querySelector('#dss-cancel').click();
+    await pending;
+    assert.equal(lines.length, 2);
+    for (const event of lines) {
+      assert.equal(event.title, 'Delete session "abcdef12"?');
+      assert.equal(event.id, 'delete-session:Delete session "abcdef12"?');
+      assert.ok(event.text.includes(`Project: ${projectPath}`), event.text);
+    }
+  });
+}
+
+test('unmarked session dialogs omit unsafe fields at the real sink', async t => {
+  const { window, document } = setup(t);
+  const lines = connectSink(t, window);
+  const pending = window.appConfirm({ title: '/review', message: 'private payroll]/Cancel',
+    confirmLabel: 'private payroll]/Cancel', sessions: [{ sessionId: 'abcdef12-2345-6789', summary: '/review' }] });
+  document.querySelector('.choice-dialog-confirm').click();
+  await pending;
+  assert.equal(lines.length, 2);
+  for (const event of lines) {
+    assert.equal(event.unmarked, true);
+    assert.deepEqual(event.sessions, ['abcdef12']);
+    assert.equal(Object.hasOwn(event, 'title'), false);
+    assert.equal(Object.hasOwn(event, 'text'), false);
+    assert.doesNotMatch(JSON.stringify(event), /private payroll|\/review/);
+  }
+});
+
+test('explicit notice logText and logId preserve visible labels and real paths', async t => {
+  const { window, document, context } = setup(t);
+  const lines = connectSink(t, window);
+  const session = { sessionId: 'abcdef12-2345-6789', summary: '/review' };
+  window.LIVE_ELSEWHERE_NOTICE_MS = 60000;
+  loadAppFunctions(context, { functions: ['showRestoreNotice'] });
+  window.showRestoreNotice('restore:/review', '/review at C:/Secret Project/file.txt', session,
+    { logId: 'restore:abcdef12', logText: 'abcdef12 at C:/Secret Project/file.txt' });
+  assert.equal(document.querySelector('.restore-toast-msg').textContent, '/review at C:/Secret Project/file.txt');
+  document.querySelector('.restore-toast-dismiss').click();
+  await Promise.resolve();
+  window.showAppNotice({ id: 'restore:/review', sessions: [session], message: '/review at /review/SKILL.md',
+    logId: 'restore:abcdef12', logText: 'abcdef12 at /review/SKILL.md' });
+  document.querySelector('.app-notice-dismiss').click();
+  assert.equal(lines.length, 4);
+  for (const event of lines) {
+    assert.equal(event.id, 'restore:abcdef12');
+    assert.ok(event.text.startsWith('abcdef12 at '), event.text);
+  }
+  assert.equal(lines[0].text, 'abcdef12 at C:/Secret Project/file.txt');
+  assert.equal(lines[2].text, 'abcdef12 at /review/SKILL.md');
+});
+
+test('marked question paragraphs and selected radio labels log ids and retain block separators', async t => {
+  const { window, document } = setup(t);
+  const lines = connectSink(t, window);
+  const session = { sessionId: 'abcdef12-2345-6789', summary: 'private payroll]/Cancel' };
+  const pending = window.appChoose({ title: 'Open?', sessions: [session], message: `Open ${session.summary}?`,
+    messageParts: [['Open ', { session, label: session.summary }, '?'], ['Path: C:/Secret Project/file.txt']],
+    options: [{ id: 'a', label: session.summary, session }] });
+  document.querySelector('.choice-dialog-confirm').click();
+  await pending;
+  assert.equal(lines[0].text.includes('Open abcdef12?\nPath:'), true);
+  assert.ok(lines[0].choices.includes('abcdef12'));
+  assert.equal(lines[1].choice, 'abcdef12');
+  assert.doesNotMatch(JSON.stringify(lines), /private payroll/);
+});
+
+test('resume guard and continuation choices mark actual caller labels', async t => {
+  const { window, document, context } = setup(t);
+  const lines = connectSink(t, window);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/resume-guard.js'), 'utf8'), context,
+    { filename: 'public/resume-guard.js' });
+  const session = { sessionId: 'abcdef12-2345-6789', summary: '/review' };
+  const pending = window.guardResume(session, { name: session.summary, live: { kind: 'interactive', cwd: 'C:/Secret Project/file.txt' },
+    confirm: window.appConfirm });
+  document.querySelector('.choice-dialog-confirm').click();
+  assert.equal(await pending, true);
+  assert.match(lines[0].text, /"abcdef12" is already running/);
+  assert.ok(lines[0].text.includes('C:/Secret Project/file.txt'));
+  const other = { sessionId: 'bcdef123-2345-6789', title: 'https://private.example/payroll' };
+  const choice = window.resolveResumeSession(session, { choose: window.appChoose,
+    api: { getSessionContinuations: async () => ({ candidates: [other] }), getSessionsLiveElsewhere: async () => ({}) } });
+  await new Promise(resolve => setImmediate(resolve));
+  document.querySelector('[data-choice-id="bcdef123-2345-6789"]').click();
+  document.querySelector('.choice-dialog-confirm').click();
+  assert.equal((await choice).sessionId, other.sessionId);
+  assert.equal(lines.at(-1).choice, 'bcdef123');
+  assert.doesNotMatch(JSON.stringify(lines), /\/review|private\.example/);
+});
+
+test('stop plans, archive checkbox labels and background progress use explicit identities', async t => {
+  const { window, document, context } = setup(t);
+  const lines = connectSink(t, window);
+  const session = { sessionId: 'abcdef12-2345-6789', name: '/review' };
+  const plan = window.describeSessionStopPlan(session, [{ sessionId: session.sessionId, where: 'at C:/Secret Project/file.txt' }], []);
+  const stop = window.appConfirm({ title: 'Stop?', message: plan.confirmText, messageParts: plan.confirmParts, sessions: [session] });
+  document.querySelector('.choice-dialog-cancel').click();
+  await stop;
+  assert.match(lines[0].text, /This session "abcdef12" at C:\/Secret Project\/file.txt/);
+  const archive = window.showChoiceDialog({ title: 'Archive?', sessions: [session], choices: [{ id: 'archive', checked: true,
+    label: checked => checked ? 'Stop /review' : 'Keep /review',
+    labelParts: checked => [checked ? 'Stop ' : 'Keep ', { session, label: session.name }] }] });
+  document.querySelector('input[type=checkbox]').click();
+  document.querySelector('.choice-dialog-confirm').click();
+  await archive;
+  assert.equal(lines.at(-1).choice, 'OK; Keep abcdef12=false');
+  loadAppFunctions(context, { functions: ['showExitBackgroundProgress', 'exitBackgroundFailure'] });
+  window.showExitBackgroundProgress({ detail: { action: 'close' }, entries: new Map([[session.sessionId,
+    { id: session.sessionId, name: session.name, phase: 'waiting' }]]) });
+  assert.match(lines.at(-1).text, /abcdef12 waits for its turn to end/);
+  assert.doesNotMatch(JSON.stringify(lines), /\/review/);
+});
+
+test('restore groups merge safe text and unmarked notices fail closed', t => {
+  const { window, document, context } = setup(t);
+  const lines = connectSink(t, window);
+  loadAppFunctions(context, { functions: ['showLiveElsewhereNotice'] });
+  window.showLiveElsewhereNotice([{ session: { sessionId: 'abcdef12-2345-6789', name: '/review' }, live: { pid: 1, cwd: 'C:/Secret Project/file.txt' } }]);
+  window.showLiveElsewhereNotice([{ session: { sessionId: 'bcdef123-2345-6789', name: 'https://private.example/payroll' }, live: { pid: 2 } }]);
+  assert.equal(lines.at(-1).event, 'merge');
+  assert.match(lines.at(-1).text, /abcdef12/);
+  assert.match(lines.at(-1).text, /bcdef123/);
+  assert.ok(lines.at(-1).text.includes('C:/Secret Project/file.txt'));
+  assert.doesNotMatch(JSON.stringify(lines), /\/review|private\.example/);
+  window.showAppNotice({ id: '/review', message: '/review', sessions: [{ sessionId: 'abcdef12-2345-6789' }] });
+  assert.equal(lines.at(-1).unmarked, true);
+  assert.equal(Object.hasOwn(lines.at(-1), 'text'), false);
+  assert.ok(document.querySelector('[data-notice-id="/review"]'));
+  assert.doesNotMatch(JSON.stringify(lines.at(-1)), /\/review/);
+});
+
+test('a partially marked session list still fails closed', async t => {
+  const { window, document } = setup(t);
+  const lines = connectSink(t, window);
+  const session = { sessionId: 'abcdef12-2345-6789', name: '/review' };
+  const pending = window.appConfirm({ title: 'Open?', sessions: [session, { sessionId: 'bcdef123-2345-6789', name: 'private payroll' }],
+    message: '/review and private payroll', messageParts: [[{ session, label: session.name }, ' and private payroll']] });
+  document.querySelector('.choice-dialog-cancel').click();
+  await pending;
+  assert.equal(lines[0].unmarked, true);
+  assert.doesNotMatch(JSON.stringify(lines), /\/review|private payroll/);
+});
 
 function setup(t) {
   const ctx = setupSidebarDom();
@@ -117,7 +286,7 @@ test('M4 restore toast logs short identity while keeping its title visible', asy
   window.LIVE_ELSEWHERE_NOTICE_MS = 60000;
   loadAppFunctions(context, { functions: ['showRestoreNotice'] });
   const session = { sessionId: 'abcdef01-2345-6789', summary: 'PRIVATE FIRST PROMPT' };
-  window.showRestoreNotice('background-info:' + session.sessionId, `${session.summary} now runs in the background.`, session);
+  window.showRestoreNotice('background-info:' + session.sessionId, `${session.summary} now runs in the background.`, session, { logText: 'abcdef01 now runs in the background.' });
   assert.match(document.querySelector('.restore-toast-msg').textContent, /PRIVATE FIRST PROMPT/);
   document.querySelector('.restore-toast-dismiss').click();
   await Promise.resolve();
@@ -130,8 +299,8 @@ test('M4 restore toast logs short identity while keeping its title visible', asy
 test('R1 multiline unnamed session is redacted across question paragraphs', async t => {
   const { window, document, events } = setup(t);
   const session = { sessionId: 'abcdef12-2345-6789', summary: 'please fix the bug\n  in my secret-project payroll module' };
-  const pending = window.appConfirm({ title: 'Stop?', message: `Stop background job "${session.summary}"`, sessions: [session] });
-  assert.equal(document.querySelectorAll('.choice-dialog-body p').length, 2);
+  const pending = window.appConfirm({ title: 'Stop?', message: `Stop background job "${session.summary}"`, messageParts: [['Stop background job "', { session, label: session.summary }, '"']], sessions: [session] });
+  assert.ok(document.querySelector('.choice-dialog-body').textContent.includes(session.summary));
   document.querySelector('.choice-dialog-cancel').click();
   await pending;
   assert.equal(events.length, 2);
@@ -157,59 +326,23 @@ test('R1 delete-session redacts the cleaned multiline unnamed label and preserve
   }
 });
 
-test('R2 one-letter names do not rewrite prose or path tokens', async t => {
+test('explicit labels preserve prose, real paths and multiline content', async t => {
   const { window, document, events } = setup(t);
-  const message = 'Stop a session named "a" at /repo/a';
-  const pending = window.appConfirm({ title: 'Stop?', message, sessions: [{ sessionId: 'abcdef12-2345-6789', name: 'a' }] });
-  document.querySelector('.choice-dialog-cancel').click();
-  await pending;
-  assert.equal(events.length, 2);
-  for (const event of events) assert.ok(event.text.includes(message), event.text);
-});
-
-test('R2 project label becomes the id without changing paths or larger words', async t => {
-  const { window, document, events } = setup(t);
-  const session = { sessionId: 'abcdef12-2345-6789', name: 'switchboard' };
-  const message = 'Stop "switchboard" at C:\\Serveur\\switchboard\\file.txt or /repo/switchboard; switchboardish stays.';
-  const pending = window.appConfirm({ title: 'Stop?', message, sessions: [session] });
-  assert.equal(document.querySelector('.choice-dialog-body p').textContent, message);
+  const session = { sessionId: 'abcdef12-2345-6789', name: 'Delete' };
+  const pending = window.appConfirm({ title: 'Stop?', sessions: [session],
+    messageParts: [['Delete [', { session, label: 'Delete' }, ']/Cancel'],
+      ['Path: C:/Secret Project/file.txt and /review/SKILL.md'],
+      ['Multi: ', { session, label: 'fix src/main.js\n for payroll' }]] });
+  assert.ok(document.querySelector('[data-log-session]'), 'explicit label marker is present');
+  assert.equal(document.querySelector('[data-log-session]').textContent, 'Delete');
   document.querySelector('.choice-dialog-cancel').click();
   await pending;
   assert.equal(events.length, 2);
   for (const event of events) {
-    assert.match(event.text, /Stop "abcdef12"/);
-    assert.ok(event.text.includes('C:\\Serveur\\switchboard\\file.txt'), event.text);
-    assert.ok(event.text.includes('/repo/switchboard; switchboardish stays.'), event.text);
-  }
-});
-
-test('a first-prompt label that contains a path is replaced as a whole', async t => {
-  const { window, document, events } = setup(t);
-  const session = { sessionId: 'abcdef12-2345-6789', summary: 'fix src/main.js for the payroll export' };
-  const message = 'Delete session "fix src/main.js for the payroll export"? Its files stay in /repo/src.';
-  const pending = window.appConfirm({ title: 'Delete?', message, sessions: [session] });
-  document.querySelector('.choice-dialog-cancel').click();
-  await pending;
-  assert.ok(events.length > 0);
-  for (const event of events) {
-    assert.match(event.text, /Delete session "abcdef12"\?/);
-    assert.ok(!event.text.includes('payroll'), event.text);
-    assert.ok(event.text.includes('/repo/src.'), event.text);
-  }
-});
-
-test('a single-token command or path label never rewrites a real path', async t => {
-  const { window, document, events } = setup(t);
-  const sessions = [{ sessionId: 'abcdef12-2345-6789', summary: '/review' },
-    { sessionId: 'bcdef123-2345-6789', name: 'src/main.js' }];
-  const message = 'Read /review/SKILL.md and open C:/repo/src/main.js now.';
-  const pending = window.appConfirm({ title: 'Open?', message, sessions });
-  document.querySelector('.choice-dialog-cancel').click();
-  await pending;
-  assert.ok(events.length > 0);
-  for (const event of events) {
-    assert.ok(event.text.includes('/review/SKILL.md'), event.text);
-    assert.ok(event.text.includes('C:/repo/src/main.js'), event.text);
+    assert.ok(event.text.includes('Delete [abcdef12]/Cancel\nPath:'), event.text);
+    assert.ok(event.text.includes('C:/Secret Project/file.txt and /review/SKILL.md'), event.text);
+    assert.ok(event.text.includes('Multi: abcdef12'), event.text);
+    assert.doesNotMatch(JSON.stringify(event), /payroll/);
   }
 });
 
