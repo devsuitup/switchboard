@@ -266,8 +266,42 @@ async function launchTerminalSession(project) {
 }
 
 async function showNewSessionDialog(project, opener = document.activeElement) {
+  return showSessionLaunchDialog(project, opener);
+}
+
+async function showSessionLaunchDialog(project, opener, session = null) {
+  const runtime = (session || project).runtime || 'claude';
+  const codex = runtime === 'codex';
+  const prefix = session ? 'rsd' : 'nsd';
+  const runtimeLabel = codex ? 'Codex' : 'Claude';
   const openerHeaderId = opener?.closest('.project-header, .worktree-header')?.id;
-  const effective = normalizeBrowserSettings(await window.api.getEffectiveSettings(project.projectPath));
+  const defaults = await window.api.getEffectiveSettings(project.projectPath);
+  const recorded = {};
+  const keys = codex
+    ? ['codexModel', 'codexSandbox', 'codexApproval', 'codexEffort', 'preLaunchCmd', 'addDirs']
+    : ['permissionMode', 'dangerouslySkipPermissions', 'browserMode', 'chrome', 'sandbox', 'preLaunchCmd', 'addDirs', 'mcpEmulation'];
+  for (const key of keys) {
+    if (session && session[key] !== undefined) recorded[key] = session[key];
+  }
+  if (!codex && Object.hasOwn(recorded, 'permissionMode') && !Object.hasOwn(recorded, 'dangerouslySkipPermissions')) recorded.dangerouslySkipPermissions = false;
+  const effective = { ...normalizeBrowserSettings(defaults), ...normalizeBrowserSettings(recorded) };
+  let models = [];
+  if (codex && typeof window.api.getHarnessModels === 'function') {
+    try {
+      const catalog = await window.api.getHarnessModels(runtime);
+      models = Array.isArray(catalog) ? catalog.filter(m => m && typeof m.slug === 'string' && m.visible !== false) : [];
+    } catch {}
+  }
+  const modelChoices = [['', 'Codex default'], ...models.map(m => [m.slug, m.label || m.slug])];
+  if (effective.codexModel && !modelChoices.some(([value]) => value === effective.codexModel)) modelChoices.push([effective.codexModel, effective.codexModel]);
+  function codexField(key, name, label, choices) {
+    return `<div class="settings-field">
+      <label class="settings-label" for="${prefix}-codex-${name}">${label}</label>
+      <div class="settings-field-control"><select class="settings-select control-select" id="${prefix}-codex-${name}">
+        ${choices.map(([value, title]) => `<option value="${escapeHtml(value)}" ${(effective[key] || '') === value ? 'selected' : ''}>${escapeHtml(title)}</option>`).join('')}
+      </select></div>
+    </div>`;
+  }
 
   const overlay = document.createElement('div');
   overlay.className = 'new-session-overlay';
@@ -289,29 +323,39 @@ async function showNewSessionDialog(project, opener = document.activeElement) {
   }
 
   dialog.innerHTML = `
-    <h3>New Session — ${escapeHtml(shortProjectPath(project.projectPath))}</h3>
+    <h3></h3>
     <div class="new-session-body">
+    ${session ? `<div class="settings-field settings-field-wide">
+      <label class="settings-label" for="rsd-cwd">Working directory</label>
+      <input class="settings-input" id="rsd-cwd" readonly value="${escapeHtml(session.cwd || session.projectPath)}">
+    </div>` : ''}
+    ${codex ? [
+      codexField('codexSandbox', 'sandbox', 'Sandbox', [['', 'Codex default'], ['read-only', 'Read-only'], ['workspace-write', 'Workspace write'], ['danger-full-access', 'Full access (danger)']]),
+      codexField('codexApproval', 'approval', 'Approval', [['', 'Codex default'], ['on-request', 'On request'], ['never', 'Never']]),
+      codexField('codexModel', 'model', 'Model', modelChoices),
+      codexField('codexEffort', 'effort', 'Reasoning effort', [['', 'Codex default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max'], ['ultra', 'Ultra']]),
+    ].join('') : `
     <div class="settings-field">
       <div class="settings-label">Permission Mode</div>
-      <div class="permission-grid" id="nsd-mode-grid">${renderModeGrid()}</div>
+      <div class="permission-grid" id="${prefix}-mode-grid">${renderModeGrid()}</div>
     </div>
-    <div class="settings-field">
+    ${!session ? `<div class="settings-field">
       <div class="settings-field-info">
         <span class="settings-label">Worktree</span>
         <div class="settings-description">Run session in an isolated git worktree</div>
       </div>
       <div class="settings-field-control">
-        <input type="text" class="settings-input" id="nsd-worktree-name" placeholder="name (optional)" value="${escapeHtml(effective.worktreeName || SETTING_DEFAULTS.worktreeName)}" style="width:140px">
-        <label class="settings-toggle"><input type="checkbox" id="nsd-worktree" ${effective.worktree ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+        <input type="text" class="settings-input" id="${prefix}-worktree-name" placeholder="name (optional)" value="${escapeHtml(effective.worktreeName || SETTING_DEFAULTS.worktreeName)}" style="width:140px">
+        <label class="settings-toggle"><input type="checkbox" id="${prefix}-worktree" ${effective.worktree ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
       </div>
-    </div>
+    </div>` : ''}
     <div class="settings-field">
       <div class="settings-field-info">
         <span class="settings-label">Browser</span>
         <div class="settings-description">Choose browser automation for this session</div>
       </div>
       <div class="settings-field-control">
-        <select class="settings-select control-select" id="nsd-browser-mode" aria-label="Browser">
+        <select class="settings-select control-select" id="${prefix}-browser-mode" aria-label="Browser">
           ${BROWSER_MODES.filter(mode => mode.value !== 'managed').map(mode => `<option value="${mode.value}" ${effective.browserMode === mode.value ? 'selected' : ''}>${mode.label}</option>`).join('')}
         </select>
       </div>
@@ -322,16 +366,17 @@ async function showNewSessionDialog(project, opener = document.activeElement) {
         <div class="settings-description">Run claude in a bubblewrap sandbox — only the project and Claude's own dirs are visible</div>
       </div>
       <div class="settings-field-control">
-        <label class="settings-toggle"><input type="checkbox" id="nsd-sandbox" ${effective.sandbox ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+        <label class="settings-toggle"><input type="checkbox" id="${prefix}-sandbox" ${effective.sandbox ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
       </div>
     </div>` : ''}
+    `}
     <div class="settings-field settings-field-wide">
       <div class="settings-field-info">
         <span class="settings-label">Pre-launch Command</span>
-        <div class="settings-description">Prepended to the claude command</div>
+        <div class="settings-description">Prepended to the ${codex ? 'codex' : 'claude'} command</div>
       </div>
       <div class="settings-field-control">
-        <input type="text" class="settings-input" id="nsd-pre-launch" placeholder="e.g. aws-vault exec profile --" value="${escapeHtml(effective.preLaunchCmd || SETTING_DEFAULTS.preLaunchCmd)}">
+        <input type="text" class="settings-input" id="${prefix}-pre-launch" placeholder="e.g. aws-vault exec profile --" value="${escapeHtml(effective.preLaunchCmd || SETTING_DEFAULTS.preLaunchCmd)}">
       </div>
     </div>
     <div class="settings-field settings-field-wide">
@@ -340,26 +385,31 @@ async function showNewSessionDialog(project, opener = document.activeElement) {
         <div class="settings-description">Extra directories to include (comma-separated)</div>
       </div>
       <div class="settings-field-control">
-        <input type="text" class="settings-input" id="nsd-add-dirs" placeholder="/path/to/dir1, /path/to/dir2" value="${escapeHtml(effective.addDirs || SETTING_DEFAULTS.addDirs)}">
+        <input type="text" class="settings-input" id="${prefix}-add-dirs" placeholder="/path/to/dir1, /path/to/dir2" value="${escapeHtml(effective.addDirs || SETTING_DEFAULTS.addDirs)}">
       </div>
     </div>
     </div>
     <div class="new-session-actions">
       <button class="new-session-cancel-btn">Cancel</button>
-      <button class="new-session-start-btn">Start</button>
+      <button class="new-session-start-btn">${session ? 'Resume' : 'Start'}</button>
     </div>
   `;
 
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
 
-  // Bind mode grid clicks
-  const modeGrid = dialog.querySelector('#nsd-mode-grid');
+  if (session) {
+    const name = session.name || session.aiTitle || session.summary || session.sessionId.slice(0, 8);
+    window.renderSessionText(dialog.querySelector('h3'), [`Resume ${runtimeLabel} Session — `, { session, label: name }]);
+  } else {
+    dialog.querySelector('h3').textContent = `New ${codex ? 'Codex ' : ''}Session — ${shortProjectPath(project.projectPath)}`;
+  }
+  const modeGrid = dialog.querySelector(`#${prefix}-mode-grid`);
   function focusSelectedMode() {
-    (modeGrid.querySelector('.permission-option.selected') || modeGrid.querySelector('button')).focus();
+    (modeGrid?.querySelector('.permission-option.selected') || modeGrid?.querySelector('button') || dialog.querySelector('select')).focus();
   }
 
-  modeGrid.addEventListener('click', (e) => {
+  modeGrid?.addEventListener('click', (e) => {
     const btn = e.target.closest('.permission-option');
     if (!btn) return;
     const mode = btn.dataset.mode;
@@ -392,27 +442,33 @@ async function showNewSessionDialog(project, opener = document.activeElement) {
   }
 
   function start() {
-    const options = {};
-    if (dangerousSkip) {
-      options.dangerouslySkipPermissions = true;
-    } else if (selectedMode) {
-      options.permissionMode = selectedMode;
+    const options = session || codex ? { runtime } : {};
+    if (codex) {
+      for (const [key, name] of [['codexSandbox', 'sandbox'], ['codexApproval', 'approval'], ['codexModel', 'model'], ['codexEffort', 'effort']]) {
+        const value = dialog.querySelector(`#${prefix}-codex-${name}`).value;
+        if (value) options[key] = value;
+      }
+    } else {
+      if (dangerousSkip) {
+        options.dangerouslySkipPermissions = true;
+      } else if (selectedMode) {
+        options.permissionMode = selectedMode;
+      }
+      if (!session && dialog.querySelector(`#${prefix}-worktree`).checked) {
+        options.worktree = true;
+        options.worktreeName = dialog.querySelector(`#${prefix}-worktree-name`).value.trim();
+      }
+      options.browserMode = dialog.querySelector(`#${prefix}-browser-mode`).value;
+      const sandboxToggle = dialog.querySelector(`#${prefix}-sandbox`);
+      if (sandboxToggle && sandboxToggle.checked) options.sandbox = true;
+      if (effective.mcpEmulation === false) options.mcpEmulation = false;
     }
-    if (dialog.querySelector('#nsd-worktree').checked) {
-      options.worktree = true;
-      options.worktreeName = dialog.querySelector('#nsd-worktree-name').value.trim();
-    }
-    options.browserMode = dialog.querySelector('#nsd-browser-mode').value;
-    const sandboxToggle = dialog.querySelector('#nsd-sandbox');
-    if (sandboxToggle && sandboxToggle.checked) {
-      options.sandbox = true;
-    }
-    const preLaunch = dialog.querySelector('#nsd-pre-launch').value.trim();
+    const preLaunch = dialog.querySelector(`#${prefix}-pre-launch`).value.trim();
     if (preLaunch) options.preLaunchCmd = preLaunch;
-    options.addDirs = dialog.querySelector('#nsd-add-dirs').value.trim();
-    if (effective.mcpEmulation === false) options.mcpEmulation = false;
+    options.addDirs = dialog.querySelector(`#${prefix}-add-dirs`).value.trim();
     close(false);
-    launchNewSession(project, options);
+    if (session) openSession(session, options);
+    else launchNewSession(project, options);
   }
 
   dialog.querySelector('.new-session-cancel-btn').onclick = () => close();
@@ -420,7 +476,7 @@ async function showNewSessionDialog(project, opener = document.activeElement) {
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   const unregister = registerModal({ overlay, cancel: () => close(), bodyEnter: true, restoreFocus: false, enter: e => {
-    if (!e.target.matches('input:not([type="checkbox"])')) {
+    if (!e.target.matches('input:not([type="checkbox"]), select, textarea')) {
       if (e.target.closest('.new-session-cancel-btn')) close();
       else start();
       return true;
@@ -537,138 +593,7 @@ function showRemoteLaunchDialog(project) {
 }
 
 async function showResumeSessionDialog(session) {
-  const effective = normalizeBrowserSettings(await window.api.getEffectiveSettings(session.projectPath));
-
-  const overlay = document.createElement('div');
-  overlay.className = 'new-session-overlay';
-
-  const dialog = document.createElement('div');
-  dialog.className = 'new-session-dialog';
-
-  let selectedMode = effective.permissionMode || null;
-  let dangerousSkip = !!effective.dangerouslySkipPermissions;
-
-  const modes = PERMISSION_MODES;
-
-  function renderModeGrid() {
-    return modes.map(m => {
-      const isSelected = !dangerousSkip && selectedMode === m.value;
-      return `<button class="permission-option${isSelected ? ' selected' : ''}" data-mode="${m.value}"><span class="perm-name">${m.label}</span><span class="perm-desc">${m.desc}</span></button>`;
-    }).join('') +
-    `<button class="permission-option dangerous${dangerousSkip ? ' selected' : ''}" data-mode="dangerous-skip"><span class="perm-name">Dangerous Skip</span><span class="perm-desc">Skip all safety prompts (use with caution)</span></button>`;
-  }
-
-  const sessionName = session.name || session.aiTitle || session.summary || session.sessionId.slice(0, 8);
-
-  dialog.innerHTML = `
-    <h3></h3>
-    <div class="new-session-body">
-    <div class="settings-field">
-      <div class="settings-label">Permission Mode</div>
-      <div class="permission-grid" id="rsd-mode-grid">${renderModeGrid()}</div>
-    </div>
-    <div class="settings-field">
-      <div class="settings-field-info">
-        <span class="settings-label">Browser</span>
-        <div class="settings-description">Choose browser automation for this session</div>
-      </div>
-      <div class="settings-field-control">
-        <select class="settings-select control-select" id="rsd-browser-mode" aria-label="Browser">
-          ${BROWSER_MODES.filter(mode => mode.value !== 'managed').map(mode => `<option value="${mode.value}" ${effective.browserMode === mode.value ? 'selected' : ''}>${mode.label}</option>`).join('')}
-        </select>
-      </div>
-    </div>
-    ${window.api.platform === 'linux' ? `<div class="settings-field">
-      <div class="settings-field-info">
-        <span class="settings-label">Sandbox</span>
-        <div class="settings-description">Run claude in a bubblewrap sandbox — only the project and Claude's own dirs are visible</div>
-      </div>
-      <div class="settings-field-control">
-        <label class="settings-toggle"><input type="checkbox" id="rsd-sandbox" ${effective.sandbox ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
-      </div>
-    </div>` : ''}
-    <div class="settings-field settings-field-wide">
-      <div class="settings-field-info">
-        <span class="settings-label">Pre-launch Command</span>
-        <div class="settings-description">Prepended to the claude command</div>
-      </div>
-      <div class="settings-field-control">
-        <input type="text" class="settings-input" id="rsd-pre-launch" placeholder="e.g. aws-vault exec profile --" value="${escapeHtml(effective.preLaunchCmd || SETTING_DEFAULTS.preLaunchCmd)}">
-      </div>
-    </div>
-    <div class="settings-field settings-field-wide">
-      <div class="settings-field-info">
-        <span class="settings-label">Additional Directories</span>
-        <div class="settings-description">Extra directories to include (comma-separated)</div>
-      </div>
-      <div class="settings-field-control">
-        <input type="text" class="settings-input" id="rsd-add-dirs" placeholder="/path/to/dir1, /path/to/dir2" value="${escapeHtml(effective.addDirs || SETTING_DEFAULTS.addDirs)}">
-      </div>
-    </div>
-    </div>
-    <div class="new-session-actions">
-      <button class="new-session-cancel-btn">Cancel</button>
-      <button class="new-session-start-btn">Resume</button>
-    </div>
-  `;
-
-  overlay.appendChild(dialog);
-  document.body.appendChild(overlay);
-
-  window.renderSessionText(dialog.querySelector('h3'), ['Resume Session — ', { session, label: sessionName }]);
-
-  // Bind mode grid clicks
-  const modeGrid = dialog.querySelector('#rsd-mode-grid');
-  modeGrid.addEventListener('click', (e) => {
-    const btn = e.target.closest('.permission-option');
-    if (!btn) return;
-    const mode = btn.dataset.mode;
-    if (mode === 'dangerous-skip') {
-      dangerousSkip = !dangerousSkip;
-      if (dangerousSkip) selectedMode = null;
-    } else {
-      dangerousSkip = false;
-      selectedMode = mode === 'null' ? null : mode;
-    }
-    modeGrid.innerHTML = renderModeGrid();
-  });
-
-  function close() {
-    overlay.remove();
-    unregister();
-  }
-
-  function resume() {
-    const options = {};
-    if (dangerousSkip) {
-      options.dangerouslySkipPermissions = true;
-    } else if (selectedMode) {
-      options.permissionMode = selectedMode;
-    }
-    options.browserMode = dialog.querySelector('#rsd-browser-mode').value;
-    const sandboxToggle = dialog.querySelector('#rsd-sandbox');
-    if (sandboxToggle && sandboxToggle.checked) {
-      options.sandbox = true;
-    }
-    const preLaunch = dialog.querySelector('#rsd-pre-launch').value.trim();
-    if (preLaunch) options.preLaunchCmd = preLaunch;
-    options.addDirs = dialog.querySelector('#rsd-add-dirs').value.trim();
-    if (effective.mcpEmulation === false) options.mcpEmulation = false;
-    close();
-    openSession(session, options);
-  }
-
-  dialog.querySelector('.new-session-cancel-btn').onclick = close;
-  dialog.querySelector('.new-session-start-btn').onclick = resume;
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-
-  const unregister = registerModal({ overlay, cancel: close, bodyEnter: true, enter: e => {
-    if (e.target.matches('input, button:not(.permission-option)')) return false;
-    resume();
-    return true;
-  } });
-  (modeGrid.querySelector(dangerousSkip ? '[data-mode="dangerous-skip"]' : '.permission-option.selected') ||
-    modeGrid.querySelector('button')).focus();
+  return showSessionLaunchDialog(session, document.activeElement, session);
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — sending a prompt")

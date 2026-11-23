@@ -1,5 +1,39 @@
 # Renderer modal stack and questions
 
+## Runtime launch form (#1201)
+
+`showNewSessionDialog` and `showResumeSessionDialog` delegate to
+`showSessionLaunchDialog` in `public/dialogs.js`. Its runtime comes from the
+session (legacy rows default to Claude), or the project argument for creation.
+Claude uses the existing permission/browser/Linux-sandbox fields; Codex uses
+sandbox, approval, model and effort selects. The Codex model catalog is
+optional; failed reads leave Default and any configured model available.
+The picker still launches Codex directly with effective settings; this change
+does not add a Configure entry to the picker.
+
+Resume hides Worktree, displays `session.cwd || session.projectPath` read-only,
+and keeps the grouped project identity when calling `openSession`. Main still
+resolves the actual cwd from the transcript/cache before spawning. Only the
+runtime's supported session option keys override effective settings. Explicit
+false, null and empty strings survive; a recorded Claude permission mode also
+clears an inherited Dangerous Skip unless that flag is itself recorded. Legacy
+`chrome` values normalize before the merge. The current index projection carries
+cwd but no launch options, so normal cached rows use effective settings for
+these controls; this dialog does not scan transcripts to reconstruct them.
+
+Submission collects only visible runtime controls plus the two shared text
+fields. Resume includes its runtime and passes custom options through
+`openSession` to `open-terminal`; the existing harness constructs resume argv.
+Codex never inherits Claude's Dangerous Skip, browser or bubblewrap settings.
+New and Resume use the same modal stack, cancellation/focus restoration and
+permission-button focus behavior. Enter in a select or text input does not
+submit. Session title markers remain outside question logging.
+
+`test/dom-resume-runtime.test.js` loads shipped dialogs in jsdom and the real
+`openSession` via `loadAppFunctions`, observes launch IPC arguments, then calls
+the production harness argument builders. It covers both forms, explicit
+overrides, fallback settings, cwd display and platform-specific sandboxing.
+
 ## UI notice history (#1196)
 
 `preload.logUiNotice` sends `ui-notice-log` without waiting for a reply.
