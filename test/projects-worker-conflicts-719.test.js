@@ -181,8 +181,8 @@ for (const away of [false, true]) test(`T5.5/T5.6 stale fallback crosses the bri
   vm.runInContext(app.slice(eventStart, app.indexOf('\n});', eventStart) + 4), h.context, { filename: appFilename });
   const initial = w.reloadProjects();
   for (let i = 0; i < 3; i++) { await flush(); f.change(); f.reply(i, effectful); }
-  assert.equal(await initial, true); assert.equal(w.cachedProjects[0].projectPath, 'accepted');
-  assert.equal(assemblies, 2); assert.equal(notifications, 0); assert.equal(timers.length, 0);
+  assert.equal(await initial, false); assert.equal(w.cachedProjects[0].projectPath, 'accepted');
+  assert.equal(assemblies, 0); assert.equal(notifications, 0); assert.equal(timers.length, 0);
   assert.equal(mainTimers.length, 1);
   const recovered = mainTimers.shift()();
   await flush();
@@ -201,7 +201,7 @@ for (const away of [false, true]) test(`T5.5/T5.6 stale fallback crosses the bri
   } else { timers.shift()(); await flush(); }
   assert.equal(f.messages.length, 5);
   f.reply(4, fresh);
-  await flush(); assert.equal(w.cachedProjects[0].projectPath, 'fresh'); assert.equal(assemblies, 6);
+  await flush(); assert.equal(w.cachedProjects[0].projectPath, 'fresh'); assert.equal(assemblies, 4);
   const coded = bridge.getProjects('both');
   for (let i = 5; i < 8; i++) { await flush(); f.change(); f.reply(i, effectful); }
   const fallback = await coded;
@@ -211,7 +211,7 @@ for (const away of [false, true]) test(`T5.5/T5.6 stale fallback crosses the bri
   for (let i = 8; i < 11; i++) { await flush(); f.change(); f.reply(i, { ...readonly, defaultProjects: [{ projectPath: 'stale', sessions: [] }], allProjects: [] }); }
   const delivered = await stale;
   assert.equal(delivered.projectsStale, true, 'a stale delivery crosses IPC flagged');
-  assert.equal(delivered.defaultProjects[0].projectPath, 'fresh', 'keep the last consistent result');
+  assert.equal(delivered.defaultProjects[0].projectPath, 'stale', 'deliver the effect-free current DB rows');
   assert.equal(notifications, 1, 'stale deliveries never immediately re-notify');
   assert.equal(mainTimers.length, 1, 'stale deliveries share one delayed refresh');
 });

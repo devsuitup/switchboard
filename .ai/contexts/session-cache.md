@@ -484,14 +484,23 @@ read-only build, preserving the deletion fence without replaying old effects.
 Effect-free conflicted replies can be delivered stale; effect-bearing replies
 still reject internally without publishing their remaining effects.
 
-Main catches that internal conflict and returns the last consistent result,
-using the persisted last-known lists once if no in-process result exists, or
-empty lists if neither exists. Current archive/hidden and live annotations
-still apply. Paired replies carry projectsStale: true and never overwrite the
-persisted last-known lists. There is no immediate conflict notification or
-projectsError envelope. One unrefed five-second timer retries the snapshot in
+Main substitutes only for a rejected conflict, using an in-process consistent
+result for paired callers. It saves a clone before assembly and clones that
+cache again on reuse so expired placeholders cannot accumulate. Current
+archive/hidden and live annotations still apply. This paired fallback carries
+both `projectsStale: true` and `projectsFallback: true`; the renderer rejects it
+before committing a generation, dropping provisional paint, announcing trigger
+readiness or advancing restore. Without an in-process result, and for boolean
+callers, main returns the exact `projectsError` conflict envelope recognized by
+preload. Persisted last-known lists remain provisional paint only; neither
+those nor invented empty lists seed the cache. Effect-free stale worker replies
+pass through with their current DB rows and only `projectsStale: true`, as in
+#1125; they never overwrite the consistent cache or the persisted last-known
+lists. No conflict or stale result immediately notifies the renderer.
+One unrefed five-second timer retries the snapshot in
 main, independently of renderer visibility. Concurrent failures share it; while
-it runs they cannot arm another timer. A stale retry arms one further interval;
+it runs they cannot arm another timer. A stale, unavailable or rejected retry
+arms one further interval; a rejected retry logs once at the snapshot boundary;
 a successful retry emits one reconcile notification. Persistent contention
 therefore costs at most one background refresh per five seconds, without a
 renderer feedback loop. Quitting prevents new retries and makes the timer inert.
@@ -508,10 +517,13 @@ eligible reconciliation; a failed attempt does not clear that debt.
 The filesystem watcher drains events into a batch but returns failed folder
 scopes to pendingChanges. Targeted scopes union with new files; a full-folder
 event dominates. Later folders in the batch still run and successful changes
-still notify. WRITER_STALE logs at info, other failures at error. One timer
-retries after five seconds without needing another filesystem event; incoming
-events do not postpone a conflict retry. The ordinary 500 ms debounce remains
-for uncontended batches. Retry work always re-reads current files rather than
+still notify. WRITER_STALE logs at info and retries after five seconds. Other
+failures back off per folder at 5 seconds, 30 seconds, then a capped 2 minutes;
+only the first failure and each backoff step log at error. Success clears that
+folder's backoff. One timer selects the earliest due folder; not-yet-due scopes
+stay pending. Incoming events do not postpone a failed folder's retry, and
+healthy folders retain their ordinary 500 ms debounce while others back off.
+Retry work always re-reads current files rather than
 replaying rejected effects. This is an in-process retry guarantee; process
 exit still relies on the next startup scan.
 

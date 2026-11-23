@@ -280,7 +280,7 @@ test('a stale delivery returns both views, projectsStale: true, without an immed
   assert.deepEqual(notifications, [], 'an accepted reply never notifies');
 });
 
-test('a terminal conflict logs the changed live component at info and returns a stale fallback', async () => {
+test('a terminal conflict logs the changed live component at info and returns an unavailable envelope without a consistent result', async () => {
   const warnings = [];
   const conflict = fields => Object.assign(new Error('Projects changed while loading; reload to retry.'),
     { code: 'PROJECTS_SNAPSHOT_CONFLICT', dispatches: 3, reconcile: false, ...fields });
@@ -288,7 +288,7 @@ test('a terminal conflict logs the changed live component at info and returns a 
   const invoke = handler({ log: { info: line => warnings.push(line) }, projectsClient: { request: async () => { throw error; } } });
   const same = { activeSessions: [], remoteRoots: [], localJobs: [] };
   error = conflict({ reason: 'live', before: JSON.stringify({ ...same, localDescriptors: [] }), after: JSON.stringify({ ...same, localDescriptors: [{ sessionId: 'new' }] }) });
-  assert.deepEqual(JSON.parse(JSON.stringify(await invoke(null, 'both'))), { defaultProjects: [], allProjects: [], projectsStale: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(await invoke(null, 'both'))), { projectsError: { code: 'PROJECTS_SNAPSHOT_CONFLICT', message: 'Projects changed while loading; reload to retry.' } });
   assert.match(warnings[0], /^\[projects\] snapshot conflict after 3 dispatches: reason=live changed=localDescriptors reconcile=false$/);
   error = conflict({ reason: 'live', before: 'not json', after: JSON.stringify(same) });
   await invoke(null, 'both');

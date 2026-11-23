@@ -1728,23 +1728,31 @@ Projects query worker. Tests cover request-time and dispatch-time gating,
 twenty publications with conflicts, failed settlement, and deadlines in
 `get-projects-worker-wiring`, `projects-worker-client` and `projects-changed`.
 
-On terminal PROJECTS_SNAPSHOT_CONFLICT, get-projects schedules the existing
-throttled projects-changed notification with cause conflict, then returns only
+On terminal PROJECTS_SNAPSHOT_CONFLICT, a paired get-projects request can reuse
+only the last in-process consistent worker result. A clone is assembled with
+current placeholder/archive/attach state and returned with `projectsStale: true`
+and `projectsFallback: true`. The renderer rejects this fallback before any
+commit, preserving provisional paint and leaving startup/restore uncommitted.
+With no consistent result, or for boolean requests, main returns only
 {projectsError:{code:'PROJECTS_SNAPSHOT_CONFLICT',message:'Projects changed while loading; reload to retry.'}}.
-Preload recognizes that exact envelope and reconstructs a coded Error. An
-effect-free build whose third dispatch conflicts on the live snapshot is not an
-error (#1125): get-projects returns the paired reply with `projectsStale: true`
-(boolean replies stay plain arrays) and schedules the same conflict
-notification, so the renderer renders it as any reply and the next reload
-replaces it; main logs the differing live component for the rejected case and
-the job options for a caller timeout (session-cache.md, "Projects query
-worker"). Ordinary errors still reject; boolean arrays and the paired defaultProjects/allProjects
+Preload recognizes that exact envelope and reconstructs a coded Error. Disk
+snapshots and empty lists never replace an unavailable worker result.
+An effect-free conflicted build is not an error (#1125): its own rows pass
+through with `projectsStale: true` on paired replies (boolean replies stay plain
+arrays). Neither path immediately notifies the renderer. Both share a coalesced
+five-second retry in main, re-armed on stale, unavailable or rejected retries;
+success emits a reconcile notification. Main selects one dispatch for snapshot
+races; the generic client defaults to three. Main logs the differing live
+component for conflicts and the job options for caller timeouts; failed retries
+log once (session-cache.md, "Projects query worker"). Ordinary errors still
+reject; boolean arrays and the paired defaultProjects/allProjects
 reply retain their successful shapes, with compact provenance on the paired
 reply. Its `projection.facts` map shares deciding inputs by opaque `scope|root`
 across both views (#742). Rows carry no `projectionFacts`; main's assembly and
 the renderer observer resolve representatives through the envelope's proof member
 sets. Subagents and terminals have no facts. Paired activity-trace byte counts
-include the envelope. Rejected worker results never reach placeholder/archive/attach assembly.
+include the envelope. Rejected worker payloads never reach assembly; only a
+clone of a prior consistent result may be assembled as an explicit fallback.
 
 session-projection-changed is a narrow preload send. Main requires its own
 window's webContents and main frame, validates allowlisted typed fields and logs

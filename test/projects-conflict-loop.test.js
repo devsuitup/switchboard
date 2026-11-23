@@ -193,3 +193,47 @@ test('watcher retries without any new event and does not postpone the retry for 
   f.event('one', 'a.jsonl');
   assert.equal([...f.time.timers.values()][0].at, due, 'streaming events must not postpone the bounded retry');
 });
+
+test('watcher backs off per failed folder while healthy folders retain the 500ms debounce', async t => {
+  const f = watcherFixture(t); f.error('EIO'); f.event('one');
+  await f.time.advance(500);
+  f.event('two'); await f.time.advance(500);
+  assert.equal(f.published.get('two/a.jsonl'), 'two', 'healthy folders must not wait for the failed folder retry');
+  await f.time.advance(4500);
+  assert.equal(f.calls.filter(([folder]) => folder === 'one').length, 2);
+  await f.time.advance(5000);
+  assert.equal(f.calls.filter(([folder]) => folder === 'one').length, 2, 'second failure backs off to 30 seconds');
+  await f.time.advance(25000);
+  assert.equal(f.calls.filter(([folder]) => folder === 'one').length, 3);
+  await f.time.advance(120000);
+  assert.equal(f.calls.filter(([folder]) => folder === 'one').length, 4);
+  await f.time.advance(120000);
+  assert.equal(f.calls.filter(([folder]) => folder === 'one').length, 5);
+  assert.equal(f.logs.filter(([level]) => level === 'error').length, 3, 'log the first failure and backoff steps, not every capped retry');
+  f.fail(false); await f.time.advance(120000);
+  assert.equal(f.published.get('one/a.jsonl'), 'one');
+  assert.equal(f.time.timers.size, 0);
+});
+
+for (const code of ['PROJECTS_WORKER_TIMEOUT', 'PROJECTS_WORKER_EXIT']) test(`rejected retry re-arms once and logs once: ${code}`, async () => {
+  const time = clock(), errors = [], notifications = [];
+  let phase = 'conflict';
+  const invoke = loadHandler({ ...time, TRACE: { on: false }, projectsReconciledAt: 0,
+    isInitialScanComplete: () => true, isCachePopulated: () => true, isSearchIndexPopulated: () => true,
+    getSetting: () => null, backfillEntrypoints() {}, backfillCustomTitles() {},
+    console: { error: (...args) => errors.push(args) }, log: { info() {}, warn: (...args) => errors.push(args), error: (...args) => errors.push(args) },
+    writer: { applyAndPersistArchived: async rows => rows }, mergePlaceholderSessions: rows => rows, annotateRemoteAttachable: rows => rows,
+    notifyRendererProjectsChanged: cause => notifications.push(cause),
+    projectsClient: { request: async () => {
+      if (phase !== 'fresh') throw Object.assign(new Error(phase), { code: phase === 'conflict' ? 'PROJECTS_SNAPSHOT_CONFLICT' : code });
+      return { defaultProjects: [], allProjects: [] };
+    } },
+  });
+  await invoke(null, 'both'); phase = 'failure'; errors.length = 0;
+  await time.advance(5000);
+  assert.equal(time.timers.size, 1, 'a rejected delayed retry must re-arm without a filesystem event');
+  assert.equal(errors.length, 1, 'a failed delayed retry is logged only once');
+  assert.deepEqual(notifications, []);
+  phase = 'fresh'; await time.advance(5000);
+  assert.equal(time.timers.size, 0); assert.deepEqual(notifications, ['reconcile']);
+});

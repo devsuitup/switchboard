@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- A project refresh conflict no longer replaces your sessions with an empty or older list, or makes startup restoration give up. A folder that cannot be read no longer delays updates from other folders. (#1194)
+
 ## v0.0.109 — 2026-11-22
 
 ### New

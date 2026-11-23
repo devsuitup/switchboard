@@ -690,7 +690,11 @@ unknown IDs return `not-found`, `session not found`; unverifiable cwd refuses
 
 `resolveProject(project, deps)` requires a consistent snapshot with local
 `allProjects` entries (`projectPath`, optional `remoteAlias`), `hiddenProjects`
-and `hiddenProjectKinds`. Snapshot errors/missing provenance refuse
+and `hiddenProjectKinds`. Main's `getTriggerProjectSnapshot` refuses both
+`projectsError` and `projectsStale`, including cached conflict fallbacks and
+effect-free stale rows, as well as hidden-setting provenance changes. These
+return retryable `project lookup unavailable`, never definitive `unknown project`.
+Snapshot errors/missing provenance refuse
 `project lookup unavailable`. Exact normalized local hidden membership is checked
 before known membership and directory existence, with `project is archived`
 for archive/delete/legacy hidden entries. Kind-only and remote-qualified entries

@@ -1449,9 +1449,9 @@ function queueProjectsRetry() {
     let stale = false;
     try {
       const reply = await getProjectsSnapshot('both');
-      stale = !!reply.projectsStale;
+      stale = !!(reply.projectsStale || reply.projectsError);
       if (!stale) notifyRendererProjectsChanged('reconcile');
-    } catch (error) { log.error('[projects] retry failed:', error.message); }
+    } catch { stale = true; }
     finally { projectsRetryRunning = false; }
     if (stale) queueProjectsRetry();
   }, 5000);
@@ -1502,10 +1502,11 @@ async function getProjectsSnapshot(showArchived) {
       if (err.code !== 'PROJECTS_SNAPSHOT_CONFLICT') throw err;
       const changed = err.reason === 'live' ? ` changed=${changedLiveComponents(err.before, err.after)}` : '';
       log.info(`[projects] snapshot conflict after ${err.dispatches ?? 'unknown'} dispatches: reason=${err.reason ?? 'unknown'}${changed} reconcile=${err.reconcile ?? 'unknown'}`);
-      projectsLastResult ||= await lastKnownProjects.load?.() || { defaultProjects: [], allProjects: [] };
-      result = { ...projectsLastResult, stale: true };
+      queueProjectsRetry();
+      if (!projectsLastResult || showArchived !== 'both') throw err;
+      result = { ...structuredClone(projectsLastResult), stale: true, fallback: true };
     } finally { if (reconcile) projectsReconciling = false; }
-    if (result.stale && projectsLastResult) result = { ...projectsLastResult, stale: true };
+    const consistentResult = result.stale ? null : structuredClone(result);
     const projection = result.projection
       ? { ...result.projection, removedInputs: structuredClone(result.projection.removedInputs) }
       : undefined;
@@ -1538,14 +1539,16 @@ async function getProjectsSnapshot(showArchived) {
     if (result.stale) {
       queueProjectsRetry();
       if (showArchived === 'both') reply.projectsStale = true;
+      if (result.fallback) reply.projectsFallback = true;
     } else {
-      projectsLastResult = result;
+      projectsLastResult = consistentResult;
       if (showArchived === 'both') lastKnownProjects.remember({ defaultProjects: reply.defaultProjects, allProjects: reply.allProjects });
     }
     return reply;
   } catch (err) {
+    if (err.code === 'PROJECTS_SNAPSHOT_CONFLICT') return { projectsError: { code: err.code, message: 'Projects changed while loading; reload to retry.' } };
     if (err.code === 'PROJECTS_WORKER_TIMEOUT') log.warn(`[projects] get-projects timed out after ${err.timeoutMs} ms: reconcile=${err.reconcile ?? 'unknown'} dispatches=${err.dispatches ?? 'unknown'}`);
-    console.error('Error listing projects:', err);
+    else console.error('Error listing projects:', err);
     throw err;
   }
 }
@@ -1564,7 +1567,7 @@ async function getTriggerProjectSnapshot() {
   const reply = await getProjectsSnapshot('both');
   const after = getSetting('global') || {};
   const provenance = value => JSON.stringify([value.hiddenProjects || [], value.hiddenProjectKinds || {}, value.hiddenProjectScopes || {}]);
-  if (reply.projectsError || provenance(before) !== provenance(after)) throw new Error('project lookup unavailable');
+  if (reply.projectsError || reply.projectsStale || provenance(before) !== provenance(after)) throw new Error('project lookup unavailable');
   return { ...reply, hiddenProjects: before.hiddenProjects || [], hiddenProjectKinds: before.hiddenProjectKinds || {}, hiddenProjectScopes: before.hiddenProjectScopes || {} };
 }
 
@@ -3987,7 +3990,7 @@ function startProjectsWatcher() {
   const pendingWorkflowTitles = new Set();
   const workflowTitles = new Map();
   let debounceTimer = null;
-  let retryAt = 0;
+  const folderRetries = new Map();
   let watcher = null;
 
   flushProjectsBeforeExit = async () => {
@@ -4003,12 +4006,11 @@ function startProjectsWatcher() {
 
   async function applyChanges() {
     debounceTimer = null;
-    retryAt = 0;
     if (projectsWatcher !== watcher) return;
     // Drain pendingChanges into a local copy so events arriving during the
     // synchronous flush land in a fresh batch for the next tick.
-    const work = new Map(pendingChanges);
-    pendingChanges.clear();
+    const work = new Map([...pendingChanges].filter(([folder]) => (folderRetries.get(folder)?.at || 0) <= Date.now()));
+    for (const folder of work.keys()) pendingChanges.delete(folder);
 
     const snapshots = [...pendingWorkflowTitles];
     pendingWorkflowTitles.clear();
@@ -4052,12 +4054,15 @@ function startProjectsWatcher() {
       } catch (error) {
         if (scope === true) recordChange(folder, null);
         else for (const file of scope) recordChange(folder, file);
-        if (error.code === 'WRITER_STALE') log.info('[projects] watcher refresh deferred:', error.message);
-        else log.error('[projects] watcher refresh failed:', error.message);
-        retryAt = Date.now() + 5000;
-        scheduleChanges(true);
+        const previous = folderRetries.get(folder);
+        const step = error.code === 'WRITER_STALE' ? -1 : Math.min(2, (previous?.step ?? -1) + 1);
+        const delay = [5000, 30000, 120000][Math.max(0, step)];
+        if (step === -1) log.info('[projects] watcher refresh deferred:', error.message);
+        else if (previous?.step !== step) log.error(`[projects] watcher refresh failed; retry in ${delay} ms:`, error.message);
+        folderRetries.set(folder, { at: Date.now() + delay, step });
         continue;
       }
+      folderRetries.delete(folder);
       changed = folderChanged === true || changed;
       activityChanged = folderChanged === 'activity' || activityChanged;
     }
@@ -4067,12 +4072,16 @@ function startProjectsWatcher() {
     } else if (activityChanged) {
       notifyRendererProjectsChanged('activity');
     }
+    if (pendingChanges.size || pendingWorkflowTitles.size) scheduleChanges();
   }
 
-  function scheduleChanges(retry = false) {
-    if (debounceTimer && retryAt && !retry) return;
+  function scheduleChanges() {
     if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => flushChanges().catch(err => log.error('[projects] watcher refresh failed:', err.message)), Math.max(500, retryAt - Date.now()));
+    const now = Date.now();
+    let at = pendingWorkflowTitles.size ? now + 500 : Infinity;
+    for (const folder of pendingChanges.keys()) at = Math.min(at, folderRetries.get(folder)?.at ?? now + 500);
+    if (!Number.isFinite(at)) { debounceTimer = null; return; }
+    debounceTimer = setTimeout(() => flushChanges().catch(err => log.error('[projects] watcher refresh failed:', err.message)), Math.max(0, at - now));
   }
 
   function recordChange(folder, relPath) {

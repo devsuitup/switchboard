@@ -37,5 +37,6 @@ module.exports = function loadGetProjectsHandler(context) {
   vm.runInContext(source.slice(clientStart, acceptedEnd + 4), sandbox, { filename,
     lineOffset: source.slice(0, clientStart).split('\n').length - 1 });
   handler.reconciledAt = () => sandbox.projectsReconciledAt;
+  handler.triggerSnapshot = () => sandbox.getTriggerProjectSnapshot();
   return handler;
 };
