@@ -1465,7 +1465,7 @@ function queueProjectsRetry(delay = 5000) {
   projectsRetryTimer.unref?.();
 }
 
-async function getProjectsSnapshot(showArchived, retry = false) {
+async function getProjectsSnapshot(showArchived, retry = false, { logConflict = true } = {}) {
   const started = TRACE.on ? performance.now() : null;
   try {
     const repairFolders = getSetting('bridge_uuid_reindex_folders');
@@ -1508,7 +1508,7 @@ async function getProjectsSnapshot(showArchived, retry = false) {
     } catch (err) {
       if (err.code !== 'PROJECTS_SNAPSHOT_CONFLICT') throw err;
       const changed = err.reason === 'live' ? ` changed=${changedLiveComponents(err.before, err.after)}` : '';
-      log.info(`[projects] snapshot conflict after ${err.dispatches ?? 'unknown'} dispatches: reason=${err.reason ?? 'unknown'}${changed} reconcile=${err.reconcile ?? 'unknown'}`);
+      if (logConflict) log.info(`[projects] snapshot conflict after ${err.dispatches ?? 'unknown'} dispatches: reason=${err.reason ?? 'unknown'}${changed} reconcile=${err.reconcile ?? 'unknown'}`);
       queueProjectsRetry();
       throw err;
     } finally { if (reconcile) projectsReconciling = false; }
@@ -1569,9 +1569,9 @@ function changedLiveComponents(before, after) {
   return changed.length ? changed.join(',') : 'none';
 }
 
-async function getTriggerProjectSnapshot() {
+async function getTriggerProjectSnapshot(options = {}) {
   const before = structuredClone(getSetting('global') || {});
-  const reply = await getProjectsSnapshot('both');
+  const reply = await getProjectsSnapshot('both', false, options);
   const after = getSetting('global') || {};
   const provenance = value => JSON.stringify([value.hiddenProjects || [], value.hiddenProjectKinds || {}, value.hiddenProjectScopes || {}]);
   if (reply.projectsError || reply.projectsStale || provenance(before) !== provenance(after)) {

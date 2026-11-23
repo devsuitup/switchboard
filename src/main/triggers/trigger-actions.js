@@ -123,8 +123,11 @@ async function resolveProject(project, deps) {
   const deadline = deps.deadline ?? now() + 300000;
   const fail = reason => ({ ok: false, outcome: 'refused', reason });
   const authority = deps.captureAuthority?.();
-  const cancelled = () => deps.signal?.aborted || deps.launchAllowed?.() === false || authority?.valid() === false
-    ? fail('Switchboard is closing.') : deps.checkProjectLookup?.();
+  const cancelled = waiting => {
+    if (deps.signal?.aborted || deps.launchAllowed?.() === false || authority?.valid() === false) return fail('Switchboard is closing.');
+    const cancellation = waiting ? deps.checkProjectLookup?.() : null;
+    return cancellation ? { ...cancellation, ok: false, outcome: cancellation.outcome || 'refused' } : null;
+  };
   let snapshot, attempts = 0, lastReason = 'unknown';
   const unavailable = error => {
     try { deps.log?.info(`[trigger] project lookup unavailable after ${attempts} lookups (last: ${String(lastReason).replace(/[\r\n]/g, ' ').slice(0, 160)})`); } catch {}
@@ -137,7 +140,7 @@ async function resolveProject(project, deps) {
       let timer;
       const finish = () => { clear(timer); deps.signal?.removeEventListener('abort', finish); resolve(); };
       const poll = () => {
-        if (cancelled() || now() >= until) return finish();
+        if (cancelled(true) || now() >= until) return finish();
         timer = schedule(poll, Math.min(50, until - now()));
       };
       deps.signal?.addEventListener('abort', finish, { once: true });
@@ -145,12 +148,12 @@ async function resolveProject(project, deps) {
     });
   }
   for (;;) {
-    const cancellation = cancelled();
+    const cancellation = cancelled(attempts > 0);
     if (cancellation) return cancellation;
     if (now() >= deadline) return attempts ? unavailable() : fail('session action timed out');
     attempts++;
     try {
-      snapshot = await boundedRead(() => deps.getProjectSnapshot(), { ...deps, now, deadline });
+      snapshot = await boundedRead(() => deps.getProjectSnapshot({ logConflict: attempts === 1 }), { ...deps, now, deadline });
       if (snapshot?.projectsError || snapshot?.projectsStale) {
         const error = snapshot.projectsError;
         throw Object.assign(new Error('project lookup unavailable'), { code: error?.code,
@@ -165,7 +168,7 @@ async function resolveProject(project, deps) {
       if (cancellation) return cancellation;
       if (error.code === 'TRIGGER_DEADLINE') return { ...fail('session action timed out'), error: error.message };
       lastReason = error.reason || error.code || error.message || 'unknown';
-      if (error.transient !== true && error.code !== 'PROJECTS_SNAPSHOT_CONFLICT') return unavailable(error);
+      if (deps.retryProjectLookup === false || error.transient !== true && error.code !== 'PROJECTS_SNAPSHOT_CONFLICT') return unavailable(error);
       await pause([250, 500, 1000, 2000][Math.min(attempts - 1, 3)]);
     }
   }
@@ -595,7 +598,8 @@ async function executeOpen(trigger, execution) {
   const authority = deps.captureAuthority?.();
   const allowed = () => !execution.signal?.aborted && deps.launchAllowed() && authority?.valid() !== false;
   const lookupDeps = { ...deps, now, deadline, log: execution.log, signal: execution.signal,
-    checkProjectLookup: () => !allowed() ? { ok: false, reason: 'Switchboard is closing.' } : execution.checkStale?.() };
+    checkProjectLookup: () => !allowed() ? { ok: false, outcome: 'refused', reason: 'Switchboard is closing.' }
+      : execution.checkProjectLookup?.() || execution.checkStale?.() };
   const expired = () => now() >= deadline;
   const admitted = () => !expired() && allowed();
   const check = () => {
@@ -719,7 +723,7 @@ async function executeOpen(trigger, execution) {
       if (session.launchMode !== 'resume' || String(session.launchSourceId).toLowerCase() !== id || session.forkFrom
         || session.cwd !== target.cwd || session.projectPath !== target.project) return fail('session target changed');
       const live = await liveness(); if (live) return live;
-      const fresh = await (deps.resolveTarget || resolveLocalTarget)(id, lookupDeps);
+      const fresh = await (deps.resolveTarget || resolveLocalTarget)(id, { ...deps, now, deadline });
       if (!fresh.ok) return fail(fresh.reason, fresh.error ? { error: fresh.error } : {});
       check();
       if (fresh.transcript !== target.transcript || fresh.transcriptIdentity !== target.transcriptIdentity

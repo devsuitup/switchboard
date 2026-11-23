@@ -197,3 +197,116 @@ test('final launch validation preserves lookup exhaustion instead of replacing i
   assert.equal((await pending).reason, 'project lookup unavailable');
   assert.deepEqual(f.logs, ['[trigger] project lookup unavailable after 1 lookups (last: db)']);
 });
+
+test('a consistent first lookup never consults the project wait cancellation callback', async () => {
+  let refusals = 0;
+  const result = await resolveProject(project, { getProjectSnapshot: snapshot,
+    checkProjectLookup: () => { refusals++; return { reason: 'trigger changed or was cancelled' }; } });
+  assert.equal(result.ok, true, 'a consistent first lookup must succeed');
+  assert.equal(refusals, 0, 'wait cancellation must not run outside a retry wait');
+});
+
+for (const reason of ['trigger exceeds staleness limit', 'trigger changed or was cancelled']) {
+  test(`verifyJoined delivers the prompt despite ${reason} after spawn`, async () => {
+    const f = openFixture();
+    f.ctx.getPtyForSession = () => null;
+    let spawned = false, refusals = 0;
+    const cancelled = () => {
+      if (!spawned) return null;
+      refusals++;
+      return { ok: false, outcome: 'refused', reason };
+    };
+    f.execution.checkStale = cancelled;
+    f.execution.checkProjectLookup = cancelled;
+    const target = { ok: true, sessionId: ID, project, cwd: project, transcript: 'file', transcriptIdentity: 'identity' };
+    f.ctx.lifecycle.resolveTarget = async (_id, deps) => deps.checkProjectLookup?.() || target;
+    f.ctx.lifecycle.broker.request = async (op, save) => {
+      await save();
+      spawned = true;
+      Object.assign(f.session, { launchMode: 'resume', launchSourceId: ID });
+      op.onOpened();
+      const joined = await op.verifyJoined(f.session);
+      if (!joined.ok) return { ...joined, resumed: true };
+      f.ctx.getPtyForSession = () => ({ session: f.session, ptyProcess: f.session.pty, cwd: project });
+      return { ok: true, resumed: true, generation: 7 };
+    };
+    const result = await f.open({ prompt: 'hello' });
+    assert.equal(result.outcome, 'opened', 'joined resume must still deliver its prompt');
+    assert.equal(result.resumed, true);
+    assert.equal(result.enter_written, true);
+    assert.equal(refusals, 0);
+  });
+}
+
+test('a stop still runs when its input is replaced while queued for the session lock', async t => {
+  const f = stopFixture(t, { onKill: session => { session.exited = true; } });
+  f.logs = [];
+  let releaseOpen;
+  f.lifecycle.broker.request = async (_op, save) => {
+    await save();
+    return new Promise(resolve => { releaseOpen = () => resolve({ ok: true, generation: 7 }); });
+  };
+  const w = watcherRig(t, f);
+  const first = '31234567-89ab-cdef-0123-456789abcdef';
+  w.write(first, { version: 1, action: 'open', sessionId: ID }); await flush();
+  assert.equal(typeof releaseOpen, 'function', 'the first action must own the session lock');
+  const trigger = { version: 1, action: 'stop', sessionId: ID };
+  w.write(STEM, trigger); await flush();
+  assert.equal(w.result(STEM), null, 'stop must be queued');
+  fs.writeFileSync(w.input(STEM), JSON.stringify({ ...trigger, timeout_ms: 800 }));
+  releaseOpen(); await flush();
+  assert.equal(f.kills(), 1, 'replacing a queued stop must not cancel its effect');
+  assert.equal(w.result(STEM)?.outcome, 'closed');
+});
+
+test('final launch validation refuses a transient conflict immediately and definitively', async t => {
+  const f = retryRig(t, conflict, 100);
+  const permit = { mode: 'new', project, tabKey: ID, requestId: STEM, deadline: f.execution.deadline };
+  let result;
+  const pending = validateTriggerOpen(permit, { ...f.ctx.lifecycle, resolveProject,
+    log: { info: line => f.logs.push(line) }, broker: { checkPermit: () => true } }).then(value => { result = value; });
+  await flush();
+  assert.equal(result?.reason, 'project lookup unavailable', 'final validation must refuse before the broker deadline');
+  await pending;
+  assert.equal(result.ok, false);
+  assert.equal(result.outcome, 'refused');
+  assert.equal(result.uncertain, undefined);
+  assert.deepEqual(f.times, [0]);
+  assert.deepEqual(f.logs, ['[trigger] project lookup unavailable after 1 lookups (last: db)']);
+});
+
+test('repeated main snapshot conflicts emit at most one projects line per action wait', async t => {
+  const f = retryRig(t, conflict, 900);
+  const filename = path.resolve(__dirname, '../main.js'), source = fs.readFileSync(filename, 'utf8');
+  const context = vm.createContext({ structuredClone, Date, TRACE: { on: false },
+    getSetting: () => ({}), isInitialScanComplete: () => true, isCachePopulated: () => true,
+    isSearchIndexPopulated: () => true, isIndexingFinished: () => true,
+    backfillEntrypoints() {}, backfillCustomTitles() {}, projectsReconciling: false,
+    projectsReconcileAttemptedAt: 10000, projectsReconciledAt: 10000, projectsReconcileAfterPopulate: false,
+    projectsClient: { request: conflict }, queueProjectsRetry() {},
+    log: { info: line => f.logs.push(line) } });
+  for (const name of ['getProjectsSnapshot', 'getTriggerProjectSnapshot']) {
+    vm.runInContext(extractFunction(source, name), context, { filename });
+  }
+  f.ctx.lifecycle.getProjectSnapshot = (...args) => {
+    f.times.push(Date.now() - 10000);
+    return context.getTriggerProjectSnapshot(...args);
+  };
+  const pending = f.run(); await flush();
+  for (const ms of [250, 500, 150]) await tick(t, ms);
+  assert.equal((await pending).reason, 'project lookup unavailable');
+  assert.deepEqual(f.times, [0, 250, 750]);
+  assert.ok(f.logs.filter(line => line.startsWith('[projects]')).length <= 1,
+    'retries must emit at most one [projects] conflict line');
+  assert.ok(f.logs.includes('[trigger] project lookup unavailable after 3 lookups (last: db)'));
+});
+
+test('a non-transient worker timeout refuses at once with exactly one lookup', async t => {
+  const f = retryRig(t, () => { throw Object.assign(new Error('worker timed out'), { code: 'PROJECTS_WORKER_TIMEOUT' }); });
+  let result;
+  const pending = f.run().then(value => { result = value; }); await flush();
+  assert.equal(result?.reason, 'project lookup unavailable', 'non-transient errors must refuse without backoff');
+  await pending;
+  assert.deepEqual(f.times, [0]);
+  assert.deepEqual(f.logs, ['[trigger] project lookup unavailable after 1 lookups (last: PROJECTS_WORKER_TIMEOUT)']);
+});

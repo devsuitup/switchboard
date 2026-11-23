@@ -700,22 +700,32 @@ fields (`code`, `message`) for preload's strict shape check; its non-enumerable
 `reason` is available only to the main-process trigger lookup and is not sent over IPC.
 `resolveProject` retries conflicts, stale
 snapshots and errors explicitly marked `transient: true` with backoffs of 250 ms,
-500 ms, 1 s, then 2 s capped, within the action's original deadline. It never
+500 ms, 1 s, then 2 s capped, until the earlier of the action's original
+`timeout_ms` deadline and the trigger max age. It never
 resolves against those rows. A final partial wait consumes the remaining budget
 without starting another lookup at the deadline. Exhaustion refuses with
 `project lookup unavailable` and logs one `[trigger] project lookup unavailable
-after N lookups (last: reason)` line. A stalled read still means
+after N lookups (last: reason)` line. The first snapshot read may log a
+`[projects] snapshot conflict`; retries suppress that line via `logConflict`.
+A stalled read still means
 `session action timed out`; a consistent `unknown project` refuses immediately.
 Non-transient snapshot errors/missing provenance still refuse immediately with
 `project lookup unavailable` and a diagnostic.
 
-The asynchronous waits leave the watcher's independent namespace slots runnable;
-they do not acquire a global queue lock. Watcher close aborts its waits immediately.
-During a backoff, the captured exit authority and request staleness/identity are
-checked at most every 50 ms, and again before every lookup. A shutdown capture
-stays invalid after rollback; a replaced or removed input refuses with
-`trigger changed or was cancelled`. Final main-process launch validation also
-checks its permit during retries and preserves lookup exhaustion as the refusal.
+Each waiting action holds one of the watcher's 8 in-flight slots. Other free
+slots can run independently, but enough waiting opens can queue other triggers.
+During backoff, the captured exit authority and request staleness/identity are
+checked at intervals of at most 50 ms, and again between retries. The
+`checkProjectLookup` callback is never consulted for a consistent first lookup.
+A shutdown capture stays invalid after rollback. Production discards `start()`'s
+return value, so it does not call watcher `close()` to abort these waits.
+A replaced or removed input refuses with `trigger changed or was cancelled` only
+during project-lookup waits; its callback is separate from the shared age check
+used after session-lock acquisition. `verifyJoined` retains its original deps,
+clock and deadline, without those lookup-wait callbacks. Final main-process
+launch validation sets `retryProjectLookup: false`: one lookup, with any transient
+conflict immediately refused as `project lookup unavailable` and logged, before
+the broker's deadline can turn a backoff into an uncertain renderer timeout.
 
 Exact normalized local hidden membership is checked
 before known membership and directory existence, with `project is archived`

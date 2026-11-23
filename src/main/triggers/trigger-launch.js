@@ -18,10 +18,7 @@ async function acquireOpen(sessions, id) {
 async function validateTriggerOpen(permit, deps) {
   const fail = reason => ({ ok: false, reason, error: reason });
   const valid = () => deps.launchAllowed() && Date.now() < permit.deadline && deps.broker.checkPermit(permit.requestId);
-  const authority = deps.captureAuthority?.();
-  const lookupDeps = { ...deps, deadline: permit.deadline,
-    checkProjectLookup: () => !deps.launchAllowed() || authority?.valid() === false ? fail('Switchboard is closing.')
-      : !deps.broker.checkPermit(permit.requestId) ? fail('session target changed') : null };
+  const lookupDeps = { ...deps, deadline: permit.deadline, retryProjectLookup: false };
   if (!valid()) return fail(deps.launchAllowed() ? 'session action timed out' : 'Switchboard is closing.');
   if (permit.mode === 'reattach') return { ok: true };
   try {
