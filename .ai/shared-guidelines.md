@@ -169,14 +169,19 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
    that doc (e.g. `// see .ai/contexts/subagent-observability.md`), and that's
    the ceiling (maintainer rule, PRs #127/#130).
 2. **Changelog.** Every PR that changes behaviour adds its entry under `## Unreleased` in `CHANGELOG.md`, written to the rule in [docs/changelog.md](../docs/changelog.md); a PR users see nothing of takes the `no-changelog` label instead.
-3. `task check` remains the full lint + test gate before a PR. The pre-commit
+3. **Docs.** Every PR that changes behaviour updates the affected user docs
+   (`docs/` or `README.md`) and agent docs (`.ai/contexts/`) in the same PR.
+   Name the updated files in the PR body's Docs section; explain any category
+   that needs no update. If no docs need updating, write `no docs: <reason>`
+   in the PR body and add the `no-docs` label. See [docs/changelog.md](../docs/changelog.md).
+4. `task check` remains the full lint + test gate before a PR. The pre-commit
    hook runs `task check:fast` (staged JS lint + matching tests); `SKIP_TESTS=1`
    keeps lint and skips tests with or without Task. 0 errors. Pre-existing
    warnings are fine. See [fast-check context](contexts/fast-check.md).
-4. Squash to clear commits. No `Co-Authored-By`. Imperative subject, brief why-body.
-5. `gh pr create` against `devsuitup/switchboard:main` (the fork's main, not upstream's). Title format: `(area): short imperative`.
-6. If the change is a port of an upstream PR, **credit the upstream author** in the body with a link. We want abasiri to see we're not stealing.
-7. **When the PR is ready to merge** (internal review loop converged to zero findings, or an external PR judged mergeable after review), **request the maintainer account `devsuitup` as reviewer**: `gh api -X POST repos/devsuitup/switchboard/pulls/<n>/requested_reviewers -f 'reviewers[]=devsuitup'`. The maintainer's review queue is the single list of what awaits approval — a ready PR that never requests review sits invisible.
+5. Squash to clear commits. No `Co-Authored-By`. Imperative subject, brief why-body.
+6. `gh pr create` against `devsuitup/switchboard:main` (the fork's main, not upstream's). Title format: `(area): short imperative`.
+7. If the change is a port of an upstream PR, **credit the upstream author** in the body with a link. We want abasiri to see we're not stealing.
+8. **When the PR is ready to merge** (internal review loop converged to zero findings, or an external PR judged mergeable after review), **request the maintainer account `devsuitup` as reviewer**: `gh api -X POST repos/devsuitup/switchboard/pulls/<n>/requested_reviewers -f 'reviewers[]=devsuitup'`. The maintainer's review queue is the single list of what awaits approval — a ready PR that never requests review sits invisible.
 
 ## Upstreaming work
 

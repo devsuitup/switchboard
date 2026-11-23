@@ -95,6 +95,42 @@ It exits 0 when the check passes, 1 when it fails, and 2 on missing arguments
 or when git or gh cannot answer. `test/check-changelog.test.js` runs it end to
 end on a temporary repository.
 
+## Documentation in the same PR
+
+Every PR that changes behaviour updates the affected user documentation in
+`docs/` (or `README.md`) and agent documentation in `.ai/contexts/` in that
+same PR. Name the files in the PR body's Docs section. If either category
+needs no update, explain why. If neither needs an update, write
+`no docs: <reason>` and apply the `no-docs` label. The PR template also asks
+for the summary, changelog entry or `no-changelog` waiver, and test results.
+
+The PR-only `docs` job in `.github/workflows/test.yml` invokes the
+dependency-free `scripts/check-docs.js`. It shares the changelog check's app
+path classification: root JavaScript except `eslint.config.js`, `src/`,
+`public/`, `workers/`, `harnesses/`, and `scripts/claude-sandbox.sh`.
+An app change must include at least one changed path under `docs/` or
+`.ai/contexts/`, or `README.md`, unless it has the exact `no-docs` label.
+Test-only, CI-only, tooling-only and docs-only changes pass automatically.
+`CHANGELOG.md` and `.ai/shared-guidelines.md` alone do not satisfy this gate.
+
+Like the changelog check, it reads the whole merge-base PR diff with renames
+disabled and reads current labels through `gh api`. After adding `no-docs`,
+re-run the failed job. This waiver is independent of `no-changelog`.
+
+```bash
+node scripts/check-docs.js --base <sha> --head <sha> --repo <owner/name> --pr <number>
+node scripts/check-docs.js --base <sha> --head <sha> --labels '["no-docs"]'
+```
+
+Exit codes are 0 for a pass, 1 for missing docs, and 2 for invalid arguments,
+invalid labels or a git/gh failure. `test/check-docs.test.js` covers the rule
+and CLI wiring, substituting only the git/gh command boundary.
+The check detects paths, not documentation quality or relevance; it does not
+parse the PR body or require both documentation categories mechanically.
+Reviewers still check that each affected document is updated and named.
+Repository label creation and required-check settings are maintained separately
+from this workflow.
+
 ## What's new in the app
 
 On startup the renderer asks the main process (`whats-new-startup`), which
