@@ -1710,6 +1710,7 @@ function scanFoldersViaWorker(options) {
 }
 function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, fileSubsets, startup, onFolder,
   sessionCounts = { folders: new Map(), total: 0 }, deferredFolders = new Set() }) {
+  const maxStartupReplans = 2;
   if (stopping) return Promise.resolve({ ok: false, error: 'indexer shutting down' });
   return new Promise((resolve) => {
     const hasFolders = Array.isArray(folders) && folders.length > 0;
@@ -1766,7 +1767,7 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
         if (msg.type === 'folder') {
           scanned++;
           try {
-            const written = await publishScannedFolder(msg, (startup?.attempt || 0) >= 2);
+            const written = await publishScannedFolder(msg, (startup?.attempt || 0) >= maxStartupReplans);
             const folder = msg.folder || msg.result?.folder;
             if (msg.result?.startup && msg.result.readErrors?.some(([file, failure]) => msg.result.deferred?.includes(file)
               && failure.error && !['changed-during-read', 'raced-before-publication', 'bridge-sibling'].includes(failure.error))) deferredFolders.add(folder);
@@ -1791,7 +1792,7 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
         for (const folder of msg.failedFolders || []) failedFolders.add(folder);
         for (const folder of msg.replanFolders || []) replanFolders.add(folder);
         if (replanFolders.size) {
-          if (!stopping && startup && (startup.attempt || 0) < 2 && startup.config === startupConfig()) {
+          if (!stopping && startup && (startup.attempt || 0) < maxStartupReplans && startup.config === startupConfig()) {
             try {
               const retry = await scanFoldersViaWorker({ projectsDir, folderPrefix, folders: [],
                 startup: { ...startupSnapshot(startup.force, [...replanFolders]), attempt: (startup.attempt || 0) + 1 },

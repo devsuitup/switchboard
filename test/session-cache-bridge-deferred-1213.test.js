@@ -22,6 +22,50 @@ async function bridgeFixture(t) {
   return { ...state, bad, sibling };
 }
 
+test('bridge repair completes despite a persistent deterministic failure', options, async t => {
+  const { f, folder, bad } = await bridgeFixture(t);
+  fs.appendFileSync(bad, '\n');
+  timers(t);
+  failReads(t, f, [bad], 'ERR_STRING_TOO_LONG');
+  await f.writer.setSetting('bridge_uuid_reindex_folders', [folder]);
+  assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+  assert.deepEqual(Array.from(f.db.getSetting('bridge_uuid_reindex_folders')), [],
+    'the first startup must complete the bridge repair');
+  await f.reopen();
+  assert.equal((await f.restart()).ok, true);
+  assert.notEqual(f.scans().find(scan => scan.folder === folder).reason, 'version',
+    'completed repair must not invalidate the next startup');
+});
+
+for (const check of ['mtime', 'deferred', 'reconcile', 'null-stamp']) {
+  test(`unchanged bridge sibling after restart: ${check}`, options, async t => {
+    const { f, folder, bad } = await bridgeFixture(t);
+    fs.appendFileSync(bad, '\n');
+    timers(t);
+    failReads(t, f, [bad], 'ERR_STRING_TOO_LONG');
+    assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+    if (check === 'null-stamp') f.db.invalidateFullRead('bridge-sibling');
+    await f.reopen();
+    assert.equal((await f.restart()).ok, true);
+    if (check === 'mtime') assert.equal(f.db.getFolderMeta(folder).indexMtimeMs,
+      require('../folder-index-state').getFolderIndexMtimeMs(f.dir), 'unchanged siblings keep the real folder mtime');
+    if (check === 'deferred' || check === 'null-stamp') assert.equal(f.scans().find(scan => scan.folder === folder).filesDeferred, 0,
+      'unchanged siblings must not be deferred again');
+    if (check === 'reconcile') {
+      const open = fs.openSync;
+      let opens = 0;
+      t.mock.method(fs, 'openSync', function (file, ...args) {
+        if (file === bad) opens++;
+        return open.call(this, file, ...args);
+      });
+      f.cache.init({ PROJECTS_DIR: f.projects, activeSessions: f.activeSessions, getMainWindow: () => null,
+        db: f.db, log: { info() {}, warn() {}, error() {} } });
+      await f.cache.reconcileCacheFromFilesystemAsync({ throttle: false });
+      assert.equal(opens, 0, 'reconcile must not reopen the witnessed source in an unchanged folder');
+    }
+  });
+}
+
 for (const error of ['ERR_STRING_TOO_LONG', 'TypeError', 'SyntaxError']) {
   test(`${error}: a sibling changed before startup is refreshed by reconcile in the same run`, options, async t => {
     const { f, folder, bad, sibling } = await bridgeFixture(t);
