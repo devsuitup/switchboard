@@ -106,7 +106,7 @@ A saved `chrome` setting is read as the matching Browser choice: `true` selects
 | Setting | Key | Default | Effect |
 |---|---|---|---|
 | Pre-launch Command | `preLaunchCmd` | empty | Written in front of the `claude` command, e.g. `aws-vault exec profile --`; restricted to letters, digits, spaces and `- _ . / \ : =` — see [Launching sessions](launching-sessions.md#pre-launch-command) |
-| Custom Arguments | `customArgs` | empty | Appended to Claude commands for new sessions, resumes, forks, schedules and remote launches; supports a project override — see [Custom arguments](launching-sessions.md#custom-arguments) |
+| Custom Arguments | `customArgs` | empty | Appended to Claude commands for new sessions, resumes, forks, schedules and remote launches; project overrides apply only to local launches — see [Custom arguments](launching-sessions.md#custom-arguments) |
 
 #### CLI Agents and Codex
 
@@ -117,8 +117,11 @@ controls are grouped here. See [Launching sessions](launching-sessions.md).
 applies to Codex new sessions, resumes and forks. It is global, like the other
 Codex launch controls, and independent of Claude's Custom Arguments.
 Both fields reject newlines and control characters. Quote values for the
-selected shell; remote Claude launches use POSIX shell quoting. Saving an empty
-Claude project override disables the global arguments for that project.
+selected shell; remote Claude launches use only global arguments, passed to the
+remote POSIX shell as typed. Windows cmd/PowerShell schedules instead split
+literal quoted tokens through the exact Windows launch route; see the linked
+quoting rules. Saving an empty Claude project override disables the global
+arguments for that project's local launches.
 
 **Show Codex usage** (`showCodexUsage`, off by default) displays Codex rate
 limits in the status bar and Stats. When enabled, it reads `CODEX_HOME/auth.json`

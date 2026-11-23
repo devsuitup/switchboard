@@ -2028,6 +2028,12 @@ The host row in global Settings offers **New session…** independently of index
 
 `remote-launch.js` builds the one ssh command and orchestrates launch then attach; the renderer side is `showRemoteLaunchDialog` (dialogs.js) and `launchRemoteSession` (app.js), the IPC is `remote-launch-session`.
 
+Custom arguments (#1202) come only from global Settings, never from a local
+`project:<cwd>` override or forwarded local custom options. The validated base
+`claude --session-id <uuid> [flags]` keeps its original space-joined form (no
+per-token quotes); only nonempty custom text adds a space and the text as typed
+for the remote POSIX shell. The existing SSH/tmux quoting wraps the whole command.
+
 - **The command is `sh -c '<script>'`** (`shellSingleQuote`, as `remote-send.js`), so a fish or csh login shell never parses it. The script checks `[ -d "$cwd" ]`, `command -v tmux`, `command -v claude` with exit codes 9, 10, 11 (each mapped to its own message), then `exec tmux new-session -d -P -F '#{session_name}:#{window_id}.#{pane_id} #{pane_pid}' -s switchboard-<uuid8> -c "$cwd" 'claude --session-id <uuid> [flags]'`. The exact string is pinned in `test/remote-launch.test.js`.
 - **Validation, not escaping, is the guard.** The cwd must match `CWD_RE` (absolute; letters, digits, space, `. _ + @ : , = / -`; no `..` segment; at most 4096 bytes). That set has no quote, `$`, backtick, backslash, newline or leading `-`, so the single-quoting is a second layer, not the only one. The uuid is matched by regex, the tmux name derives from it, the permission mode is checked against an allow-list. The same checks run in the renderer (UX), in `handleLaunchRequest` and in the adapter.
 - **Why attach straight to the created pane.** `-P -F` prints the pane's `session:@window.%pane` and `pane_pid`. `handleLaunchRequest` hands `{ pid, tmux, sessionId, cwd }` to the existing `remoteAttachAdapter.attach`, which discovers the socket from `/proc/<pid>/environ` and runs the same pid-reuse guard (the pane's command line contains `claude`). No wait for the descriptor to show up in the next refresh; `refreshHostNow` is fired afterwards so the row's real descriptor replaces the pending one.

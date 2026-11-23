@@ -17,6 +17,21 @@ const { handleLaunchRequest } = require('../src/main/remote/remote-launch');
 const { shellSingleQuote } = require('../src/main/remote/remote-attach');
 const raw = `--settings '{"outputStyle":"Learning"}'`;
 
+test('Windows schedules split literal quoted custom tokens before exact executable resolution', () => {
+  const launch = profiles.headlessClaudeLaunch('powershell.exe', ['--resume', ID], {
+    windows: true, env: { PATH: 'C:\\bin' },
+    deps: { exists: file => file === 'C:\\bin\\claude.exe' },
+    customArgs: `--settings '{"outputStyle":"Learning"}' --name 'it''s ready' --empty "" --dir "C:\\space dir\\" --literal $env:PATH`,
+  });
+  assert.equal(launch.program, 'C:\\bin\\claude.exe');
+  assert.deepEqual(launch.args, ['--resume', ID, '--settings', '{"outputStyle":"Learning"}', '--name', "it's ready", '--empty', '', '--dir', 'C:\\space dir\\', '--literal', '$env:PATH']);
+});
+
+test('Windows schedules refuse an unclosed custom argument quote before resolving the binary', () => {
+  const launch = profiles.headlessClaudeLaunch('cmd.exe', [], { windows: true, customArgs: '--model "unfinished', deps: { exists: () => false } });
+  assert.match(launch.error || '', /unclosed.*quote/i);
+});
+
 test('custom arguments default to empty independently for both CLIs', () => {
   assert.equal(SETTING_DEFAULTS.customArgs, '');
   assert.equal(SETTING_DEFAULTS.codexCustomArgs, '');
@@ -79,21 +94,23 @@ test('local sandbox replacement retains custom arguments', async () => {
   assert.ok(command.includes('/sandbox.sh') && command.endsWith(' ' + raw), command);
 });
 
-test('remote requests inherit project arguments, reject controls and honor an empty override', async () => {
+test('remote requests use only global arguments despite a matching local project or request override', async () => {
   const seen = [];
-  let project = { customArgs: raw };
+  let global = { customArgs: raw };
+  const keys = [];
   const deps = { hasHost: () => true, launchBlockReason: () => null,
-    getSetting: key => key === 'global' ? { customArgs: '--global' } : project,
+    getSetting: key => { keys.push(key); return key === 'global' ? global : { customArgs: '--local-only' }; },
     adapter: { launch: async (_alias, request) => { seen.push(request); return { ok: true, descriptor: { tmux: 'fixture' } }; } },
     attach: async () => ({ ok: true }),
   };
-  const request = () => handleLaunchRequest({ alias: 'fixture', sessionId: ID, cwd: '/srv/app' }, deps);
+  const request = () => handleLaunchRequest({ alias: 'fixture', sessionId: ID, cwd: '/srv/app', options: { customArgs: '--local-option' } }, deps);
   assert.equal((await request()).ok, true);
   assert.equal(seen[0].options.customArgs, raw);
-  project = { customArgs: '\n' };
+  assert.deepEqual(keys, ['global']);
+  global = { customArgs: '\n' };
   assert.equal((await request()).ok, false);
   assert.equal(seen.length, 1);
-  project = { customArgs: '' };
+  global = { customArgs: '' };
   assert.equal((await request()).ok, true);
   assert.equal(seen[1].options.customArgs, '');
 });
@@ -121,7 +138,7 @@ for (const sandbox of [false, true]) {
 
 test('remote launch keeps the complete command inside the tmux shell argument', () => {
   const script = buildLaunchScript({ sessionId: ID, cwd: '/srv/app', options: { customArgs: raw } });
-  const command = profiles.claudeCommand('/bin/sh', ['--session-id', ID], { windows: false, customArgs: raw });
+  const command = `claude --session-id ${ID} ${raw}`;
   assert.ok(script.endsWith(shellSingleQuote(command)), script);
   assert.throws(() => buildLaunchScript({ sessionId: ID, cwd: '/srv/app', options: { customArgs: '\n' } }), /control|newline/i);
 });

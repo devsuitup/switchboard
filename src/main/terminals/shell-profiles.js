@@ -165,10 +165,10 @@ function isWslShell(shellPath) {
 const psLiteral = text => "'" + text.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&') + "'";
 
 // see .ai/contexts/trigger-watcher.md ("Naming a new session")
-const PS_PREAMBLE = "function __switchboard_launch{param([string]$n)"
-  + "$c=Get-Command $n -ErrorAction Stop|Select-Object -First 1;$f=$c.Source;$t='';"
+const PS_PREAMBLE = "function __switchboard_launch{param([string]$__sbCmd)"
+  + "$c=Get-Command $__sbCmd -ErrorAction Stop|Select-Object -First 1;$f=$c.Source;$t='';"
   + "if($c.CommandType -eq 'ExternalScript'){"
-  + "$a=Get-Command $n -CommandType Application -ErrorAction SilentlyContinue|Where-Object{[IO.Path]::GetDirectoryName($_.Source) -eq [IO.Path]::GetDirectoryName($c.Source) -and $_.Source -match '\\.(cmd|bat)$'}|Select-Object -First 1;"
+  + "$a=Get-Command $__sbCmd -CommandType Application -ErrorAction SilentlyContinue|Where-Object{[IO.Path]::GetDirectoryName($_.Source) -eq [IO.Path]::GetDirectoryName($c.Source) -and $_.Source -match '\\.(cmd|bat)$'}|Select-Object -First 1;"
   + "$f=if($a){$a.Source}else{''}}"
   + "elseif($c.CommandType -ne 'Application'){& $c @args;return};"
   + "if($f -match '\\.(cmd|bat)$'){"
@@ -271,22 +271,43 @@ function isUnixLikeShell(shellPath) {
   return isWslShell(shellPath) || /bash|zsh|fish|^sh$|^dash$|^ksh$|^nu$/.test(base);
 }
 
+function splitHeadlessCustomArgs(text) {
+  const args = [];
+  let token = '', quote = '', started = false;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (quote) {
+      if (char === quote) {
+        if (text[i + 1] === quote) { token += char; i++; }
+        else quote = '';
+      } else token += char;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+      started = true;
+    } else if (/\s/.test(char)) {
+      if (started) { args.push(token); token = ''; started = false; }
+    } else {
+      token += char;
+      started = true;
+    }
+  }
+  if (quote) throw new Error('unclosed custom argument quote');
+  if (started) args.push(token);
+  return args;
+}
+
 // see .ai/contexts/schedule-runner.md ("Windows launches")
 function headlessClaudeLaunch(shellPath, argv, { env = {}, profileArgs = [], windows = isWindows, deps, customArgs = '' } = {}) {
   const check = validateCustomArgs(customArgs);
   if (!check.ok) return { error: check.error };
-  if (customArgs) {
-    const command = claudeCommand(shellPath, argv, { env, windows, extraArgs: profileArgs, customArgs });
-    if (windows && isCmdShell(shellPath)) {
-      return { program: shellPath, args: ['/d', '/s', '/c', `"${command}"`], verbatim: true };
-    }
-    return { program: shellPath, args: shellArgs(shellPath, command, profileArgs, { windows }), verbatim: false };
-  }
   if (windows && !isUnixLikeShell(shellPath)) {
-    const plan = resolveWindowsClaude(argv, env, deps);
+    let customArgv;
+    try { customArgv = splitHeadlessCustomArgs(customArgs); }
+    catch (err) { return { error: err.message }; }
+    const plan = resolveWindowsClaude([...argv, ...customArgv], env, deps);
     return plan.error ? { error: plan.error } : { program: plan.program, args: plan.args, verbatim: plan.verbatim };
   }
-  const command = 'claude ' + quoteArgvForShell(shellPath, argv, { env });
+  const command = 'claude ' + quoteArgvForShell(shellPath, argv, { env }) + (customArgs ? ' ' + customArgs : '');
   return { program: shellPath, args: shellArgs(shellPath, command, profileArgs, { windows }), verbatim: false };
 }
 

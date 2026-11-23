@@ -9,7 +9,7 @@ const {
 } = require('./remote-attach');
 const { isValidAlias } = require('./remote-hosts');
 const { remoteHostLabel } = require('../../../public/utils');
-const { claudeCommand, customArgsForLaunch } = require('../terminals/shell-profiles');
+const { SETTING_DEFAULTS, validateCustomArgs } = require('../../../public/setting-defaults');
 
 const DEFAULT_LAUNCH_TIMEOUT_MS = 20000;
 const NO_DIR_EXIT_CODE = 9;
@@ -56,8 +56,10 @@ function buildLaunchScript({ sessionId, cwd, options }) {
   if (!dir.ok) throw new Error(dir.error);
   const flags = buildClaudeArgs(options);
   if (!flags.ok) throw new Error(flags.error);
-  const claude = claudeCommand('/bin/sh', ['--session-id', sessionId.toLowerCase(), ...flags.args],
-    { windows: false, customArgs: options?.customArgs });
+  const customArgs = options?.customArgs === undefined ? SETTING_DEFAULTS.customArgs : options.customArgs;
+  const check = validateCustomArgs(customArgs);
+  if (!check.ok) throw new Error(check.error);
+  const claude = ['claude', '--session-id', sessionId.toLowerCase(), ...flags.args].join(' ') + (customArgs ? ' ' + customArgs : '');
   return `cwd=${shellSingleQuote(cwd)}; [ -d "$cwd" ] || exit ${NO_DIR_EXIT_CODE}; ` +
     `command -v tmux >/dev/null 2>&1 || exit ${NO_TMUX_EXIT_CODE}; ` +
     `command -v claude >/dev/null 2>&1 || exit ${NO_CLAUDE_EXIT_CODE}; ` +
@@ -142,7 +144,10 @@ async function handleLaunchRequest(payload, deps) {
   try {
   let customArgs;
   try {
-    customArgs = customArgsForLaunch('claude', payload.options, deps.getSetting || (() => null), payload.cwd);
+    const global = deps.getSetting?.('global') || {};
+    customArgs = global.customArgs === undefined ? SETTING_DEFAULTS.customArgs : global.customArgs;
+    const check = validateCustomArgs(customArgs);
+    if (!check.ok) throw new Error(check.error);
   } catch (err) {
     return { ok: false, error: err.message };
   }

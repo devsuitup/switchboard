@@ -86,7 +86,7 @@ function spawnPty(file, args, opts) {
 }
 
 // Shell profiles → shell-profiles.js
-const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell, claudeCommand, headlessClaudeLaunch } = require('./src/main/terminals/shell-profiles');
+const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell, claudeCommand, headlessClaudeLaunch, customArgsForLaunch } = require('./src/main/terminals/shell-profiles');
 const { startScheduler, scheduleLaunchRefusal, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./src/main/schedules/schedule-runner');
 const { buildScheduleList } = require('./src/main/schedules/schedule-list');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
@@ -4382,7 +4382,7 @@ if (!app.isPackaged) {
         const shell = profile.path;
         const env = { ...cleanPtyEnv, FORCE_COLOR: '0' };
         // see .ai/contexts/schedule-runner.md ("Windows launches")
-        const customArgs = require('./src/main/terminals/shell-profiles').customArgsForLaunch('claude', null, getSetting, cwd);
+        const customArgs = customArgsForLaunch('claude', null, getSetting, cwd);
         let launch = headlessClaudeLaunch(shell, claudeArgv, { env, profileArgs: profile.args || [], customArgs });
 
         const sandbox = resolveScheduleSandbox(cwd, getSetting, SETTING_DEFAULTS.sandbox);

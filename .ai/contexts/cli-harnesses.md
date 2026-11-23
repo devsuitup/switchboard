@@ -13,21 +13,28 @@ Claude inherits project then global, with an explicit empty project value
 disabling inheritance. Codex follows the existing global-only Codex controls.
 `customArgsForLaunch` resolves launch options first, then the applicable stored
 scopes, using the resolved cwd. Dialogs forward effective Claude options; main
-also resolves settings for paths without renderer options, including schedules
-and remote launches. `codexCommand` fixes its binary to Codex and delegates the
+also resolves settings for schedules. Remote launches read only global arguments,
+ignoring both local project settings and forwarded custom-argument overrides.
+The remote adapter currently launches Claude; Codex's separate field remains
+global-only. `codexCommand` fixes its binary to Codex and delegates the
 shell encoding to `claudeCommand`; each receives only its own selected field.
 
 Custom text is raw shell syntax appended after generated argv, before prefix/cwd
 and SSH/tmux transport wrapping. It is not one argv token. PowerShell's helper
 receives the shell-parsed custom tokens and preserves its native argv encoding;
-command-length checks include the suffix. Headless launches with a nonempty
-suffix use the selected shell; empty suffixes keep Windows' existing direct
-executable/npm target resolution. Sandbox replacement commands append the same
-validated text. Remote scripts use `claudeCommand('/bin/sh', ...)` then the
-existing `shellSingleQuote` layers. No command-preview surface exists.
+command-length checks include the suffix. The helper's binary parameter is
+`$__sbCmd`, so CLI flags such as `-n` and `-N` stay in its argument list.
+Windows cmd/PowerShell schedules split literal quoted custom tokens, append them
+to generated argv and keep the existing direct executable/npm target resolution
+(see `schedule-runner.md`, "Windows launches"). Sandbox replacement commands
+append the same validated text. Remote scripts keep the validated base command's
+space join, append nonempty custom text as typed for the remote POSIX shell,
+then apply the existing `shellSingleQuote` layers. No command-preview surface exists.
 
 Attaching to an already running daemon/remote process and internal Claude
-management commands do not receive session arguments. No CLI or shell is
+management commands do not receive session arguments. Background `--bg` dispatch
+through `runClaudeCommand` deliberately does not receive custom arguments.
+No CLI or shell is
 executed to validate the text. Tests: `custom-session-args`, `dom-settings-nav`,
 and the existing launch/extraction suites; live transports remain a separate
 qualification boundary.

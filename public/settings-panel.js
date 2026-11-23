@@ -184,7 +184,7 @@
           <div class="settings-field-info">
             <label class="settings-label" for="sv-custom-args">Custom Arguments</label>
             ${useGlobalCheckbox('customArgs')}
-            <div class="settings-description">Appended to Claude commands. Use your selected shell's quoting; remote sessions use POSIX quoting. One line, no control characters.</div>
+            <div class="settings-description">Appended to Claude commands. Use your selected shell's quoting. ${isProject ? 'This override applies to local launches only.' : 'Remote launches use only global arguments, passed to the remote POSIX shell as typed.'} Windows cmd/PowerShell schedules split literal quoted arguments without shell expansion. One line, no control characters.</div>
           </div>
           <div class="settings-field-control"><textarea rows="1" class="settings-input" id="sv-custom-args" ${fieldDisabled('customArgs')}>${escapeHtml(fieldValue('customArgs'))}</textarea></div>
         </div>

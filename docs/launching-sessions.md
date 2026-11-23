@@ -78,9 +78,10 @@ That covers a wrapper (`aws-vault exec profile --`), an environment assignment
 
 In **Settings → Sessions → Claude**, **Custom Arguments** adds text after the
 generated Claude arguments. **Project Settings → Launch → Claude** can override
-it; an empty override removes the global arguments. It applies when starting,
-resuming or forking, including the Configure dialogs, scheduled runs and remote
-launches. Sandbox launches pass the same arguments through the wrapper.
+it for local launches; an empty override removes the global arguments. It applies
+when starting, resuming or forking, including the Configure dialogs and scheduled
+runs. Remote launches use only global arguments, never a matching local project's
+override. Sandbox launches pass the same arguments through the wrapper.
 
 **Settings → Sessions → Codex → Custom arguments** is a separate global field
 for Codex starts, resumes and forks. Both fields default to empty. They do not
@@ -88,12 +89,25 @@ change running sessions, plain terminals, or attachment to an existing process.
 
 Write one line using the selected shell's argument quoting, for example
 `--settings '{"outputStyle":"Learning"}'` in bash or PowerShell. On cmd, use cmd's
-quoting rules instead. Remote launches use POSIX quoting on the remote host.
-The text is interpreted by that shell, including its expansions and operators;
-Switchboard does not split it into arguments or escape it as one argument.
+quoting rules instead. Remote text is passed to the remote POSIX shell as typed,
+including its expansions and operators. Interactive launches likewise interpret
+the text in the selected shell; it is not escaped as one argument.
+
+Windows schedules under cmd or PowerShell keep the direct executable/npm target
+route. Their custom text is split into literal arguments: whitespace separates
+tokens, single or double quotes group text, an empty quoted string is an empty
+argument, and doubling a matching quote inside quoted text inserts that quote.
+Backslashes are literal, including a trailing backslash in a quoted path.
+Unclosed quotes are refused. Variables, operators and backticks are literal;
+there is no shell expansion. These tokens are appended to the generated argv
+and passed through the same exact Windows resolver as a schedule without custom
+text. Other schedule profiles retain their shell's quoting and expansion.
+
 Newlines, tabs and other control characters are rejected by Settings and again
 before launch. Generated arguments keep their existing shell escaping, and the
-whole remote command stays quoted while it passes through SSH and tmux.
+whole remote command stays quoted while it passes through SSH and tmux. The
+validated remote base command keeps its original space-joined form; custom text
+is appended only when nonempty.
 
 ### Generated arguments
 
