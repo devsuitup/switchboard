@@ -26,16 +26,21 @@ gh's default here is the upstream repository, `doctly/switchboard`.
    `test/changelog.test.js` fails when `CHANGELOG.md` has no section for the
    version in `package.json`, so a bump without its section does not pass CI.
 
-   PR titles use `type(area): subject`, for example `chore(release): v0.1.0`.
-   The separate **PR title** workflow checks this format in advisory mode.
-   It does not replace the checks below.
+   Commit subjects and PR titles use `type(area): subject`; the release title
+   is `chore(release): v0.1.0`. The PR title becomes the squash commit title
+   (`PR_TITLE`). The separate `pr-title` check is advisory during rollout and
+   is not a required release check.
 
-   The PR checks emitted by this workflow are `lint`,
+   The required PR checks for this workflow are `lint`,
    `test (20, ubuntu-latest)`, `test (22, ubuntu-latest)`,
-   `test (22, windows-2022)`, `changelog` and `e2e`. Required checks and review
-   requirements are GitHub repository settings, separate from these workflow
-   definitions. Inspect the current ruleset and branch protection before
-   arming auto-merge; keep both aligned when changing the test matrix.
+   `test (22, windows-2022)`, `changelog` and `e2e`: ruleset 17240725
+   (`main-protection`) requires all six, and the classic branch protection on
+   `main` requires the same list minus `changelog`. Build is not required.
+   Required checks and review requirements are GitHub repository settings,
+   separate from these workflow definitions: keep the ruleset and the branch
+   protection aligned whenever the test matrix changes. No approving review is
+   required, so `gh pr merge --repo devsuitup/switchboard --auto --squash` can
+   be armed once the required checks run.
    CI-only PRs use the `no-changelog` label.
 
 2. **Run the app before tagging.** The tag is what publishes, and nothing

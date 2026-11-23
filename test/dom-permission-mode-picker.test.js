@@ -149,10 +149,20 @@ test('showResumeSessionDialog: also offers auto in its mode grid (second dialogs
 test('dialogs.js: New and Resume dialogs share one PERMISSION_MODES list (no re-duplicated literal array)', () => {
   const src = fs.readFileSync(path.join(PUBLIC_DIR, 'dialogs.js'), 'utf8');
   const modeListRefs = src.match(/const modes = PERMISSION_MODES;/g) || [];
-  assert.equal(modeListRefs.length, 2, 'both showNewSessionDialog and showResumeSessionDialog must reference the shared PERMISSION_MODES constant');
+  assert.equal(modeListRefs.length, 1, 'New and Resume must use one form referencing the shared PERMISSION_MODES constant');
   // Regression guard: no literal mode array (the pre-fix duplication) left in dialogs.js.
   assert.doesNotMatch(src, /const modes = \[/, 'dialogs.js must not re-introduce a literal, divergence-prone modes array');
 });
+
+for (const file of ['dialogs.js', 'settings-panel.js']) {
+  test(`${file}: Codex pickers use shared choices without literal option arrays`, () => {
+    const src = fs.readFileSync(path.join(PUBLIC_DIR, file), 'utf8');
+    for (const key of ['codexSandbox', 'codexApproval', 'codexEffort']) {
+      assert.match(src, new RegExp(`CODEX_CHOICES\\.${key}\\b`), `${file} must use shared ${key} choices`);
+    }
+    assert.doesNotMatch(src, /\[\s*['"](?:read-only|workspace-write|danger-full-access|on-request|never|low|medium|high|xhigh|max|ultra)['"]\s*,/, `${file} must not duplicate Codex choice arrays`);
+  });
+}
 
 // --- Harness for settings-panel.js (project-scope Settings panel) ---
 function setupSettingsPanelDom() {
