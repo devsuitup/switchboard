@@ -20,7 +20,7 @@ interactive shell records it in its history like any command the user typed.
 |---|---|
 | `src/main/terminals/plain-terminal-shell.js` | `plainTerminalLaunch()`: args, env and the fallback line per shell. `ensureInitFiles()`: writes the generated startup files. The files' content. |
 | `main.js` (`open-terminal`, `isPlainTerminal` branch) | Builds the base env (`cleanPtyEnv` plus the terminal variables), asks `plainTerminalLaunch()`, spawns what it returns, types `launch.typed` 300 ms after the spawn when it is not null. |
-| `src/main/terminals/shell-profiles.js` | `shellArgs()`: the args every other spawn uses (`-l -i` for bash-like shells — bash, zsh, `sh` — and for fish and nushell; WSL gets `-- bash -l -i`). |
+| `src/main/terminals/shell-profiles.js` | `shellArgs()`: the args every other spawn uses. With no command: `-l -i` for bash-like shells (bash, zsh, `sh`), fish and nushell; WSL gets `-- bash -l -i`. With a command (e.g. `headlessClaudeLaunch`): fish and nushell get `-l -c <cmd>`. |
 | `src/main/shared/clean-env.js` | The base env: drops the Claude Code session markers inherited from a parent session and, when one was found, its `GIT_EDITOR=true` residue (see [ipc-bridge](ipc-bridge.md), "Clean child environment"). |
 | `test/plain-terminal-shell.test.js` | Args and env per shell, the generated files run by real bash and zsh, the `main.js` wiring. |
 

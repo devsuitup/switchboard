@@ -4,7 +4,7 @@ Captured 2026-05-30 while writing the .ai/contexts/*.md files; pruned 2026-11-24
 
 ## Architecture
 
-- **`main.js` is still the largest file** (4688 lines at 4d468532). Handlers move out by context under `src/main/` (`app`, `bg-agents`, `browser`, `changes`, `cli`, `files`, `integrations`, `projects`, `remote`, `schedules`, `session-index`, `shared`, `terminals`, `triggers`, `usage`, `viewer`) following [ADR 0005](../../docs/decisions/0005-main-process-context-layout.md); the MCP bridge is `src/main/integrations/mcp/mcp-bridge.js`.
+- **`main.js` remains large** (4688 lines at 4d468532). Handlers move out by context under `src/main/` (`app`, `bg-agents`, `browser`, `changes`, `cli`, `files`, `integrations`, `projects`, `remote`, `schedules`, `session-index`, `shared`, `terminals`, `triggers`, `usage`, `viewer`) following [ADR 0005](../../docs/decisions/0005-main-process-context-layout.md); the MCP bridge is `src/main/integrations/mcp/mcp-bridge.js`.
 
 - **No subagent-observability module** — the feature is implemented across `session-cache.js` (indexing), `main.js` (4+ IPCs), `public/sidebar.js` (rendering), `public/jsonl-viewer.js` (transcript). Considered creating a `subagent/` directory but the cross-cuts are real (it's a feature, not a sub-system). The context doc cross-references the pieces.
 
