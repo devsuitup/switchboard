@@ -1,15 +1,4 @@
-// #app-container is a flex child of body, sharing the window with the 22px
-// #status-bar, so it is strictly shorter than the viewport. A descendant sized
-// to 100vh therefore overflows it by the height of the status bar, and since
-// #app-container is overflow: hidden the browser can scroll that overflow out
-// of view (a focus or scrollIntoView below the fold is enough) with no
-// scrollbar to bring it back — the top row stays clipped until a reload.
-// Container-relative heights are the only safe way to fill #app-container.
-//
-// Same source-grep shape as test/session-meta-layout-css.test.js — no real CSS
-// parser, just brace/comment stripping good enough to isolate selector text —
-// with index.html parsed by jsdom to decide which selectors actually land
-// inside #app-container.
+// See .ai/contexts/window-frame.md, "Preventing focus from scrolling the app container".
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -87,7 +76,7 @@ test('style.css: nothing inside #app-container is sized to the full viewport hei
   dom.window.close();
 });
 
-test('style.css: #app-container shares the window with a fixed-height #status-bar and hides its overflow', () => {
+test('style.css: #app-container shares the window with a fixed-height #status-bar', () => {
   const dom = new JSDOM(HTML);
   const { document } = dom.window;
   const appContainer = document.getElementById('app-container');
@@ -102,9 +91,15 @@ test('style.css: #app-container shares the window with a fixed-height #status-ba
   const statusBarHeight = /(?:^|;)\s*height\s*:\s*(\d+(?:\.\d+)?)px/.exec(declarationsOf(statusBarRule));
   assert.ok(statusBarHeight && Number(statusBarHeight[1]) > 0,
     '#status-bar reserves a fixed pixel strip of the window');
+});
 
-  const appContainerRule = ruleFor(/^#app-container$/);
-  assert.ok(appContainerRule, 'expected an #app-container rule');
-  assert.match(declarationsOf(appContainerRule), /overflow:\s*hidden/,
-    'overflow that escapes #app-container gets no scrollbar, so it cannot be scrolled back into view');
+test('style.css: #app-container clips overflow so focus cannot scroll the window content', t => {
+  const dom = new JSDOM(HTML);
+  t.after(() => dom.window.close());
+  const style = dom.window.document.createElement('style');
+  style.textContent = CSS;
+  dom.window.document.head.append(style);
+  const appContainer = dom.window.document.getElementById('app-container');
+  assert.equal(dom.window.getComputedStyle(appContainer).overflow, 'clip',
+    '#app-container must use overflow: clip to prevent focus-driven scrolling');
 });
