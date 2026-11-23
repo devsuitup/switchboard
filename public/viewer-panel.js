@@ -71,6 +71,8 @@ class ViewerPanel {
       format: !!opts.format,
       delete: !!opts.onDelete,
       save: !!opts.onSave,
+      openExternal: !!opts.openExternal,
+      revealInFolder: !!opts.revealInFolder,
       close: !!opts.onClose,
     });
     container.insertBefore(this.toolbar.el, container.firstChild);

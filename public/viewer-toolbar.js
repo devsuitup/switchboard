@@ -529,6 +529,53 @@ window.setViewerPath = setViewerPath;
  *   .flashSave()
  *   .on(event, handler)  - Attach event handlers
  */
+const VIEWER_OPEN_EXTENSIONS = Object.freeze(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.pdf', '.md', '.mdx', '.txt', '.log', '.json', '.jsonl', '.csv', '.tsv']);
+
+function createViewerFileActions(opts = {}) {
+  const el = document.createDocumentFragment();
+  let filePath = '';
+  const makeButton = (enabled, label, icon, open) => {
+    if (!enabled) return null;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'icon-btn';
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.innerHTML = icon;
+    button.hidden = true;
+    button.disabled = true;
+    button.style.display = 'none';
+    button.addEventListener('click', async () => {
+      if (!filePath || button.hidden || button.disabled) return;
+      const target = filePath;
+      try {
+        const result = await (open ? window.api.openPath(target, { viewer: true }) : window.api.showItemInFolder(target));
+        if (open ? result === '' : result?.ok === true) return;
+        throw new Error((open ? result : result?.reason) || 'The file could not be opened.');
+      } catch (error) {
+        await appAlert({ title: label, message: `${target}: ${error.message || String(error)}` });
+      }
+    });
+    el.appendChild(button);
+    return button;
+  };
+  const openExternalBtn = makeButton(opts.openExternal, 'Open in default app', '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 3h6v6M10 14 21 3M18 13v6H5V6h6"/></svg>', true);
+  const revealInFolderBtn = makeButton(opts.revealInFolder, 'Reveal in folder', '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7V4h6l2 3h10v13H3zM7 13h10m-3-3 3 3-3 3"/></svg>', false);
+  return {
+    el, openExternalBtn, revealInFolderBtn,
+    setPath(value) {
+      filePath = typeof value === 'string' && /^(?:\/(?!\/)|[A-Za-z]:[/\\])/.test(value) ? value : '';
+      const basename = filePath.split(/[/\\]/).pop();
+      const extension = /\.[^.]+$/.exec(basename);
+      const openable = !!filePath && extension?.index > 0 && VIEWER_OPEN_EXTENSIONS.includes(extension[0].toLowerCase());
+      if (openExternalBtn) openExternalBtn.disabled = openExternalBtn.hidden = !openable;
+      if (revealInFolderBtn) revealInFolderBtn.disabled = revealInFolderBtn.hidden = !filePath;
+      if (openExternalBtn) openExternalBtn.style.display = openable ? '' : 'none';
+      if (revealInFolderBtn) revealInFolderBtn.style.display = filePath ? '' : 'none';
+    },
+  };
+}
+
 function createViewerToolbar(opts = {}) {
   const el = document.createElement('div');
   el.className = 'viewer-toolbar';
@@ -630,6 +677,9 @@ function createViewerToolbar(opts = {}) {
     controlsEl.appendChild(saveBtn);
   }
 
+  const fileActions = createViewerFileActions(opts);
+  controlsEl.appendChild(fileActions.el);
+
   let closeBtn = null;
   if (opts.close) {
     closeBtn = document.createElement('button');
@@ -656,9 +706,11 @@ function createViewerToolbar(opts = {}) {
     gotoLineBtn,
     formatBtn,
     deleteBtn,
+    openExternalBtn: fileActions.openExternalBtn,
+    revealInFolderBtn: fileActions.revealInFolderBtn,
 
     setTitle(text) { titleEl.textContent = text; },
-    setPath(text) { setViewerPath(pathEl, text); },
+    setPath(text) { setViewerPath(pathEl, text); fileActions.setPath(text); },
 
     setPreviewMode(active) {
       if (!previewBtn) return;
@@ -700,5 +752,6 @@ document.addEventListener('keydown', (e) => {
 
 // Expose globally
 window.createViewerToolbar = createViewerToolbar;
+window.createViewerFileActions = createViewerFileActions;
 window.flashButtonText = flashButtonText;
 window.toggleMarkdownPreview = toggleMarkdownPreview;

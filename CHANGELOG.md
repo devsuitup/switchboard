@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
+- Local file viewers now offer **Open in default app** for supported documents and **Reveal in folder**, including Memory, Activity traces and files opened from Touched or terminal paths. Unsaved edits stay in the editor; scripts and executables can only be revealed. (#1203)
 - Notices and question dialogs now leave a bounded history in the application log, including dismissals and answers, with common credentials masked; session titles and prompts are not recorded, and project paths remain intact. (#1196)
 - Settings → Advanced → Diagnostics shows the size of Switchboard's logs and activity traces and lets you delete files older than a chosen number of days, keeping current files. (#1197)
 

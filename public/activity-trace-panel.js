@@ -23,6 +23,7 @@ function getActivityTracePanel() {
   if (!container || typeof ViewerPanel !== 'function') return null;
   activityTracePanel = new ViewerPanel(container, {
     copyPath: true, copyContent: true,
+    openExternal: true, revealInFolder: true,
     language: 'auto', storageKey: 'activityTracePreviewMode',
     format: true,
     onDelete: async (filePath) => {

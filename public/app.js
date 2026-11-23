@@ -30,6 +30,7 @@ const statsViewerBody = document.getElementById('stats-viewer-body');
 const memoryViewer = document.getElementById('memory-viewer');
 const memoryPanel = new ViewerPanel(memoryViewer, {
   copyPath: true, copyContent: true,
+  openExternal: true, revealInFolder: true,
   language: 'markdown', storageKey: 'markdownPreviewMode',
   onSave: (filePath, content, expected) => window.api.saveMemory(filePath, content, expected),
 });
