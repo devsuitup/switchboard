@@ -1,5 +1,7 @@
 'use strict';
 
+const { customArgsForLaunch } = require('../src/main/terminals/shell-profiles');
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -73,7 +75,7 @@ function setup(t, { sandbox = false, platform = 'linux', refused = false, spawnE
     SETTING_DEFAULTS: { shellProfile: 'test', sandbox: false },
     resolveShell: () => ({ path: 'test-shell' }),
     quoteArgvForShell: (_shell, args) => args.join(' '), shellArgs: (_shell, cmd) => [cmd],
-    headlessClaudeLaunch: (shell, args) => ({ program: shell, args: ['claude ' + args.join(' ')] }),
+    customArgsForLaunch, headlessClaudeLaunch: (shell, args) => ({ program: shell, args: ['claude ' + args.join(' ')] }),
     cleanPtyEnv: {}, resolveScheduleSandbox: () => sandbox, process: { platform },
     sandboxScriptPath: () => '/sandbox.sh', scheduleProjects: () => ({ list: async () => [root] }),
     scheduleLaunchRefusal: require('../src/main/schedules/schedule-runner').scheduleLaunchRefusal,

@@ -78,15 +78,15 @@ function envFor(kind) {
   return { ...env, PATH: `${bins[kind]};${path.dirname(process.execPath)};${process.env.PATH ?? process.env.Path}`, SB_ARGV_OUT: path.join(bins[kind], 'argv.json') };
 }
 
-async function runSchedule(shell, kind, claudeArgv) {
+async function runSchedule(shell, kind, claudeArgv, customArgs = '') {
   for (const suffix of ['', '.ps1']) fs.rmSync(path.join(bins[kind], 'argv.json' + suffix), { force: true });
   const env = envFor(kind);
   const log = { info() {}, warn() {}, error() {} };
   const ctx = vm.createContext({
     require: createRequire(path.join(ROOT, 'main.js')), fs, path, os, process, Date, setTimeout, clearTimeout,
-    DB_PATH: path.join(bins[kind], 'db'), getSetting: () => ({}), isProjectSettingsArchived: () => false,
+    DB_PATH: path.join(bins[kind], 'db'), getSetting: () => ({ customArgs }), isProjectSettingsArchived: () => false,
     SETTING_DEFAULTS: { shellProfile: 'test', sandbox: false }, resolveShell: () => ({ path: shell }),
-    quoteArgvForShell: profiles.quoteArgvForShell, shellArgs: profiles.shellArgs, headlessClaudeLaunch: profiles.headlessClaudeLaunch,
+    quoteArgvForShell: profiles.quoteArgvForShell, shellArgs: profiles.shellArgs, customArgsForLaunch: profiles.customArgsForLaunch, headlessClaudeLaunch: profiles.headlessClaudeLaunch,
     cleanPtyEnv: env, resolveScheduleSandbox: () => false,
     scheduleLaunchRefusal: require('../src/main/schedules/schedule-runner').scheduleLaunchRefusal,
     scheduleProjects: () => ({ list: async () => [] }), sandboxScriptPath: () => 'sandbox', sandboxBindEnv: () => '', encodeProjectPath: () => 'project',
@@ -110,6 +110,27 @@ const ARGV = ['--resume', ID, '-p', 'Run the scheduled task', '--permission-mode
   '--add-dir', 'C:\\space dir\\', '--append-system-prompt', 'say "hi" a" b\\ & %PATH% ^ |<> $env:PATH `x` ;', '--model', ''];
 
 for (const [shell, available] of shells) {
+  for (const kind of KINDS) {
+    test(`${shell}: scheduled custom arguments preserve hostile argv for ${kind}`, { skip: !available || skip }, async () => {
+      const result = await runSchedule(shell, kind, ARGV, '--model "custom model" --empty ""');
+      assert.equal(result.viaScript, false, 'custom arguments must not route through claude.ps1');
+      assert.deepEqual(result.argv, [...ARGV, '--model', 'custom model', '--empty', '']);
+    });
+  }
+}
+
+for (const flag of ['-n', '-N']) {
+  test(`PowerShell interactive custom ${flag} reaches the CLI unchanged`, { skip }, () => {
+    const env = envFor('exe');
+    fs.rmSync(env.SB_ARGV_OUT, { force: true });
+    const command = profiles.claudeCommand('powershell.exe', ['--resume', ID], { env, customArgs: `${flag} foo` });
+    const result = spawnSync('powershell.exe', profiles.shellArgs('powershell.exe', command), { env, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(env.SB_ARGV_OUT, 'utf8')), ['--resume', ID, flag, 'foo']);
+  });
+}
+
+for (const [shell, available] of shells) {
   const options = { skip: skip || (!available && `${shell} is not installed`), timeout: 90000 };
   for (const kind of KINDS) {
     test(`a schedule under ${path.basename(shell)} hands a claude (${kind}) its exact arguments`, options, async () => {
@@ -128,7 +149,7 @@ test('a schedule under cmd.exe or PowerShell with no claude on PATH is refused w
       require: createRequire(path.join(ROOT, 'main.js')), fs, path, os, process, Date,
       DB_PATH: path.join(dir, 'db'), getSetting: () => ({}), isProjectSettingsArchived: () => false,
       SETTING_DEFAULTS: { shellProfile: 'test', sandbox: false }, resolveShell: () => ({ path: 'powershell.exe' }),
-      quoteArgvForShell: profiles.quoteArgvForShell, shellArgs: profiles.shellArgs, headlessClaudeLaunch: profiles.headlessClaudeLaunch,
+      quoteArgvForShell: profiles.quoteArgvForShell, shellArgs: profiles.shellArgs, customArgsForLaunch: profiles.customArgsForLaunch, headlessClaudeLaunch: profiles.headlessClaudeLaunch,
       cleanPtyEnv: { PATH: dir, PATHEXT: '.COM;.EXE;.BAT;.CMD' }, resolveScheduleSandbox: () => false,
       cpSpawn: () => { throw new Error('spawn must not be reached'); },
       cliSessionState: { trackScheduleRun() {} }, activityReporter: { sessionStarted() {}, sessionEnded() {} },

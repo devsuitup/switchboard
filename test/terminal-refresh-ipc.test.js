@@ -147,6 +147,7 @@ test('remote open, reattach and launch preserve the adapter sizing capability in
       normalizePtySize: require('../src/main/terminals/pty-size').normalizePtySize,
       remoteAttachAdapter: { attach: async () => attachResult },
       remoteLaunchAdapter: {},
+      getSetting: () => ({}),
       handleLaunchRequest: async (_payload, deps) => {
         const result = { ok: true, descriptor, attachResult };
         await deps.register(result);

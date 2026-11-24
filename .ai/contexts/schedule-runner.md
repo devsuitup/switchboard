@@ -519,6 +519,16 @@ only be detected through the CLI's own descriptors, with their existing limits.
 
 ## Windows launches (#1107)
 
+Custom arguments (#1202) retain this direct resolver even when nonempty.
+For Windows cmd/PowerShell schedules, `splitHeadlessCustomArgs` splits whitespace
+outside single/double quotes, preserves empty quoted arguments and literal
+backslashes, and decodes doubled matching quotes inside quoted text. Unclosed
+quotes refuse the launch. Variables, operators and backticks stay literal;
+the parser never evaluates shell syntax. The resulting tokens follow generated
+argv in `resolveWindowsClaude`. Other profiles append the validated text as
+typed to their shell command. `customArgsForLaunch` is imported at module scope
+in main; schedule extraction fixtures supply that real helper explicitly.
+
 `runScheduleCommand` plans the child with `headlessClaudeLaunch(shell, argv,
 { env, profileArgs })` (`src/main/terminals/shell-profiles.js`), which returns
 `{ program, args, verbatim }` or `{ error }`. Under a bash, zsh, fish, nushell

@@ -1,5 +1,53 @@
 # CLI harness port
 
+## Custom launch arguments (#1202)
+
+`SETTING_DEFAULTS` owns empty `customArgs` and `codexCustomArgs`, and exports
+`validateCustomArgs` for the Settings renderer and main-process command builders.
+It rejects non-strings, C0/C1 controls, DEL and Unicode line/paragraph separators.
+The fields are textareas so pasted newlines remain visible to validation rather
+than being silently stripped by HTML single-line inputs. Save validates before
+writing either scope; dirty tracking includes textareas.
+
+Claude inherits project then global, with an explicit empty project value
+disabling inheritance. Codex follows the existing global-only Codex controls.
+`customArgsForLaunch` resolves launch options first, then the applicable stored
+scopes, using the resolved cwd. Dialogs forward effective Claude options; main
+also resolves settings for schedules. Remote launches read only global arguments,
+ignoring both local project settings and forwarded custom-argument overrides.
+The remote adapter currently launches Claude; Codex's separate field remains
+global-only. `codexCommand` fixes its binary to Codex and delegates the
+shell encoding to `claudeCommand`; each receives only its own selected field.
+
+Custom text is raw shell syntax appended after generated argv, before prefix/cwd
+and SSH/tmux transport wrapping. It is not one argv token. PowerShell's helper
+receives the shell-parsed custom tokens and preserves its native argv encoding;
+command-length checks include the suffix. Custom text is appended after the
+generated argv, behind a bare `--`: `__switchboard_launch '<program>' '<token>'...
+-- <custom text>`. The helper declares no `param()` block and takes the program
+from `$args[0]`, shifting the rest (`$__sbCmd=$args[0];$args=@($args|Select-Object
+-Skip 1)`): a named parameter could be bound by an abbreviated flag in custom
+text (`-__s x` replaced the launched program). PowerShell consumes the first bare
+`--` of any function call as its end-of-parameters marker, even without
+`param()`, so the generated `--` is the one consumed and a `--` typed in custom
+text reaches the program, as it does when PowerShell runs a native command
+directly. Both measured on Windows PowerShell 5.1. A `-name:value` token is still
+split in two by PowerShell's parser before the helper runs.
+Windows cmd/PowerShell schedules split literal quoted custom tokens, append them
+to generated argv and keep the existing direct executable/npm target resolution
+(see `schedule-runner.md`, "Windows launches"). Sandbox replacement commands
+append the same validated text. Remote scripts keep the validated base command's
+space join, append nonempty custom text as typed for the remote POSIX shell,
+then apply the existing `shellSingleQuote` layers. No command-preview surface exists.
+
+Attaching to an already running daemon/remote process and internal Claude
+management commands do not receive session arguments. Background `--bg` dispatch
+through `runClaudeCommand` deliberately does not receive custom arguments.
+No CLI or shell is
+executed to validate the text. Tests: `custom-session-args`, `dom-settings-nav`,
+and the existing launch/extraction suites; live transports remain a separate
+qualification boundary.
+
 ## Codex startup observations (#1152)
 
 `listFolders({ strict: true })` and `listTranscripts(dir, { strict: true })`

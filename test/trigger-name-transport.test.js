@@ -122,9 +122,10 @@ test('PowerShell off Windows keeps the bare claude and plain single-quoted token
 const helperSource = () => profiles.shellArgs(PWSH, '__switchboard_launch x', [], { windows: true })[2].slice(0, -'__switchboard_launch x'.length);
 test('the PowerShell helper falls back to the command PowerShell resolves and never shadows claude', () => {
   const source = helperSource();
-  assert.ok(source.startsWith('function __switchboard_launch{param([string]$n)'), source);
+  assert.ok(source.startsWith('function __switchboard_launch{$__sbCmd=$args[0];$args=@($args|Select-Object -Skip 1);'), source);
+  assert.ok(!/param\s*\(/i.test(source), 'a named parameter would let an abbreviated custom flag replace the launched program');
   assert.ok(!source.includes('function claude'));
-  assert.ok(source.includes("Get-Command $n -ErrorAction Stop|Select-Object -First 1;$f=$c.Source;$t='';if($c.CommandType -eq 'ExternalScript'){"), source);
+  assert.ok(source.includes("Get-Command $__sbCmd -ErrorAction Stop|Select-Object -First 1;$f=$c.Source;$t='';if($c.CommandType -eq 'ExternalScript'){"), source);
   assert.ok(source.includes("[IO.Path]::GetDirectoryName($_.Source) -eq [IO.Path]::GetDirectoryName($c.Source) -and $_.Source -match '\\.(cmd|bat)$'}|Select-Object -First 1;$f=if($a){$a.Source}else{''}}"), source);
   assert.ok(source.includes("elseif($c.CommandType -ne 'Application'){& $c @args;return};"), source);
   assert.ok(source.includes("'" + require('../claude-binary').SHIM_INVOCATION.source + "','IgnoreCase,Multiline');"), source);
@@ -173,7 +174,7 @@ test('a launch that fits only without the helper keeps the plain token form and 
   }
 });
 test('a launch that fits with the helper keeps it just below the limit', async () => {
-  const prompt = 'y'.repeat(30800);
+  const prompt = 'y'.repeat(30767);
   const spawned = await launch('pwsh.exe', { isNew: false, transcript: true, options: { appendSystemPrompt: prompt } });
   assert.ok(spawned.args[2].startsWith('function __switchboard_launch'));
   assert.ok(argsToCommandLine('pwsh.exe', spawned.args).length + 1 <= 32767);

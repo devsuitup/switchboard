@@ -56,6 +56,29 @@ const plain = value => JSON.parse(JSON.stringify(value));
 
 for (const runtime of ['claude', 'codex']) {
   for (const resume of [false, true]) {
+    for (const custom of ['  --label "quoted value"  ', '']) {
+      test(`${resume ? 'Resume' : 'New'} ${runtime}: forwards only its custom arguments (${custom ? 'verbatim' : 'explicit empty'})`, async t => {
+        const key = runtime === 'codex' ? 'codexCustomArgs' : 'customArgs';
+        const otherKey = runtime === 'codex' ? 'customArgs' : 'codexCustomArgs';
+        const h = setup(t, { [key]: custom, [otherKey]: '--other-runtime' });
+        let options;
+        h.window.launchNewSession = (_project, value) => { options = value; };
+        if (resume) {
+          await h.window.showResumeSessionDialog(session(runtime));
+          options = (await h.submit())[3];
+        } else {
+          await h.window.showNewSessionDialog({ projectPath: '/repo', runtime });
+          h.document.querySelector('.new-session-start-btn').click();
+        }
+        assert.equal(options[key], custom, 'runtime custom arguments survive the shared form unchanged');
+        assert.equal(Object.hasOwn(options, otherKey), false, 'the other runtime custom arguments must not leak');
+      });
+    }
+  }
+}
+
+for (const runtime of ['claude', 'codex']) {
+  for (const resume of [false, true]) {
     test(`${resume ? 'Resume' : 'New'} ${runtime}: Enter on a select keeps the dialog open without launching`, async t => {
       const h = setup(t);
       const launches = [];
@@ -137,4 +160,37 @@ test('New Codex and Resume Codex use the same fields and model defaults', async 
   await h.window.showResumeSessionDialog(session('codex'));
   const resumeFields = [...h.document.querySelectorAll('.new-session-body input, .new-session-body select')].filter(el => el.id !== 'rsd-cwd').map(el => [el.id.replace('rsd-', ''), el.value]);
   assert.deepEqual(resumeFields, fields);
+});
+
+test('Codex resume submits the values picked in the form and the harness turns them into argv', async t => {
+  const h = setup(t, { codexModel: 'configured-model', codexSandbox: 'read-only', codexApproval: 'on-request', codexEffort: 'low' });
+  await h.window.showResumeSessionDialog(session('codex'));
+  const pick = (id, value) => {
+    const el = h.document.querySelector(`#rsd-${id}`);
+    assert.ok([...(el.options || [{ value }])].some(o => o.value === value), `${id} offers ${value}`);
+    el.value = value;
+    el.dispatchEvent(new h.window.Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
+  };
+  assert.equal(h.document.querySelector('#rsd-codex-model').value, 'configured-model', 'the form starts from the effective model');
+  pick('codex-sandbox', 'workspace-write');
+  pick('codex-approval', 'never');
+  pick('codex-model', 'catalog-model');
+  pick('codex-effort', 'high');
+  pick('add-dirs', ' /extra/a, /extra/b ');
+  const [id, , isNew, options] = await h.submit();
+  assert.deepEqual(plain(options), {
+    runtime: 'codex', codexSandbox: 'workspace-write', codexApproval: 'never',
+    codexModel: 'catalog-model', codexEffort: 'high', addDirs: '/extra/a, /extra/b',
+  });
+  const args = getHarness(options.runtime).buildLaunchArgs({ sessionId: id, isNew, options });
+  assert.deepEqual(args.slice(0, 2), ['resume', id]);
+  const picked = [
+    '--sandbox', 'workspace-write',
+    '--ask-for-approval', 'never',
+    '--model', 'catalog-model',
+    '-c', 'model_reasoning_effort="high"',
+    '--add-dir', '/extra/a',
+    '--add-dir', '/extra/b',
+  ];
+  assert.deepEqual(args.slice(-picked.length), picked, 'each picked value follows its own flag, in order, at the end of argv');
 });

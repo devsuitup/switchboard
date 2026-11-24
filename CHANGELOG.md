@@ -7,6 +7,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### New
 - Local schedules can opt into background sessions that you can join while they run, with a one-hour limit and automatic cleanup when nobody has joined; a run in progress when Switchboard closes is picked up again at the next launch. (#611)
 - Local file viewers now offer **Open in default app** for supported documents and **Reveal in folder**, including Memory, Activity traces and files opened from Touched or terminal paths. Unsaved edits stay in the editor; scripts and executables can only be revealed. (#1203)
+- Sessions can append custom command-line arguments, with separate Claude and Codex settings and project overrides for Claude. (#1202)
 - Notices and question dialogs now leave a bounded history in the application log, including dismissals and answers, with common credentials masked; session titles and prompts are not recorded, and project paths remain intact. (#1196)
 - Settings → Advanced → Diagnostics shows the size of Switchboard's logs and activity traces and lets you delete files older than a chosen number of days, keeping current files. (#1197)
 
