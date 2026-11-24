@@ -62,6 +62,8 @@ setting outside this file (read from the GitHub API on 2026-10-28).
 | A transcript-driven row state survives a sidebar re-render | `state-survives-rerender.spec.js` | the row state kept across a re-render |
 | The themed file panel shows a long Touched list and scrollable file contents | `theme-controls.spec.js` | the file panel's scroll regions under a theme |
 | E1–E8: the session tool bar | `tool-bar.spec.js` | see [Session tool bar](#session-tool-bar-506) |
+| Schedule rows keep every action inside the tab at 200, 340 and 600 px, light and dark, 100% and 150% zoom | `schedules.spec.js` | no button or history toggle leaves its row or the tab, none clips its text, and the tab never scrolls sideways (#1238) |
+| Keyboard focus survives Schedules refreshes, and the create form stays reachable in a small zoomed window | `schedules.spec.js` | Create, a row action, the history toggle and a project Retry keep focus across a re-render; Tab reveals row actions with a visible outline; the open form keeps its value and focus; Tab reaches the form's Create at 800x500, 150% zoom; Escape returns to Create (#1238) |
 
 The issue's fifth journey expected the Changes control to disappear. #310 made
 it unconditional, so the journey checks what the panel says instead (see
@@ -120,6 +122,16 @@ and the absence of new Unicode directories in the checkout after teardown.
   kill is sent. A journey may end the app itself (`hung-window.spec.js` and `close-window.spec.js` do);
   the fixture then skips the trace, the screenshot and the close, and only
   deletes the temporary `HOME`.
+
+`schedules.spec.js` replaces the main-process `list-schedules` handler with a
+fixture (long Windows paths, a long name and refusal, disabled, malformed,
+linked, unreadable, archived-project and unknown-project rows, a project whose
+folder cannot be read, 20 history entries), so no schedule file or CLI run is
+involved. It turns the tab on with `window._applySchedulesTab(true)`, the call
+Settings → Save makes. Its screenshots (one per size, zoom, theme and sidebar
+width, plus the create form) and the sidebar width each combination actually
+got (a 600 px sidebar can shrink in a small zoomed window) go to the test output
+directory and the report annotations; CI uploads them only when the job fails.
 
 ## Proving a journey can fail
 
