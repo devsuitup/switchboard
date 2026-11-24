@@ -789,9 +789,10 @@
     function dirtySnapshot() {
       return { values: trackedControls.map(controlValue), hosts: JSON.stringify(remoteHosts), shortcuts: JSON.stringify(scShortcuts) };
     }
-    function resetDirty(snapshot = dirtySnapshot()) {
+    function resetDirty(snapshot = dirtySnapshot(), submittedEdits = null) {
       trackedControls.forEach((control, index) => { control.dataset.initial = snapshot.values[index]; });
-      editedControls.clear();
+      if (submittedEdits) for (const control of submittedEdits) editedControls.delete(control);
+      else editedControls.clear();
       initialHosts = snapshot.hosts;
       initialShortcuts = snapshot.shortcuts;
       updateDirty();
@@ -1020,6 +1021,7 @@
       let settings = {};
       let rejectedHosts = false;
       const submitted = dirtySnapshot();
+      const submittedEdits = new Set(editedControls);
 
       if (isProject) {
         // Only save fields where "use global" is unchecked
@@ -1066,7 +1068,8 @@
         settings.restoreOnStartup = settingsViewerBody.querySelector('#sv-restore-startup').value || SETTING_DEFAULTS.restoreOnStartup;
         settings.hideSdkSessions = settingsViewerBody.querySelector('#sv-hide-sdk').checked;
         settings.mcpEmulation = settingsViewerBody.querySelector('#sv-mcp-emulation').checked;
-        settings.schedulesTab = settingsViewerBody.querySelector('#sv-schedules-tab').checked;
+        const schedulesToggle = settingsViewerBody.querySelector('#sv-schedules-tab');
+        if (submittedEdits.has(schedulesToggle)) settings.schedulesTab = schedulesToggle.checked;
         settings.autoUpdate = settingsViewerBody.querySelector('#sv-auto-update').checked;
         settings.receiveBetaVersions = settingsViewerBody.querySelector('#sv-receive-beta-versions').checked;
         settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || SETTING_DEFAULTS.shellProfile;
@@ -1109,8 +1112,17 @@
       if (!isProject) setRemoteHostLabels(settings.remoteHosts);
 
       // Update visibleSessionCount, sessionMaxAgeDays, and theme
+      let storedSchedulesTab;
+      if (!isProject && settings.schedulesTab === undefined) {
+        try {
+          const stored = await window.api.getSetting('global');
+          storedSchedulesTab = stored?.schedulesTab ?? SETTING_DEFAULTS.schedulesTab;
+        } catch {
+          storedSchedulesTab = settingsViewerBody.querySelector('#sv-schedules-tab').checked;
+        }
+      }
       if (!isProject) {
-        window._applySchedulesTab?.(settings.schedulesTab);
+        window._applySchedulesTab?.(settings.schedulesTab ?? storedSchedulesTab);
         if (Array.isArray(settings.disabledHarnesses)) window._applyUsageHarnesses?.(settings.disabledHarnesses);
         if (typeof settings.showCodexUsage === 'boolean' && settings.showCodexUsage !== appliedCodexUsage) {
           window._applyCodexUsage?.(settings.showCodexUsage);
@@ -1180,6 +1192,11 @@
         }
         submitted.values[index] = normalized;
       });
+      const schedulesIndex = trackedControls.findIndex(control => control.id === 'sv-schedules-tab');
+      if (storedSchedulesTab !== undefined && schedulesIndex >= 0 && !editedControls.has(trackedControls[schedulesIndex])) {
+        trackedControls[schedulesIndex].checked = storedSchedulesTab;
+        submitted.values[schedulesIndex] = String(storedSchedulesTab);
+      }
       if (!isProject && !rejectedHosts && JSON.stringify(remoteHosts) === submitted.hosts && JSON.stringify(settings.remoteHosts) !== submitted.hosts) {
         remoteHosts = settings.remoteHosts.map(h => ({ ...h }));
         renderRemoteHosts();
@@ -1189,7 +1206,7 @@
       const saveBtn = settingsViewerBody.querySelector('#sv-save-btn');
       saveBtn.textContent = rejectedHosts ? 'Some changes not saved' : deferred ? '✓ Applied' : '✓ Saved';
       saveBtn.classList.toggle('saved', !rejectedHosts);
-      resetDirty(submitted);
+      resetDirty(submitted, submittedEdits);
       clearTimeout(savedFlashTimer);
       savedFlashTimer = setTimeout(() => {
         saveBtn.classList.remove('saved');

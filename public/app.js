@@ -229,10 +229,6 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
   };
   const write = _persistChain.then(async () => {
     if (window.projectDeletionWritesBlocked) return defer();
-    const epoch = window.projectDeletionWriteEpoch;
-    const g = await window.api.getSetting('global');
-    if (window.projectDeletionWritesBlocked || epoch !== window.projectDeletionWriteEpoch) return defer();
-    const global = g || {};
     const set = [];
     for (const [sessionId, entry] of openSessions) {
       if (entry.session.type === 'terminal') continue; // exclude plain shells
@@ -273,8 +269,7 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
       const opening = set.find(e => pendingSessions.get(e.sessionId)?.openingActive);
       if (opening) opening.active = true;
     }
-    global.openWorkingSet = set.filter(item => !window.isDeletedProjectRestoreTarget?.(item));
-    await window.api.setSetting('global', global);
+    await window.api.mergeGlobalSettings({ openWorkingSet: set.filter(item => !window.isDeletedProjectRestoreTarget?.(item)) });
   });
   _persistChain = write.catch((e) => { if (!checked) console.warn('[switchboard] failed to persist working set', e); });
   return checked ? write : _persistChain;

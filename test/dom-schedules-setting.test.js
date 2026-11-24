@@ -211,6 +211,7 @@ test('global Settings saves the toggle and switches surfaces live in both direct
     assert.ok(toggle, 'Global Settings exposes Schedules tab');
     assert.equal(toggle.checked, !enabled);
     toggle.checked = enabled;
+    toggle.dispatchEvent(new h.w.Event('change', { bubbles: true }));
     h.w.document.querySelector('#sv-save-btn').click();
     await settle();
     assert.equal(h.saved.schedulesTab, enabled);
@@ -239,7 +240,7 @@ test('an untouched stale Settings toggle follows a late migration, so its Save k
   assert.equal(h.w.document.querySelector('#sv-unsaved').textContent, '', 'following the stored value is not an unsaved change');
   h.w.document.querySelector('#sv-save-btn').click();
   await settle();
-  assert.equal(h.saved.schedulesTab, true, 'an untouched Save does not opt out');
+  assert.equal(Object.hasOwn(h.saved, 'schedulesTab'), false, 'an untouched Save does not write the Schedules value');
   assert.equal(h.saved.schedulesTabDefaultMigrated, true);
   assert.equal(h.tab.hidden, false);
 });
@@ -287,4 +288,70 @@ test('an explicit off queued behind the migration keeps its marker, so the next 
   assert.equal(h.saved.schedulesTabDefaultMigrated, true, 'the merge kept the committed marker');
   assert.equal(migrateSchedulesTabDefault(h.db), 'none');
   assert.equal(h.tab.hidden, true);
+});
+
+function holdNextMerge(h) {
+  const merge = h.w.api.mergeGlobalSettings;
+  const held = {};
+  h.w.api.mergeGlobalSettings = (...args) => {
+    h.w.api.mergeGlobalSettings = merge;
+    held.args = args;
+    return new Promise(resolve => { held.acknowledge = resolve; });
+  };
+  held.commit = async () => { await merge(...held.args); held.acknowledge(); await settle(); await settle(); };
+  return held;
+}
+
+test('an untouched Save submitted before the migration commits does not opt out (#1239)', async t => {
+  let migrated;
+  const h = await setup(t, { schedulesTab: false }, w => { w.api.onSchedulesTabMigrated = callback => { migrated = callback; }; });
+  await h.w.openSettingsViewer('global');
+  const held = holdNextMerge(h);
+  h.w.document.querySelector('#sv-save-btn').click();
+  await settle();
+  assert.ok(held.args, 'Settings submitted while the migration was pending');
+  assert.equal(Object.hasOwn(held.args[0], 'schedulesTab'), false, 'an untouched Schedules toggle is not part of the patch');
+  assert.equal(migrateSchedulesTabDefault(h.db), 'turned-on');
+  await held.commit();
+  await migrated();
+  assert.equal(h.saved.schedulesTabDefaultMigrated, true);
+  assert.equal(h.saved.schedulesTab ?? true, true, 'the untouched Save kept the migrated default');
+  assert.equal(migrateSchedulesTabDefault(h.db), 'none');
+  assert.equal(h.tab.hidden, false);
+  assert.equal(h.w.document.querySelector('#sv-schedules-tab').checked, true, 'the form follows the stored value after the Save');
+  assert.equal(h.w.document.querySelector('#sv-unsaved').textContent, '');
+});
+
+test('an untouched Save acknowledged before the notification already shows the migrated tab (#1239)', async t => {
+  const h = await setup(t, { schedulesTab: false }, w => { w.api.onSchedulesTabMigrated = () => {}; });
+  await h.w.openSettingsViewer('global');
+  const held = holdNextMerge(h);
+  h.w.document.querySelector('#sv-save-btn').click();
+  await settle();
+  assert.equal(migrateSchedulesTabDefault(h.db), 'turned-on');
+  await held.commit();
+  assert.equal(h.tab.hidden, false, 'Save applies the stored effective value, not the stale checkbox');
+  assert.equal(h.w.document.querySelector('#sv-schedules-tab').checked, true);
+});
+
+test('a Schedules change made while an untouched Save is in flight is kept and saved next (#1239)', async t => {
+  const h = await setup(t, { schedulesTab: false }, w => { w.api.onSchedulesTabMigrated = () => {}; });
+  await h.w.openSettingsViewer('global');
+  const toggle = h.w.document.querySelector('#sv-schedules-tab');
+  const held = holdNextMerge(h);
+  h.w.document.querySelector('#sv-save-btn').click();
+  await settle();
+  for (const checked of [true, false]) {
+    toggle.checked = checked;
+    toggle.dispatchEvent(new h.w.Event('change', { bubbles: true }));
+  }
+  assert.equal(migrateSchedulesTabDefault(h.db), 'turned-on');
+  await held.commit();
+  assert.equal(toggle.checked, false, 'the edit made during the Save is not overwritten');
+  h.w.document.querySelector('#sv-save-btn').click();
+  await settle();
+  await settle();
+  assert.equal(h.saved.schedulesTab, false, 'the next Save sends the edited choice');
+  assert.equal(h.tab.hidden, true);
+  assert.equal(migrateSchedulesTabDefault(h.db), 'none');
 });

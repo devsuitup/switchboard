@@ -193,15 +193,6 @@ test('a Settings merge on a profile with no global settings writes its patch alo
   assert.equal(launch(s), 'turned-on', 'an unmigrated profile still migrates');
 });
 
-test('keepMigrationMarker carries a committed marker into a replacement that lacks it, and nothing else (#1239)', () => {
-  const { keepMigrationMarker } = require('../src/main/schedules/schedules-tab-migration');
-  assert.deepEqual(keepMigrationMarker({ [MARKER]: true }, { theme: 'dark' }), { theme: 'dark', [MARKER]: true });
-  assert.deepEqual(keepMigrationMarker({ theme: 'dark' }, { theme: 'light' }), { theme: 'light' });
-  assert.deepEqual(keepMigrationMarker(null, { theme: 'light' }), { theme: 'light' });
-  assert.deepEqual(keepMigrationMarker({ [MARKER]: true }, { [MARKER]: false }), { [MARKER]: false });
-  assert.equal(keepMigrationMarker({ [MARKER]: true }, null), null);
-});
-
 function writerLaunch(dir, scenario) {
   const result = spawnSync(require('electron'), ['-e', `
     const assert = require('node:assert/strict');
@@ -241,20 +232,19 @@ test('through the real writer, the migrated value is what main reads, and a seco
   }
 });
 
-test('through the real writer, a whole-object replacement or a Settings merge after the migration keeps the marker (#1239)', () => {
+test('through the real writer, Settings and working-set merges after the migration keep its result (#1239)', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'schedules-tab-migration-'));
   try {
     writerLaunch(dir, `
       await writer.setSetting('global', { schedulesTab: false, theme: 'dark', chrome: {} });
       assert.equal(await writer.migrateSchedulesTabDefault(), 'turned-on');
-      await writer.setSetting('global', { schedulesTab: false, theme: 'dark', chrome: {}, openWorkingSet: [] });
-      assert.deepEqual(db.getSetting('global'), { schedulesTab: false, theme: 'dark', chrome: {}, openWorkingSet: [], ${MARKER}: true });
+      await writer.mergeGlobal({ openWorkingSet: [] });
       await writer.mergeGlobal({ theme: 'light' }, ['chrome']);
-      assert.deepEqual(db.getSetting('global'), { schedulesTab: false, theme: 'light', openWorkingSet: [], ${MARKER}: true });
+      assert.deepEqual(db.getSetting('global'), { theme: 'light', ${MARKER}: true, openWorkingSet: [] });
     `);
     writerLaunch(dir, `
       assert.equal(await writer.migrateSchedulesTabDefault(), 'none');
-      assert.equal(db.getSetting('global').schedulesTab, false);
+      assert.equal(db.getSetting('global').schedulesTab, undefined);
     `);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

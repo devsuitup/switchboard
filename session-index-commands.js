@@ -3,7 +3,7 @@
 const archive = require('./archived-projects');
 const { scheduleRegistry } = require('./src/main/schedules/schedule-runner');
 const { whatsNewOnStartup } = require('./src/main/app/changelog');
-const { migrateSchedulesTabDefault, keepMigrationMarker } = require('./src/main/schedules/schedules-tab-migration');
+const { migrateSchedulesTabDefault } = require('./src/main/schedules/schedules-tab-migration');
 const { isProjectHidden } = require('./public/worktree-nesting');
 const { createHash } = require('node:crypto');
 const path = require('node:path');
@@ -182,11 +182,10 @@ function createWriterCommands(db) {
     readProjectArchiveEpochs: epochs,
     patchGlobal: patch,
     mergeGlobal(fields, remove = []) {
-      const stored = db.getSetting('global');
-      const global = { ...(stored || {}), ...fields };
+      const global = { ...(db.getSetting('global') || {}), ...fields };
       for (const key of remove) delete global[key];
       assertHarnessSettings(global);
-      db.setSetting('global', keepMigrationMarker(stored, global));
+      db.setSetting('global', global);
       return global;
     },
     cleanupWorktree(projectPath) {

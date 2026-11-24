@@ -470,12 +470,12 @@ receipts and status/replay recovery are deliberately not added in step 1.
 | staged metrics / FTS publication | Current generation/head or name/summary resolved in the publication transaction |
 
 Settings setSetting is an explicit replacement of the supplied key; patchGlobal is
-the field-merge API. For `global` the replacement keeps one exception: a stored
-`schedulesTabDefaultMigrated: true` is carried into a value that lacks the key
-(`keepMigrationMarker`), so a renderer snapshot read before the startup
-migration (the working-set persist) cannot erase it. mergeGlobal is the
-renderer's field merge, with explicit removals; global Settings Save goes
-through it, never through a renderer read plus setSetting. Main's own bounds and diagnostics toggles use field patches.
+the field-merge API. mergeGlobal is the renderer's field merge, with explicit
+removals: global Settings Save, the sidebar's global writes and the working-set
+persist (`{ openWorkingSet }`) go through it, never through a renderer read plus
+a whole-object setSetting, so a renderer snapshot older than another writer's
+commit (the startup Schedules tab migration, a main-side patch) is never
+written back. Main's own bounds and diagnostics toggles use field patches.
 The repair completion command subtracts completed folders from current state.
 Readonly Projects may compute effects in its overlay; only named writer commands
 can persist them. Main reads remain readonly, including the existing search

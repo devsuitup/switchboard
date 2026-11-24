@@ -9,7 +9,6 @@ const { assertHarnessSettings } = require('../harnesses');
 const { createProjectDeleteProgress, commitTransaction } = require('../src/main/projects/project-delete-progress');
 const { completeProjectDeletion, bindDeletionProducer, assertDeletionProducer } = require('../src/main/projects/project-delete-writer');
 const { folderReadWitness } = require('../src/main/session-index/full-read-state');
-const { keepMigrationMarker } = require('../src/main/schedules/schedules-tab-migration');
 
 // see .ai/contexts/session-index-writer.md
 const db = openSessionIndexStore({ readonly: false, onPinChange: pinChange => parentPort.postMessage({ pinChange }) });
@@ -89,7 +88,7 @@ function* targetUnits(name, args) {
     yield () => db.deleteCachedSession(args[0]);
   } else if (name === 'setSetting' && args[0] === 'global') {
     // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
-    yield () => { assertHarnessSettings(args[1]); return db.setSetting('global', keepMigrationMarker(db.getSetting('global'), args[1])); };
+    yield () => { assertHarnessSettings(args[1]); return db.setSetting(...args); };
   } else if (name === 'upsertSearchEntries') {
     for (const entry of args[0]) {
       const token = require('node:crypto').randomUUID();

@@ -760,16 +760,16 @@ test('historical committed recovery refreshes without tearing down a re-added se
   assert.equal(h.document.querySelector('.project-delete-btn').disabled, false);
 });
 
-test('a global snapshot read before deletion cannot overwrite its committed hidden state', async t => {
-  const h = setup(t); let resolveRead;
-  h.w.api.getSetting = () => new Promise(resolve => { resolveRead = resolve; });
+test('a working-set flush sends only its own field, so it cannot overwrite a committed deletion hidden state', async t => {
+  const h = setup(t); const merges = [];
+  h.w.api.getSetting = async () => { throw new Error('the flush must not read a global snapshot'); };
+  h.w.api.mergeGlobalSettings = async (...args) => { merges.push(args); };
   Object.assign(h.w, { exitingApp: false, skippedWorkingSetEntries: new Map(), dormantWorkingSet: new Map(),
     restoreAwaitingConsent: [], restoreInFlight: new Map(), restoreSavedIndex: new Map(), restorePlanner: null });
   loadAppFunctions(h.context, { functions: ['persistWorkingSet', 'pendingRestoreEntries'], declarations: ['_persistChain'] });
-  const write = h.w.persistWorkingSet(); await flush();
-  h.w.setProjectDeletionWritesBlocked(h.p, true);
-  resolveRead({ hiddenProjects: [] }); await write;
-  assert.equal(h.calls.writes.length, 0, 'stale global snapshot must not overwrite deletion visibility');
+  await h.w.persistWorkingSet({ checked: true });
+  assert.deepEqual(merges.map(([patch, remove]) => [Object.keys(patch), remove]), [[['openWorkingSet'], undefined]]);
+  assert.equal(h.calls.writes.length, 0, 'no whole-object replacement');
 });
 
 test('partial receipt offers an explicit fresh preview without replaying the old operation', async t => {
