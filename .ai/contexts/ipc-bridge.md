@@ -300,7 +300,7 @@ content, invoke return payload, file access or application action.
 | `create-schedule-file` | `projectPath, fields` | `{ ok: true, filePath }` or `{ ok: false, field, error }`; registered, unarchived project; runner validation and sandbox refusals; guarded commands directory and exclusive hard-link publication | `api.createScheduleFile(projectPath, fields)` |
 | `set-schedule-enabled` | `filePath, enabled` (boolean) | `{ ok }` or `{ ok: false, error }`; exact current listing path, linked-file and front-matter guards; re-enable skips missed catch-up before writing | `api.setScheduleEnabled(filePath, enabled)` |
 | `delete-schedule-file` | `filePath` | `{ ok }` or `{ ok: false, error }`; exact current listing path and disk-resolved link guard; removes the file and its catch-up/run-result records, preserving transcripts | `api.deleteScheduleFile(filePath)` |
-| `list-schedules` | none | `{ now, catchUpActive, projects: [{ projectPath, shortName, archived, sandboxed, known, schedules: [{ filePath, file, name, slug, cron, cronText, enabled, catchUp, cli, prompt, linked, problems, nextRunMs, catchUpDueMs, runs: [{ sessionId, created, messageCount, replied, running, result }] }] }] }` | `api.listSchedules()` |
+| `list-schedules` | none | `{ now, catchUpActive, projects: [{ projectPath, shortName, archived, sandboxed, known, scanError, schedules: [{ filePath, file, name, slug, cron, cronText, enabled, catchUp, cli, prompt, linked, readError, problems, nextRunMs, catchUpDueMs, runs: [{ sessionId, created, messageCount, replied, running, result }] }] }] }` | `api.listSchedules()` |
 
 Main registers the handler and calls the Electron-free
 `src/main/schedules/schedule-list.js` export `buildScheduleList(deps)`. The

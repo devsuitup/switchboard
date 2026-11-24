@@ -556,9 +556,27 @@ Cron descriptions use fixed-interval wording only for steps that divide sixty.
 Other steps retain their raw expression (`*/45` fires at :00 and :45).
 Numeric clock fields are formatted by value, so `007 09 * * *` says `daily at 9:07`.
 
+### Unreadable definitions (#1237)
+
+A schedule file whose read fails with anything but `ENOENT` stays listed by
+`file` and `filePath` with `readError: { code, message }`, a
+`could not read the file (<code>)` problem, `name` set to the file name, and `null` for
+the metadata only its bytes could give: `slug`, `enabled`, `cron`,
+`cronText`, `prompt`, `cli`, `catchUp`, `nextRunMs`, `catchUpDueMs`. Its `runs`
+are empty (no slug to match) and it takes no part in the shared-slug check.
+`ENOENT` between enumeration and read is a deletion race and the file is
+omitted. A commands directory read failure other than `ENOENT` reaches
+`buildScheduleList` through the `onScanError(projectPath, error)` option and
+becomes the project's `scanError: { code, message }` (otherwise `null`); an
+absent directory is an ordinary empty project. Listing still writes nothing.
+`setListedScheduleEnabled` refuses a `readError` row; `deleteListedScheduleFile`
+keeps its exact-listed-path and link checks, so an unreadable file can be
+deleted after the usual confirmation.
+
 Tests: `test/schedule-list.test.js` (real disposable schedule, state and transcript
 files, main handler extracted into a VM with filename attribution; counts
-PROJECTS_DIR scans), `test/schedule-next-run.test.js` (descriptions and DST).
+PROJECTS_DIR scans; EACCES/ENOENT read and readdir failures injected on
+`fs`), `test/schedule-next-run.test.js` (descriptions and DST).
 
 
 ## Schedule creation (#792, slice C)
@@ -658,7 +676,25 @@ Run now retains `RunSchedule:<filePath>` and the persistent error contract;
 exit notices still subscribe once from memory-workfiles-view.js. Every scheduled-run
 exit, including success, queues the same visible-tab reload before displaying any
 failure notice. Open checks a
-nonempty read-memory response before opening memoryPanel. History resolves a
+nonempty read-memory response before opening memoryPanel.
+
+Load states (#1237): before the first successful listing the tab shows
+`Loading schedules…`. A failed load keeps the `listSchedules` notice (its
+Retry action opens the tab and retries) and shows a `.schedule-load-error`
+alert with a Retry button in the tab: alone on a first load, or above the
+last successful rows, labelled with their load time, after a refresh failure.
+`retrySchedules` is single-flight: it returns the in-flight load and disables
+every Retry button. The request counter still discards older and hidden-tab
+responses. Success clears the notice and the local error. With no registry
+project the tab says to add a local project from Sessions; with only archived
+projects, to unarchive one in Settings → Archived; either message is the
+disabled Create button's title and description. `No schedules found. Use
+Create schedule to add one.` appears only when a project can take a schedule
+and no project has a `scanError`. A `scanError` project keeps its group with
+the error, a permission/path hint and Retry. A `readError` row shows
+`Schedule unknown`, `Unknown: the file could not be read`, the hint and Retry;
+Run now, Turn on/off, Open and Show history in Sessions are disabled, Delete
+is not. History resolves a
 fresh indexed session and goes through openSession, preserving resume guards.
 
 `set-schedule-enabled` requires a boolean and exact equality with a path from
