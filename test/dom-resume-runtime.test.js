@@ -161,10 +161,13 @@ test('Codex resume submits the values picked in the form and the harness turns t
   });
   const args = getHarness(options.runtime).buildLaunchArgs({ sessionId: id, isNew, options });
   assert.deepEqual(args.slice(0, 2), ['resume', id]);
-  const flagValue = flag => args[args.indexOf(flag) + 1];
-  assert.equal(flagValue('--model'), 'catalog-model');
-  assert.equal(flagValue('--sandbox'), 'workspace-write');
-  assert.equal(flagValue('--ask-for-approval'), 'never');
-  assert.ok(args.includes('model_reasoning_effort="high"'), 'the picked effort reaches argv');
-  assert.deepEqual(args.flatMap((arg, i) => arg === '--add-dir' ? [args[i + 1]] : []), ['/extra/a', '/extra/b']);
+  const picked = [
+    '--sandbox', 'workspace-write',
+    '--ask-for-approval', 'never',
+    '--model', 'catalog-model',
+    '-c', 'model_reasoning_effort="high"',
+    '--add-dir', '/extra/a',
+    '--add-dir', '/extra/b',
+  ];
+  assert.deepEqual(args.slice(-picked.length), picked, 'each picked value follows its own flag, in order, at the end of argv');
 });
