@@ -51,8 +51,8 @@ Only when the whole wait reaches 200 ms does it log one line:
   starvation, not writer work.
 
 A phase the answer could not report (worker failure, timeout, an answer without
-`timing`) prints `n/a`. Below the threshold nothing is logged; the cost is five
-clock reads per journal command and none for other commands. To attribute a
+`timing`) prints `n/a`. Below the threshold nothing is logged; the cost is seven
+clock reads per journal command (four in the client, three in the worker) and none for other commands. To attribute a
 live stall, capture this line together with `main.loop` from the activity
 trace: turn Debug Mode on (Settings → Advanced → Diagnostics, see
 `docs/activity-trace.md`) after starting the app with
