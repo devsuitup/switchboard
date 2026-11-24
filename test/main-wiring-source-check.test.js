@@ -249,6 +249,7 @@ test('scheduler health reaches the Schedules listing, its own IPC and a push to 
   assert.match(mainSrc, /schedulerHealth: scheduleHealth,/);
   assert.match(mainSrc, /ipcMain\.handle\('get-schedule-health', \(\) => scheduleHealth\(\)\)/);
   assert.match(mainSrc, /onHealthChange: notifyScheduleHealth,/);
+  assert.match(mainSrc, /^function notifyScheduleHealth\(\) \{$/m, 'the notifier is a top-level declaration, defined before startup reads it');
   assert.match(mainSrc, /onResultFailureChange\(notifyScheduleHealth\)/);
   assert.match(mainSrc, /webContents\.send\('schedule-health', scheduleHealth\(\)\)/);
   assert.match(mainSrc, /revision: \+\+scheduleHealthRevision/, 'every snapshot carries a fresh revision');
