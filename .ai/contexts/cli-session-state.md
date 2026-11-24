@@ -12,6 +12,27 @@ would not solve event-loop starvation. Correlate the summary below with main
 loop delay and child start/kill/exit/close timestamps before changing ownership
 or failure-caching behavior.
 
+`probeProcessTable` records those timestamps when its caller passes a `phases`
+object (the refresh and fresh-snapshot paths do): milliseconds from the
+`execFile` call to the child's `spawn`, to the first `child.kill` (the
+`execFile` timeout or an abort calls it), to `exit`, to `close`, and to the
+`execFile` callback. A probe whose duration exceeds its granted timeout is an
+overrun; the window keeps its worst one, and a window with an overrun is
+summarized even if every probe succeeded. The summary line then ends with:
+
+`worstOverrun: totalMs=<duration> timeoutMs=<grant> spawnAtMs=<n> killAtMs=<n> exitAtMs=<n> closeAtMs=<n> callbackAtMs=<n>`
+
+Reading it: `killAtMs` far past `timeoutMs` means the timeout timer itself ran
+late (the main loop was blocked); `killAtMs` near the grant with `closeAtMs`
+far later means the child took that long to die or release its pipes;
+`callbackAtMs` near `closeAtMs` but `totalMs` far later means the continuation
+waited on main. A stamp the probe never observed prints `n/a` (a custom
+`readProcessTable`, or no child). Probes within budget add nothing to the
+summary and keep a successful window silent. Capture it alongside `main.loop`
+with the histogram armed, as described in session-index-writer.md
+("Consumed-request journal"). `test/cli-session-probe-phases-1192.test.js`
+drives a fake child with an injected clock.
+
 `readProcessTableSnapshot(deadline, { fresh: true, signal })` isolates deletion
 discovery from the global cached or in-flight process-table read. It starts a
 new probe with the lesser of 15 seconds and the remaining request budget,

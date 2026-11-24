@@ -4,7 +4,6 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { Worker } = require('node:worker_threads');
 const { AsyncLocalStorage } = require('node:async_hooks');
-const { performance } = require('node:perf_hooks');
 const archive = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
 const { parseFolderKey } = require('./src/main/remote/remote-hosts');
@@ -17,11 +16,6 @@ const { worktreeParentPath } = require('./public/worktree-nesting');
 const { stable } = require('./src/main/projects/project-delete-identity');
 const { SESSION_CONTENT_INDEX_VERSION, fullIndexConfig, rowWitness, folderReadWitness, observation, startupFolderPath, startupTouchedIds, startupInventoryMatches } = require('./src/main/session-index/full-read-state');
 const { randomUUID } = require('node:crypto');
-
-// see .ai/contexts/session-index-writer.md
-const journalCommands = new Set(['querySessionRequestOutcome', 'claimSessionResultNamespace', 'recordSessionResultPublication',
-  'recordConsumedSessionStatusRequest', 'recordSessionRequestConflict']);
-const journalWaitWarnMs = 200;
 
 function createSessionIndexWriter(options = {}, cache = require('./session-cache')) {
   const mirror = new Map();
@@ -85,17 +79,9 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     recorder = createCacheEffects(backend);
   });
   ready.catch(() => {});
-  const measureJournalWait = async (name, work) => {
-    const started = performance.now();
-    try { return await work(); }
-    finally {
-      const waited = performance.now() - started;
-      if (waited >= journalWaitWarnMs) (options.log || console).warn(`[session-index-writer] journal command ${name} waited ${Math.round(waited)} ms`);
-    }
-  };
   const request = (name, ...args) => !admitted() ? Promise.reject(new Error('writer is closing')) : track(ready.then(async () => {
     const notifyChanges = prepareSessionsChanged([{ name, args }]);
-    const value = journalCommands.has(name) ? await measureJournalWait(name, () => send(name, ...args)) : await send(name, ...args);
+    const value = await send(name, ...args);
     notifyChanges?.();
     return value;
   }));
@@ -174,7 +160,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
               if (startupFence) startupFence = { folder: key, sessionIds, witness: receipt.folderWitness };
             } catch (error) {
               if (scanResult?.startup) throw error;
-              (options.log || console).warn('[session-index-writer] full index begin outcome unknown: ' + error.message);
+              (options.log || console).warn(`[session-index-writer] full index begin ${error.code === 'WRITER_STALE' ? 'refused (stale)' : 'outcome unknown'}: ${error.message}`);
             }
           }
         }

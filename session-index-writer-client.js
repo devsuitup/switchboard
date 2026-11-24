@@ -1,6 +1,12 @@
 'use strict';
 
+const { performance } = require('node:perf_hooks');
+
 const MAX_WORK_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
+const journalCommands = new Set(['querySessionRequestOutcome', 'claimSessionResultNamespace', 'recordSessionResultPublication',
+  'recordConsumedSessionStatusRequest', 'recordSessionRequestConflict']);
+const journalWaitWarnMs = 200;
+const writerClock = () => performance.timeOrigin + performance.now();
 
 // see .ai/contexts/session-index-writer.md
 function commandTimeoutMs(command, args, timeoutMs) {
@@ -39,7 +45,7 @@ function commandTimeoutMs(command, args, timeoutMs) {
 }
 
 function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusyCounts = () => {}, onBootstrap = () => {}, timeoutMs = 30000, maxRestarts = 3,
-  now = () => Date.now(), setTimeout = global.setTimeout, clearTimeout = global.clearTimeout, heartbeatMs = 30000, log = console }) {
+  now = () => Date.now(), clock = writerClock, setTimeout = global.setTimeout, clearTimeout = global.clearTimeout, heartbeatMs = 30000, log = console }) {
   let worker, closing, stopped = false, terminated = false, nextId = 0, restartTimer;
   const restarts = [];
   const queue = [];
@@ -77,10 +83,23 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
     return Promise.all([...terminations]);
   }
 
+  function reportJournalWait(job) {
+    const waited = clock() - job.enqueuedAt;
+    if (waited < journalWaitWarnMs) return;
+    const span = (from, to) => from === undefined || to === undefined ? 'n/a' : Math.round(to - from);
+    const { receivedAt, startedAt, finishedAt } = job.timing || {};
+    try {
+      log.warn(`[session-index-writer] journal command ${job.command} waited ${Math.round(waited)} ms`
+        + ` (main queue ${span(job.enqueuedAt, job.postedAt)} ms, to worker ${span(job.postedAt, receivedAt)} ms,`
+        + ` worker queue ${span(receivedAt, startedAt)} ms, worker run ${span(startedAt, finishedAt)} ms, ack ${span(finishedAt, job.ackAt)} ms)`);
+    } catch {}
+  }
+
   function settle(job, error, value) {
     clearTimeout(job.timer);
     if (job.settled) return;
     job.settled = true;
+    if (job.enqueuedAt !== undefined) reportJournalWait(job);
     if (error) job.reject(error);
     else job.resolve(value);
   }
@@ -123,6 +142,7 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
       active.set(job.id, job);
       const current = worker;
       if (job.workflowId) workflowTerminations.set(job.workflowId, current.terminationConfirmed);
+      if (job.enqueuedAt !== undefined) job.postedAt = clock();
       try { current.postMessage({ id: job.id, command: job.command, args: job.args, ...(job.workflowId ? { workflowId: job.workflowId } : {}) }); }
       catch (error) { void fail(current, error); return; }
       if (worker !== current) return;
@@ -175,6 +195,7 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
         return;
       }
       active.delete(message.id);
+      if (job.enqueuedAt !== undefined) { job.ackAt = clock(); job.timing = message.timing; }
       if (message.settings) onSettings(message.settings);
       const error = message.error ? Object.assign(new Error(message.error.message), { code: message.error.code, requestId: job.id }) : null;
       settle(job, error, message.result);
@@ -196,7 +217,7 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
 
   function enqueue(command, args, workflowId) {
     return new Promise((resolve, reject) => {
-      queue.push({ id: ++nextId, command, args, workflowId, resolve, reject });
+      queue.push({ id: ++nextId, command, args, workflowId, resolve, reject, ...(journalCommands.has(command) ? { enqueuedAt: clock() } : {}) });
       dispatch();
     });
   }
@@ -244,4 +265,4 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
     waitForWorkflowTermination: workflowId => workflowTerminations.get(workflowId) || Promise.resolve(), close, terminate };
 }
 
-module.exports = { createWriterWorkerClient };
+module.exports = { createWriterWorkerClient, journalCommands, writerClock };

@@ -273,6 +273,17 @@ test('deletion counters include folder drops when begin failed', { skip: sqliteS
   assert.equal(result.counters.filesDeleted, 1);
 });
 
+for (const [label, error, expected] of [
+  ['a stale refusal', Object.assign(new Error('Index producer snapshot changed before begin'), { code: 'WRITER_STALE' }),
+    '[session-index-writer] full index begin refused (stale): Index producer snapshot changed before begin'],
+  ['an unknown outcome', Object.assign(new Error('writer command timed out; outcome unknown'), { code: 'WRITER_TIMEOUT' }),
+    '[session-index-writer] full index begin outcome unknown: writer command timed out; outcome unknown'],
+]) test(`a non-startup begin failure logs ${label} as such`, { skip: sqliteSkip }, async t => {
+  const f = await publicationFixture(t, name => { if (name === 'beginFullIndex') throw error; });
+  await f.writer.writeScannedFolder(f.result());
+  assert.deepEqual(f.warnings.filter(line => line.includes('full index begin')), [expected]);
+});
+
 test('deletion-only subset counts removals without beginning a full read', { skip: sqliteSkip }, async t => {
   const f = await publicationFixture(t);
   f.db.upsertCachedSessions([{ sessionId: 'old', folder: f.folder }]);

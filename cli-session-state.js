@@ -178,27 +178,39 @@ function parseProcessTable(text) {
   return out;
 }
 
-function probeProcessTable(plat = process.platform, timeoutMs = PROCESS_TABLE_TIMEOUT_MS, exec = execFile, signal) {
+function observeProbeChild(child, phases, stamp) {
+  if (!phases || !child || typeof child.once !== 'function') return;
+  child.once('spawn', () => stamp('spawnAtMs'));
+  child.once('exit', () => stamp('exitAtMs'));
+  child.once('close', () => stamp('closeAtMs'));
+  const kill = child.kill;
+  if (typeof kill === 'function') child.kill = function (...args) { stamp('killAtMs'); return kill.apply(this, args); };
+}
+
+function probeProcessTable(plat = process.platform, timeoutMs = PROCESS_TABLE_TIMEOUT_MS, exec = execFile, signal, phases) {
   return new Promise((resolve, reject) => {
     const opts = { timeout: timeoutMs, windowsHide: true, maxBuffer: PROCESS_TABLE_MAX_BUFFER, ...(signal ? { signal } : {}) };
+    const started = phases ? now() : 0;
+    const stamp = key => { phases[key] ??= Math.max(0, now() - started); };
     const done = (err, stdout, stderr) => {
+      if (phases) stamp('callbackAtMs');
       if (err) { err.stderr = String(stderr || '').slice(0, 300); err.timedOut = err.killed === true && err.signal === 'SIGTERM'; reject(err); return; }
       resolve(parseProcessTable(stdout));
     };
     if (plat === 'win32') {
       const script = 'Get-CimInstance -ClassName Win32_Process | ForEach-Object { $t = if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { "" }; "$($_.ProcessId) $($_.ParentProcessId) $t`t$($_.CommandLine)" }';
       const exe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-      exec(exe, ['-NoProfile', '-NonInteractive', '-Command', script], opts, done);
+      observeProbeChild(exec(exe, ['-NoProfile', '-NonInteractive', '-Command', script], opts, done), phases, stamp);
     } else if (plat === 'darwin') {
-      exec('/bin/ps', ['-A', '-o', 'pid=,ppid=,lstart='], opts, done);
+      observeProbeChild(exec('/bin/ps', ['-A', '-o', 'pid=,ppid=,lstart='], opts, done), phases, stamp);
     } else {
       resolve(new Map());
     }
   });
 }
 
-function defaultReadProcessTable(timeoutMs, { signal } = {}) {
-  return probeProcessTable(process.platform, timeoutMs, execFile, signal);
+function defaultReadProcessTable(timeoutMs, { signal, phases } = {}) {
+  return probeProcessTable(process.platform, timeoutMs, execFile, signal, phases);
 }
 
 function processTableFresh() {
@@ -224,17 +236,21 @@ function flushProbeWindow() {
   if (probeWindowTimer) cancelProbeWindow(probeWindowTimer);
   probeWindowTimer = null;
   probeWindow = null;
-  if (!window || !(window.timeout || window.error || window.caller.timeout || window.caller.error || window.aborted)) return;
+  if (!window || !(window.timeout || window.error || window.caller.timeout || window.caller.error || window.aborted || window.overrun)) return;
   const durations = window.durations.sort((a, b) => a - b);
+  const overrun = window.overrun;
+  const at = key => overrun.phases[key] ?? 'n/a';
   log.info?.(`[cli-state] process table probes: windowMs=${PROCESS_TABLE_LOG_WINDOW_MS} timeoutBudgetMs=${PROCESS_TABLE_TIMEOUT_MS}`
     + ` ok=${window.ok} timeout=${window.timeout} error=${window.error} maxMs=${durations.at(-1) ?? 'n/a'} p95Ms=${durations[Math.ceil(durations.length * 0.95) - 1] ?? 'n/a'}`
-    + ` callerOk=${window.caller.ok} callerTimeout=${window.caller.timeout} callerError=${window.caller.error} aborted=${window.aborted}`);
+    + ` callerOk=${window.caller.ok} callerTimeout=${window.caller.timeout} callerError=${window.caller.error} aborted=${window.aborted}`
+    + (overrun ? ` worstOverrun: totalMs=${overrun.duration} timeoutMs=${overrun.timeoutMs} spawnAtMs=${at('spawnAtMs')} killAtMs=${at('killAtMs')}`
+      + ` exitAtMs=${at('exitAtMs')} closeAtMs=${at('closeAtMs')} callbackAtMs=${at('callbackAtMs')}` : ''));
 }
 
-function recordProcessTableProbe(outcome, duration, timeoutMs) {
+function recordProcessTableProbe(outcome, duration, timeoutMs, phases) {
   if (probeWindow && now() - probeWindow.at >= PROCESS_TABLE_LOG_WINDOW_MS) flushProbeWindow();
   if (!probeWindow) {
-    probeWindow = { at: now(), ok: 0, timeout: 0, error: 0, durations: [], caller: { ok: 0, timeout: 0, error: 0 }, aborted: 0 };
+    probeWindow = { at: now(), ok: 0, timeout: 0, error: 0, durations: [], caller: { ok: 0, timeout: 0, error: 0 }, aborted: 0, overrun: null };
     probeWindowTimer = scheduleProbeWindow(flushProbeWindow, PROCESS_TABLE_LOG_WINDOW_MS);
     probeWindowTimer.unref?.();
   }
@@ -243,18 +259,22 @@ function recordProcessTableProbe(outcome, duration, timeoutMs) {
     probeWindow[outcome]++;
     probeWindow.durations.push(duration);
   } else probeWindow.caller[outcome]++;
+  if (duration > timeoutMs && !(probeWindow.overrun?.duration >= duration)) probeWindow.overrun = { duration, timeoutMs, phases: phases || {} };
 }
 
 function measureProcessTable(timeoutMs, options) {
   const epoch = probeWindowEpoch;
   const started = now();
-  return (map, err) => {
+  const phases = {};
+  const record = (map, err) => {
     let outcome = map ? 'ok' : 'error';
     if (err?.code === 'ABORT_ERR' || err?.name === 'AbortError') outcome = 'aborted';
     else if (err?.timedOut === true) outcome = 'timeout';
     if (options?.signal?.aborted) outcome = 'aborted';
-    if (epoch === probeWindowEpoch) recordProcessTableProbe(outcome, Math.max(0, now() - started), timeoutMs);
+    if (epoch === probeWindowEpoch) recordProcessTableProbe(outcome, Math.max(0, now() - started), timeoutMs, phases);
   };
+  record.phases = phases;
+  return record;
 }
 
 function refreshProcessTable({ force = false, deadline = Infinity } = {}) {
@@ -269,7 +289,7 @@ function refreshProcessTable({ force = false, deadline = Infinity } = {}) {
     const timeoutMs = Math.max(1, Math.min(PROCESS_TABLE_TIMEOUT_MS, deadline - now()));
     const record = measureProcessTable(timeoutMs);
     try {
-      map = normaliseProcessTable(await readProcessTable(timeoutMs));
+      map = normaliseProcessTable(await readProcessTable(timeoutMs, { phases: record.phases }));
     } catch (err) {
       error = err;
       if (now() - processTableFailureLoggedAt >= PROCESS_TABLE_LOG_WINDOW_MS) {
@@ -305,7 +325,7 @@ async function readProcessTableSnapshot(deadline, { fresh = false, signal } = {}
       const timeoutMs = Math.min(PROCESS_TABLE_TIMEOUT_MS, deadline - observedAt);
       const record = measureProcessTable(timeoutMs, { signal });
       let error;
-      try { map = normaliseProcessTable(await readProcessTable(timeoutMs, { signal })); }
+      try { map = normaliseProcessTable(await readProcessTable(timeoutMs, { signal, phases: record.phases })); }
       catch (err) { error = err; }
       finally { record(map, error); }
     }
