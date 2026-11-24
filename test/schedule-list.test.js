@@ -399,3 +399,82 @@ test('main catch-up flag matches runner truthiness for an empty isolation variab
   assert.equal(reply.catchUpActive, true);
   assert.equal(reply.projects[0].schedules[0].catchUpDueMs, reply.now - reply.now % 60000);
 });
+
+function failingFs(t, method, target, code) {
+  const original = fs[method];
+  const restore = () => { fs[method] = original; };
+  fs[method] = function (file, ...args) {
+    if (path.resolve(String(file)) === path.resolve(target)) throw Object.assign(new Error(`fixture ${code}`), { code });
+    return original.call(this, file, ...args);
+  };
+  t.after(restore);
+  return restore;
+}
+
+test('an unreadable schedule file stays listed with its error and unknown metadata (#1237)', async t => {
+  const f = fixture(t);
+  f.write('valid');
+  const bad = f.write('locked', 'cron: 0 9 * * *\nenabled: false\nslug: other\ncatch-up: true', 'Secret prompt');
+  failingFs(t, 'readFileSync', bad, 'EACCES');
+  const listing = await f.build();
+  const rows = listing.projects[0].schedules;
+  assert.deepEqual(rows.map(r => r.filePath).sort(), [bad, path.join(f.commands, 'schedule-valid.md')].sort(),
+    'EACCES must not turn an existing schedule into No schedules found');
+  const locked = rows.find(r => r.filePath === bad);
+  assert.equal(locked.file, 'schedule-locked.md');
+  assert.equal(locked.readError?.code, 'EACCES');
+  for (const field of ['enabled', 'cron', 'prompt', 'slug', 'catchUp', 'cronText', 'nextRunMs', 'catchUpDueMs']) assert.equal(locked[field], null, field);
+  assert.ok(locked.problems.some(p => p.includes('EACCES')), 'the read error is a problem');
+  assert.deepEqual(locked.runs, []);
+  assert.equal(rows.find(r => r.file === 'schedule-valid.md').nextRunMs, Date.parse('2026-11-03T12:01Z'));
+  assert.equal(fs.existsSync(f.stateDir), false, 'listing creates no state directory');
+  assert.equal(fs.existsSync(path.join(f.root, 'transcripts')), false, 'listing creates no transcript directory');
+});
+
+test('a schedule file deleted between enumeration and read is omitted (#1237)', t => {
+  const f = fixture(t);
+  f.write('valid');
+  failingFs(t, 'readFileSync', f.write('gone'), 'ENOENT');
+  assert.deepEqual(f.list().map(r => r.file), ['schedule-valid.md']);
+});
+
+test('a commands directory read failure is a visible project error; an absent one is empty (#1237)', async t => {
+  const f = fixture(t);
+  f.write('blocked');
+  const healthy = path.join(f.root, 'healthy');
+  fs.mkdirSync(path.join(healthy, '.claude', 'commands'), { recursive: true });
+  fs.writeFileSync(path.join(healthy, '.claude', 'commands', 'schedule-ok.md'), '---\ncron: * * * * *\n---\nPrompt');
+  const absent = path.join(f.root, 'absent');
+  fs.mkdirSync(absent);
+  const restore = failingFs(t, 'readdirSync', f.commands, 'EACCES');
+  const build = () => f.build({ scheduleProjects: () => ({ list: async () => [f.project, healthy, absent] }) });
+  const listing = await build();
+  assert.deepEqual(listing.projects.map(p => p.projectPath), [f.project, healthy, absent], 'every project identity remains');
+  assert.equal(listing.projects[0].scanError?.code, 'EACCES');
+  assert.deepEqual(listing.projects[0].schedules, []);
+  assert.equal(listing.projects[1].scanError, null);
+  assert.deepEqual(listing.projects[1].schedules.map(s => s.file), ['schedule-ok.md']);
+  assert.equal(listing.projects[2].scanError, null, 'an absent commands directory is an ordinary empty project');
+  assert.deepEqual(listing.projects[2].schedules, []);
+  restore();
+  const recovered = await build();
+  assert.equal(recovered.projects[0].scanError, null);
+  assert.deepEqual(recovered.projects[0].schedules.map(s => s.file), ['schedule-blocked.md'], 'retry lists the definition without a restart');
+});
+
+test('an unreadable row refuses enable/disable but keeps listed-path deletion (#1237)', async t => {
+  const f = fixture(t);
+  const bad = f.write('locked');
+  const restore = failingFs(t, 'readFileSync', bad, 'EACCES');
+  const scheduleProjects = () => ({ list: async () => [f.project] });
+  let wrote = false;
+  const toggled = await runner.setListedScheduleEnabled(bad, false, { scheduleProjects, stateDir: f.stateDir, setEnabled: () => { wrote = true; return { ok: true }; } });
+  assert.equal(toggled.ok, false);
+  assert.match(toggled.error, /could not be read/);
+  assert.equal(wrote, false);
+  const { deleteListedScheduleFile } = require('../src/main/schedules/schedule-delete-file');
+  const deleted = await deleteListedScheduleFile(bad, { scheduleProjects, stateDir: f.stateDir, runsDir: path.join(f.root, 'runs') });
+  restore();
+  assert.deepEqual(deleted, { ok: true });
+  assert.equal(fs.existsSync(bad), false);
+});

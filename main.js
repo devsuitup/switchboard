@@ -1916,7 +1916,7 @@ ipcMain.handle('set-setting', async (_event, key, value) => {
 // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
 ipcMain.handle('get-harnesses', () => {
   const disabled = new Set(getSetting('global')?.disabledHarnesses || []);
-  return allHarnesses().map(h => ({ id: h.id, label: h.label, available: h.available(), enabled: !disabled.has(h.id), isDefault: h.id === DEFAULT_HARNESS }));
+  return allHarnesses().map(h => ({ id: h.id, label: h.label, available: h.available(), enabled: !disabled.has(h.id), isDefault: h.id === DEFAULT_HARNESS, capabilities: { ...h.capabilities } }));
 });
 
 ipcMain.handle('get-harness-models', (_event, runtime) => {

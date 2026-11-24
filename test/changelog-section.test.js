@@ -23,6 +23,13 @@ test('the notes of a tag are its section, without the version heading', () => {
   assert.equal(releaseNotes(TEXT, '0.0.2'), '### Fixed\n- Two. (#2)');
 });
 
+test('the notes of a beta tag are its own -beta.N section, never its final release one', () => {
+  const text = TEXT.replace('## v0.0.2 — 2026-10-02', '## v0.1.0-beta.1 — 2026-10-02');
+  assert.equal(releaseNotes(text, 'v0.1.0-beta.1'), '### Fixed\n- Two. (#2)');
+  assert.throws(() => releaseNotes(text, 'v0.1.0'), /no "## v0\.1\.0 — YYYY-MM-DD" section/);
+  assert.throws(() => releaseNotes(text, 'v0.1.0-beta.2'), /no "## v0\.1\.0-beta\.2 — YYYY-MM-DD" section/);
+});
+
 test('unknown Unreleased groups do not prevent extracting released notes', () => {
   let notes;
   assert.doesNotThrow(() => { notes = releaseNotes(TEXT.replace('### New', '### Added'), 'v0.0.2'); });

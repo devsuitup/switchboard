@@ -1330,6 +1330,10 @@ id) in attributes through `agentsEscapeAttr`, which also escapes `"` and `'`:
 
 ## Send to background
 
+A tab whose harness has `capabilities.bgJobs === false` (Codex) gets the
+action disabled with a reason naming the CLI; see cli-harnesses.md
+("Capabilities in the renderer"). Main still refuses it if it arrives.
+
 ### The button types `/bg` (#661)
 
 The tab's Send to background submits the CLI's own `/bg` command into the

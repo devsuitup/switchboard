@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 const { loadAppFunctions, extractFunction } = require('./app-source');
 
-function setup(t, run = () => ({ ok: true })) {
+function setup(t, run = () => ({ ok: true }), { render = true } = {}) {
   const dom = new JSDOM('<body><div id="app-notices"></div><div id="schedules-content"></div></body>', { runScripts: 'outside-only', url: 'http://localhost' });
   t.after(() => { dom.window.setSchedulesVisible(false); dom.window.close(); });
   const ctx = dom.getInternalVMContext();
@@ -39,6 +39,7 @@ function setup(t, run = () => ({ ok: true })) {
     vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx, { filename });
   }
   w.schedulesTabEnabled = true;
+  if (!render) return { dom, w, project, schedule, data, calls };
   w.renderSchedules(data);
   const button = w.document.querySelector('.schedule-run-btn');
   const titles = [];
@@ -681,4 +682,188 @@ test('history opens a continuation member through its merged local row', async t
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(h.calls[0], merged, 'openSession receives the full row and its merged membership for the existing resume guards');
   assert.equal(h.w.document.querySelector('[role="alert"]'), null);
+});
+
+const scheduleTabText = h => h.w.document.getElementById('schedules-content').textContent;
+const listNotice = h => h.w.document.querySelector('#app-notices [data-notice-id="listSchedules"]');
+
+test('empty states tell apart no project, only archived projects and an empty project (#1237)', t => {
+  const h = setup(t);
+  const apiCalls = [];
+  for (const name of Object.keys(h.w.api)) {
+    const original = h.w.api[name];
+    h.w.api[name] = (...args) => { apiCalls.push(name); return original(...args); };
+  }
+  const create = () => h.w.document.querySelector('.schedule-create-btn');
+  h.w.renderSchedules({ now: Date.now(), catchUpActive: true, projects: [] });
+  assert.equal(create().disabled, true);
+  assert.match(scheduleTabText(h), /Add a local project from Sessions, then return here/);
+  assert.doesNotMatch(scheduleTabText(h), /No schedules found/);
+  assert.match(create().title, /Add a local project from Sessions/, 'the disabled action says why');
+  h.w.renderSchedules({ now: Date.now(), catchUpActive: true, projects: [{ ...h.project, archived: true, schedules: [] }] });
+  assert.equal(create().disabled, true);
+  assert.match(scheduleTabText(h), /Unarchive a project in Settings → Archived/);
+  assert.doesNotMatch(scheduleTabText(h), /Add a local project|No schedules found/);
+  h.w.renderSchedules({ now: Date.now(), catchUpActive: true, projects: [{ ...h.project, schedules: [] }] });
+  assert.equal(create().disabled, false);
+  assert.match(scheduleTabText(h), /No schedules found\. Use Create schedule to add one\./);
+  assert.doesNotMatch(scheduleTabText(h), /Add a local project|Unarchive a project/);
+  assert.deepEqual(apiCalls, [], 'guidance neither registers nor runs a project');
+});
+
+test('a project whose commands directory cannot be read shows its error and Retry, not No schedules found (#1237)', async t => {
+  const h = setup(t);
+  await settle();
+  const healthy = { ...h.project, projectPath: '/q', shortName: 'q', scanError: null, schedules: [] };
+  h.project.schedules = [];
+  h.project.scanError = { code: 'EACCES', message: 'permission denied' };
+  h.data.projects.push(healthy);
+  h.w.renderSchedules(h.data);
+  assert.doesNotMatch(scheduleTabText(h), /No schedules found/);
+  const group = h.w.document.querySelector('.schedule-project[data-project-path="/p"]');
+  assert.ok(group, 'the unreadable project keeps its group');
+  assert.match(group.textContent, /EACCES/);
+  assert.match(group.textContent, /permissions/);
+  let calls = 0;
+  h.w.api.listSchedules = async () => { calls++; h.project.scanError = null; h.project.schedules = [h.schedule]; return h.data; };
+  group.querySelector('.schedule-retry-btn').click();
+  await settle();
+  assert.equal(calls, 1);
+  assert.ok(h.w.document.querySelector(`.schedule-item[data-filepath="${h.schedule.filePath}"]`), 'Retry lists the definition');
+});
+
+test('an unreadable row shows its error, keeps Delete and disables the actions that need its bytes (#1237)', t => {
+  const h = setup(t);
+  Object.assign(h.schedule, { name: h.schedule.file, slug: null, enabled: null, cron: null, cronText: null, prompt: null, catchUp: null,
+    nextRunMs: null, problems: ['could not read the file (EACCES)'], readError: { code: 'EACCES', message: 'permission denied' } });
+  h.w.renderSchedules(h.data);
+  const item = h.w.document.querySelector('.schedule-item');
+  assert.match(item.textContent, /could not be read/i);
+  assert.match(item.textContent, /permissions and path/);
+  assert.doesNotMatch(item.textContent, /Disabled|null|Next run/);
+  for (const cls of ['.schedule-run-btn', '.schedule-toggle-btn', '.schedule-open-btn']) assert.equal(item.querySelector(cls).disabled, true, cls);
+  assert.equal(item.querySelector('.schedule-delete-btn').disabled, false, 'Delete keeps its listed-path policy');
+  assert.ok(item.querySelector('.schedule-retry-btn'), 'the row offers Retry');
+});
+
+test('initial load shows loading, then a navigable error with single-flight Retry that recovers (#1237)', async t => {
+  const h = setup(t, undefined, { render: false });
+  h.w.api.listSchedules = async () => { throw new Error('offline'); };
+  h.w.setSchedulesVisible(true);
+  assert.match(scheduleTabText(h), /Loading schedules/);
+  await settle();
+  const error = h.w.document.querySelector('.schedule-load-error');
+  assert.ok(error, 'the failure is shown in the tab');
+  assert.match(error.textContent, /offline/);
+  assert.ok(listNotice(h), 'the global notice is kept');
+  let calls = 0;
+  let finish;
+  h.w.api.listSchedules = () => { calls++; return new Promise(resolve => { finish = resolve; }); };
+  const retry = () => h.w.document.querySelector('.schedule-load-error .schedule-retry-btn');
+  retry().focus();
+  assert.equal(h.w.document.activeElement, retry(), 'Retry is reachable from the keyboard');
+  retry().click();
+  retry().click();
+  assert.equal(calls, 1, 'Retry is single-flight');
+  assert.equal(retry().disabled, true);
+  finish(h.data);
+  await settle();
+  assert.equal(h.w.document.querySelector('.schedule-load-error'), null);
+  assert.equal(listNotice(h), null, 'recovery clears the notice');
+  assert.ok(h.w.document.querySelector('.schedule-item'));
+});
+
+test('a failed refresh keeps the last rows labelled stale until a reload succeeds (#1237)', async t => {
+  const h = setup(t);
+  await settle();
+  h.w.api.listSchedules = async () => { throw new Error('offline'); };
+  await h.w.loadSchedules();
+  assert.ok(h.w.document.querySelector('.schedule-item'), 'last rows remain');
+  assert.match(h.w.document.querySelector('.schedule-load-error')?.textContent || '', /last loaded.*offline/is);
+  assert.ok(listNotice(h));
+  h.w.api.listSchedules = async () => h.data;
+  await h.w.loadSchedules();
+  assert.equal(h.w.document.querySelector('.schedule-load-error'), null);
+  assert.equal(listNotice(h), null);
+});
+
+test('older and hidden-tab responses cannot replace newer schedules (#1237)', async t => {
+  const h = setup(t);
+  await settle();
+  const pending = [];
+  h.w.api.listSchedules = () => new Promise(resolve => pending.push(resolve));
+  const older = h.w.loadSchedules();
+  const newer = h.w.loadSchedules();
+  pending[1]({ ...h.data, projects: [{ ...h.project, schedules: [{ ...h.schedule, name: 'Newer' }] }] });
+  await newer;
+  pending[0]({ ...h.data, projects: [{ ...h.project, schedules: [{ ...h.schedule, name: 'Older' }] }] });
+  await older;
+  assert.equal(h.w.document.querySelector('.schedule-name').textContent, 'Newer');
+  const hidden = h.w.loadSchedules();
+  h.w.setSchedulesVisible(false);
+  pending[2]({ ...h.data, projects: [{ ...h.project, schedules: [{ ...h.schedule, name: 'Hidden' }] }] });
+  await hidden;
+  assert.equal(h.w.document.querySelector('.schedule-name').textContent, 'Newer');
+});
+
+const scheduleScanError = h => {
+  h.project.schedules = [];
+  h.project.scanError = { code: 'EACCES', message: 'permission denied' };
+  h.w.renderSchedules(h.data);
+};
+
+for (const outcome of ['success', 'failure', 'hidden failure']) {
+  test(`the load error notice stays while its Retry is pending and settles with the reload: ${outcome} (#1237)`, async t => {
+    const h = setup(t, undefined, { render: false });
+    h.w.api.listSchedules = async () => { throw new Error('offline'); };
+    h.w.setSchedulesVisible(true);
+    await settle();
+    let finish;
+    h.w.api.listSchedules = () => new Promise((resolve, reject) => {
+      finish = outcome === 'success' ? () => resolve(h.data) : () => reject(new Error('still offline'));
+    });
+    listNotice(h).querySelector('.app-notice-action').click();
+    assert.ok(listNotice(h), 'the notice remains while Retry is pending');
+    if (outcome === 'hidden failure') h.w.setSchedulesVisible(false);
+    finish();
+    await settle();
+    if (outcome === 'success') assert.equal(listNotice(h), null, 'a successful reload clears the notice');
+    else assert.ok(listNotice(h), 'a failed Retry leaves the notice in place');
+  });
+}
+
+for (const where of ['project', 'row']) {
+  test(`a failed ${where} Retry makes the kept Retry controls usable again (#1237)`, async t => {
+    const h = setup(t);
+    await settle();
+    if (where === 'project') scheduleScanError(h);
+    else {
+      Object.assign(h.schedule, { readError: { code: 'EACCES', message: 'permission denied' }, problems: ['could not read the file (EACCES)'] });
+      h.w.renderSchedules(h.data);
+    }
+    const kept = h.w.document.querySelector(where === 'project' ? '.schedule-project .schedule-retry-btn' : '.schedule-item .schedule-retry-btn');
+    h.w.api.listSchedules = async () => { throw new Error('offline'); };
+    kept.click();
+    assert.equal(kept.disabled, true, 'Retry is unavailable while its reload is pending');
+    await settle();
+    assert.equal(kept.disabled, false, 'the kept Retry is available once the reload has failed');
+    assert.equal(h.w.document.querySelector('.schedule-load-error .schedule-retry-btn').disabled, false);
+  });
+}
+
+test('a superseded failed Retry leaves Retry unavailable until the newer reload settles (#1237)', async t => {
+  const h = setup(t);
+  await settle();
+  scheduleScanError(h);
+  const pending = [];
+  h.w.api.listSchedules = () => new Promise((resolve, reject) => pending.push(reject));
+  const kept = h.w.document.querySelector('.schedule-project .schedule-retry-btn');
+  kept.click();
+  h.w.loadSchedules();
+  pending[0](new Error('older failure'));
+  await settle();
+  assert.equal(kept.disabled, true, 'a stale failure does not reopen Retry while a newer reload is pending');
+  pending[1](new Error('newer failure'));
+  await settle();
+  assert.equal(kept.disabled, false);
 });

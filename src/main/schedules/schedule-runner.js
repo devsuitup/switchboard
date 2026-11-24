@@ -484,16 +484,25 @@ function scheduleFields(file, meta) {
   };
 }
 
-function listScheduleFiles(projectPaths, { getSetting = () => null, defaultSandbox = false, platform = process.platform, home = os.homedir() } = {}) {
+function listScheduleFiles(projectPaths, { getSetting = () => null, defaultSandbox = false, platform = process.platform, home = os.homedir(), onScanError = () => {} } = {}) {
   const schedules = [];
   for (const projectPath of projectPaths) {
     const commandsDir = path.join(projectPath, '.claude', 'commands');
     let files;
-    try { files = fs.readdirSync(commandsDir).filter(isRunnerScheduleFileName); } catch { continue; }
+    try { files = fs.readdirSync(commandsDir).filter(isRunnerScheduleFileName); }
+    catch (error) { if (error.code !== 'ENOENT') onScanError(projectPath, error); continue; }
     for (const file of files) {
       const filePath = path.join(commandsDir, file);
       let content;
-      try { content = fs.readFileSync(filePath, 'utf8'); } catch { continue; }
+      try { content = fs.readFileSync(filePath, 'utf8'); }
+      catch (error) {
+        if (error.code !== 'ENOENT') {
+          schedules.push({ file, filePath, projectPath, name: file, slug: null, catchUp: null, cron: null, enabled: null, cli: null, prompt: null,
+            linked: !scheduleFileUnlinked(projectPath, filePath), readError: { code: error.code || null, message: error.message },
+            problems: [`could not read the file${error.code ? ` (${error.code})` : ''}`] });
+        }
+        continue;
+      }
       const { meta, body } = parseFrontmatter(content);
       const problems = [];
       if (!/^---\n([\s\S]*?)\n---\n?/.test(content)) problems.push(`front matter not read${content.includes('\r\n') ? ': save with LF line endings' : ''}`);
@@ -513,7 +522,7 @@ function listScheduleFiles(projectPaths, { getSetting = () => null, defaultSandb
   }
   for (const row of schedules) {
     for (const other of schedules) {
-      if (other !== row && other.projectPath === row.projectPath && other.slug === row.slug) row.problems.push(`slug shared with ${other.file}`);
+      if (other !== row && row.slug !== null && other.projectPath === row.projectPath && other.slug === row.slug) row.problems.push(`slug shared with ${other.file}`);
     }
   }
   return schedules;
@@ -685,6 +694,7 @@ async function setListedScheduleEnabled(filePath, enabled, { scheduleProjects, s
     const schedule = listScheduleFiles(await scheduleProjects().list()).find(s => s.filePath === filePath);
     if (!schedule) return { ok: false, error: 'schedule is not listed' };
     if (schedule.linked) return { ok: false, error: 'linked file: edit it at its source' };
+    if (schedule.readError) return { ok: false, error: 'the schedule file could not be read' };
     if (schedule.problems.some(p => p.startsWith('front matter not read'))) return { ok: false, error: 'front matter not read' };
     if (enabled && !schedule.enabled) skipMissedRunsOf(schedule, stateDir, getLastTickMinute());
     return setEnabled(filePath, enabled, { projectRoot: schedule.projectPath });

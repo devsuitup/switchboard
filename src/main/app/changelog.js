@@ -2,14 +2,14 @@
 
 // see docs/changelog.md
 
-const VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)$/;
+const VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-beta\.([1-9]\d*))?$/;
 const VERSION_BEFORE_WHATS_NEW = '0.0.84';
-const VERSION_HEADING_RE =/^## v(\d+\.\d+\.\d+) — (\d{4}-\d{2}-\d{2})$/;
+const VERSION_HEADING_RE =/^## v(\d+\.\d+\.\d+(?:-beta\.[1-9]\d*)?) — (\d{4}-\d{2}-\d{2})$/;
 
 function parseVersion(value) {
   const m = typeof value === 'string' ? VERSION_RE.exec(value) : null;
   if (!m) throw new TypeError(`not a version: ${String(value)}`);
-  return [Number(m[1]), Number(m[2]), Number(m[3])];
+  return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] === undefined ? Infinity : Number(m[4])];
 }
 
 function isVersion(value) {
@@ -19,7 +19,7 @@ function isVersion(value) {
 function compareVersions(a, b) {
   const x = parseVersion(a);
   const y = parseVersion(b);
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     if (x[i] !== y[i]) return x[i] > y[i] ? 1 : -1;
   }
   return 0;
