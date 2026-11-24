@@ -4,10 +4,6 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
-### Fixed
-- A local session waiting on a question from Claude now shows the orange attention mark in the sidebar instead of the working spinner, as it already did for permission prompts and remote sessions. The mark clears once the question is answered, and is not shown on the session you are looking at. (#1246)
-- A project or worktree holding a running session or a live background job is no longer collapsed in the sidebar because its last activity looks old, which hid a long-running background session after a fresh start. A group collapsed automatically opens again once it has recent activity; a group you collapse yourself stays collapsed. (#1249)
-
 ## v0.1.0-beta.1 — 2026-11-24
 
 ### New
@@ -36,6 +32,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Background sessions retry temporary attachment failures at startup and share one dismissible notice with recovery actions. Finished jobs with queued tasks first try to recover; if respawn completes but their worker is confirmed dead, they no longer return at every launch. Timeouts and daemon errors keep them saved for another attempt at the next launch. (#1191)
 - With sessions active, Switchboard no longer reloads the project list in a loop, which kept the main process busy and logged spurious refresh errors; a project change that loses a race with indexing is now retried instead of dropped. (#1194)
 - A temporarily unreadable session is retried during the run, and a single failed read no longer makes the next start re-read its whole project folder, including subagent sessions. (#1193)
+- A local session waiting on a question from Claude now shows the orange attention mark in the sidebar instead of the working spinner, as it already did for permission prompts and remote sessions. The mark clears once the question is answered, and is not shown on the session you are looking at. (#1246)
+- A project or worktree holding a running session or a live background job is no longer collapsed in the sidebar because its last activity looks old, which hid a long-running background session after a fresh start. A group collapsed automatically opens again once it has recent activity; a group you collapse yourself stays collapsed. (#1249)
 
 ## v0.0.109 — 2026-11-22
 
