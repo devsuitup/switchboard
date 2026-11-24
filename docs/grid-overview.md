@@ -15,7 +15,8 @@ closes it. Whether the grid is on is remembered across restarts
 The grid's header reads **Session Overview**, the number of sessions, and a
 **Group by project** button: on (the default), cards are grouped under project
 headings in sidebar order; off, they form one flat grid. The choice is
-remembered (`localStorage.gridGroupByProject`).
+remembered (`localStorage.gridGroupByProject`). Remote headings include the
+host; the same path on two hosts forms separate groups.
 
 ## A card
 
@@ -23,8 +24,8 @@ remembered (`localStorage.gridGroupByProject`).
   spinner during a head turn, a static spinner for background work, and
   attention or response-ready indicators. A busy head with running agents
   uses violet. The session's name turns blue while written output is unseen.
-  Its project and a Stop session button while the process is alive follow the
-  name. An open background or remote attach also has a separate neutral Detach
+  A CLI badge (such as **Codex**), when present, follows the name, then its
+  project and host and a Stop session button while the process is alive. An open background or remote attach also has a separate neutral Detach
   button.
 - **Body**: the session's terminal, live.
 - **Running subagents**, beneath the header: `1 subagent running` or
@@ -49,7 +50,8 @@ remembered (`localStorage.gridGroupByProject`).
 - Click a card's header or footer, or into its terminal, to focus that session:
   the sidebar highlights it and its notifications are cleared.
 - Double-click a header to leave the grid and show that session alone.
-- The stop button asks for confirmation, then ends the process.
+- The stop button stops every eligible running part of the conversation,
+  using the same confirmation and refusals as the sidebar's Stop session.
 - On a background or remote attach, Stop ends the session. Detach leaves it
   running without asking and offers Undo for about 10 seconds.
 - The session-navigation shortcuts move between cards in two dimensions — see

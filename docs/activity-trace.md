@@ -65,7 +65,7 @@ SWITCHBOARD_ACTIVITY_TRACE=1 task dev
 off. When the variable is set, it decides the state the app starts with, and the
 stored preference is ignored for that launch; when it is unset or blank, the
 stored preference decides. Either way the switch still works once the app runs.
-The main process reads the variable once (`activity-trace.js`) and tells the
+The main process reads the variable once (`src/main/shared/activity-trace.js`) and tells the
 renderer, through a launch argument and then the `activity-trace-state` event,
 so the two halves cannot disagree.
 
@@ -120,6 +120,10 @@ before an emission with cause `activity`. Repeated activity does not restart
 that timer. A structural emission satisfies pending activity and cancels its
 timer, so it does not cause a second reload. Both timers are unref'd and cleared
 on shutdown.
+
+During startup indexing, `scan` and `conflict` causes are additionally
+coalesced for ten seconds, or flushed when that indexing pass completes.
+Other causes keep the normal throttle.
 
 ### Turning it off, and on again
 
@@ -209,12 +213,16 @@ Probes that only record an observation (`osc.title`, `osc.progress`,
 | `main.loop` | Once per second while tracing is on | `lagMs`; `maxMs`, `p99Ms` only with `SWITCHBOARD_MAIN_LOOP_HISTOGRAM=1` at startup |
 | `projects.changed` | A throttled projects notification is sent | `cause` (distinct caller labels coalesced across the throttle window) |
 | `session-index-writer.busy` | At most once a minute when the index writer retried or gave up on `SQLITE_BUSY`, and once at writer close if counts remain | `counts` (per command name: `retries`, `exhaustions`) |
+| `ipc.get-projects` | A project-list request finishes | `totalMs`, `rows`, `replyBytes` |
+| `ipc.get-memories` | An Agent Files request finishes | `totalMs`, `entries` |
 | `app.quit` | A clean shutdown starts its last steps; `pty.exit` and a final `session-index-writer.busy` can still follow | — |
 
 ### Renderer
 
 | `cat` | Fires when | Key fields |
 |---|---|---|
+| `sidebar.refresh` | A sidebar refresh is performed or skipped | `skipped`, reconciliation counters |
+| `terminal.query-reply.drop` | A stale terminal query reply is dropped | `kind`, `age` |
 | `renderer.longframe` | An observed frame/task lasts at least 50 ms, while tracing is on | `durationMs`, `blockingMs` |
 | `recv.*` | An IPC event arrives (`cli-busy-state`, `terminal-notification`, `session-forked`, `session-detected`, `process-exited`, `subagent-spawned`, `subagent-completed`) | per event |
 | `recv.subagent-spawned` | `noteSubagentActivity()` recorded a sighting — the single write path into `activeSubagentsByParent`. `applied` says whether it changed anything. `applied:false` with `reason:"heartbeat-for-untracked-agent"` is a heartbeat dropped before that function (traced from `onSubagentSpawned`, so without `source`) | `agentId`, `applied`, `source` (`local-ipc` / `attached-ipc` / `remote-watch` / `local-transcript`), `bootstrap`, `heartbeat` (both IPC sources only), `from` |
@@ -436,7 +444,7 @@ may not have happened yet; unlinking that file first would let the late open
 recreate it, outside the queue and never pruned again.
 
 `pruneSegments()` therefore stops at the first old file whose stream has not
-emitted `close` (the `unsettled` map in `activity-trace.js`, a count per path,
+emitted `close` (the `unsettled` map in `src/main/shared/activity-trace.js`, a count per path,
 since a same-second reopen can reuse a path before its previous stream closed).
 Every retired stream prunes again on its own `close`. The late-open order occurs
 on the Windows CI runners; the test "a retired segment whose open lands late is

@@ -1,17 +1,17 @@
 # Context: activitywatch
 
 Switchboard reports session activity to a local [ActivityWatch](https://activitywatch.net)
-server, when the user has turned it on in Settings → Activity Reporting. It is
+server, when the user has turned it on in Settings → Integrations → Activity Reporting. It is
 off by default, and off means nothing is sent and no connection is attempted.
 
 ## Key files
 
 | File | Role |
 |---|---|
-| `activitywatch-client.js` | HTTP to the server: bucket creation, heartbeats, span upserts, a probe. Assumes the server is absent. |
-| `activitywatch-reporter.js` | Turns focus and session lifecycle into writes to two buckets. Pure; timers and clock injected. |
-| `main.js` | Constructs both, feeds the reporter from `open-terminal`, the PTY exit handler and `before-quit`; the `*-activity-reporting-*` and `activity-focus` IPCs. |
-| `session-transitions.js` | Calls `rekeyActivity` when a session is re-keyed to its real id, beside `rekeyMcpServer`. |
+| `src/main/integrations/activitywatch/activitywatch-client.js` | HTTP to the server: bucket creation, heartbeats, span upserts, a probe. Assumes the server is absent. |
+| `src/main/integrations/activitywatch/activitywatch-reporter.js` | Turns focus and session lifecycle into writes to two buckets. Pure; timers and clock injected. |
+| `main.js` | Constructs both, feeds the reporter from `open-terminal`, the PTY exit handler and `before-quit`; the `*-activity-reporting-*`, `activity-focus` and `activity-titles` IPCs; injects `rekeyActivity` into `session-transitions.js`. |
+| `session-transitions.js` | `rekeySession` calls `rekeyActivity` when a session is re-keyed to its real id, beside `rekeyMcpServer`; a Codex tab's launch detection re-keys through the same path. |
 | `public/app.js` | `reportActivityFocus()` — the renderer owns which session is shown and whether the window has focus. |
 | `public/activity-reporting-panel.js` | The Settings section's toggle and status line. |
 
@@ -25,7 +25,7 @@ by type:
 |---|---|---|
 | id | `aw-watcher-switchboard_<hostname>` | `aw-watcher-switchboard-running_<hostname>` |
 | type | `app.editor.activity` | `app.session.running` |
-| holds | the one session on screen while the window has focus | every Claude session, start to exit |
+| holds | the one session on screen while the window has focus | every CLI session (Claude or Codex), start to exit |
 | data | `{project, path, session, title?, file}` — `file` is the title, or the id when there is none | `{project, path, session, title?}` |
 | written by | heartbeat | one event per session, updated every minute |
 
@@ -79,7 +79,7 @@ fragment every event it sits in.
 ### Running
 
 - Counted: sessions spawned locally that are not plain terminals and not panel
-  shells, and scheduled headless runs (`runScheduleCommand`). A shell sitting
+  shells, whatever their CLI (Claude or Codex), and scheduled headless runs (`runScheduleCommand`). A shell sitting
   open is not work running. Remote sessions are not counted: their lifecycle
   belongs to another host.
 - A scheduled run has no transcript id when it is spawned, so it is reported
@@ -265,7 +265,7 @@ keys, which consumers of the buckets read by name:
 |---|---|
 | `project` | the project directory's name (`switchboard`, `platform`), split on `/` and `\` alike |
 | `path` | the project's absolute path |
-| `session` | the session id — the Claude session UUID, Switchboard's session key |
+| `session` | the session id — the CLI's session id (Claude's UUID, or Codex's once its launch is detected and the tab re-keyed), Switchboard's session key |
 | `title` | the name the sidebar shows, on one line (runs of whitespace, newlines included, become one space); absent when there is none |
 
 A title changes during a session when the user renames it or a title is

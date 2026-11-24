@@ -1,5 +1,10 @@
 # Glossary
 
+> The original audit and its numeric source references describe v0.0.94.
+> Targeted factual corrections below reflect current code; uncorrected line
+> numbers, counts and issue-status snapshots are historical, not current
+> source locations. This is not a fresh whole-product audit.
+
 Switchboard as it is at **v0.0.94** (f596e28). One entry per user-facing
 concept. Each entry gives:
 
@@ -419,9 +424,10 @@ concept. Each entry gives:
 - **Definition**: **Archive project** removes a project or a worktree from the
   sidebar and suspends its schedules, keeping its settings, cached sessions and
   schedule registration; **Unarchive** (Settings, Archived projects) restores
-  it. **Delete project** drops the project's settings, cache, search index and
-  schedule registration; files on disk are never deleted, and the project
-  returns only through Add project, with default settings.
+  it. **Delete project** previews separate choices for session metadata and
+  project settings, and optional removal of individually selected linked
+  worktree folders. The main checkout and unselected folders stay on disk;
+  see [Project Settings](../settings.md#project-settings).
 - **Don't say**: "hide", "remove".
 - **Code**: `archive-project-settings`, `unarchive-project` and
   `remove-project` (`main.js`); **Archive Project** and **Delete Project**
@@ -435,10 +441,9 @@ concept. Each entry gives:
 
 - **Definition**: restart a finished background job (`claude respawn <id>`).
 - **Code**: `public/agents-view.js:155-161`, `340`.
-- **Today**: **Respawn** is an Agents view button. Send to background on a
-  session that already has a job, and the restore of a saved background tab
-  whose worker is dead, respawn that same job too (#785). Kept separate from
-  Fork and Resume on purpose.
+- **Today**: **Respawn** is an Agents view button. Restore of a
+  saved background tab whose worker is dead may respawn that same job.
+  Send to background uses `/bg`, not Respawn. Kept separate from Fork and Resume.
 
 ### Send to background
 
@@ -447,8 +452,8 @@ concept. Each entry gives:
 - **Code**: `bgButton` (`public/app.js`, `public/sidebar.js`);
   `docs/background-agents.md`, "Send to background".
 - **Today**: in the terminal header and the row's right-click menu. A session
-  with a background job already relaunches that job (Respawn) instead of
-  typing `/bg` (#785). Quit, Restart and window close offer the same move for
+  moves through the CLI's own `/bg`, with confirmation while working.
+  A live background continuation refuses the move and points to the sidebar. Quit, Restart and window close offer the same move for
   eligible sessions (#546).
 
 ### Send a prompt
@@ -552,8 +557,9 @@ concept. Each entry gives:
 ### Trigger
 
 - **Definition**: a JSON file dropped in `~/.switchboard/triggers/` that makes
-  Switchboard type a command into an open session's terminal, optionally
-  waiting for it to be idle.
+  Switchboard handle a session request: read status, open a local session,
+  create a named Claude session with a prompt, stop an idle local session, or
+  type into an open terminal, optionally waiting for idle.
 - **Don't say**: "hook", "message", "inject" in user docs.
   - **Code**: `src/main/triggers/trigger-watcher.js`, `src/main/triggers/trigger-context.js`; `docs/automation.md:181-700`.
 - **Today**: no UI; `remoteTriggers` is a setting with no UI either
