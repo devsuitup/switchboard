@@ -52,14 +52,19 @@ function pruneScheduleRunResults(runsDir, key, keep = 20) {
 }
 
 const LINK_UNSUPPORTED = new Set(['ENOTSUP', 'EPERM', 'EISDIR', 'EXDEV', 'EINVAL', 'ENOSYS']);
-const loggedFailures = new Map();
+const NO_HARD_LINKS = 'This drive does not support hard links; schedule results cannot be recorded safely here. Move the Switchboard data directory to an NTFS or ext4 drive.';
+const unresolvedFailures = new Map();
 const failureListeners = new Set();
-let latestFailure = null;
 
-function setLatestFailure(failure) {
-  if (latestFailure === failure) return;
-  latestFailure = failure;
-  for (const listener of failureListeners) { try { listener(failure); } catch {} }
+function announceFailures() {
+  const latest = latestResultFailure();
+  for (const listener of failureListeners) { try { listener(latest); } catch {} }
+}
+
+function resolveFailures(keys) {
+  let changed = false;
+  for (const key of keys) changed = unresolvedFailures.delete(key) || changed;
+  if (changed) announceFailures();
 }
 
 function onResultFailureChange(listener) {
@@ -80,28 +85,22 @@ function createExclusive(file, text) {
   fs.closeSync(fd);
 }
 
-function createNew(file, text) {
-  try { createExclusive(file, text); return true; }
-  catch (error) { if (error.code === 'EEXIST') return false; throw error; }
-}
-
-function publishNew(tmp, destination, text, link) {
+function publishNew(tmp, destination, link) {
   try { link(tmp, destination); return true; }
   catch (error) {
     if (error.code === 'EEXIST') return false;
-    if (LINK_UNSUPPORTED.has(error.code)) return createNew(destination, text);
+    if (LINK_UNSUPPORTED.has(error.code)) throw Object.assign(new Error(NO_HARD_LINKS), { code: error.code });
     throw error;
   }
 }
 
-function resultFailure(destination, error, log, sessionId) {
+function resultFailure(key, destination, error, log, sessionId) {
   const failure = { path: destination || null, code: error.code || null, message: error.message, at: Date.now() };
-  setLatestFailure(failure);
-  const key = destination || '';
-  if (loggedFailures.get(key) !== failure.message) {
-    loggedFailures.set(key, failure.message);
-    log.warn(`[schedule] Cannot record result for ${sessionId}:`, failure.message);
-  }
+  const previous = unresolvedFailures.get(key);
+  unresolvedFailures.delete(key);
+  unresolvedFailures.set(key, failure);
+  if (previous?.message !== failure.message) log.warn(`[schedule] Cannot record result for ${sessionId}:`, failure.message);
+  announceFailures();
   return { ok: false, error: failure };
 }
 
@@ -121,25 +120,24 @@ function publishScheduleRunResult(runsDir, input, log, { link = fs.linkSync } = 
     if (typeof input.cleanup === 'string') record.cleanup = input.cleanup;
     if (typeof input.warning === 'string') record.warning = input.warning;
     const text = JSON.stringify(record) + '\n';
-    fs.mkdirSync(runsDir, { recursive: true });
     destination = path.join(runsDir, filename);
+    fs.mkdirSync(runsDir, { recursive: true });
     tmp = path.join(runsDir, `.${filename}.${crypto.randomUUID()}.tmp`);
     createExclusive(tmp, text);
-    if (publishNew(tmp, destination, text, link)) pruneScheduleRunResults(runsDir, key);
+    if (publishNew(tmp, destination, link)) pruneScheduleRunResults(runsDir, key);
     else {
       let valid = false;
       try { valid = validRecord(JSON.parse(fs.readFileSync(destination, 'utf8')), RESULT_NAME.exec(filename)); } catch {}
       if (!valid) {
-        return resultFailure(destination, Object.assign(new Error(`The result file ${destination} is unreadable; remove or fix it`),
+        return resultFailure(destination, destination, Object.assign(new Error(`The result file ${destination} is unreadable; remove or fix it`),
           { code: 'EBADRESULT' }), log, sessionId);
       }
       log.info(`[schedule] Result already recorded for ${sessionId}; keeping the first`);
     }
-    loggedFailures.delete(destination);
-    setLatestFailure(null);
+    resolveFailures([destination, runsDir]);
     return { ok: true };
   } catch (error) {
-    return resultFailure(destination, error, log, input.sessionId);
+    return resultFailure(destination || runsDir, destination, error, log, input.sessionId);
   } finally {
     if (tmp) { try { fs.unlinkSync(tmp); } catch {} }
   }
@@ -150,7 +148,8 @@ function writeScheduleRunResult(runsDir, input, log, options) {
 }
 
 function latestResultFailure() {
-  return latestFailure;
+  const failures = [...unresolvedFailures.values()];
+  return failures.length ? { ...failures[failures.length - 1], count: failures.length } : null;
 }
 
 function validRecord(record, match) {

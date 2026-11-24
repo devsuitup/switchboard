@@ -379,15 +379,17 @@ test('an invalid result file keeps the result record and the report names the fi
 });
 
 for (const code of ['ENOTSUP', 'EXDEV']) {
-  test(`a store without hard links (${code}) still publishes a recovered result and retires its record`, async t => {
+  test(`a store without hard links (${code}) keeps the recovered result in its record and reports why`, async t => {
     const h = fixture(t);
     const file = h.record(JOB, { phase: 'result', result: { outcome: 'exited', code: 0 }, cleanup: 'stopped and removed' });
     const r = resultFixture(h, file);
     const link = () => { throw Object.assign(new Error('hard links not supported'), { code }); };
     const [details] = await bg.resumeBackgroundRuns({ ...h.deps, writeResult: value => results.publishScheduleRunResult(path.dirname(r.destination), value, h.log, { link }) });
-    assert.equal(details.resultPending, undefined);
-    assert.equal(JSON.parse(fs.readFileSync(r.destination, 'utf8')).cleanup, 'stopped and removed');
-    assert.equal(fs.existsSync(file), false);
+    assert.equal(details.resultPending, true);
+    assert.match(details.persistenceError, /does not support hard links/);
+    assert.equal(fs.existsSync(r.destination), false, 'no destination is created');
+    assert.equal(saved(file).phase, 'result', 'the record keeps the result for a later start');
+    assert.equal(saved(file).cleanup, 'stopped and removed');
   });
 }
 

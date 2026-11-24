@@ -251,7 +251,15 @@ test('scheduler health reaches the Schedules listing, its own IPC and a push to 
   assert.match(mainSrc, /onHealthChange: notifyScheduleHealth,/);
   assert.match(mainSrc, /onResultFailureChange\(notifyScheduleHealth\)/);
   assert.match(mainSrc, /webContents\.send\('schedule-health', scheduleHealth\(\)\)/);
+  assert.match(mainSrc, /revision: \+\+scheduleHealthRevision/, 'every snapshot carries a fresh revision');
   const preload = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
   assert.match(preload, /getScheduleHealth: \(\) => ipcRenderer\.invoke\('get-schedule-health'\)/);
   assert.match(preload, /onScheduleHealth: callback => ipcRenderer\.on\('schedule-health'/);
+});
+
+test('the IPC inventory documents the schedule health channels and preload methods', () => {
+  const inventory = fs.readFileSync(path.join(__dirname, '..', '.ai', 'contexts', 'ipc-bridge.md'), 'utf8');
+  for (const name of ['get-schedule-health', 'schedule-health', 'getScheduleHealth', 'onScheduleHealth', 'revision']) {
+    assert.ok(inventory.includes(name), `IPC inventory must document ${name}`);
+  }
 });

@@ -31,6 +31,7 @@ let schedulesLoadError = null;
 let schedulesInFlight = null;
 
 const scheduleHealthNotices = new Map();
+let scheduleHealthApplied = null;
 
 function scheduleRetryText(ms) {
   return ms >= 60000 ? `${Math.round(ms / 60000)} min` : `${Math.max(1, Math.round(ms / 1000))} s`;
@@ -47,7 +48,9 @@ function scheduleSuspensionText(health) {
 
 function scheduleResultFailureText(health) {
   const failure = health?.resultFailure;
-  return failure ? `A schedule result could not be recorded: ${failure.message}` : null;
+  if (!failure) return null;
+  const others = failure.count > 1 ? ` (${failure.count - 1} other result${failure.count > 2 ? 's' : ''} also not recorded)` : '';
+  return `A schedule result could not be recorded: ${failure.message}${others}`;
 }
 
 function showScheduleHealthNotice(id, message) {
@@ -58,6 +61,8 @@ function showScheduleHealthNotice(id, message) {
 }
 
 function applyScheduleHealth(health) {
+  if (Number.isFinite(health?.revision) && Number.isFinite(scheduleHealthApplied?.revision) && health.revision < scheduleHealthApplied.revision) return;
+  scheduleHealthApplied = health;
   showScheduleHealthNotice('ScheduleSuspended', scheduleSuspensionText(health));
   showScheduleHealthNotice('ScheduleResultFailure', scheduleResultFailureText(health));
 }
@@ -299,7 +304,8 @@ function renderSchedules(data) {
   }
   scheduleText(container, 'schedule-help', 'Runs before v0.0.90 carry no schedule marker and are not listed. Runs before results were kept, runs of another instance and runs alive when Switchboard closes have no result recorded.');
   if (data.health) applyScheduleHealth(data.health);
-  for (const text of [scheduleSuspensionText(data.health), scheduleResultFailureText(data.health)]) {
+  const health = data.health ? scheduleHealthApplied : null;
+  for (const text of [scheduleSuspensionText(health), scheduleResultFailureText(health)]) {
     if (!text) continue;
     const banner = document.createElement('div');
     banner.className = 'schedule-scan-error schedule-health';
@@ -548,7 +554,7 @@ function buildScheduleItem(project, schedule, data) {
       : !schedule.enabled ? 'Disabled'
         : fatal.length ? `Never runs: ${fatal.join('; ')}`
           : schedule.nextRunMs === null ? 'No run within a year'
-            : data.health?.suspended ? `Paused: automatic launches are suspended (next run due ${scheduleTime(schedule.nextRunMs, data.now)})`
+            : data.health && scheduleHealthApplied?.suspended ? `Paused: automatic launches are suspended (next run due ${scheduleTime(schedule.nextRunMs, data.now)})`
               : `Next run: ${scheduleTime(schedule.nextRunMs, data.now)}`;
   scheduleText(item, 'schedule-state', state);
   if (schedule.runAsBackground) scheduleText(item, 'schedule-state', project.remoteAlias ? 'Background option ignored: local schedules only'

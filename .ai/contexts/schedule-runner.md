@@ -108,21 +108,25 @@ end of the last:
   repair that moved an invalid destination aside could delete or replace a
   result another writer had already acknowledged). On `EEXIST` a valid
   destination is acknowledged; an invalid one (external corruption, an older
-  version, an interrupted fallback creation) is never moved, renamed or
+  version) is never moved, renamed or
   deleted: the writer returns the error `The result file <path> is unreadable;
   remove or fix it` (code `EBADRESULT`). A link that fails with `ENOTSUP`,
   `EPERM`, `EISDIR` (libuv's mapping of `ERROR_INVALID_FUNCTION`, FAT/exFAT on
-  Windows), `EXDEV`, `EINVAL` or `ENOSYS` means the store has no hard links
-  (re-review F3 of #1233): the writer falls back to exclusive creation of the
-  destination (`wx`, write, fsync, close; `EEXIST` follows the same rule, and a
-  write failure removes the file it created). That path is not atomic for a
-  concurrent reader: a reader racing the creation can see a partial file and
-  report it unreadable, and a crash between creation and write leaves an
-  invalid destination for the user to remove. Any other failure returns the
-  error. The latest failure is kept (`latestResultFailure()`, cleared by the
-  next successful publication) and announced to listeners
-  (`onResultFailureChange`); a failure is logged once per destination and
-  message. Lock files left by older versions are ignored and pruned like
+  Windows), `EXDEV`, `EINVAL` or `ENOSYS` means the store has no hard links:
+  the writer returns that code with `This drive does not support hard links;
+  schedule results cannot be recorded safely here. Move the Switchboard data
+  directory to an NTFS or ext4 drive.` and creates no destination. There is no
+  fallback (fifth re-review F1 of #1233: an exclusive-create
+  fallback let a second writer acknowledge bytes whose writer then failed its
+  fsync and removed them); a background run keeps its record in `result`, so
+  nothing is lost once the data directory moves. Any other failure returns the
+  error. Failures are kept unresolved per destination (or per results
+  directory when no destination could be named); a successful publication
+  clears only its own destination and its directory, never an unrelated one.
+  `latestResultFailure()` returns the most recent unresolved failure with
+  `count`, the number still unresolved, or `null`; listeners
+  (`onResultFailureChange`) are called on each change. A failure is logged once
+  per destination and message. Lock files left by older versions are ignored and pruned like
   stale temp files.
   The main callback returns that result. The record is deleted only on
   `ok`, otherwise kept in `result` for the next start, which publishes it
@@ -176,10 +180,15 @@ directory or record that failed, filled in by `discoverBackgroundRuns` when the
 error has none) or `slow` (the wait expired with no answer). `onHealthChange`
 is called on every change and on each rejection; the suspension clears only
 when a discovery resolves. Main composes `scheduleHealth()` = scheduler health
-plus `resultFailure` (`latestResultFailure()`), passes it to
-`buildScheduleList` as `schedulerHealth` (the listing returns it as `health`),
-serves it on `get-schedule-health`, and pushes it on `schedule-health` when
-either part changes. The renderer (`public/schedules-view.js`) shows an
+plus `resultFailure` (`latestResultFailure()`) plus `revision`, a counter
+incremented for every snapshot, passes it to `buildScheduleList` as
+`schedulerHealth` (the listing returns it as `health`), serves it on
+`get-schedule-health`, and pushes it on `schedule-health` when either part
+changes. The renderer applies a snapshot only if its revision is not older
+than the one it last applied, so a startup reply or a list reply computed
+before a push cannot erase it (fifth re-review F3 of #1233); the tab's banner
+and paused rows use the applied health, not the reply's. See
+[ipc-bridge.md](ipc-bridge.md), "Schedules", for the channel contract. The renderer (`public/schedules-view.js`) shows an
 app-level error notice for each part (ids `ScheduleSuspended`,
 `ScheduleResultFailure`), shown whether or not the Schedules tab is enabled
 and replaced only when the text changes; the tab also shows a banner with the
@@ -1009,8 +1018,8 @@ a non-empty signal string, refused/spawn-error require string error text, and
 exited requires an integer exitCode; inconsistent records are unreadable.
 
 Publication is the temp file plus no-overwrite hard link described under
-`result` above, with exclusive creation as the fallback on stores without hard
-links; an existing final file is kept, and an invalid one is reported, never
+`result` above; a store without hard links records nothing and reports it; an
+existing final file is kept, and an invalid one is reported, never
 replaced. The temp file is removed on success and on failure. A process killed
 during publication can leave a temp file; readers ignore it. Per-key pruning
 removes that key's temp files, and lock files left by older versions, whose

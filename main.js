@@ -366,9 +366,10 @@ const closedSessions = new Map();
 // see .ai/contexts/touched-files.md ("One route into Touched")
 const exitedRemoteSessionIds = new Set();
 let stopScheduler;
+let scheduleHealthRevision = 0;
 function scheduleHealth() {
   const resultFailure = require('./src/main/schedules/schedule-run-results').latestResultFailure();
-  return { ...(stopScheduler?.getHealth?.() || { suspended: false }), resultFailure };
+  return { ...(stopScheduler?.getHealth?.() || { suspended: false }), resultFailure, revision: ++scheduleHealthRevision };
 }
 function notifyScheduleHealth() {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;

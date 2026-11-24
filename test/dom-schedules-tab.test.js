@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 const { loadAppFunctions, extractFunction } = require('./app-source');
 
-function setup(t, run = () => ({ ok: true }), { render = true } = {}) {
+function setup(t, run = () => ({ ok: true }), { render = true, api = {} } = {}) {
   const dom = new JSDOM('<body><div id="app-notices"></div><div id="schedules-content"></div></body>', { runScripts: 'outside-only', url: 'http://localhost' });
   t.after(() => { dom.window.setSchedulesVisible(false); dom.window.close(); });
   const ctx = dom.getInternalVMContext();
@@ -19,7 +19,7 @@ function setup(t, run = () => ({ ok: true }), { render = true } = {}) {
   const data = { now: Date.now(), catchUpActive: true, projects: [project] };
   const w = dom.window;
   w.api = { runScheduleNow: async filePath => { calls.push(filePath); return run(); }, listSchedules: async () => data,
-    setScheduleEnabled: async () => ({ ok: true }), readMemory: async () => '', onScheduleHealth: listener => { healthListeners.push(listener); } };
+    setScheduleEnabled: async () => ({ ok: true }), readMemory: async () => '', onScheduleHealth: listener => { healthListeners.push(listener); }, ...api };
   w.activeTab = 'schedules';
   w.formatDate = () => 'today';
   w.ICONS = { schedule: () => '<svg></svg>' };
@@ -1055,4 +1055,31 @@ test('the suspension reaches the user while the Schedules tab is disabled', t =>
   h.emitHealth({ suspended: false, resultFailure: { path: '/r/x.json', code: 'EBADRESULT', message: 'The result file /r/x.json is unreadable; remove or fix it', at: 1 } });
   assert.equal(h.w.document.querySelector('[data-notice-id="ScheduleSuspended"]'), null);
   assert.match(h.w.document.querySelector('[data-notice-id="ScheduleResultFailure"]').textContent, /A schedule result could not be recorded: The result file \/r\/x\.json is unreadable; remove or fix it/);
+});
+
+test('an older health snapshot never erases a newer push, from the startup reply or a list reply', async t => {
+  let reply, startup;
+  const h = setup(t, undefined, { render: false, api: { getScheduleHealth: () => new Promise(resolve => { startup = resolve; }) } });
+  h.w.schedulesTabEnabled = false;
+  h.emitHealth({ ...SUSPENDED, resultFailure: null, revision: 5 });
+  startup({ suspended: false, resultFailure: null, revision: 4 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(h.w.document.querySelector('[data-notice-id="ScheduleSuspended"]'), 'a stale startup reply must not clear the live suspension notice');
+  h.w.schedulesTabEnabled = true;
+  h.data.health = { suspended: false, resultFailure: null, revision: 3 };
+  h.w.api.listSchedules = () => new Promise(resolve => { reply = resolve; });
+  const loading = h.w.loadSchedules();
+  reply(h.data);
+  await loading;
+  assert.ok(h.w.document.querySelector('[data-notice-id="ScheduleSuspended"]'), 'a stale list refresh must not clear the live suspension notice');
+  assert.ok(h.w.document.querySelector('#schedules-content .schedule-health'), 'the tab shows the newest health, not the stale one');
+  assert.match(h.w.document.querySelector('.schedule-state').textContent, /^Paused/);
+  h.emitHealth({ suspended: false, resultFailure: null, revision: 6 });
+  assert.equal(h.w.document.querySelector('[data-notice-id="ScheduleSuspended"]'), null, 'a newer healthy push clears it');
+});
+
+test('the result notice counts the other unresolved results', t => {
+  const h = setup(t, undefined, { render: false });
+  h.emitHealth({ suspended: false, resultFailure: { path: '/r/a.json', code: 'EBADRESULT', message: 'The result file /r/a.json is unreadable; remove or fix it', at: 1, count: 3 }, revision: 1 });
+  assert.match(h.w.document.querySelector('[data-notice-id="ScheduleResultFailure"] .app-notice-message').textContent, /remove or fix it \(2 other results also not recorded\)$/);
 });

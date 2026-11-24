@@ -197,8 +197,11 @@ recorded, the notice **… finished, but its result was not recorded** gives the
 reason, and the run's history says **No result recorded**; a background run
 keeps its saved state and Switchboard tries again at the next launch. A result
 file that cannot be read is left as it is: the notice names it, so you can
-remove or fix it. A data folder on a drive without hard links (FAT, exFAT,
-some network shares) still works; results are then created directly.
+remove or fix it. Results need a drive that supports hard links: on FAT,
+exFAT or some network shares, no result is recorded and the notice says
+**This drive does not support hard links**. Move the Switchboard data
+directory to an NTFS or ext4 drive; background runs keep their result until
+it can be written.
 
 Switchboard only stops or removes a job whose id the launcher printed. If the
 launch prints no job id, the run is recorded as failed to start with
