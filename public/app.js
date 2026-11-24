@@ -3264,6 +3264,10 @@ setTimeout(() => {
 
 // --- Init: restore settings ---
 (async () => {
+  window.api.onSchedulesTabMigrated?.(async () => {
+    const latest = await window.api.getSetting('global');
+    window._applySchedulesTab(latest?.schedulesTab ?? SETTING_DEFAULTS.schedulesTab);
+  });
   const global = await window.api.getSetting('global');
   if (global) {
     if (global.sidebarWidth) {

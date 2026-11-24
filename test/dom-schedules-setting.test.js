@@ -121,6 +121,22 @@ test('fresh profile: Schedules is on and keyboard reachable without a restart or
   assert.equal(rows.some(row => row.textContent.includes('schedule-nightly.md')), false, 'Agent Files hides runner schedules');
 });
 
+test('a migration that commits after the first render shows the tab without a restart (#1239)', async t => {
+  let migrated;
+  const h = await setup(t, { schedulesTab: false }, w => {
+    w.api.onSchedulesTabMigrated = callback => { migrated = callback; };
+  });
+  assert.equal(h.tab.hidden, true, 'the first render read the stored value before the migration committed');
+  assert.equal(typeof migrated, 'function', 'startup listens for a late migration');
+  await h.w.api.setSetting('global', { schedulesTabDefaultMigrated: true });
+  migrated();
+  await settle();
+  assert.equal(h.w.schedulesTabEnabled, true);
+  assert.equal(h.tab.hidden, false);
+  assert.equal(h.tab.disabled, false);
+  assert.equal(h.tab.tabIndex, 0);
+});
+
 test('a second apply of the same value keeps the tab in step with the setting', async t => {
   const h = await setup(t, {});
   h.w._applySchedulesTab(true);

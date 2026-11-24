@@ -107,15 +107,72 @@ test('startup survives a rejected migration and logs it, then a later launch mig
   assert.equal(shown(s.global()), true);
 });
 
-test('main awaits the migration at load, before the window and its first render (#1239)', () => {
+test('main waits for the migration at load only up to its bound, before the window, and pushes a late change (#1239)', () => {
   const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
-  const at = main.indexOf('await migrateSchedulesTabOnStartup(writer, log);');
+  assert.equal(main.includes('await migrateSchedulesTabOnStartup('), false, 'startup never awaits the unbounded migration');
+  const at = main.indexOf('await migrateSchedulesTabWithinBound(writer, log, {');
   assert.notEqual(at, -1);
   assert.ok(at > main.indexOf('const INSTALL_PREDATES_LAUNCH ='), 'after the install signal is read');
   assert.ok(at < main.indexOf('function createWindow'));
   assert.ok(at < main.indexOf('app.whenReady().then('));
+  const call = main.slice(at, main.indexOf('});', at));
+  assert.match(call, /onLateChange: \(\) => \{/);
+  assert.match(call, /webContents\.send\('schedules-tab-migrated'\)/);
+  const preload = fs.readFileSync(path.join(ROOT, 'preload.js'), 'utf8');
+  assert.match(preload, /onSchedulesTabMigrated: .*ipcRenderer\.on\('schedules-tab-migrated'/);
   const facade = fs.readFileSync(path.join(ROOT, 'session-index-writer.js'), 'utf8');
   assert.ok(facade.includes("request('migrateSchedulesTabDefault')"));
+});
+
+const flush = () => new Promise(resolve => setImmediate(resolve));
+
+function boundHarness(migrate) {
+  const warnings = [];
+  const late = [];
+  const log = { warn: message => warnings.push(message), info() {} };
+  return { warnings, late, log, writer: { migrateSchedulesTabDefault: migrate }, onLateChange: () => late.push('notified') };
+}
+
+test('a stalled writer releases startup after the bound and a late turn-on reaches the renderer (#1239)', async () => {
+  const { migrateSchedulesTabWithinBound, STARTUP_WAIT_MS } = require('../src/main/schedules/schedules-tab-migration');
+  assert.ok(STARTUP_WAIT_MS > 0 && STARTUP_WAIT_MS <= 2000, 'the default bound keeps the first window within two seconds');
+  let finish;
+  const h = boundHarness(() => new Promise(resolve => { finish = resolve; }));
+  const started = Date.now();
+  assert.equal(await migrateSchedulesTabWithinBound(h.writer, h.log, { waitMs: 30, onLateChange: h.onLateChange }), 'pending');
+  assert.ok(Date.now() - started < 1000, 'startup continues at the bound, not when the writer answers');
+  assert.equal(h.warnings.length, 1);
+  assert.match(h.warnings[0], /30 ms/);
+  assert.deepEqual(h.late, []);
+  finish('turned-on');
+  await flush();
+  assert.deepEqual(h.late, ['notified'], 'the renderer is told once the late migration commits');
+});
+
+test('a late migration that changes nothing visible, or fails, never notifies the renderer (#1239)', async () => {
+  const { migrateSchedulesTabWithinBound } = require('../src/main/schedules/schedules-tab-migration');
+  for (const outcome of ['marked', 'none', 'reject']) {
+    let finish;
+    let fail;
+    const h = boundHarness(() => new Promise((resolve, reject) => { finish = resolve; fail = reject; }));
+    assert.equal(await migrateSchedulesTabWithinBound(h.writer, h.log, { waitMs: 10, onLateChange: h.onLateChange }), 'pending');
+    if (outcome === 'reject') fail(new Error('command timed out'));
+    else finish(outcome);
+    await flush();
+    assert.deepEqual(h.late, [], outcome);
+    if (outcome === 'reject') assert.match(h.warnings.at(-1), /command timed out/);
+  }
+});
+
+test('a migration that answers within the bound returns its result and does not notify (#1239)', async () => {
+  const { migrateSchedulesTabWithinBound } = require('../src/main/schedules/schedules-tab-migration');
+  const s = store({ schedulesTab: false });
+  const h = boundHarness(async () => launch(s));
+  assert.equal(await migrateSchedulesTabWithinBound(h.writer, h.log, { waitMs: 5000, onLateChange: h.onLateChange }), 'turned-on');
+  await flush();
+  assert.deepEqual(h.late, []);
+  assert.deepEqual(h.warnings, []);
+  assert.equal(shown(s.global()), true);
 });
 
 function writerLaunch(dir, scenario) {

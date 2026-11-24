@@ -49,6 +49,19 @@ search.
 A linked file can be opened and run, but must be turned on or off and deleted
 at its source.
 
+## Editing a schedule
+
+**Open** shows the file in the editor described in
+[Agent Files](memory-workfiles.md#agent-files). **Save**, or `Ctrl+S` /
+`Cmd+S`, writes your edits. If the file changed on disk since you opened it,
+the save is refused and your edits stay in the editor: **Reload** discards
+them and reads the file again, and **Overwrite** writes them over the newer
+file only after you confirm. A file changed on disk while you have unsaved
+edits offers **Reload** or **Keep my edits**. A schedule written by hand or in
+another editor must keep LF line endings: with CRLF its front matter is not
+recognised and the file is skipped — see
+[Automation](automation.md#schedules).
+
 ## Creating a schedule
 
 **Create schedule** at the top of the tab opens a form: registered project,

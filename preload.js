@@ -202,6 +202,7 @@ contextBridge.exposeInMainWorld('api', {
   onSubagentCompleted: (cb) => ipcRenderer.on('subagent-completed', (_e, payload) => cb(payload)),
   onSubagentWatchEvent: (cb) => ipcRenderer.on('subagent-watch-event', (_e, payload) => cb(payload)),
   onBgAgentsChanged: (cb) => ipcRenderer.on('bg-agents-changed', (_e, payload) => cb(payload)),
+  onSchedulesTabMigrated: (callback) => ipcRenderer.on('schedules-tab-migrated', () => callback()),
   onProjectsChanged: (callback) => {
     ipcRenderer.on('projects-changed', (_event, payload) => callback(payload));
   },

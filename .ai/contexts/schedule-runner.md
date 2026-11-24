@@ -662,9 +662,21 @@ refreshes and refreshes sidebar notices.
 Every global Save since #792 has written the checkbox state, so a stored
 `false` from before #1239 is not an opt-out. On the first launch of 0.1.0,
 `src/main/schedules/schedules-tab-migration.js` runs once in the writer worker
-(`migrateSchedulesTabDefault`, awaited in `main.js` right after
-`INSTALL_PREDATES_LAUNCH` is read and before any window exists, so the first
-render reads the result without a restart). Without the
+(`migrateSchedulesTabDefault`, started in `main.js` right after
+`INSTALL_PREDATES_LAUNCH` is read and before any window exists). Startup waits
+for it through `migrateSchedulesTabWithinBound`, at most `STARTUP_WAIT_MS`
+(2000 ms): a writer command's 30 s timeout is armed only once the worker
+reports it started, and a queued command has no admission deadline, so a
+stalled writer could otherwise hold the first window for 30 s or more. Within the bound the first render reads the result. Past it,
+main logs a warning, creates the window, and lets the migration finish in the
+background; if it then returns `turned-on`, main sends `schedules-tab-migrated`
+(preload `onSchedulesTabMigrated`). The renderer registers that listener at the
+top of its settings-restore block, before its first `get-setting`, and on the
+event re-reads `global` and calls `_applySchedulesTab`, so the tab appears
+without a restart. Invokes resolve in order, so a stale first read always
+applies before the event's fresh one; an event sent before the page loaded is
+lost, but the page's first read then already sees the committed value. A late
+`marked` or `none` changes nothing visible and sends nothing. Without the
 `schedulesTabDefaultMigrated` marker it deletes a stored `schedulesTab: false`,
 so the default applies, and writes the marker in the same `global` write; a
 missing `global` gets `{ schedulesTabDefaultMigrated: true }`, so a fresh
