@@ -80,6 +80,13 @@ reveals the row's actions. Delete opens a confirmation naming the file and
 explaining that past runs stay in Sessions. Cancel receives initial focus;
 Escape cancels and Tab stays inside the confirmation while it is open.
 
+The list refreshes every minute and after schedule changes. A refresh keeps
+keyboard focus on the same control: Create schedule, a row's button, its
+history toggle, or Retry. While a Retry is loading, focus waits on the list or
+the row and returns to the new Retry, or to Create schedule when the list
+loaded; if you move focus elsewhere meanwhile, it stays where you put it. An
+open Create schedule form keeps its fields and focus during a refresh.
+
 ## Window
 
 | Keys (Windows, Linux) | Keys (macOS) | Effect |

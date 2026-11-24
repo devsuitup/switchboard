@@ -6623,7 +6623,8 @@ body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-ses
 .mermaid-error { color: var(--text-muted); font-size: 12px; }
 .mermaid-render-scratch { position: fixed; left: -100000px; top: 0; visibility: hidden; pointer-events: none; }
 
-#schedules-content { overflow-y: auto; flex: 1; min-height: 0; padding: 12px; }
+#schedules-content { overflow-y: auto; flex: 1; min-height: 0; padding: 12px; overflow-wrap: anywhere; }
+#schedules-content .settings-action-btn { max-width: 100%; padding: 4px 10px; border-radius: 6px; white-space: normal; overflow-wrap: anywhere; }
 .schedule-project { margin-bottom: 20px; }
 .schedule-project-title, .schedule-name { font-weight: 600; }
 .schedule-item { padding: 12px 0; border-bottom: 1px solid var(--hairline); overflow-wrap: anywhere; }
@@ -6632,7 +6633,7 @@ body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-ses
 .schedule-problems { color: var(--state-modified); }
 .schedule-prerequisite { color: var(--text-muted); margin: 8px 0; }
 .schedule-load-error, .schedule-scan-error { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
-.schedule-actions { display: flex; gap: 6px; margin: 8px 0; opacity: 0; }
+.schedule-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; opacity: 0; }
 .schedule-item:hover .schedule-actions, .schedule-actions:has(:focus-visible) { opacity: 1; }
 .schedule-history-run { display: block; text-align: left; margin: 6px 0; width: 100%; }
 .schedule-actions button:disabled { cursor: default; }

@@ -806,6 +806,160 @@ test('older and hidden-tab responses cannot replace newer schedules (#1237)', as
   assert.equal(h.w.document.querySelector('.schedule-name').textContent, 'Newer');
 });
 
+const scheduleRows = (h, count) => Array.from({ length: count }, (_, index) => ({ ...h.schedule,
+  file: `schedule-${index}.md`, filePath: `/p/schedule-${index}.md` }));
+
+for (const count of [0, 2]) {
+  test(`Create schedule keeps keyboard focus across a refresh with ${count} rows (#1238)`, async t => {
+    const h = setup(t);
+    await settle();
+    h.project.schedules = scheduleRows(h, count);
+    h.w.renderSchedules(h.data);
+    const before = h.w.document.querySelector('.schedule-create-btn');
+    before.focus();
+    await h.w.loadSchedules();
+    const after = h.w.document.querySelector('.schedule-create-btn');
+    assert.notEqual(after, before, 'the refresh replaced the button');
+    assert.equal(h.w.document.activeElement, after, 'focus moves to the replacement Create schedule');
+  });
+}
+
+test('a project Retry keeps focus while its folder stays unreadable, then falls back to Create (#1238)', async t => {
+  const h = setup(t);
+  await settle();
+  h.project.schedules = [];
+  h.project.scanError = { code: 'EACCES', message: 'permission denied' };
+  h.w.renderSchedules(h.data);
+  const retry = () => h.w.document.querySelector('.schedule-project[data-project-path="/p"] .schedule-retry-btn');
+  const first = retry();
+  first.focus();
+  first.click();
+  await settle();
+  assert.notEqual(retry(), first, 'the refresh replaced the Retry button');
+  assert.equal(h.w.document.activeElement, retry(), 'focus moves to the replacement project Retry');
+  h.project.scanError = null;
+  retry().click();
+  await settle();
+  assert.equal(retry(), null);
+  assert.equal(h.w.document.activeElement, h.w.document.querySelector('.schedule-create-btn'), 'a gone Retry hands focus to Create');
+});
+
+for (const outcome of ['success', 'failure']) {
+  test(`a pending load Retry keeps focus in the tab and lands after ${outcome} (#1238)`, async t => {
+    const h = setup(t, undefined, { render: false });
+    h.w.api.listSchedules = async () => { throw new Error('offline'); };
+    h.w.setSchedulesVisible(true);
+    await settle();
+    let finish;
+    h.w.api.listSchedules = () => new Promise((resolve, reject) => { finish = outcome === 'success' ? () => resolve(h.data) : () => reject(new Error('still offline')); });
+    const retry = () => h.w.document.querySelector('.schedule-load-error .schedule-retry-btn');
+    retry().focus();
+    retry().click();
+    const container = h.w.document.getElementById('schedules-content');
+    assert.ok(container.contains(h.w.document.activeElement) || h.w.document.activeElement === container, 'a disabled Retry keeps focus inside the tab');
+    assert.notEqual(h.w.document.activeElement, retry(), 'focus leaves the disabled Retry');
+    finish();
+    await settle();
+    const expected = outcome === 'success' ? h.w.document.querySelector('.schedule-create-btn') : retry();
+    assert.ok(expected);
+    assert.equal(h.w.document.activeElement, expected, outcome === 'success' ? 'recovery focuses Create schedule' : 'a repeated failure focuses the new Retry');
+  });
+}
+
+for (const start of ['create', 'retry']) {
+  test(`completion of a pending refresh respects focus moved away from ${start} (#1238)`, async t => {
+    const h = setup(t);
+    await settle();
+    let finish;
+    if (start === 'retry') {
+      h.w.api.listSchedules = async () => { throw new Error('offline'); };
+      await h.w.loadSchedules();
+    }
+    h.w.api.listSchedules = () => new Promise(resolve => { finish = () => resolve(h.data); });
+    if (start === 'create') {
+      h.w.document.querySelector('.schedule-create-btn').focus();
+      h.w.loadSchedules();
+    } else {
+      const retry = h.w.document.querySelector('.schedule-load-error .schedule-retry-btn');
+      retry.focus();
+      retry.click();
+    }
+    const elsewhere = h.w.document.createElement('button');
+    h.w.document.body.appendChild(elsewhere);
+    elsewhere.focus();
+    finish();
+    await settle();
+    assert.equal(h.w.document.activeElement, elsewhere, 'the refresh does not steal the newer focus choice');
+  });
+}
+
+test('a pending row Retry holds focus on its row and returns to the replacement Retry (#1238)', async t => {
+  const h = setup(t);
+  await settle();
+  Object.assign(h.schedule, { readError: { code: 'EACCES', message: 'permission denied' }, problems: ['could not read the file (EACCES)'] });
+  h.w.renderSchedules(h.data);
+  let finish;
+  h.w.api.listSchedules = () => new Promise(resolve => { finish = () => resolve(h.data); });
+  const retry = () => h.w.document.querySelector('.schedule-item .schedule-retry-btn');
+  const first = retry();
+  first.focus();
+  first.click();
+  assert.equal(h.w.document.activeElement, h.w.document.querySelector('.schedule-item'), 'the disabled row Retry hands focus to its row');
+  finish();
+  await settle();
+  assert.notEqual(retry(), first);
+  assert.equal(h.w.document.activeElement, retry(), 'the row Retry regains focus after the refresh');
+  Object.assign(h.schedule, { readError: null, problems: [] });
+  h.w.api.listSchedules = async () => h.data;
+  retry().click();
+  await settle();
+  assert.equal(retry(), null, 'the recovered row no longer offers Retry');
+  const action = h.w.document.querySelector('.schedule-item .schedule-actions button:not(:disabled)');
+  assert.ok(action);
+  assert.equal(h.w.document.activeElement, action, 'the recovered row hands focus to its first available action');
+});
+
+test('a failed row Retry re-enables the row Retry and returns focus to it, unless focus moved (#1238)', async t => {
+  const h = setup(t);
+  await settle();
+  Object.assign(h.schedule, { readError: { code: 'EACCES', message: 'permission denied' }, problems: ['could not read the file (EACCES)'] });
+  h.w.renderSchedules(h.data);
+  let fail;
+  h.w.api.listSchedules = () => new Promise((_, reject) => { fail = () => reject(new Error('offline')); });
+  const retry = h.w.document.querySelector('.schedule-item .schedule-retry-btn');
+  retry.focus();
+  retry.click();
+  assert.equal(h.w.document.activeElement, h.w.document.querySelector('.schedule-item'), 'the disabled row Retry hands focus to its row');
+  fail();
+  await settle();
+  assert.equal(retry.disabled, false, 'the kept row Retry can be used again');
+  assert.equal(h.w.document.activeElement, retry, 'focus returns to the row Retry');
+  h.w.api.listSchedules = () => new Promise((_, reject) => { fail = () => reject(new Error('offline')); });
+  retry.click();
+  const elsewhere = h.w.document.createElement('button');
+  h.w.document.body.appendChild(elsewhere);
+  elsewhere.focus();
+  fail();
+  await settle();
+  assert.equal(retry.disabled, false);
+  assert.equal(h.w.document.activeElement, elsewhere, 'the failure does not steal the newer focus choice');
+});
+
+test('a failed project Retry re-enables the kept Retry and returns focus to it (#1238)', async t => {
+  const h = setup(t);
+  await settle();
+  h.project.schedules = [];
+  h.project.scanError = { code: 'EACCES', message: 'permission denied' };
+  h.w.renderSchedules(h.data);
+  h.w.api.listSchedules = async () => { throw new Error('offline'); };
+  const retry = h.w.document.querySelector('.schedule-project[data-project-path="/p"] .schedule-retry-btn');
+  retry.focus();
+  retry.click();
+  await settle();
+  assert.equal(retry.disabled, false, 'the kept project Retry can be used again');
+  assert.equal(h.w.document.activeElement, retry, 'focus returns to the project Retry');
+});
+
 const scheduleScanError = h => {
   h.project.schedules = [];
   h.project.scanError = { code: 'EACCES', message: 'permission denied' };

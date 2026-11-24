@@ -838,6 +838,38 @@ pending focus target across renders. Re-enabling restores it while focus stays
 on that row; a newer focus choice takes precedence. The on/off toggle uses this
 same focus hand-off as soon as its focused button becomes disabled. An unmatched project
 focus request is consumed by that render. Guard refusal reasons are visible row text.
+
+Top-level focus (#1238): the controls outside rows carry a `data-schedule-control`
+identity too: Create schedule (`schedule-create-btn`), the load-error Retry and
+each project's scan-error Retry (`schedule-retry-btn`, told apart by the
+enclosing `.schedule-project` path, none for the load error). A render, and a
+failed reload's `renderSchedulesLoadError`, read the focused identity first
+(`scheduleTopFocus`) and refocus its replacement (`restoreScheduleTopFocus`).
+A focused Retry that no longer exists after the render hands focus to Create,
+or to the list container when Create is disabled. Retry disables every Retry
+button while its load is in flight: a focused top-level Retry first moves
+focus to the list container and becomes `schedulesPendingTopFocus`, a focused
+row Retry hands focus to its row through `focusScheduleControl`. The pending
+target applies only while the container still has focus, so focus moved
+elsewhere during the request stays there. A failed reload re-enables the Retry
+buttons it keeps and restores both pending targets, the row one through
+`restorePendingScheduleFocus` (only while focus is still parked on that row).
+When a render keeps the row but not its focused control (a recovered row loses
+its Retry), `focusScheduleControl` falls back to the row's first enabled action,
+then to Create, then to the list container. Hiding the tab clears the pending target. Nothing here
+touches focus outside `#schedules-content`, so the create form keeps its
+fields and focus across background refreshes, and closing it focuses the
+current Create button.
+
+Sizes (#1238): every button of the tab uses the shared `.settings-action-btn`
+class, scoped in `#schedules-content` to a smaller padding, `max-width: 100%`
+and wrapping text. `.schedule-actions` wraps, and `#schedules-content` sets
+`overflow-wrap: anywhere` so long paths, names and refusals break inside the
+sidebar. Keyboard focus keeps the global `button:focus-visible` outline.
+`e2e/schedules.spec.js` checks the supported sidebar widths (200, 340 and
+600 px) in both themes, at 800x500 and 1400x900, at 100% and 150% zoom, with a
+stubbed `list-schedules` fixture, and checks focus across refreshes and the
+create form's reach in the small zoomed window; see `docs/e2e.md`.
 Next-run wording uses minutes below an hour, then today's time, tomorrow's time,
 a weekday within the following week, or a date for later runs.
 
