@@ -47,13 +47,16 @@ in `#touched-coverage` inside a modal, including while loading, on failure and
 on an empty list. It uses the shared modal styles and existing dialog pattern;
 Escape, the close button and an outside click dismiss it and restore focus to
 the info button. A capturing Escape handler prevents list/editor navigation.
-Tab stays on the modal close button. `test/dom-file-panel-touched.test.js` pins it. The empty state reads "No files touched by the file tools", never
+Tab stays on the modal close button. `test/dom-file-panel-touched.test.js` pins it.
+
+The empty state reads "No files touched by the file tools", never
 "nothing changed". Changes stays the authority on the working tree.
 
 The transcript records intent, not outcome: a refused `Write` is listed. Each
 row is checked against the disk when the list is built (`state`): `present`,
 `gone` (`ENOENT`/`ENOTDIR`), `not-file`, `unreadable` (any other error, or no
-answer in 3 s), or `refused` (see below). The list is not live: it is built on open and on the refresh button, not on
+answer in 3 s), or `refused` (see below); a remote row is `unknown` until
+its host answers ("Remote sessions" below). The list is not live: it is built on open and on the refresh button, not on
 every busy-to-idle edge. A build stats up to 500 paths; transcript reads use
 the incremental, time-window cache described below.
 
@@ -197,7 +200,7 @@ DOM. The panel shell remains outside this navigation.
 counters, partial UTF-8 appends, rewrites, deletion, LRU and repeated window
 extensions. Its large fixture is about 26.6 MB; the one-day read counter
 includes chunk reads and validation probes. The measured full-read comparison
-is recorded in the test diagnostic and `.work-files/pr-body.md`.
+is recorded in the test diagnostic.
 
 ## Decisions that were open in the issue
 
@@ -302,7 +305,7 @@ Remote Git retains the host locale. Its HEAD-missing/untracked classification
 still matches English `path … does not exist in 'HEAD'` / `invalid object name
 'HEAD'`; a translated message can therefore open the existing plain read-only
 pair instead of an empty-original HEAD pair. This remaining limitation requires
-a separate remote change; #754 adds no locale prefix or remote shell dependency.
+a separate remote change; no locale prefix or remote shell dependency is added.
 
 Tests use disposable mirrors, injected transports, shipped IPC handlers and
 the real CodeMirror factories. A local fake host executes the exact shell
@@ -382,8 +385,7 @@ Main-process local Git uses `LC_ALL=C`, `LC_MESSAGES=C`, `LANG=C`, with
 `LANGUAGE` removed, without changing the parent locale or UTF-8 handling.
 Regression coverage includes the French-stderr/localGitEnv tests, empty-ancestor,
 Git-ceiling and device-boolean discovery cases in the file/runner suites and
-the real-Git Unicode case. #659's broader editing behavior remains separate;
-when rebased, its Changes read/save discovery fallback must use `noRepositoryAt`.
+the real-Git Unicode case.
 A missing or timed-out Git process during discovery, repository reread or
 blob read, or a diff read refused for
 its filename or mixed line endings, uses the guarded file content
@@ -438,7 +440,9 @@ Every file opened by a click outside the Touched list goes through
 a `file://` link (`openFileInPanel`, see `.ai/contexts/terminal-path-links.md`),
 the terminal menu's "Open in panel", and the CLI's IDE-emulation `openFile`
 (`mcp-open-file`). There is no other file tab: the panel's tab types are
-`changes`, `touched` and `diff`.
+`changes`, `touched` and `diff`. The per-project Work Files sidebar tab was
+removed in v0.0.108 (#1018); a `.work-files` document opens through these
+routes like any other file.
 
 - **Origin.** `'link'` for the three terminal routes, `'mcp'` for `openFile`,
   `'row'` for a click on a row of the list. A link and a row are the user's
@@ -488,7 +492,7 @@ the terminal menu's "Open in panel", and the CLI's IDE-emulation `openFile`
   with qualifying repository evidence or an uncertain bounded walk, and the
   Touched path rules of `resolveTouchedPath`. Thrown/-1 discovery transports
   retain their separate plain marker fallback. A symbolic link opens read-only.
-- **`mcp-bridge.js`** sends `{filePath}` only and reads nothing, so the bytes
+- **`src/main/integrations/mcp/mcp-bridge.js`** sends `{filePath}` only and reads nothing, so the bytes
   of a file the panel refuses never cross IPC on this route.
 
 ## Opened rows (#472)
@@ -593,7 +597,7 @@ the same editor. See [tool-bar.md](tool-bar.md).
 Local Touched opens request { editor: true, image: true }; remote reads retain
 their session ID and never request images. The main read preserves the existing
 Git metadata, sensitive-path, regular-file and 2 MiB guards before sniffing bytes.
-panel-image.js recognizes PNG, JPEG, GIF, WebP and BMP signatures, independently
+`src/main/files/panel-image.js` recognizes PNG, JPEG, GIF, WebP and BMP signatures, independently
 of the extension. SVG stays editable text; ICO and other binary formats are refused.
 GIF and WebP signatures become images only when the read buffer also contains
 a NUL byte; NUL-free UTF-8 text beginning with those signatures stays editable.
@@ -611,7 +615,7 @@ Binary, encoding and size refusals show "This file can't be shown here." with
 one action. Extensions in the [viewer allowlist](viewer-panel.md#local-file-actions-1203), case insensitive, offer
 Open with system viewer via openPath(path, { viewer: true }); all others offer
 Show in folder. SYSTEM_VIEWER_EXTENSIONS lives in the pure main module and a
-classic-script copy in touched-files-view.js; panel-image.test.js compares them.
+classic-script copy in `public/touched-files-view.js`; `test/panel-image.test.js` compares them.
 Main enforces that allowlist on both the requested name and its native-realpath
 target, requires `fs.statSync(real).isFile()`, and checks both paths for
 sensitivity before opening the canonical target. Windows colons after the drive

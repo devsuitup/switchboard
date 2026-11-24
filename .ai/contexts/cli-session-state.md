@@ -42,9 +42,9 @@ in the v1 reader. Schedules without that identity do not supply descriptor proof
 Status requests require a unique verified writer; competing identities project
 ambiguous. Existing action readers keep their refusal on any verified live writer.
 
-Deletion previews call `readProcessTableSnapshot(deadline)` at startup.
-It reuses the shared three-second cache (including null failures) or the in-flight
-read. The returned snapshot is passed explicitly to `readStatusEvidence`,
+Deletion previews call `readProcessTableSnapshot(deadline, { fresh: true, signal })`
+at startup (`src/main/projects/project-delete-main.js`): the fresh, abortable read
+described at the top of this file, never the shared cache or in-flight read. The returned snapshot is passed explicitly to `readStatusEvidence`,
 `liveElsewhereV1Checked` and `deliveryPtyStart`. Windows V1 reads starts and
 ancestry from it rather than launching Get-Process twice per descriptor. Its
 three-second age is checked when consumed; expired/failed/missing/mismatched
@@ -185,7 +185,14 @@ including the `session-live-elsewhere` and `sessions-live-elsewhere` IPCs),
 `test/canary-cli-session-state.test.js`,
 `test/cli-session-live-elsewhere.test.js`, `test/cli-session-process-table.test.js`,
 `test/resume-guard.test.js`,
-`test/restore-live-elsewhere.test.js`.
+`test/restore-live-elsewhere.test.js`, `test/cli-session-state-v1.test.js`,
+`test/cli-session-state-delivery.test.js`, `test/cli-session-state-windows-tabs.test.js`.
+Related code: `src/main/cli/session-state-v1.js` (V1 reader), `src/main/cli/proc-start.js`,
+`src/main/projects/project-delete-main.js` (deletion snapshot),
+`src/main/triggers/trigger-context.js` (trigger consumer; `src/main/triggers/session-status.js`
+builds the 2 s status deadline), `src/main/terminals/windows-job-helper.ps1` (`observe`).
+Only Claude descriptors are read (`~/.claude/sessions`, `DEFAULT_DIR`); nothing in
+this module or `public/resume-guard.js` reads Codex state.
 
 The module has a second, unrelated consumer: the resume guard described under
 "Live elsewhere" below.
@@ -489,7 +496,8 @@ ids past the cap are not looked up and resume as before the guard.
 - Otherwise `findLiveProcess(sessionId)` reads `~/.claude/sessions/*.json`
   afresh — it does not use the watcher's maps, so it answers before the watcher
   attaches and past the `MAX_SEEDED_FILES` seed cap — and returns the first file
-  whose `sessionId` matches, whose `pid` is alive (`process.kill(pid, 0)`), and
+  whose `sessionId` matches (or whose `bridgeSessionId` has the same bridge key,
+  `bridgeSessionKey` in `bridge-session-id.js`), whose `pid` is alive (`process.kill(pid, 0)`), and
   whose `procStart` matches the process that owns that pid now.
 - **`procStart` is the creation time of the process that wrote the file**, and
   a mismatch with the process that owns the pid now means the pid was reused and
@@ -539,9 +547,9 @@ ids past the cap are not looked up and resume as before the guard.
   On Windows only `pidDomain === "win32:anchor"` with a string `procStart` of
   17-19 digits is compared (a JSON number past 2^53 has already lost digits; a
   descriptor without `pidDomain` is not known to carry a FILETIME). The probe
-  keeps the lines PowerShell printed when it exits non-zero (a candidate that died
-  after the liveness check makes it exit 1) and rejects only on timeout or a
-  spawn error. **Not closed:** a pid reused by an elevated or system process
+  runs `Get-Process -ErrorAction SilentlyContinue … ; exit 0`, so a candidate that
+  died after the liveness check prints no line instead of failing the batch; it
+  rejects only on a killed child (timeout) or a spawn error (non-numeric exit code). **Not closed:** a pid reused by an elevated or system process
   yields no `StartTime` (measured: pid 4 prints no line), so it stays live.
 - `status` is not required: any live process holding the session counts.
 
@@ -627,7 +635,7 @@ Two rules share that snapshot and must not be confused:
 
 - **Reader.** `probeProcessTable(platform)` runs one process, bounded by
   `PROCESS_TABLE_TIMEOUT_MS` (15 s, clipped to a supplied deadline): on Windows `powershell.exe -NoProfile` over
-  `Get-CimInstance Win32_Process` printing `<pid> <ppid>` lines (about 0.7-1.4 s
+  `Get-CimInstance Win32_Process` printing `<pid> <ppid> <FILETIME>	<CommandLine>` lines (about 0.7-1.4 s
   cold, 340 processes, measured 2026-10-10) with the process's `CreationDate` as a
   FILETIME (within 5 ticks of `Get-Process`'s `StartTime.ToFileTimeUtc()`, the descriptor's
   value: CIM keeps microseconds; measured 2026-10-10); on macOS `/bin/ps -A -o pid=,ppid=,lstart=` (seconds
@@ -689,7 +697,7 @@ retains `nameSource`; seed and file flush retain descriptor kind, job id,
 session id, cwd, name/source and start time alongside status. A change to
 name/source, kind, job id or cwd notifies `onStatusesChanged`, so projects reload
 after a registry-only rename even when status is unchanged. Timestamp-only
-updates still do not notify projects. `getStatus` keeps its two-field result
+updates still do not notify projects. `getStatus` keeps its three-field result (`{status, statusUpdatedAt, waitingFor}`)
 and the idle/rescan callback still runs only on the original status transition.
 The sidebar projection does not use a descriptor as proof of PTY ownership.
 
@@ -731,7 +739,7 @@ made it indexable, showed up as a second, unattached row.
 The state file is what links the two: the CLI rewrites
 `~/.claude/sessions/<pid>.json` with the new `sessionId` on `/clear` (checked
 2026-10-05 on CLI 2.1.28x: live state files whose `sessionId` names a
-transcript that starts with the `/clear` record). `clearOwner(newId, ptyPid)`
+transcript that starts with the `/clear` record). `clearOwner(newId, ptyPid, {closestWriter, descriptorSnapshot})`
 finds the live pid whose state file names `newId` and walks its parent chain
 (`/proc/<pid>/stat`) up to the PTY's pid. Verdicts:
 
@@ -750,6 +758,11 @@ finds the live pid whose state file names `newId` and walks its parent chain
   not even when this is the only Claude PTY in the folder: a `claude` run
   outside the app in the same folder would be taken over. The file is recorded
   and not rechecked.
+
+With `closestWriter: true` (continuation re-keying in `session-transitions.js`)
+it answers through `closestWriterOwner` over `descriptorSnapshot` (or a fresh
+descriptor read) and can also return `absent` (no descriptor names the id) or
+`unsupported` (macOS); see `.ai/contexts/session-state.md`, "Proven continuation re-key".
 
 On Windows and macOS there is no `/proc`; `clearOwner` uses the process table
 of "Own descendants outside Linux" instead and gives the same answer as

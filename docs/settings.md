@@ -43,10 +43,11 @@ also outside the settings search.
 
 ### General
 
-Startup, Shell, Terminal and IDE settings:
+Startup, Shell, Appearance, Terminal and IDE settings:
 
 | Setting | Key | Default | Effect |
 |---|---|---|---|
+| Theme | `theme` | Dark (`dark`) | **Dark**, **Light** or **System**; applied on save to the app, editors and terminals; System follows the operating system |
 | Terminal Theme | `terminalTheme` | Switchboard | Terminal colours, applied on save — see [Terminal](terminal.md#theme) |
 | Terminal Right-Click | `terminalRightClick` | Context menu (`menu`) | `menu`, `paste`, `default` (Native), `none` — see [Terminal](terminal.md#right-click) |
 | Restore Sessions on Startup | `restoreOnStartup` | Ask on startup (`ask`) | `off`, `ask`, `lazy` (Restore on click), `auto`; read at launch — see [Session restore](session-restore.md) |
@@ -110,8 +111,19 @@ A saved `chrome` setting is read as the matching Browser choice: `true` selects
 
 #### CLI Agents and Codex
 
-The existing CLI switches and Codex sandbox, approval, model and reasoning-effort
-controls are grouped here. See [Launching sessions](launching-sessions.md).
+See [Codex sessions](launching-sessions.md#codex-sessions) for launch and
+feature support. CLI switches and **Show Codex usage** are in **CLI Agents**;
+launch options are in the separate **Codex** section on the same Sessions page.
+Switching a CLI off stops scanning and hides its sessions and
+launch entries; its open tabs keep working. At least one CLI must stay enabled.
+
+| Setting | Key | Default | Effect |
+|---|---|---|---|
+| Claude / Codex | `disabledHarnesses` | empty (both enabled) | Stores the ids of disabled CLIs |
+| Codex sandbox | `codexSandbox` | Codex default (empty) | `read-only`, `workspace-write` or `danger-full-access`, passed as `--sandbox` |
+| Codex approval | `codexApproval` | Codex default (empty) | `on-request` or `never`, passed as `--ask-for-approval` |
+| Codex model | `codexModel` | Codex default (empty) | A model from the local Codex catalog, passed as `--model` |
+| Codex reasoning effort | `codexEffort` | Codex default (empty) | `low`, `medium`, `high`, `xhigh`, `max` or `ultra`, passed as `model_reasoning_effort` |
 
 **Custom arguments** (`codexCustomArgs`, empty by default) in the Codex section
 applies to Codex new sessions, resumes and forks. It is global, like the other
@@ -160,6 +172,9 @@ Primary+Shift (Ctrl, or Cmd on macOS) with its key — see
 | SSH hosts to observe | `remoteHosts` | none | `{alias, label, enabled}` per host — see [Remote hosts](remote-hosts.md) |
 | Refresh every | `remoteRefreshMs` | 5 minutes (minimum 1; the field offers up to 1440) | Time between full pulls |
 
+A saved, enabled host also offers **New session…**, including before its first
+project has been indexed. See [Remote hosts](remote-hosts.md).
+
 ### Integrations
 
 | Setting | Key | Default | Effect |
@@ -198,6 +213,12 @@ items survive project updates. Sessions of archived projects appear after Unarch
 | Debug Mode | `activityTrace` | off | *Live.* Records the activity trace; lists, opens and deletes trace files — see [Activity trace](activity-trace.md) |
 
 The **What it records** explanation expands when selected.
+
+**Switchboard log files**, under Diagnostics, shows log and activity-trace disk
+usage. **Delete files older than** (`logRetentionDays`, default 14 days;
+1–36500) and **Delete old files…** let you preview and confirm cleanup. Current
+logs and recording traces are kept. Saving remembers the age; deletion is an
+explicit action. See [Activity trace](activity-trace.md#deleting-older-log-files).
 
 ### Stored without a field
 
@@ -256,8 +277,11 @@ is archived. Shared path-only settings cannot be deleted. Only confirmed,
 available choices are remembered; Cancel changes nothing.
 
 The preview shows the full host and path, counts, and expandable complete
-targets and effects. Project files, transcripts, schedules, memory, `.work-files`
-and nested worktrees stay on disk. Kept schedules may reactivate on re-add;
+targets and effects. Project files, schedules, memory and `.work-files` stay on
+disk, except inside a linked worktree folder you explicitly select for removal:
+that folder is removed together with its ignored files (`.work-files`, `.env`,
+and so on). Those folder choices start unchecked; the main checkout is always
+kept. Transcripts under `~/.claude/projects` are never removed. Kept schedules may reactivate on re-add;
 retained transcripts can restore their titles. Background jobs must be stopped
 from the Agents view first. Local terminal stopping for deletion requires Windows;
 on other platforms stop the terminals first and reopen the preview.

@@ -3,6 +3,10 @@
 Switchboard can reopen, at launch, the sessions that were open when it last
 closed.
 
+During startup, the previous run's sidebar appears greyed out and cannot be
+clicked until the first current project list arrives. This snapshot does not
+start any session.
+
 ## The setting
 
 **Global Settings → General → Startup → Restore Sessions on Startup**:
@@ -60,6 +64,12 @@ cannot be reopened, the first tab that is ready is shown meanwhile, and the slow
 one opens behind it without taking the focus. The tab order still follows the
 saved order once every tab is open.
 
+Temporary background attachment failures are retried at startup and collected
+in one dismissible notice with recovery actions. A finished job with queued
+tasks first attempts recovery; after a successful respawn whose worker is
+confirmed dead, its saved tab is released. Timeouts and daemon errors retain
+the entry for the next launch.
+
 ### A session with no transcript yet
 
 A session started with **+**, or one just cleared with `/clear`, has no
@@ -99,11 +109,9 @@ the old conversation's continuation on the next start. Untagged macOS Dock
 Quit and logout can bypass the session choice; force termination can bypass
 the save entirely.
 
-The saved set is written on each open and close half a second later, so
-the last change before quitting could be lost, and so could the whole set:
-quitting stops every session, and each of those exits was itself a "session
-closed" that saved the set again — empty, if the app took longer than that
-half second to go away.
+The open set is normally saved after a half-second delay. A confirmed exit
+flushes it immediately and suppresses shutdown-driven saves, so stopping the
+terminals during quit does not overwrite the saved set with an empty one.
 
 Once a close or quit is confirmed (the window's close, ☰ → Quit, an update
 install; see the unsaved-edits guard in `.ai/contexts/viewer-panel.md`), the
@@ -267,7 +275,7 @@ live. A saved entry without that mark still skips a session live elsewhere.
 
 ## Restore on click
 
-No `claude` process is started at launch. Each saved session that is in the
+No Claude or Codex process is started at launch. Each saved session that is in the
 index gets an outlined dot in the sidebar and stays visible there whatever the
 visible-session count and age limit say. The grid starts empty, and no session
 is selected, the last active one included.

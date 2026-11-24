@@ -6,11 +6,12 @@ precedes catch-up claims and transcript creation. Run now holds its reservation
 until the spawn acknowledgement settles.
 
 Main-process modules live in `src/main/schedules/` (ADR 0005, step 8):
-`schedule-runner.js`, `schedule-ipc.js` and `run-schedule-now-target.js` are siblings.
+`schedule-runner.js`, `schedule-ipc.js`, `schedule-run-results.js`, `schedule-list.js`,
+`schedule-delete-file.js` and `run-schedule-now-target.js` are siblings.
 Their project and home based schedule paths remain unchanged. The Run now VM
 test uses a module-specific loader and checks eager and lazy stub consumption.
 
-**Purpose**: in-process cron that fires user-defined Claude tasks on a schedule. Stores schedules as Markdown files with YAML frontmatter inside each project's `.claude/commands/schedule-*.md`. Spawns `claude --resume <sid> -p "..."` as a detached child process when the cron expression matches.
+**Purpose**: in-process cron that fires user-defined Claude tasks on a schedule. Stores schedules as Markdown files with YAML frontmatter inside each project's `.claude/commands/schedule-*.md`. Spawns `claude --resume <sid> -p "..."` as a headless child process (no PTY, no `detached` option; see "Launch invariants") when the cron expression matches.
 
 ## Test home isolation
 
@@ -43,9 +44,12 @@ and `fixtures/browser-mode.cjs` simulate schedule data without loading a writer.
 
 | File | LOC | Role |
 |---|---|---|
-| `src/main/schedules/schedule-runner.js` | ~670 | The cron loop, cron parser, file scanner, catch-up record, session pre-seeder, command builder. |
-| `src/main/schedules/schedule-ipc.js` | ~225 | IPC handlers + the inline `SCHEDULE_CREATOR_TEMPLATE` (an embedded Claude command that teaches Claude how to write schedule files). |
+| `src/main/schedules/schedule-runner.js` | ~900 | The cron loop, cron parser, file scanner and lister, catch-up record, session pre-seeder, command builder, schedule file creation and enable/disable rewrite. |
+| `src/main/schedules/schedule-ipc.js` | ~265 | IPC handlers + the inline `SCHEDULE_CREATOR_TEMPLATE` (an embedded Claude command that teaches Claude how to write schedule files). |
 | `src/main/schedules/schedule-run-results.js` | ~130 | Run-result persistence, read-only lookup, pruning and the shared exit classifier. |
+| `src/main/schedules/schedule-list.js` | ~80 | `buildScheduleList`, the Electron-free backend of `list-schedules`. |
+| `src/main/schedules/schedule-delete-file.js` | ~35 | `deleteScheduleFile` / `deleteListedScheduleFile`, behind `delete-schedule-file`. |
+| `src/main/schedules/run-schedule-now-target.js` | ~60 | `resolveRunNowTarget`, the Run now file/cwd resolution. |
 
 ## Public surface
 
@@ -60,7 +64,7 @@ From `schedule-runner.js`:
 - `createScheduleSession(schedule, dueMs)` — write a pre-seeded JSONL into `~/.claude/projects/<encoded>/<uuid>.jsonl` with the schedule's prompt as the first user message, prefixed `Scheduled Task: `, or `Scheduled Task (catch-up: due …, started …): ` when `dueMs` is set. Returns `{ sessionId, jsonlPath }`.
 - `buildScheduleCommand(sessionId, schedule)` — build the Claude argv, returned as `{ claudeArgs }` and shell-quoted by the caller: `--resume <sid> -p "Run the scheduled task" --permission-mode <mode> --allowedTools <tools>`, plus `--model`, `--max-budget-usd`, `--append-system-prompt` and `--add-dir` from the `cli:` block. The mode defaults to `auto` and the tools to `Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch` when the schedule names none.
 - `resolveScheduleSandbox(cwd, getSetting, defaultValue)` — whether a run in `cwd` is sandboxed: the nearest `project:` setting at or above `cwd` that sets `sandbox`, then the global setting, then the default.
-- `skipMissedRuns(log, projects, stateDir)` — see the Archive invariant below.
+- `skipMissedRuns(log, projects, stateDir, lastTickMinute = null)` — see the Project Archive item under "Launch invariants" below.
 - `parseFrontmatter(content)`, `cronMatches(cronExpr, now)` — utilities, exported for tests.
 - `scheduleFileUnlinked(projectRoot, filePath, realpath)` and `setScheduleEnabled(filePath, enabled, { projectRoot, rewrite })` — see [Disabling a schedule file](#disabling-a-schedule-file).
 
@@ -111,10 +115,9 @@ name and tracked live schedule name. `public/resume-guard.js` therefore retains
 that marker when it names a running schedule in its confirmation. The exit IPC
 continues to carry the plain schedule name and the separate `manual` flag.
 
-No existing schedule event could carry asynchronous completion: `run-schedule-now`
-is a request/reply that has already acknowledged spawn and is never invoked by
-cron. The new event stays in the existing schedule IPC module and is exposed as
-`onScheduleRunExit` in preload. `public/memory-workfiles-view.js` subscribes once
+`run-schedule-now` is a request/reply that has already acknowledged spawn and is
+never invoked by cron, so asynchronous completion travels on its own event, sent
+from the schedule IPC module and exposed as `onScheduleRunExit` in preload. `public/memory-workfiles-view.js` subscribes once
 at script load, independently of whether the Schedules tab is open, and shows a
 persistent B8 error with the schedule name, code (or signal) and recovery hint.
 Manual notices use `ScheduleRun:<sessionId>` and say "Manual run of schedule".
@@ -141,7 +144,7 @@ Only an absent or non-array setting invokes the seed; an empty array stays empty
 The registry is seeded before any session can run, so a sandboxed one cannot plant into the seed.
 Main awaits `scheduleProjects().list()` before starting the scheduler and trigger
 watcher, including when the bounded deletion-holds wait fails or times out.
-Path comparisons share `normalizeProjectPath` in `normalize-project-path.js`
+Path comparisons share `normalizeProjectPath` in `src/main/shared/normalize-project-path.js`
 with `main.js`'s Archive checks and unarchive catch-up reset: use
 `fs.realpathSync.native` when available, replace backslashes with slashes,
 then lowercase only on Windows and only when the path did not resolve: a
@@ -271,11 +274,10 @@ record never proves a reply. Unreadable transcripts give `replied: null`;
 readable transcripts without an assistant give `false`. The cache is not
 modified. `cliSessionState.isScheduleRunLive(sessionId)` reads the launcher's
 in-memory map without probing processes; `running` uses that export for cron
-and manual runs. Slice A1 introduced `result: null`; slice D fills it from the
-instance's persistent record (see "Run results").
+and manual runs. `result` comes from the instance's persistent record (see
+"Run results"), `null` when none exists.
 
-Slice A1 added no renderer consumer, mutation IPC, result persistence or
-changelog entry. Regressions: `schedule-next-run.test.js`,
+Regressions: `schedule-next-run.test.js`,
 `schedule-file-name.test.js` and `schedule-list.test.js`; they use disposable
 files and plain Node boundaries, including the real main IPC registration and
 preload exposure, without launching Electron.
@@ -447,11 +449,11 @@ received, including the quote, backslash, `%PATH%` and empty-argument cases.
 
 - `public/dialogs.js` (`launchScheduleCreator`) — UI entry point for the schedule creator flow
 - `public/schedules-view.js` — lists schedules, runs them, toggles enabled and opens their file; `memory-workfiles-view.js` keeps the independent exit-notice subscription
-- `file-lists.js` — excludes runner schedule names from project commands before `listed()`, removing them from Agent Files and its FTS input; other scopes are unchanged
+- `file-lists.js` — marks runner schedule names among project commands with `schedule: true` (`isRunnerScheduleFileName`); `memory-workfiles-view.js` hides them from Agent Files only when the Schedules tab is on (see "Schedules tab")
 - `public/sidebar.js` — `.project-schedule-btn` clock icon wiring per project
 - `archived-projects.js` (`archivePlanForGroups`) and `test/schedule-disable.test.js` — if you change `parseFrontmatter`, the rewrite in `setScheduleEnabled` follows the same state machine
 - `schedule-ipc.js` `SCHEDULE_CREATOR_TEMPLATE` — if you change the schedule file format, update the template's instructions
-- `main.js` (wherever `startScheduler(log, runScheduleCommand, { resumeSource: powerMonitor, stateDir })` is invoked at app boot — checked 2026-09, it moves as main.js grows)
+- `main.js` (wherever `startScheduler(log, runScheduleCommand, { resumeSource: powerMonitor, stateDir, projects })` is invoked at app boot, after `scheduleIpc.init`)
 - The `runScheduleCommand` factory in `main.js` — uses `child_process.spawn`, `cleanPtyEnv`, and the global shell profile through `headlessClaudeLaunch` (no shell under cmd.exe or PowerShell on Windows). Schedules don't get their own shell selector.
 
 ## Limitations worth knowing
@@ -770,8 +772,8 @@ during publication can leave a temp/lock file; readers ignore it. Per-key prunin
 removes that key's publication temp/lock files whose mtime is older than ten
 minutes, retaining recent artifacts, unrelated names and other keys.
 After a write, pruning keeps the 20 newest starts of that key and ignores
-unlink errors. `pruneScheduleRunResults(dir, key, 0)` also supports the later
-delete slice. Other keys and transcripts are untouched; renamed files can
+unlink errors. `pruneScheduleRunResults(dir, key, 0)` also serves schedule
+deletion (see "Delete a schedule"). Other keys and transcripts are untouched; renamed files can
 leave their old key's bounded history behind.
 
 `readScheduleRunResults(dir, sessionIds)` performs one readdir, parses only
@@ -785,8 +787,7 @@ code with the existing PATH/sandbox/log recovery hint, Stopped: signal,
 Refused: error, Failed to start: error, or Unknown: result record unreadable.
 Without a record it keeps No result recorded and the assistant/seed/started/
 unknown transcript hint. It never infers Exit 0. Runs alive when Switchboard
-quits, older runs and runs from another instance have no result here. Deletion,
-the creation form and creator-template migration remain later slices.
+quits, older runs and runs from another instance have no result here.
 `scheduleRunFailureHint(failure)` is a classic-script global defined in
 memory-workfiles-view.js, loaded before schedules-view.js in index.html. Both
 exit notices and persistent history use it for the same recovery wording.

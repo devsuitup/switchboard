@@ -1,6 +1,6 @@
 # ActivityWatch
 
-Switchboard can report the time spent on Claude sessions to
+Switchboard can report the time spent on Claude or Codex sessions to
 [ActivityWatch](https://activitywatch.net), the local time tracker, at
 `http://localhost:5600`.
 
@@ -22,14 +22,14 @@ so they go to separate buckets:
 |---|---|---|
 | Bucket | `aw-watcher-switchboard_<hostname>` | `aw-watcher-switchboard-running_<hostname>` |
 | Type | `app.editor.activity` | `app.session.running` |
-| Holds | the session whose terminal is on screen | every Claude session, from start to exit |
+| Holds | the session whose terminal is on screen | every Claude or Codex session, from start to exit |
 | Shown in | ActivityWatch's **Editor** view, by project and by session | queries and custom views; sessions overlap there, as they did |
 
 **Attention** counts a session while its terminal is on screen, the window has
 focus, and there has been input in the last 3 minutes. It stops while Settings,
 Agent Files, Stats or a transcript viewer replaces the terminals.
 
-**What ran** counts every Claude session launched by Switchboard, scheduled runs
+**What ran** counts every Claude or Codex session launched by Switchboard, scheduled runs
 included (named `Scheduled: <schedule name>`), whether or not you looked at it.
 Each running session is written when it starts, every minute, and when it ends,
 so a crash loses at most its last minute. Plain terminals and panel shells are
@@ -38,6 +38,6 @@ not counted, nor are sessions on remote hosts.
 ## What is sent
 
 Each event carries the session's id, its project (name and path) and its name —
-the one you gave it, or the title Claude generated; a session with neither is
+the one you gave it, or its indexed title; a session with neither is
 sent under its id. No prompt, command or transcript content is sent — not even
 the first prompt the sidebar shows for an untitled session.

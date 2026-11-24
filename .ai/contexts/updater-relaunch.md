@@ -1,6 +1,17 @@
 # Linux update relaunch (#590)
 
-`relaunch.js` exports one async function for callers, including the future async
+**Purpose**: after a Linux update installs, start the new version through the
+user's service manager instead of a child of the old process, and fall back to a
+visible manual-restart notice when that cannot be done.
+
+| File | Role |
+|---|---|
+| `src/main/app/relaunch.js` | The exported async `relaunch({ execPath, log, notify, quit, … })`: environment, `systemd-run` argv, timeouts, fallback. |
+| `src/main/app/linux-startup.js` | `acquireInstanceLock` (the marked relaunch's lock retry) and `readNoNewPrivs` (the startup diagnostic). |
+| `main.js` | `autoRunAppAfterInstall = false` on Linux, `appimage-filename-updated`, the explicit `install(false, false)` then `relaunch`, the `relaunch-required` notice. |
+| `test/relaunch.test.js` | The helper, the lock retry, the NoNewPrivs diagnostic and the installed electron-updater branches. |
+
+`src/main/app/relaunch.js` exports one async function for callers, including the future async
 installer in #475. Call it after successful installation, passing `quit` and an
 async `notify(message)` that resolves after the user has seen and acknowledged
 the manual restart notice. It submits a transient **user service** with
@@ -10,7 +21,7 @@ the calling Electron process's NoNewPrivs flag. The manager itself must be
 unrestricted; this cannot repair a restricted user manager. The service inherits
 the manager's environment, with the caller's entire cleaned environment forwarded
 explicitly, including HOME, CLAUDE_CONFIG_DIR, SWITCHBOARD_TRIGGERS_DIR, PATH,
-SSH_AUTH_SOCK, locale and XDG settings. It reuses `clean-env.js` to exclude Claude
+SSH_AUTH_SOCK, locale and XDG settings. It reuses `src/main/shared/clean-env.js` (`cleanEnv` with `locale: false`) to exclude Claude
 session identities, Electron internals, Node injection options and the existing
 child-process exclusions. Additionally, CHROME_CRASHPAD_PIPE_NAME and CHROME_RESTART
 belong to the old Chromium process; INVOCATION_ID, JOURNAL_STREAM, SYSTEMD_EXEC_PID,
@@ -81,13 +92,14 @@ still runs its own exit-after-install integration subprocess, without starting
 an interactive instance. Pacman and RPM use the same no-force-run contract.
 
 The new process carries `--switchboard-relaunch`. Only on Linux with that marker
-does single-instance-lock acquisition retry every 200 ms for at most ten seconds.
+does single-instance-lock acquisition (`acquireInstanceLock`) retry every 200 ms
+for at most ten seconds.
 The old instance finishes its normal bounded shutdown while the replacement
 waits. Ordinary second launches still quit and focus the existing window.
 Once updateInstalling is set, the old instance ignores second-instance events
 instead of repeatedly restoring and focusing its window. Exhausting a marked
 launch's retry bound logs a warning through the main logger before quitting.
-The startup diagnostic reads /proc/self/status on Linux and logs NoNewPrivs as
+The startup diagnostic (`readNoNewPrivs`) reads /proc/self/status on Linux and logs NoNewPrivs as
 0, 1 or unknown. Only 1 produces an error-kind app notice, sent on did-finish-load
 and again on renderer reload. NoNewPrivs cannot be cleared in the current process.
 

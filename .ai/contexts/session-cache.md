@@ -383,12 +383,20 @@ receipt/revision transaction and NORMAL durability boundary.
 
 | File | LOC | Role |
 |---|---|---|
-| `session-index-store.js` | ~945 | SQLite (better-sqlite3) schema + prepared statements, opened writable only by the writer worker ([session-index-writer](session-index-writer.md)). Owns `session_cache`, `session_meta`, `cache_meta`, `settings`, `search_fts` (FTS5 + trigram tokenizer). |
-| `db.js` | 16 | Main's readonly connection: `openSessionIndexStore({ readonly: true })` plus a settings mirror. Re-exports the store's API. |
-| `session-cache.js` | ~1800 | Indexer + watcher. Reads `~/.claude/projects/<folder>/*.jsonl` (+ subagents subdir), populates rows, emits projects-changed events. |
-| `read-session-file.js` | ~770 | Streaming JSONL reader. `readSessionFile()` (full) + `readSessionDisplayHeader()` (256 KB / 500 lines of head plus a 256 KB tail for titles). |
+| `session-index-store.js` | ~1270 | SQLite (better-sqlite3) schema + prepared statements, opened writable only by the writer worker ([session-index-writer](session-index-writer.md)). Owns `session_cache`, `session_meta`, `cache_meta`, `settings`, `search_fts` (FTS5 + trigram tokenizer). |
+| `db.js` | 30 | Main's readonly connection: `openSessionIndexStore({ readonly: true })` plus a settings mirror. Re-exports the store's API. |
+| `session-cache.js` | ~2050 | Indexer + watcher. Reads `~/.claude/projects/<folder>/*.jsonl` (+ subagents subdir), populates rows, emits projects-changed events. |
+| `read-session-file.js` | ~840 | Streaming JSONL reader. `readSessionFile()` (full) + `readSessionDisplayHeader()` (256 KB / 500 lines of head plus a 256 KB tail for titles). |
 | `encode-project-path.js` | ~60 | `/path/to/project` → `-path-to-project` folder name. Mirrors Claude CLI's encoding. |
-| `derive-project-path.js` | ~290 | Inverse: read `cwd` field from JSONL, derive original projectPath. **Collapses worktrees back to parent repo** via `resolveWorktreePath`. |
+| `derive-project-path.js` | ~310 | Inverse: read `cwd` field from JSONL, derive original projectPath. **Collapses worktrees back to parent repo** via `resolveWorktreePath`. |
+| `workers/scan-projects.js` | ~510 | Scan worker behind `populateCacheViaWorker`: one message per folder, plus the warm-startup mode (`workerData.startup`, see "Local warm startup"). |
+| `projects-worker-client.js` / `workers/projects-query.js` | ~215 / ~130 | `get-projects` off the main thread (see "Projects query worker"). |
+| `workers/scan-session-titles.js` | ~15 | Bounded header reads that backfill session names (see "Session names and transcript refreshes"). |
+| `jsonl-scan.js` | ~80 | Chunked line scanner (256 KiB chunks, line cap) used by full reads. |
+| `src/main/session-index/full-read-state.js` | ~175 | Content index version, read witnesses, deterministic read failures and startup deferral helpers. |
+| `src/main/session-index/message-count.js` / `read-counters.js` | ~60 / ~65 | Shared message-count predicate; byte and read counters for the per-folder diagnostics. |
+| `cache-effects.js`, `folder-index-state.js` | ~80 / ~50 | Projection-effect recorder; folder and transcript index mtimes. |
+| `src/main/projects/last-known-projects.js` | ~145 | Persisted last sidebar payload (`get-last-known-projects`); documented in [ipc-bridge](ipc-bridge.md). |
 
 ## Public surface
 
@@ -406,7 +414,7 @@ From `session-cache.js`:
 
 - `init(ctx)` — wire main process → cache (mainWindow ref for IPC events)
 - `refreshFolder(folder, opts)` — opts `{files: Set<string>}` for targeted refresh (watcher payload). Defaults to full folder walk. Returns a boolean indicating a sidebar-relevant change, after computing the cache writes; the writer facade resolves it after those writes are acknowledged.
-- `populateCacheViaWorker()` — initial scan / re-scan. The worker (`workers/scan-projects.js`) streams one `{type:'folder', result, current, total}` message per on-disk folder (plus a final `{type:'done'}`) instead of buffering the whole tree, so each folder is written to the DB and pushed to the renderer as soon as it's read — a large history no longer leaves the sidebar empty for the entire scan.
+- `populateCacheViaWorker({ force } = {})` — initial scan / re-scan; resolves `{ ok, error? }` and shares one in-flight promise (a forced call during a non-full run queues one forced follow-up). On a warm start the worker runs in startup mode instead (see "Local warm startup"). The worker (`workers/scan-projects.js`) streams one `{type:'folder', result, current, total}` message per on-disk folder (plus a final `{type:'done'}`) instead of buffering the whole tree, so each folder is written to the DB and pushed to the renderer as soon as it's read — a large history no longer leaves the sidebar empty for the entire scan.
 - `buildProjectsFromCache(showArchived)` — produces the sidebar payload (sorted, grouped by project, missing flag computed here). It also injects every live plain-terminal PTY from `activeSessions` as a synthetic row, so a terminal sorts among the cached sessions even though it has no JSONL; the row's `summary` is the hard-coded string `Terminal`, which is what the sidebar displays — the renderer's own session object is never the one shown. A panel shell is a plain terminal too and is excluded here by `isPanelShellSession` (`src/main/terminals/panel-terminal-target.js`); see `.ai/contexts/panel-terminal.md` for the full list of places that have to skip one.
 - `notifyRendererProjectsChanged(cause)` — structural pushes use a 1.5s leading-edge/trailing throttle; activity-only pushes coalesce for at least 30s.
 - `sendIndexingProgress()` (internal) — emits the `indexing-progress` IPC event, gated on `coldStart` (captured once at the top of `populateCacheViaWorker()` via `!isInitialScanComplete()`) and throttled to ~4 events/s (the first event and every `done:true` always pass). Feeds the renderer's first-run banner; see `.ai/contexts/ipc-bridge.md`. A `done:true` payload carrying `error` keeps the banner visible with the failure message instead of hiding it.
@@ -706,7 +714,7 @@ The retry clock is injectable through `init({now})`; retry state resets at start
 - **`refreshFolder` is idempotent** — calling it twice with the same `opts.files` is safe; the `filePathToDbId` inverted index makes lookups O(1).
 - **Header-only refresh** (via `readSessionDisplayHeader`) merges with the cached row to preserve `textContent`, `aiTitle`, etc. Don't overwrite cached fields with `null` from a partial read. For `scheduleSlug`, a visible marker replaces the cached one; a null clears it only when `scheduleSlugComplete` confirms the entire transcript was read within the 256 KB / 500-line bounds with no JSON parse failure. An incomplete negative read preserves the cached marker, including when a later user record may carry it. A failed header read keeps the existing mtime-only fallback.
 - **FTS entries follow `{id, type, folder, title, body}`** shape. `type` is one of `'session'`, `'subagent'`, `'memory'`, `'work-file'`. Mixing types within one upsert is fine.
-- **`get-projects` never awaits the cold-start scan.** `main.js`'s handler fires `populateCacheViaWorker()` without `await` when the cache is empty, returning whatever's cached right now (still non-empty for project *names* — the projects query worker lists on-disk directories even with zero indexed sessions). Progressive fill-in relies entirely on `notifyRendererProjectsChanged()` firing per folder. Don't reintroduce the `await` — it's what caused the multi-minute blocking "Loading…" on a large `~/.claude/projects/`.
+- **`get-projects` never awaits the cold-start scan.** `main.js`'s handler fires `populateCacheViaWorker()` without `await` when a populate is needed (marker absent, cache or search index empty) or indexing has not finished, returning whatever's cached right now (still non-empty for project *names* — the projects query worker lists on-disk directories even with zero indexed sessions). Progressive fill-in relies entirely on `notifyRendererProjectsChanged()` firing per folder. Don't reintroduce the `await` — it's what caused the multi-minute blocking "Loading…" on a large `~/.claude/projects/`.
 - **"Cache has rows" does not mean "initial scan finished".** The worker streams one DB write per folder, so killing the app mid-first-scan leaves `session_cache` partially populated. The authoritative signal is the `initial_scan_complete` settings key: written by `session-cache.js` only on the worker's final successful `done` message, backfilled once by migration v8 for pre-marker installs (their populated caches could only come from completed batch-write scans), cleared whenever the schema-reconciliation pass wipes the cache. `get-projects` treats "rows present but marker absent" as an interrupted scan: it resumes the background worker (safe — each folder message is delete-then-insert, so re-scanned folders never duplicate) and must NOT run the synchronous `reconcileCacheFromFilesystem()` sweep, which would re-parse every missing folder on the main thread. While the marker is absent, `buildProjectsFromCache`'s empty-dir fallback also skips `deriveProjectPath()` (per-folder readdir + 256 KB read) in favor of a zero-I/O best-effort decode of the folder name (`decodeProjectFolderBestEffort`), never persisted to `cache_meta`.
 
 ## Transcript size freshness (#740)
@@ -881,8 +889,8 @@ part supplies the name, with start time and UUID/name breaking ties. Descriptor
 order cannot change the selected name. A matched live background descriptor's
 status reaches the activity projection; the cached CLI list status does not.
 A closed PTY or transcript head turn wins: descriptor `busy` supplies the busy
-slot only for an open or unknown turn, so the historical frozen bg descriptor in
-`audit-indicators.md` cannot reopen a closed turn. A closed working turn retains
+slot only for an open or unknown turn, so a frozen bg descriptor (seen in a
+field audit) cannot reopen a closed turn. A closed working turn retains
 its background-work display. Descriptor `waiting` requests attention, including
 for a hosted done job.
 
@@ -1286,7 +1294,7 @@ declared alias and calls `remoteIndexer.refreshHostNow(alias)` (the periodic
 cycle's per-host entry point) on a coalesced "this host changed" signal —
 never on every line, and never in place of the periodic pull. Full rationale,
 the exact remote command, and the mutation proofs are in
-`.work-files/switchboard/remote-watch-report.md`.
+a local, untracked session note (`.work-files/` is gitignored).
 
 - **One `ssh` inventory, then only the deltas.** `remote-transport.js` runs
   `find .claude/projects -type f -name '*.jsonl' -printf '%T@	%s	%P

@@ -118,7 +118,7 @@ caller's original ID is also discarded because it may contain the label.
 
 Main writes single-line JSON with a `[ui-notice]` prefix at info level, independent
 of Debug Mode. Each field is cut to its cap plus 128 characters before redaction
-through `shared/redact-log-text.js`, then
+through `src/main/shared/redact-log-text.js`, then
 capped: ID 160, source 80, text 4096, title 256, answer 1024 characters, and at
 most 20 choice labels of 256 characters. Paths are preserved; bearer credentials,
 credential variable names, authorization and cookie values, JWTs,
@@ -147,8 +147,8 @@ values; subsequent lines stay intact. Key and URL scans guard their left token
 boundary to prevent rescanning long suffixes, and cookie/value scans advance
 monotonically with sticky expressions. The 100 KiB adversarial tests exercise
 long identifiers, scheme-like strings, quotes and header-like prose.
-No main.log redaction helper existed at this revision: this shared
-helper protects the new channel, and does not claim to sanitize other log writers.
+`ui-notice-log.js` is the helper's only caller: it protects this channel and
+does not sanitize other main.log writers.
 
 Identical consecutive normalized events are counted as additional occurrences
 (`repeated N×`) when the run changes or once per minute, without repeating the
@@ -175,19 +175,13 @@ These bounds also cover alternating IDs and large payloads. The fixed deadline
 is not extended by new events. Its timer is unreferenced, cleared on disposal, and pending counts flush
 on graceful quit. Abrupt termination can lose the final partial window.
 
-Project deletion uses `showChoiceDialog` with `onChange`, `planDetails` and
-`planUnavailable`. Details are literal text, applied only after request sequence
-and current-answer matching. A reason keeps Confirm disabled while preserving
-the inspectable plan. Checkbox `disabled/disabledReason` forces remembered true
-to unchecked without writing storage; acceptance remembers only enabled choices.
-Cancel, close and timeout never persist. Disconnected openers return focus to
-the surviving sidebar. Existing callers without these options keep their queue.
+## Modal stack and keyboard router
 
 `public/modal-stack.js` loads before every renderer consumer. It owns the modal stack and the only modal `keydown` listener, installed on `document` in capture phase. Each modal calls `registerModal({ overlay, cancel, enter, bodyEnter })` after mounting and calls the returned unregister function on every close path. The stack's last registration owns the keys; neither DOM class order nor the current event target chooses another modal.
 
-Registered surfaces are the choice dialog (including `appConfirm` and `appAlert`), New Session, Resume, remote launch, Send a prompt, Add Project, dispatch-agent, schedule creation, the unsaved-edits guard, session/worktree deletion, Touched info, What's new, and fullscreen transcript images. The New session popover is a menu and retains its own arrow-key navigation.
+Registered surfaces are the choice dialog (including `appConfirm` and `appAlert`), New Session, Resume, remote launch (opened from a remote project's row or from Settings → Remote hosts), Send a prompt, Add Project, dispatch-agent, schedule creation, the unsaved-edits guard, session/worktree deletion, Touched info, What's new, and fullscreen transcript images. The New session popover is a menu and retains its own arrow-key navigation.
 
-The B6 chooser uses `appChoose({ title, message, options, selectedId, confirmLabel })` from `public/app-dialogs.js`. It shares the question queue, focuses Open initially, and returns `{ choice: id }` on acceptance or `null` on cancellation. The adapter defaults the title to Choose and the action to Open, and splits string messages into lines. Manual continuation opens use it for one part chooser. The resolved choice is remembered per row as a `continuationChoice:<rowKey>` setting, and the row menu's **Choose part to open…** asks again (see [cli-session-state](cli-session-state.md)).
+The part chooser uses `appChoose({ title, message, options, selectedId, confirmLabel })` from `public/app-dialogs.js`. It shares the question queue, focuses Open initially, and returns `{ choice: id }` on acceptance or `null` on cancellation. The adapter defaults the title to Choose and the action to Open, and splits string messages into lines. Manual continuation opens use it for one part chooser. The resolved choice is remembered per row as a `continuationChoice:<rowKey>` setting, and the row menu's **Choose part to open…** asks again (see [cli-session-state](cli-session-state.md)).
 
 `openChoiceDialog` accepts `options` alongside its existing checkbox `choices`. Each option has `{ id, label, detail?, disabled?, disabledReason? }`; labels, details and reasons are literal text. Options render as native same-name radios inside a labelled radiogroup. Each radio's label supplies its accessible name; a non-empty detail and disabled reason form a separate description linked by `aria-describedby` to a unique id. `selectedId` preselects an enabled option; an absent, missing or disabled selection falls back to the first enabled option. Disabled options show their reason and cannot be accepted. If no option is enabled, Open is disabled and container Enter does nothing. Acceptance reads the currently checked enabled radio, independently of checkbox answers.
 
@@ -252,11 +246,19 @@ and `closeWith` retain their explicit independent result contracts; the hook
 gates primary acceptance only. Without `onChange`, result shapes, remembered
 answers, focus, dynamic labels/danger, queueing and cancellation are unchanged.
 
-## Question queue and the unsaved guard
+Project deletion uses `showChoiceDialog` with `onChange`, `planDetails` and
+`planUnavailable`. Details are literal text, applied only after request sequence
+and current-answer matching. A reason keeps Confirm disabled while preserving
+the inspectable plan. Checkbox `disabled/disabledReason` forces remembered true
+to unchecked without writing storage; acceptance remembers only enabled choices.
+Cancel, close and timeout never persist. Disconnected openers return focus to
+the surviving sidebar. Existing callers without these options keep their queue.
 
 `fallbackFocus: () => element` opts into focus recovery when `returnFocus` is
 gone. Project deletion uses the sidebar container. Other choice-dialog callers
 keep their existing focus behavior without this option.
+
+## Question queue and the unsaved guard
 
 `showChoiceDialog({ replace: true })` is the one way to jump the queue: it cancels the open choice dialog (resolving it as Cancel) and enqueues its question at the front (`enqueueModalQuestion(open, { front: true })`). `closeWith`, a promise, closes the dialog with the value it resolves to; both paths close through the same function that unregisters from the modal stack. The window-close question (#478, [window-frame](window-frame.md), "Closing the window") uses both.
 

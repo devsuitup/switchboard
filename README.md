@@ -1,8 +1,8 @@
 # Switchboard
 
-A desktop app for Claude Code sessions.
+A desktop app for Claude Code and Codex CLI sessions.
 
-Switchboard lists every Claude Code session on the machine, grouped by project
+Switchboard lists indexed Claude Code and Codex sessions, grouped by project
 and searchable by content, and runs them in built-in terminals. It launches,
 resumes and forks sessions, shows which ones are busy or waiting for you, and
 can observe sessions running on other machines over SSH.
@@ -26,8 +26,11 @@ fit. `git log --oneline upstream/main..main` lists what the fork carries.
 The builds are not code-signed. macOS Gatekeeper and Windows SmartScreen warn
 on first launch.
 
-Switchboard needs the `claude` CLI on the `PATH` of your login shell, and reads
-its sessions from `~/.claude/projects`. Installed builds update themselves; see
+Install the CLI you want to run (`claude` or `codex`) on your shell's `PATH`.
+Switchboard reads Claude transcripts from `~/.claude/projects` and Codex
+rollouts from `~/.codex/sessions` (or `$CODEX_HOME/sessions`). Enable or disable
+each CLI in [Settings → Sessions → CLI Agents](docs/settings.md#cli-agents-and-codex).
+Installed builds update themselves; see
 [Updates](docs/settings.md#updates).
 
 ## Features
@@ -36,6 +39,7 @@ its sessions from `~/.claude/projects`. Installed builds update themselves; see
 |---|---|
 | Sidebar: projects, sessions, filters, search, pin, archive, delete | [Session browser](docs/session-browser.md) |
 | Starting, resuming and forking sessions; the New Session dialog | [Launching sessions](docs/launching-sessions.md) |
+| Codex launch, resume, fork and supported features | [Codex sessions](docs/launching-sessions.md#codex-sessions) |
 | Running several sessions on one repository in git worktrees | [Worktree sessions](docs/worktrees.md) |
 | Running `claude` in a bubblewrap sandbox (Linux) | [Sandbox](docs/sandbox.md) |
 | The built-in terminal: right-click, clickable paths, paste, find, panel shell | [Terminal](docs/terminal.md) |

@@ -1,5 +1,17 @@
 # Automation
 
+Schedules run recurring headless Claude tasks. Triggers are JSON requests for
+scripts and harnesses: they can request local session status, open a local
+session, create a named Claude session with a prompt, stop an idle local
+session, or type into an open terminal. Both require Switchboard to be running;
+a schedule can ask to [catch up](#catching-up-a-missed-run) a missed run.
+
+Opening uses **`action: "open"`**. The reserved **`type: "open-session"`**
+request is refused as described below; these are different request formats.
+
+Temporary project-lookup conflicts during startup are retried within the
+trigger's timeout. A retry does not extend that timeout.
+
 ## Read-only session status
 
 Write a JSON file atomically to the configured triggers directory. Its UUID
@@ -42,16 +54,6 @@ session/process identities and text_written/enter_written=false. Its complete
 open envelope also contains version/type/requestId/kind/from/spawnedBy/forkedFrom,
 provisionalSessionId, created_at and completed_at. Retrying that UUID will keep
 the same refusal when future builds add opening support.
-
-Two mechanisms run Claude without you at the keyboard:
-
-- **Schedules** — recurring headless runs, defined as Markdown files and fired
-  by a scheduler inside the app.
-- **Triggers** — one-shot requests to open a local session, create one or type
-  into an open session, published as JSON files. Meant for scripts and harnesses.
-
-Both live in the running app: when Switchboard is not running, nothing fires. A
-schedule can ask to [catch up](#catching-up-a-missed-run) a run it missed.
 
 Implementation paths: `src/main/schedules/` contains the scheduler and schedule
 IPC modules; `src/main/triggers/` contains the trigger watcher and context

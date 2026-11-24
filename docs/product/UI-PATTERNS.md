@@ -1,5 +1,10 @@
 # UI patterns
 
+> The original audit and its numeric source references describe v0.0.94.
+> Targeted factual corrections below reflect current code; uncorrected line
+> numbers, counts and issue-status snapshots are historical, not current
+> source locations. This is not a fresh whole-product audit.
+
 How Switchboard shows a concept and lets the user act on it, **as it is at
 v0.0.94 (f596e28)**. One section per recurring job. Each section lists every
 place that implements the job (`file:line`, valid at f596e28), then the
@@ -161,7 +166,7 @@ The Changes badge is the one place that already meets "never colour alone".
 | Worktree Delete | `sidebar.js:1337-1352`, dialog `1949-2017` | `Delete anyway` | `git worktree remove` | custom modal with dirty-file list |
 | Worktree Archive project | `sidebar.js` (`worktree-hide-btn`) | `Archive Project` | removes the row, keeps settings and cache, suspends schedules; reversible from Settings | no confirmation; 10-second Undo notice |
 | Project Archive | Project Settings → This project → Danger zone, `settings-panel.js` (`sv-archive-btn`) | `Archive Project` | same | no confirmation; 10-second Undo notice |
-| Project Delete | Project Settings → This project → Danger zone, `settings-panel.js` (`sv-delete-btn`) | `Delete Project` | drops settings, cache, search index and schedule registration; no file on disk is deleted | `showChoiceDialog`, danger style, focus on Cancel |
+| Project Delete | Project Settings → This project → Danger zone, `settings-panel.js` (`sv-delete-btn`) | `Delete Project` | previews metadata/settings choices and optional selected linked worktree removal; main checkout stays | `showChoiceDialog`, danger style, focus on Cancel |
 | Optional viewer file delete | `viewer-panel.js:284` | — | delete file | danger `appConfirm`, `Delete "<name>"?` / `This cannot be undone.`, button `Delete` |
 | Trace file delete | `activity-trace-panel.js:120` | — | delete file | same wording |
 
@@ -416,12 +421,11 @@ breakpoints rather than a user mode.
 
 ## 6. Layout, tokens, rendering
 
-**Tokens.** 21 custom properties in `:root` (11 colour, 10 size; `style.css:5-26`),
-`var(--` used 257 times; **118 distinct hard-coded hex colours**. State
-colours are literals, repeated: `#3ecf5a` (green), `#e05070` (red),
-`#6a6a80` (grey), `#4fc3f7` (busy blue), `#f0a050` (attention orange). One
-helper hard-codes green inline (`viewer-toolbar.js:31-32`). The chrome is
-dark only; terminal themes live apart (`terminal-themes.js`).
+**Tokens.** The app supports Dark, Light and System appearance.
+`public/style.css` defines dark tokens in `:root` and light overrides in
+`:root[data-theme="light"]`, including state colors. The original v0.0.94
+property and literal counts no longer describe this stylesheet. Light mode
+uses the light terminal palette; dark mode uses the selected terminal theme.
 
 **Buttons.** At least six button styles: `.icon-btn` (shared with the filter
 toggles, `style.css:2132-2160`), `.control-btn` / `.fp-toolbar-btn`

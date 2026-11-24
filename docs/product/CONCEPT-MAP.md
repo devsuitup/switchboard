@@ -1,5 +1,10 @@
 # Concept map
 
+> The original audit and its numeric source references describe v0.0.94.
+> Targeted factual corrections below reflect current code; uncorrected line
+> numbers, counts and issue-status snapshots are historical, not current
+> source locations. This is not a fresh whole-product audit.
+
 Switchboard as it is at **v0.0.94** (f596e28), not as it should be. One
 section per concept: its **states** (exact words shown to the user), its
 **actions** with their exact labels per surface, **where** it appears, and the
@@ -218,7 +223,7 @@ amber (`docs/remote-hosts.md:149-157`).
 | Change project path | **Change project path** (`:922`), confirm "Remap <name> to: <path>?" (`:1302`) | — | — |
 | Archive project | — | **Archive project**, no confirmation, 10-second Undo notice (`public/sidebar.js`) | Settings: **Archive Project** (`public/settings-panel.js`), same Undo notice; settings/cache are kept and schedules suspended; also reversible from Settings → Archived projects |
 | Unarchive project | — | — | Global Settings → **Archived projects** → **Unarchive**, including legacy hidden entries |
-| Delete | — | **Delete worktree from disk** (`:994`) → dialog "Delete worktree "<name>"?" (`:1949-1961`) | Settings: **Delete Project**, destructive in-app confirmation lists settings, cache/search and schedule registration; keeps all disk files |
+| Delete | — | **Delete worktree from disk** (`:994`) → dialog "Delete worktree "<name>"?" (`:1949-1961`) | Settings: **Delete Project**, preview with separate metadata/settings choices and optional linked worktree folder removal; main checkout and unselected folders stay |
 | Reconnect (remote) | "Reconnect <alias> now" (`:896`) | — | — |
 | Add | — | — | **Add project** (`public/index.html:31`) |
 
@@ -229,8 +234,9 @@ amber (`docs/remote-hosts.md:149-157`).
 - R6.2 Archive folder keeps settings and comes back on new activity or Add
   Project. Archive Project keeps settings, cache and schedule registration,
   suspends schedules and returns through explicit Unarchive or Add Project.
-  Delete Project drops settings, cache/search and schedule registration,
-  while keeping disk files (`docs/settings.md`, `main.js`).
+  Delete Project previews separate metadata/settings choices and optional
+  removal of selected linked worktree folders; the main checkout stays
+  (`docs/settings.md`, `public/sidebar.js`).
 - R6.3 The worktree Archive project control passes its host-qualified folder
   key to `archive-project-settings`; it uses the same reversible project action.
 
@@ -313,7 +319,7 @@ row text `<state> · <status>` (`:227`); row icon from the session-state ladder
 | Attach | **Attach** (**Go to tab** when already open here, #779), or double-click row | live and daemon reachable | none | row click on a `bg` row; the header then offers the separate **Detach (the session keeps running)** button next to **Stop session** |
 | Transcript | **Transcript** | transcript exists | none | row **View messages** |
 | Stop | **Stop** (`claude stop`) | live and reachable | After the fresh check: job name and id; its process ends, the conversation is kept | row, card and header **Stop session** stop the job too after the same check; **Detach** leaves it running (#777) |
-| Respawn | **Respawn** | finished, no live conversation | none | Send to background on a session with a job; restore of a saved background tab whose worker is dead (#785) |
+| Respawn | **Respawn** | finished, no live conversation | none | restore of an eligible saved background tab whose worker is dead; Send to background uses `/bg` instead |
 | Delete | **Delete** (`claude rm`) | finished, no live conversation | After the fresh check: "Delete this background session? Its conversation goes, and its worktree when that is safe." | row **Delete session** refused: "background job <id> is still running this session — use Stop session on its sidebar row first"; if the row cannot stop that job, "stop it from the Agents view first" (`liveBackgroundJobRefusal`, `public/stop-session-ui.js`) |
 | New | **New agent** (`public/index.html:91`) | — | — | — |
 | View options | **Finished**, Group **None / State / Project**, **Worktrees** (`public/index.html:82-90`) | — | — | Primary+Shift+A toggles the view |
@@ -409,8 +415,9 @@ its own (`docs/automation.md:41-55`).
 **Actions**: none in the UI; a JSON file in `~/.switchboard/triggers/`
 (`docs/automation.md:181-233`).
 
-**Rules**: R15.1 target must be open with a live process, plain terminals
-included (`docs/automation.md:196-197`). R15.2 Switchboard never types over
+**Rules**: R15.1 typing requires an open live terminal, plain terminals
+included. Other request formats can read status, open or create a session, or
+stop an idle local session; see [Automation](../automation.md). R15.2 Switchboard never types over
 unsubmitted input (`docs/automation.md:291`).
 
 ---

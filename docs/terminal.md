@@ -19,9 +19,9 @@ On the left, the header above the terminal shows:
   not **Auto**.
 
 Immediately after the session id, **Refresh screen** redraws the terminal and
-**Stop session** stops its process after confirmation, including the agent of
-an attached background session. A separate **Detach (the session keeps
-running)** button follows Stop for an open background attach; it asks nothing
+**Stop session** stops every eligible running part of the conversation after
+confirmation, including an attached background agent. A separate **Detach (the session keeps
+running)** button follows Stop for an open background or remote attach; it asks nothing
 and offers Undo for about 10 seconds. The Sandbox and IDE Emulation indicators follow them. The top-right
 corner holds the window controls.
 
@@ -49,6 +49,11 @@ Detaching from a background session prints `session detached — it keeps runnin
 in the background`. The job continues; its grid card changes from `Detached` to
 `Running in background` when live job evidence arrives, or to the finished job
 state or `Not running` when the job ends or its process is known dead.
+
+On Windows, closing or stopping a local terminal also ends its child
+processes, including detached windows; force-closed windows lose unsaved work.
+Recognized background agents keep running. If process cleanup is unavailable,
+Switchboard falls back to closing the terminal, and some children may remain.
 
 ## Right-click
 
@@ -95,7 +100,8 @@ outside the credential paths the side panel refuses (`~/.ssh/`, `~/.gnupg/`,
 `~/.aws/credentials`, `.env` files, `.netrc`, `~/.kube/config`,
 `~/.docker/config.json`, `~/.claude/.credentials.json`, `.git-credentials`,
 `~/.config/gh/hosts.yml`, `~/.config/gcloud/`, `.npmrc`, `.pypirc`, `.pgpass`,
-`.my.cnf`). Text that fails a check is not underlined. The answer for a path is
+`.my.cnf`). The `.env.example`, `.env.sample` and `.env.template`
+placeholders are exempt from the `.env` rule. Text that fails a check is not underlined. The answer for a path is
 cached for 30 seconds.
 
 A plain left click opens the file in [Touched](touched-files.md#files-opened-from-elsewhere),
@@ -167,3 +173,5 @@ in "N open here", never restored at startup, and never
 
 **Global Settings → General → Terminal → Terminal Theme**: Switchboard (default), Ghostty, Tokyo
 Night, Catppuccin Mocha, Dracula, Nord, Solarized Dark. It applies on save.
+Light app appearance uses the light terminal palette; returning to Dark uses
+the selected Terminal Theme.
