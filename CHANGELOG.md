@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- A local session waiting on a question from Claude now shows the orange attention mark in the sidebar instead of the working spinner, as it already did for permission prompts and remote sessions. The mark clears once the question is answered, and is not shown on the session you are looking at. (#1246)
+
 ## v0.1.0-beta.1 — 2026-11-24
 
 ### New

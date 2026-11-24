@@ -138,8 +138,8 @@ function createSessionState(kind) {
         if (event.attention === true) {
           if (event.status === 'waiting' && liveness !== 'dead') {
             clearExclusive();
+            if (!attention) attentionFromDescriptor = true;
             attention = true;
-            attentionFromDescriptor = true;
           } else {
             releaseDescriptorAttention();
           }

@@ -367,6 +367,13 @@ function writeIconSlot(el, icon, title, text, session, lifecycle) {
   el.dataset.glyph = icon.glyph || '';
 }
 
+// see .ai/contexts/session-state.md ("Descriptor-owned attention")
+function localDescriptorAttention(sessionId, session) {
+  if (typeof activeSessionId !== 'undefined' && sessionId === activeSessionId) return false;
+  const lastEntryAt = headTurns.get(sessionId)?.lastEntryAt;
+  return !Number.isFinite(lastEntryAt) || Number.isFinite(session.statusUpdatedAt) && session.statusUpdatedAt > lastEntryAt;
+}
+
 // Thin wrapper over the local-pty adapter's own persisted state — see .ai/contexts/session-state.md ("The local-pty adapter")
 function snapshotForLocal(sessionId, session, selection) {
   let state = localPtyState(sessionId);
@@ -377,7 +384,7 @@ function snapshotForLocal(sessionId, session, selection) {
   if (sess && sess.status !== undefined) {
     // session.status present is itself the liveness signal — see .ai/contexts/cli-session-state.md
     state.apply({ type: 'liveness', value: 'alive' });
-    if (!background) state.apply({ type: 'descriptorStatus', status: sess.status, at: sess.statusUpdatedAt });
+    if (!background) state.apply({ type: 'descriptorStatus', status: sess.status, at: sess.statusUpdatedAt, attention: localDescriptorAttention(sessionId, sess) });
   } else if (!sess?.remoteAlias && state.snapshot().liveness === 'alive'
     && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId))) {
     localPtyStates.delete(sessionId);

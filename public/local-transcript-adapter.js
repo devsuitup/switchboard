@@ -59,7 +59,7 @@ function seedLocalTranscriptDescriptor(sessionId, session, selection) {
   localTranscriptDescriptorLosses.delete(sessionId);
   const targetHere = !session.headSessionId || session.headSessionId === sessionId;
   const background = targetHere && (session.bgJobId || typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId, row, selection));
-  if (!background) state.apply({ type: 'descriptorStatus', status: session.status, at: session.statusUpdatedAt });
+  if (!background) state.apply({ type: 'descriptorStatus', status: session.status, at: session.statusUpdatedAt, attention: localDescriptorAttention(sessionId, session) });
   return background ? { descriptorStatus: session.status, waitingFor: session.waitingFor } : null;
 }
 
