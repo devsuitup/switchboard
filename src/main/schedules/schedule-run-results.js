@@ -8,6 +8,7 @@ const { scheduleStateKey } = require('./schedule-runner');
 
 const RESULT_NAME = /^([0-9a-f]{16})-(\d+)-([0-9a-f-]{36})\.json$/;
 const PUBLICATION_NAME = /^(?:([0-9a-f]{16})-\d+-[0-9a-f-]{36}\.json\.lock|\.([0-9a-f]{16})-\d+-[0-9a-f-]{36}\.json\.[0-9a-f-]{36}\.tmp)$/;
+const STALE_PUBLICATION_MS = 10 * 60 * 1000;
 
 function scheduleRunsDir(dataDir) {
   return path.join(dataDir, 'schedule-runs');
@@ -34,7 +35,7 @@ function classifyRunExit({ code, sandbox, stderr }) {
 function pruneScheduleRunResults(runsDir, key, keep = 20) {
   let files;
   try { files = fs.readdirSync(runsDir); } catch { return; }
-  const staleBefore = Date.now() - 10 * 60 * 1000;
+  const staleBefore = Date.now() - STALE_PUBLICATION_MS;
   for (const file of files) {
     const match = PUBLICATION_NAME.exec(file);
     if (!match || (match[1] || match[2]) !== key) continue;
@@ -49,6 +50,17 @@ function pruneScheduleRunResults(runsDir, key, keep = 20) {
   for (const { file } of own.slice(keep)) {
     try { fs.unlinkSync(path.join(runsDir, file)); } catch {}
   }
+}
+
+function claimPublication(lock) {
+  try { return fs.openSync(lock, 'wx'); }
+  catch (error) { if (error.code !== 'EEXIST') throw error; }
+  try {
+    if (fs.statSync(lock).mtimeMs >= Date.now() - STALE_PUBLICATION_MS) return undefined;
+    fs.unlinkSync(lock);
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  try { return fs.openSync(lock, 'wx'); }
+  catch (error) { if (error.code === 'EEXIST') return undefined; throw error; }
 }
 
 function writeScheduleRunResult(runsDir, input, log, { rename = fs.renameSync } = {}) {
@@ -69,13 +81,20 @@ function writeScheduleRunResult(runsDir, input, log, { rename = fs.renameSync } 
     fs.mkdirSync(runsDir, { recursive: true });
     const destination = path.join(runsDir, filename);
     lock = destination + '.lock';
-    try { lockFd = fs.openSync(lock, 'wx'); }
-    catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      log.info(`[schedule] Result already claimed for ${sessionId}; keeping the first`);
-      return true;
+    const match = RESULT_NAME.exec(filename);
+    const durable = () => {
+      try { return validRecord(JSON.parse(fs.readFileSync(destination, 'utf8')), match); } catch { return false; }
+    };
+    lockFd = claimPublication(lock);
+    if (lockFd === undefined) {
+      if (durable()) {
+        log.info(`[schedule] Result already recorded for ${sessionId}; keeping the first`);
+        return true;
+      }
+      log.warn(`[schedule] Result of ${sessionId} is being published by another writer; not acknowledged yet`);
+      return false;
     }
-    if (fs.existsSync(destination)) {
+    if (durable()) {
       log.info(`[schedule] Result already recorded for ${sessionId}; keeping the first`);
       return true;
     }

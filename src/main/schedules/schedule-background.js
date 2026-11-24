@@ -54,24 +54,30 @@ function timeOf(value) {
   return typeof value === 'number' ? value : Date.parse(value);
 }
 
+async function cleanupHold(run, d, stopped) {
+  if (await d.isJoined(run.actualId, run.jobId)) return { done: true, message: 'left running, joined' };
+  if (!run.actualId) return null;
+  const { job, missing } = readJob(d, run.jobId);
+  if (missing) return { done: true, message: stopped ? 'stopped; job already removed' : 'job already removed' };
+  if (!job?.sessionId) return { done: false, message: `cleanup deferred: cannot confirm that job ${run.jobId} is still session ${run.actualId}` };
+  if (job.sessionId !== run.actualId.toLowerCase()) {
+    return { done: true, message: `unresolved: job ${run.jobId} now belongs to session ${job.sessionId}, not ${run.actualId}; ${stopped ? 'it was stopped but nothing was removed' : 'nothing was stopped or removed'}` };
+  }
+  return null;
+}
+
 async function cleanupOnce(run, d, mode) {
   if (mode === 'none') return { done: true, message: 'job already removed' };
   try {
-    if (await d.isJoined(run.actualId, run.jobId)) return { done: true, message: 'left running, joined' };
-    if (run.actualId) {
-      const { job, missing } = readJob(d, run.jobId);
-      if (missing) return { done: true, message: 'job already removed' };
-      if (!job?.sessionId) return { done: false, message: `cleanup deferred: cannot confirm that job ${run.jobId} is still session ${run.actualId}` };
-      if (job.sessionId !== run.actualId.toLowerCase()) {
-        return { done: true, message: `unresolved: job ${run.jobId} now belongs to session ${job.sessionId}, not ${run.actualId}; nothing was stopped or removed` };
-      }
-    }
     if (mode === 'stop') {
+      const held = await cleanupHold(run, d, false);
+      if (held) return held;
       const stopped = await d.runCommand(['stop', run.jobId], { cwd: fs.existsSync(run.cwd) ? run.cwd : d.homeDir, timeout: VERB_TIMEOUT_MS });
       if (stopped.code !== 0) return { done: false, message: `stop failed: ${stripShellNoise(stopped.stderr) || stopped.code}` };
       run.cleanupMode = 'rm';
-      if (await d.isJoined(run.actualId, run.jobId)) return { done: true, message: 'left running, joined' };
     }
+    const held = await cleanupHold(run, d, mode === 'stop');
+    if (held) return held;
     const removed = await d.runCommand(['rm', run.jobId], { cwd: d.homeDir, timeout: VERB_TIMEOUT_MS });
     if (removed.code !== 0) return { done: false, message: `remove failed: ${stripShellNoise(removed.stderr) || removed.code}` };
     return { done: true, message: mode === 'stop' ? 'stopped and removed' : 'removed' };
@@ -303,10 +309,13 @@ async function discoverBackgroundRuns(deps, claim = () => () => {}) {
     const { v: _v, ...saved } = run;
     saved.runName = saved.runName || saved.name;
     saved.phase = saved.phase || 'running';
-    d.log?.info(`[schedule] ${saved.runName}: resuming the monitor of background job ${saved.jobId} (${saved.phase})`);
     let release = () => {};
-    try { release = claim(saved) || release; }
-    catch (error) { d.log?.warn(`[schedule] ${saved.runName}: cannot reserve its schedule:`, error.message); }
+    try {
+      const claimed = claim(saved);
+      if (claimed === false) continue;
+      release = claimed || release;
+    } catch (error) { d.log?.warn(`[schedule] ${saved.runName}: cannot reserve its schedule:`, error.message); }
+    d.log?.info(`[schedule] ${saved.runName}: resuming the monitor of background job ${saved.jobId} (${saved.phase})`);
     runs.push({ run: saved, release });
   }
   return runs;

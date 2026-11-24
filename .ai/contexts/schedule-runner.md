@@ -79,22 +79,36 @@ end of the last:
 
 - `running`: the job is watched. When it ends, its outcome is saved as
   `result` with the cleanup mode, and the record moves to `cleanup`.
-- `cleanup`: stop/rm against the saved job. Before any stop or rm the job's
-  current state.json must carry the saved `actualId`: a missing state.json
-  means the job is gone (done), another session id is recorded as
-  `unresolved: job … now belongs to session …; nothing was stopped or removed`
-  (done, nothing touched), and an unreadable state defers. A failed or deferred
+- `cleanup`: stop/rm against the saved job. The attachment check and the
+  job's current state.json are read before the stop and read again before the
+  rm, after the stop returned (re-review F4 of #1233: a slot whose short id was
+  taken by another session during the stop used to be removed). The
+  state.json must carry the saved `actualId`: a missing state.json means the
+  job is gone (done), another session id is recorded as `unresolved: job … now
+  belongs to session …; nothing was stopped or removed` (or `it was stopped but
+  nothing was removed` after the stop; done, no rm), and an unreadable state
+  defers. Two local reads narrow the window but are not atomic with the
+  daemon's verbs: only a conditional daemon operation would close it. A failed or deferred
   attempt keeps the record with `cleanupAttempts`; a process makes at most 3
   attempts, `retryMs` (30 s) apart, and the next start continues. After a
   successful stop the mode becomes `rm`, so a retry does not stop twice. After
   9 attempts in all the run is recorded with `cleanup abandoned after 9
   attempts: …`. A joined user takes the job over and ends the phase. The
   outcome is never recomputed: a resumed `cleanup` record is not watched again.
-- `result`: `writeScheduleRunResult` returns `true` once the result file
-  exists (also when it already did, or another writer holds its lock) and
-  `false` on an error; the main callback returns that acknowledgement. The
-  record is deleted only on `true`, otherwise kept for the next start, which
-  publishes it without cleaning again.
+- `result`: `writeScheduleRunResult` returns `true` only for a durable
+  result: a valid result file already present (first result wins, whoever
+  holds the lock) or this writer's own completed rename. A publication lock
+  with no valid result file returns `false` (re-review F3 of #1233: a lock left
+  by a crashed writer used to be acknowledged and the record deleted with no
+  history). A lock older than `STALE_PUBLICATION_MS` (10 min, the same age at
+  which pruning drops it) is taken over; a younger one is treated as a live
+  writer and left alone. The writer is synchronous and the app is single
+  instance, so a live lock lasts milliseconds; the age only guards against a
+  second process sharing the data directory. A valid file found while holding
+  the lock is kept; an invalid one is replaced. `false` also covers any error.
+  The main callback returns that acknowledgement. The record is deleted only
+  on `true`, otherwise kept in `result` for the next start, which publishes it
+  without cleaning again.
 
 The result is published after cleanup settles, so a run whose cleanup is still
 pending has no history entry yet. A launch-time failure without a confirmed
@@ -105,12 +119,24 @@ next start. A launch interrupted before identity is not recorded either.
 Resume is two phases. `discoverBackgroundRuns` reads at most 256 record names,
 validates each and calls `claim` for at most 64 valid ones; `resumeBackgroundRuns`
 returns the promise of all lifetimes with a `discovered` promise attached.
-`startScheduler` holds every check (startup catch-up, wake-up and minute ticks)
-behind `discovered`, bounded by `DISCOVERY_WAIT_MS` (10 s), never behind the
-lifetimes (re-review R2 of #1233: the startup catch-up used to beat the record
-reads). A resume source without `discovered` (test stubs claiming
+`startScheduler` returns at once, but holds every automatic check (startup
+catch-up, wake-up and minute ticks, for all schedules) until some discovery's
+`discovered` settles, never behind the lifetimes (re-review R2 of #1233: the
+startup catch-up used to beat the record reads). Checks requested during the
+hold are coalesced into one check when it ends, run as a tick if any was a
+tick. A tick-only schedule whose minute passed during the hold is skipped;
+catch-up schedules catch up. When discovery has not settled after
+`DISCOVERY_WAIT_MS` (10 s), the hold is kept, a warning names the unresolved
+recovery, and discovery is started again, the wait doubling up to
+`DISCOVERY_RETRY_MAX_MS` (5 min) (re-review F1 of #1233: the bound used to
+release scheduling before a slow scan had claimed a still-working run, so a
+second run launched beside it). All attempts share one claim: a job id claimed
+once is refused (`claim` returns `false`) to every later attempt, so a stalled
+scan that finally completes never supervises a run twice. Records are known
+once any attempt settles, since every record an attempt read is claimed at
+read time. A resume source without `discovered` (test stubs claiming
 synchronously) does not gate. Claims are counted per schedule key, so several
-resumed runs of one slug hold it until the last ends.
+resumed runs of one slug hold it until the last ends. Manual runs are not held.
 
 Validation before any claim: `v: 1`, an 8-hex `jobId` matching the file name,
 a full UUID `actualId` starting with it, non-empty cwd, name, filePath and slug,

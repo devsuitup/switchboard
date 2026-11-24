@@ -12,6 +12,7 @@ const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 const MINUTE_MS = 60 * 1000;
 const CATCH_UP_WINDOW_MS = 7 * 24 * 60 * MINUTE_MS;
 const DISCOVERY_WAIT_MS = 10 * 1000;
+const DISCOVERY_RETRY_MAX_MS = 5 * 60 * 1000;
 
 /** Parse YAML-like frontmatter from a markdown file (simple key: value parser). */
 function parseFrontmatter(content) {
@@ -825,9 +826,13 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects, res
     }
   }
 
-  let gate = null;
+  let hold = null;
+  let discoveryTimer = null;
   const runCheck = onTick => {
-    if (gate) return gate.then(() => runCheck(onTick));
+    if (hold) {
+      hold.onTick = hold.onTick || !!onTick;
+      return hold.drained;
+    }
     try {
       const result = check(onTick);
       if (result?.catch) return result.catch(err => log.error('[schedule] Cannot load schedule projects:', err));
@@ -837,7 +842,12 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects, res
   const onResume = () => runCheck(false);
 
   if (resumeBackgroundRuns) {
+    const seen = new Set();
     const claim = run => {
+      if (run.jobId) {
+        if (seen.has(run.jobId)) return false;
+        seen.add(run.jobId);
+      }
       const key = `${encodeProjectPath(run.cwd)}:${run.slug}`;
       reserved.set(key, (reserved.get(key) || 0) + 1);
       let held = true;
@@ -848,24 +858,43 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects, res
         if (left > 0) reserved.set(key, left); else reserved.delete(key);
       };
     };
-    try {
-      const resumed = resumeBackgroundRuns(claim);
-      Promise.resolve(resumed).catch(err => log.error('[schedule] Cannot resume background runs:', err));
-      if (resumed && typeof resumed.discovered?.then === 'function') {
-        let timer;
-        const bound = new Promise(resolve => {
-          timer = setTimeout(() => {
-            log.warn(`[schedule] Background run records not read after ${DISCOVERY_WAIT_MS / 1000} s; scheduling without waiting for them`);
-            resolve();
-          }, DISCOVERY_WAIT_MS);
-          timer?.unref?.();
-        });
-        gate = Promise.race([Promise.resolve(resumed.discovered).catch(() => {}), bound]).then(() => {
-          clearTimeout(timer);
-          gate = null;
-        });
+    let release;
+    const current = { onTick: false };
+    current.drained = new Promise(resolve => { release = resolve; }).then(() => {
+      hold = null;
+      return runCheck(current.onTick);
+    });
+    let known = false, attempts = 0;
+    const settleHold = () => {
+      if (known) return;
+      known = true;
+      clearTimeout(discoveryTimer);
+      if (attempts > 1) log.info(`[schedule] Background run records read after ${attempts} attempts; scheduling resumes`);
+      release();
+    };
+    const discover = () => {
+      if (known || !running) return;
+      attempts++;
+      let resumed;
+      try {
+        resumed = resumeBackgroundRuns(claim);
+        Promise.resolve(resumed).catch(err => log.error('[schedule] Cannot resume background runs:', err));
+      } catch (err) { log.error('[schedule] Cannot resume background runs:', err); }
+      if (!resumed || typeof resumed.discovered?.then !== 'function') {
+        if (hold) settleHold(); else known = true;
+        return;
       }
-    } catch (err) { log.error('[schedule] Cannot resume background runs:', err); }
+      hold = current;
+      Promise.resolve(resumed.discovered).then(settleHold, settleHold);
+      const waitMs = Math.min(DISCOVERY_WAIT_MS * 2 ** (attempts - 1), DISCOVERY_RETRY_MAX_MS);
+      discoveryTimer = setTimeout(() => {
+        if (known || !running) return;
+        log.warn(`[schedule] Background run records not read after ${waitMs / 1000} s (attempt ${attempts}); automatic launches stay suspended until they are, retrying`);
+        discover();
+      }, waitMs);
+      discoveryTimer?.unref?.();
+    };
+    discover();
   }
   runCheck(false);
   if (resumeSource) resumeSource.on('resume', onResume);
@@ -881,6 +910,7 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects, res
   function stop() {
     running = false;
     clearTimeout(initialTimer);
+    clearTimeout(discoveryTimer);
     if (initialTimer._interval) clearInterval(initialTimer._interval);
   }
   stop.getLastTickMinute = () => lastTickMinute;

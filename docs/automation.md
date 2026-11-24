@@ -181,7 +181,10 @@ records **left running, joined**. Stop and remove it in Agents when finished.
 A job stopped or removed from Agents before it finished ends the run as
 stopped or as a lost job. If Switchboard closes during a run, the next launch
 resumes watching it, records its result and cleans it up; a run whose hour
-passed meanwhile is recorded as timed out.
+passed meanwhile is recorded as timed out. Until Switchboard has read those
+saved runs, no schedule starts on its own (Run now still works), so a schedule
+never starts a second run beside one still in progress; if reading them is
+slow, the log says so and Switchboard keeps trying.
 
 Switchboard only stops or removes a job whose id the launcher printed. If the
 launch prints no job id, the run is recorded as failed to start with

@@ -13,6 +13,7 @@ const runner = require('../src/main/schedules/schedule-runner');
 const { encodeProjectPath } = require('../encode-project-path');
 const { guardResume } = require('../public/resume-guard');
 const { deleteSessionRefusal } = require('../delete-session-guard');
+const { customArgsForLaunch } = require('../src/main/terminals/shell-profiles');
 const SID = '61100000-0000-4000-8000-000000000001';
 const JOB = '61111111';
 const OTHER_JOB = '61122222';
@@ -66,7 +67,7 @@ function setup(t, options = {}) {
     getSetting: options.getSetting || (() => ({})), isProjectSettingsArchived: () => false,
     SETTING_DEFAULTS: { shellProfile: 'test', sandbox: false }, resolveShell: () => ({ path: options.shell || 'fake-shell' }),
     cleanPtyEnv: { PATH: 'fake' }, resolveScheduleSandbox: () => !!options.sandbox,
-    headlessClaudeLaunch: (shell, args) => ({ program: shell, args }),
+    customArgsForLaunch, headlessClaudeLaunch: (shell, args) => ({ program: shell, args }),
     scheduleLaunchRefusal: () => null, sandboxScriptPath: () => 'sandbox.sh', sandboxBindEnv: () => null, scheduleProjects: () => ({ list: async () => [] }),
     encodeProjectPath: () => 'project', quoteArgvForShell: (_shell, args) => args.join(' '), shellArgs: (_shell, cmd) => [cmd],
     cpSpawn: (_program, args) => {
