@@ -1170,7 +1170,16 @@ local callers, `snapshotForLocal` and `seedLocalTranscriptDescriptor`:
   whole state on that loss.
 - **Background (#785)**: both callers apply `descriptorStatus` only when the
   row is not a background job, so the background projection stays the only
-  path that maps a background job's `waiting` to attention.
+  path that maps a background job's `waiting` to attention. For a background
+  row they send `releaseDescriptorAttention` instead
+  (`backgroundReleasesDescriptorAttention`) when the projection owns the row
+  (`backgroundActivityEntry` returns a job), or when the descriptor no longer
+  supports it (not `waiting`, active session, older than the transcript). A
+  foreground `waiting` that raised attention before the row became a job
+  cannot outlive the handover; a stale job marker that the projection ignores
+  (#767) keeps the interactive row's attention while it still waits. Explicit
+  OSC attention stays, and the projection still raises attention when the job
+  itself waits.
 
 The spinner is the icon slot: attention outranks the busy rung there. The
 row's `cli-busy` class keeps following `snapshot.busy` beside `needs-attention`

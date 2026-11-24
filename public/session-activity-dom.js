@@ -374,6 +374,12 @@ function localDescriptorAttention(sessionId, session) {
   return !Number.isFinite(lastEntryAt) || Number.isFinite(session.statusUpdatedAt) && session.statusUpdatedAt > lastEntryAt;
 }
 
+// see .ai/contexts/session-state.md ("Descriptor-owned attention")
+function backgroundReleasesDescriptorAttention(sessionId, session, row, selection) {
+  return !!(typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId, row, selection))
+    || session.status !== 'waiting' || !localDescriptorAttention(sessionId, session);
+}
+
 // Thin wrapper over the local-pty adapter's own persisted state — see .ai/contexts/session-state.md ("The local-pty adapter")
 function snapshotForLocal(sessionId, session, selection) {
   let state = localPtyState(sessionId);
@@ -385,6 +391,7 @@ function snapshotForLocal(sessionId, session, selection) {
     // session.status present is itself the liveness signal — see .ai/contexts/cli-session-state.md
     state.apply({ type: 'liveness', value: 'alive' });
     if (!background) state.apply({ type: 'descriptorStatus', status: sess.status, at: sess.statusUpdatedAt, attention: localDescriptorAttention(sessionId, sess) });
+    else if (backgroundReleasesDescriptorAttention(sessionId, sess, localActivityRow(sessionId, session), selection)) state.apply({ type: 'releaseDescriptorAttention' });
   } else {
     state.apply({ type: 'releaseDescriptorAttention' });
     if (state.snapshot().liveness === 'alive' && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId))) {

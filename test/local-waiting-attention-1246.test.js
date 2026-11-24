@@ -6,6 +6,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { classifyTranscriptTail } = require('../transcript-turn');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 
 const base = Date.now() - 10 * 60 * 1000;
@@ -182,4 +185,45 @@ test('an OSC attention survives the descriptor disappearing', t => {
   delete s.row.statusUpdatedAt;
   s.render();
   assertAttention(s, 'explicit OSC attention is not the descriptor\'s to clear');
+});
+
+function setupBackgroundTransition(t, { ptyHere = true } = {}) {
+  const s = setup(t, { ptyHere });
+  const filename = path.resolve(__dirname, '../public/agents-view.js');
+  vm.runInContext(fs.readFileSync(filename, 'utf8'), s.ctx.context, { filename });
+  s.headTurn([prompt, askQuestion]);
+  if (!ptyHere) s.ctx.emitSessionTranscriptActivity({ sessionId: s.id, at: waitingAt - 50 });
+  s.render();
+  const joinJob = status => {
+    const at = Date.parse(answeredAt) + 100;
+    Object.assign(s.row, { bgJobId: 'question-job', bgSessionId: s.id, status, statusUpdatedAt: at });
+    s.ctx.read('applyAgentsSnapshot')({ roster: [{ id: 'question-job', sessionId: s.id, kind: 'background', hosted: true,
+      state: status === 'waiting' ? 'blocked' : 'working', status, statusUpdatedAt: at }], daemonReachable: true });
+    s.headTurn([prompt, askQuestion, answer]);
+    for (let i = 0; i < 3; i++) s.render();
+  };
+  return { ...s, joinJob };
+}
+
+for (const ptyHere of [true, false]) {
+  test(`descriptor-owned attention is released when the row becomes a busy background job (${ptyHere ? 'PTY here' : 'no PTY here'})`, t => {
+    const s = setupBackgroundTransition(t, { ptyHere });
+    assertAttention(s, 'precondition: the foreground waiting raised attention');
+    s.joinJob('busy');
+    assert.equal(s.ctx.read('storedActivitySnapshot')(s.id, s.row).busy, true, 'the hosted job is working');
+    assert.equal(s.icon().classList.contains('session-icon--attention'), false, 'the background projection owns the row now');
+  });
+}
+
+test('an OSC attention survives the row becoming a background job', t => {
+  const s = setupBackgroundTransition(t);
+  s.ctx.read('setAttention')(s.id, true, 'onTerminalNotification');
+  s.joinJob('busy');
+  assert.equal(s.icon().classList.contains('session-icon--attention'), true);
+});
+
+test('a background job that is itself waiting still shows attention', t => {
+  const s = setupBackgroundTransition(t);
+  s.joinJob('waiting');
+  assert.equal(s.icon().classList.contains('session-icon--attention'), true);
 });
