@@ -654,3 +654,40 @@ test('a permanent records read failure is reported by the scheduler and the Sche
   assert.deepEqual(s.stop.getHealth(), { suspended: false }, 'a successful discovery clears the suspension');
   assert.equal(s.changes(), announced + 1, 'the recovery is announced');
 });
+
+test('an accepted record whose result cannot be named stays unresolved when another run publishes', async t => {
+  const h = fixture(t);
+  const s0 = Date.now() - 120000 + 0.5;
+  const file = h.record(JOB, { phase: 'result', result: { outcome: 'exited', code: 0 }, cleanup: 'stopped and removed', startedAtMs: s0, deadline: s0 + 3600000 });
+  const runsDir = path.join(h.home, 'results');
+  const before = results.latestResultFailure()?.count || 0;
+  const pending = bg.resumeBackgroundRuns({ ...h.deps, writeResult: value => results.publishScheduleRunResult(runsDir, value, h.log) });
+  assert.equal(await pending.discovered, 1, 'discovery accepts the saved result record');
+  const [details] = await pending;
+  assert.equal(details.resultPending, true);
+  assert.equal(results.latestResultFailure().message, 'Invalid schedule run identity');
+  assert.equal(results.latestResultFailure().path, null);
+  assert.equal(results.latestResultFailure().count, before + 1);
+  const other = { sessionId: ACTUAL_B, filePath: h.filePath, name: 'daily', slug: 'daily', startedAtMs: Date.now(), outcome: 'exited', code: 0 };
+  assert.equal(results.publishScheduleRunResult(runsDir, other, h.log).ok, true);
+  assert.equal(saved(file).phase, 'result');
+  assert.equal(results.latestResultFailure()?.count || 0, before + 1, 'success for another run must not erase the unresolved failure');
+});
+
+test('an access denial keeps the result record, and a later start publishes it without cleaning again', async t => {
+  const h = fixture(t);
+  const file = h.record(JOB, { phase: 'result', result: { outcome: 'exited', code: 0 }, cleanup: 'stopped and removed' });
+  const runsDir = path.join(h.home, 'results');
+  const [first] = await bg.resumeBackgroundRuns({ ...h.deps, writeResult: value => results.publishScheduleRunResult(runsDir, value, h.log, {
+    link() { throw Object.assign(new Error('locked'), { code: 'EPERM' }); },
+  }) });
+  assert.equal(first.resultPending, true);
+  assert.match(first.persistenceError, /^Access was denied while recording the result \(EPERM: locked\)/);
+  assert.equal(saved(file).phase, 'result');
+  assert.deepEqual(fs.readdirSync(runsDir), []);
+  const [second] = await bg.resumeBackgroundRuns({ ...h.deps, writeResult: value => results.publishScheduleRunResult(runsDir, value, h.log) });
+  assert.equal(second.resultPending, undefined);
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(results.readScheduleRunResults(runsDir, [ACTUAL]).get(ACTUAL).exitCode, 0);
+  assert.deepEqual(h.calls, [], 'a result-phase retry does not repeat cleanup');
+});

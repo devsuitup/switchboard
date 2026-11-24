@@ -111,18 +111,28 @@ end of the last:
   version) is never moved, renamed or
   deleted: the writer returns the error `The result file <path> is unreadable;
   remove or fix it` (code `EBADRESULT`). A link that fails with `ENOTSUP`,
-  `EPERM`, `EISDIR` (libuv's mapping of `ERROR_INVALID_FUNCTION`, FAT/exFAT on
+  `EISDIR` (libuv's mapping of `ERROR_INVALID_FUNCTION`, FAT/exFAT on
   Windows), `EXDEV`, `EINVAL` or `ENOSYS` means the store has no hard links:
   the writer returns that code with `This drive does not support hard links;
   schedule results cannot be recorded safely here. Move the Switchboard data
-  directory to an NTFS or ext4 drive.` and creates no destination. There is no
+  directory to an NTFS or ext4 drive.` and creates no destination. `EPERM`,
+  `EACCES` and `EBUSY` are access denials or locks, not a drive limitation
+  (sixth re-review F2 of #1233): the message is `Access was denied while
+  recording the result (<code>: <original message>). Check the permissions of
+  <dir> or whether another program holds it; Switchboard retries.` Both keep
+  the original error text in `error.detail`. There is no
   fallback (fifth re-review F1 of #1233: an exclusive-create
   fallback let a second writer acknowledge bytes whose writer then failed its
   fsync and removed them); a background run keeps its record in `result`, so
   nothing is lost once the data directory moves. Any other failure returns the
-  error. Failures are kept unresolved per destination (or per results
-  directory when no destination could be named); a successful publication
-  clears only its own destination and its directory, never an unrelated one.
+  error. Failures are kept unresolved by key: the destination once it is
+  named; before that, the run identity (`jobId`, `sessionId`, schedule file and
+  `startedAtMs`, as given) when the identity itself is rejected; and the
+  results directory only when it cannot be created. A successful publication
+  clears its own destination and its own run identity; the directory key is
+  cleared only by a successful link in that directory (sixth re-review F1 of
+  #1233: a failure with no destination used to be keyed by directory, so any
+  other run's success erased it while its record stayed pending).
   `latestResultFailure()` returns the most recent unresolved failure with
   `count`, the number still unresolved, or `null`; listeners
   (`onResultFailureChange`) are called on each change. A failure is logged once

@@ -389,7 +389,7 @@ test('publication creates no lock file another writer could steal', t => {
 
 const unresolvedAt = (a, destination) => a.latestResultFailure() && [destination].includes(a.latestResultFailure().path);
 
-for (const code of ['ENOTSUP', 'EPERM', 'EISDIR', 'EXDEV', 'EINVAL', 'ENOSYS']) {
+for (const code of ['ENOTSUP', 'EISDIR', 'EXDEV', 'EINVAL', 'ENOSYS']) {
   test(`a store without hard links (${code}) records nothing and says why`, t => {
     const f = fixture(t), a = api();
     const link = () => { throw Object.assign(new Error('hard links not supported'), { code }); };
@@ -398,6 +398,7 @@ for (const code of ['ENOTSUP', 'EPERM', 'EISDIR', 'EXDEV', 'EINVAL', 'ENOSYS']) 
     assert.equal(written.error.code, code);
     assert.equal(written.error.path, destinationOf(f));
     assert.match(written.error.message, /does not support hard links; schedule results cannot be recorded safely here\. Move the Switchboard data directory to an NTFS or ext4 drive\./);
+    assert.equal(written.error.detail, 'hard links not supported', 'the original error is kept');
     assert.deepEqual(fs.readdirSync(f.runsDir), [], 'no destination is ever created without a hard link');
     assert.equal(unresolvedAt(a, destinationOf(f)), true, 'the failure is surfaced');
   });
@@ -458,4 +459,47 @@ test('the temporary directory supports the no-overwrite publication', t => {
   assert.equal(a.writeScheduleRunResult(f.runsDir, { ...f.input, code: 7 }, f.log), true);
   assert.equal(f.read()[0].exitCode, 2, 'the first result is kept');
   assert.equal(fs.readdirSync(f.runsDir).length, 1);
+});
+
+for (const code of ['EPERM', 'EACCES', 'EBUSY']) {
+  test(`an access denial (${code}) on a drive that supports hard links is reported as access, and a retry recovers`, t => {
+    const f = fixture(t), a = api();
+    assert.equal(a.publishScheduleRunResult(f.runsDir, f.input, f.log).ok, true, 'the drive supports hard links');
+    const other = { ...f.input, sessionId: crypto.randomUUID() };
+    const failure = a.publishScheduleRunResult(f.runsDir, other, f.log, {
+      link() { throw Object.assign(new Error('link access denied by temporary ACL/lock'), { code }); },
+    });
+    assert.equal(failure.ok, false);
+    assert.equal(failure.error.code, code);
+    assert.equal(failure.error.detail, 'link access denied by temporary ACL/lock');
+    assert.doesNotMatch(failure.error.message, /does not support hard links|NTFS/, 'an access denial is not a missing drive capability');
+    assert.equal(failure.error.message, `Access was denied while recording the result (${code}: link access denied by temporary ACL/lock). Check the permissions of ${f.runsDir} or whether another program holds it; Switchboard retries.`);
+    assert.equal(a.publishScheduleRunResult(f.runsDir, other, f.log).ok, true, 'the same drive records the result once access is back');
+  });
+}
+
+test('a run failure with no destination is kept by run identity, not by directory', t => {
+  const f = fixture(t), a = api();
+  const before = a.latestResultFailure()?.count || 0;
+  const malformed = { ...f.input, sessionId: crypto.randomUUID(), startedAtMs: 100000.5 };
+  assert.equal(a.publishScheduleRunResult(f.runsDir, malformed, f.log).error.message, 'Invalid schedule run identity');
+  assert.equal(a.latestResultFailure().count, before + 1);
+  assert.equal(a.publishScheduleRunResult(f.runsDir, f.input, f.log).ok, true);
+  assert.equal(a.latestResultFailure().count, before + 1, 'a success of another run in the same directory does not clear it');
+});
+
+test('a directory capability failure is cleared only by a successful link in that directory', t => {
+  const f = fixture(t), a = api();
+  const before = a.latestResultFailure()?.count || 0;
+  fs.writeFileSync(f.runsDir, 'not a directory');
+  const failed = a.publishScheduleRunResult(f.runsDir, f.input, f.log);
+  assert.equal(failed.ok, false);
+  assert.equal(failed.error.path, null);
+  assert.equal(a.latestResultFailure().count, before + 1);
+  const elsewhere = path.join(f.root, 'elsewhere');
+  assert.equal(a.publishScheduleRunResult(elsewhere, { ...f.input, sessionId: crypto.randomUUID() }, f.log).ok, true);
+  assert.equal(a.latestResultFailure().count, before + 1, 'a success in another directory proves nothing here');
+  fs.unlinkSync(f.runsDir);
+  assert.equal(a.publishScheduleRunResult(f.runsDir, { ...f.input, sessionId: crypto.randomUUID() }, f.log).ok, true);
+  assert.equal(a.latestResultFailure()?.count || 0, before, 'a link in that directory proves the capability and clears its failure');
 });

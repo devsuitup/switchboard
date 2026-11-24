@@ -51,7 +51,8 @@ function pruneScheduleRunResults(runsDir, key, keep = 20) {
   }
 }
 
-const LINK_UNSUPPORTED = new Set(['ENOTSUP', 'EPERM', 'EISDIR', 'EXDEV', 'EINVAL', 'ENOSYS']);
+const LINK_UNSUPPORTED = new Set(['ENOTSUP', 'EISDIR', 'EXDEV', 'EINVAL', 'ENOSYS']);
+const LINK_DENIED = new Set(['EPERM', 'EACCES', 'EBUSY']);
 const NO_HARD_LINKS = 'This drive does not support hard links; schedule results cannot be recorded safely here. Move the Switchboard data directory to an NTFS or ext4 drive.';
 const unresolvedFailures = new Map();
 const failureListeners = new Set();
@@ -89,13 +90,22 @@ function publishNew(tmp, destination, link) {
   try { link(tmp, destination); return true; }
   catch (error) {
     if (error.code === 'EEXIST') return false;
-    if (LINK_UNSUPPORTED.has(error.code)) throw Object.assign(new Error(NO_HARD_LINKS), { code: error.code });
+    if (LINK_UNSUPPORTED.has(error.code)) throw Object.assign(new Error(NO_HARD_LINKS), { code: error.code, detail: error.message });
+    if (LINK_DENIED.has(error.code)) {
+      throw Object.assign(new Error(`Access was denied while recording the result (${error.code}: ${error.message}). Check the permissions of ${path.dirname(destination)} or whether another program holds it; Switchboard retries.`),
+        { code: error.code, detail: error.message });
+    }
     throw error;
   }
 }
 
+function runIdentity(input) {
+  return `run:${input.jobId || ''}:${input.sessionId}:${input.filePath}:${input.startedAtMs}`;
+}
+
 function resultFailure(key, destination, error, log, sessionId) {
-  const failure = { path: destination || null, code: error.code || null, message: error.message, at: Date.now() };
+  const failure = { path: destination || null, code: error.code || null, message: error.message, at: Date.now(),
+    ...(typeof error.detail === 'string' ? { detail: error.detail } : {}) };
   const previous = unresolvedFailures.get(key);
   unresolvedFailures.delete(key);
   unresolvedFailures.set(key, failure);
@@ -106,6 +116,8 @@ function resultFailure(key, destination, error, log, sessionId) {
 
 function publishScheduleRunResult(runsDir, input, log, { link = fs.linkSync } = {}) {
   let tmp, destination;
+  const identity = runIdentity(input);
+  let failureKey = identity;
   try {
     const { sessionId, filePath, name, slug, manual = false, dueMs = null, startedAtMs,
       endedAtMs = Date.now(), outcome, code = null, signal = null, error = null } = input;
@@ -120,11 +132,14 @@ function publishScheduleRunResult(runsDir, input, log, { link = fs.linkSync } = 
     if (typeof input.cleanup === 'string') record.cleanup = input.cleanup;
     if (typeof input.warning === 'string') record.warning = input.warning;
     const text = JSON.stringify(record) + '\n';
-    destination = path.join(runsDir, filename);
+    failureKey = `dir:${runsDir}`;
     fs.mkdirSync(runsDir, { recursive: true });
+    destination = path.join(runsDir, filename);
+    failureKey = destination;
     tmp = path.join(runsDir, `.${filename}.${crypto.randomUUID()}.tmp`);
     createExclusive(tmp, text);
-    if (publishNew(tmp, destination, link)) pruneScheduleRunResults(runsDir, key);
+    const linked = publishNew(tmp, destination, link);
+    if (linked) pruneScheduleRunResults(runsDir, key);
     else {
       let valid = false;
       try { valid = validRecord(JSON.parse(fs.readFileSync(destination, 'utf8')), RESULT_NAME.exec(filename)); } catch {}
@@ -134,10 +149,10 @@ function publishScheduleRunResult(runsDir, input, log, { link = fs.linkSync } = 
       }
       log.info(`[schedule] Result already recorded for ${sessionId}; keeping the first`);
     }
-    resolveFailures([destination, runsDir]);
+    resolveFailures([destination, identity, ...(linked ? [`dir:${runsDir}`] : [])]);
     return { ok: true };
   } catch (error) {
-    return resultFailure(destination || runsDir, destination, error, log, input.sessionId);
+    return resultFailure(failureKey, destination, error, log, input.sessionId);
   } finally {
     if (tmp) { try { fs.unlinkSync(tmp); } catch {} }
   }

@@ -201,7 +201,10 @@ remove or fix it. Results need a drive that supports hard links: on FAT,
 exFAT or some network shares, no result is recorded and the notice says
 **This drive does not support hard links**. Move the Switchboard data
 directory to an NTFS or ext4 drive; background runs keep their result until
-it can be written.
+it can be written. If the notice says **Access was denied while recording the
+result** instead, the drive is fine: check the permissions of the folder it
+names, or whether another program (an antivirus or a sync client) holds it.
+Switchboard tries again at the next launch.
 
 Switchboard only stops or removes a job whose id the launcher printed. If the
 launch prints no job id, the run is recorded as failed to start with
