@@ -292,13 +292,22 @@ async function discoverBackgroundRuns(deps, claim = () => () => {}) {
   const d = withDefaults(deps);
   let names;
   try { names = (await fs.promises.readdir(d.recordsDir)).filter(name => /^[0-9a-f]{8}\.json$/.test(name)).sort().slice(0, MAX_RECORD_READS); }
-  catch { return []; }
+  catch (error) {
+    if (error.code === 'ENOENT') return [];
+    d.log?.warn('[schedule] Cannot read the background run records:', error.message);
+    throw error;
+  }
   const runs = [];
   for (const file of names) {
     if (runs.length >= MAX_RESUMED_RUNS) break;
     let text;
     try { text = await fs.promises.readFile(path.join(d.recordsDir, file), 'utf8'); }
-    catch (error) { d.log?.warn(`[schedule] Cannot read the background run record ${file}:`, error.message); continue; }
+    catch (error) {
+      if (error.code === 'ENOENT') continue;
+      d.log?.warn(`[schedule] Cannot read the background run record ${file}:`, error.message);
+      runs.failure = runs.failure || error;
+      continue;
+    }
     let run;
     try { run = JSON.parse(text); } catch {}
     if (!validRun(run, file, d.now())) {
@@ -324,7 +333,11 @@ async function discoverBackgroundRuns(deps, claim = () => () => {}) {
 function resumeBackgroundRuns(deps, claim) {
   const discovered = discoverBackgroundRuns(deps, claim);
   const lifetimes = discovered.then(runs => Promise.all(runs.map(({ run, release }) => superviseBackgroundRun(run, deps).finally(release))));
-  lifetimes.discovered = discovered.then(runs => runs.length, () => 0);
+  lifetimes.discovered = discovered.then(runs => {
+    if (runs.failure) throw runs.failure;
+    return runs.length;
+  });
+  lifetimes.discovered.catch(() => {});
   return lifetimes;
 }
 

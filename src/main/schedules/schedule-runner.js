@@ -885,7 +885,10 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects, res
         return;
       }
       hold = current;
-      Promise.resolve(resumed.discovered).then(settleHold, settleHold);
+      const attempt = attempts;
+      Promise.resolve(resumed.discovered).then(settleHold, err => {
+        log.warn(`[schedule] Cannot read the background run records (attempt ${attempt}); automatic launches stay suspended, retrying:`, err?.message || err);
+      });
       const waitMs = Math.min(DISCOVERY_WAIT_MS * 2 ** (attempts - 1), DISCOVERY_RETRY_MAX_MS);
       discoveryTimer = setTimeout(() => {
         if (known || !running) return;

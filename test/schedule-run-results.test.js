@@ -259,19 +259,19 @@ test('reader creates nothing, parses only requested ids, and marks broken record
 
 test('atomic replacement publishes complete JSON, keeps the first write, and removes temporary files on error', t => {
   const f = fixture(t), a = api();
-  let renamed = false;
-  const rename = (from, to) => {
+  let linked = false;
+  const link = (from, to) => {
     assert.equal(path.dirname(from), f.runsDir);
     assert.equal(fs.existsSync(to), false, 'no partial destination is visible');
     assert.equal(JSON.parse(fs.readFileSync(from, 'utf8')).exitCode, 2);
-    fs.renameSync(from, to);
-    renamed = true;
+    fs.linkSync(from, to);
+    linked = true;
   };
-  a.writeScheduleRunResult(f.runsDir, f.input, f.log, { rename });
-  assert.equal(renamed, true);
+  a.writeScheduleRunResult(f.runsDir, f.input, f.log, { link });
+  assert.equal(linked, true);
   a.writeScheduleRunResult(f.runsDir, { ...f.input, code: 99, endedAtMs: 200000 }, f.log);
   assert.equal(f.read()[0].exitCode, 2, 'duplicate completion keeps the first record');
-  a.writeScheduleRunResult(f.runsDir, { ...f.input, sessionId: crypto.randomUUID() }, f.log, { rename: () => { throw new Error('rename failed'); } });
+  a.writeScheduleRunResult(f.runsDir, { ...f.input, sessionId: crypto.randomUUID() }, f.log, { link: () => { throw new Error('link failed'); } });
   assert.equal(f.records().length, 1);
   assert.equal(fs.readdirSync(f.runsDir).length, 1, 'no temporary or lock files survive failure');
   assert.ok(f.warnings.length, 'write failure is logged');
@@ -285,4 +285,63 @@ test('write failure never changes launcher acknowledgement or exit notice', asyn
   assert.equal(h.messages[0][1].code, 2);
   assert.equal(h.done, 1);
   assert.ok(h.warnings.length, 'failed persistence warns');
+});
+
+function pausedPublisher(t, f, during) {
+  const a = api();
+  const destination = path.join(f.runsDir, `${scheduleStateKey({ filePath: f.filePath })}-${f.input.startedAtMs}-${f.input.sessionId}.json`);
+  let paused = false;
+  for (const name of ['renameSync', 'linkSync']) {
+    const native = fs[name];
+    t.mock.method(fs, name, function(from, to, ...args) {
+      if (!paused && path.resolve(String(to)) === destination) { paused = true; during(destination, a); }
+      return native.call(fs, from, to, ...args);
+    });
+  }
+  return { a, destination, paused: () => paused };
+}
+
+test('a publisher paused past the stale-lock age never replaces the result the takeover acknowledged', t => {
+  const f = fixture(t);
+  let acknowledged, published;
+  const p = pausedPublisher(t, f, (destination, a) => {
+    const old = new Date(Date.now() - 11 * 60 * 1000);
+    fs.utimesSync(destination + '.lock', old, old);
+    acknowledged = a.writeScheduleRunResult(f.runsDir, { ...f.input, outcome: 'timed-out', code: null, error: 'late' }, f.log);
+    published = fs.readFileSync(destination, 'utf8');
+  });
+  assert.equal(p.a.writeScheduleRunResult(f.runsDir, f.input, f.log), true, 'the paused writer finds a valid result and acknowledges it');
+  assert.equal(p.paused(), true);
+  assert.equal(acknowledged, true);
+  assert.equal(fs.readFileSync(p.destination, 'utf8'), published, 'the first acknowledged result stays');
+  assert.equal(JSON.parse(published).outcome, 'timed-out');
+  assert.deepEqual(fs.readdirSync(f.runsDir), [path.basename(p.destination)], 'no lock or temporary file is left');
+});
+
+test('a paused publisher releases only its own lock, never the one of the writer that took over', t => {
+  const f = fixture(t);
+  let lockAfterTakeover;
+  const p = pausedPublisher(t, f, destination => {
+    const old = new Date(Date.now() - 11 * 60 * 1000);
+    fs.utimesSync(destination + '.lock', old, old);
+    fs.unlinkSync(destination + '.lock');
+    fs.writeFileSync(destination + '.lock', 'another writer');
+    lockAfterTakeover = destination + '.lock';
+  });
+  assert.equal(p.a.writeScheduleRunResult(f.runsDir, f.input, f.log), true);
+  assert.equal(fs.existsSync(lockAfterTakeover), true, 'the replacement lock is left to its owner');
+  assert.equal(fs.readFileSync(lockAfterTakeover, 'utf8'), 'another writer');
+});
+
+test('the temporary directory supports the no-overwrite publication', t => {
+  const f = fixture(t), a = api();
+  const first = path.join(f.root, 'first'), second = path.join(f.root, 'second'), dest = path.join(f.root, 'dest');
+  fs.writeFileSync(first, 'a'); fs.writeFileSync(second, 'b');
+  fs.linkSync(first, dest);
+  assert.throws(() => fs.linkSync(second, dest), { code: 'EEXIST' });
+  assert.equal(fs.readFileSync(dest, 'utf8'), 'a');
+  assert.equal(a.writeScheduleRunResult(f.runsDir, f.input, f.log), true);
+  assert.equal(a.writeScheduleRunResult(f.runsDir, { ...f.input, code: 7 }, f.log), true);
+  assert.equal(f.read()[0].exitCode, 2, 'the first result is kept');
+  assert.equal(fs.readdirSync(f.runsDir).length, 1);
 });

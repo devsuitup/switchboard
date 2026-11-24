@@ -505,3 +505,92 @@ test('a pending cleanup whose job state cannot be confirmed is retried, not clea
   assert.deepEqual(h.calls, []);
   assert.equal(saved(file).phase, 'cleanup');
 });
+
+function failingRead(t, operation, target) {
+  const native = fs.promises[operation];
+  const failure = { on: true };
+  t.mock.method(fs.promises, operation, async function(file, ...args) {
+    if (failure.on && path.resolve(String(file)) === path.resolve(target)) {
+      throw Object.assign(new Error('temporary recovery I/O failure'), { code: 'EACCES' });
+    }
+    return native.call(this, file, ...args);
+  });
+  return failure;
+}
+
+function recoveringScheduler(t, h) {
+  const start = Math.floor(Date.now() / 60000) * 60000 + 59000;
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: start });
+  const launches = [], attempts = [];
+  const stop = runner.startScheduler(h.log, (...args) => { launches.push(args); args[3](); return { ok: true }; }, {
+    projects: async () => [h.cwd],
+    resumeBackgroundRuns: claim => { const resumed = bg.resumeBackgroundRuns(h.deps, claim); attempts.push(resumed); return resumed; },
+  });
+  t.after(stop);
+  const settle = async (n = 20) => { for (let i = 0; i < n; i++) await immediate(); };
+  return { start, launches, attempts, settle };
+}
+
+test('a records directory read error keeps automatic launches held until a retry reads the records', async t => {
+  const h = fixture(t);
+  const s0 = Math.floor(Date.now() / 60000) * 60000 + 59000;
+  h.record(JOB, { startedAtMs: s0 - 60000, deadline: s0 + 3600000 }); h.state(JOB, { state: 'working' });
+  const failure = failingRead(t, 'readdir', h.recordsDir);
+  const s = recoveringScheduler(t, h);
+  await assert.rejects(s.attempts[0].discovered, /temporary recovery I\/O failure/);
+  t.mock.timers.tick(1000);
+  await s.settle();
+  assert.equal(s.launches.length, 0, 'an unreadable records directory is not an empty one');
+  assert.match(h.lines.join('\n'), /Cannot read the background run records/);
+  failure.on = false;
+  t.mock.timers.tick(9000);
+  await s.settle();
+  assert.equal(s.attempts.length, 2, 'discovery is retried after its bounded wait');
+  assert.equal(await s.attempts[1].discovered, 1);
+  await s.settle();
+  assert.equal(s.launches.length, 0, 'the released check sees the recovered run as in flight');
+  h.state(JOB, { lastTerminalAt: s.start + 1 });
+  await s.attempts[1];
+  assert.equal(h.written.length, 1);
+  t.mock.timers.tick(60000);
+  await s.settle();
+  assert.equal(s.launches.length, 1, 'the schedule runs once the recovered run ended');
+});
+
+test('a record read error keeps the runs already claimed and the hold, and a retry claims only the rest', async t => {
+  const h = fixture(t);
+  const s0 = Math.floor(Date.now() / 60000) * 60000 + 59000;
+  const file = h.record(JOB, { startedAtMs: s0 - 60000, deadline: s0 + 3600000 }); h.state(JOB, { state: 'working' });
+  h.record(JOB_B, { startedAtMs: s0 - 60000, deadline: s0 + 3600000 }); h.state(JOB_B, { state: 'working' });
+  const failure = failingRead(t, 'readFile', file);
+  const s = recoveringScheduler(t, h);
+  await assert.rejects(s.attempts[0].discovered, /temporary recovery I\/O failure/);
+  t.mock.timers.tick(1000);
+  await s.settle();
+  assert.equal(s.launches.length, 0, 'an unread record keeps the hold');
+  assert.equal(fs.existsSync(file), true, 'an unread record is left in place');
+  failure.on = false;
+  t.mock.timers.tick(9000);
+  await s.settle();
+  assert.equal(await s.attempts[1].discovered, 1, 'the retry claims only the record that failed');
+  h.state(JOB, { lastTerminalAt: s.start + 1 }); h.state(JOB_B, { lastTerminalAt: s.start + 1 });
+  await Promise.allSettled(s.attempts);
+  assert.equal(h.written.length, 2, 'each run is supervised once');
+  assert.deepEqual(h.calls.filter(c => c[1] === JOB_B), [['stop', JOB_B], ['rm', JOB_B]], 'the run claimed before the failure is not claimed again');
+  t.mock.timers.tick(60000);
+  await s.settle();
+  assert.equal(s.launches.length, 1);
+});
+
+for (const [label, prepare] of [['empty', () => {}], ['missing', h => fs.rmSync(h.recordsDir, { recursive: true })]]) {
+  test(`an ${label} records directory releases automatic ticks at once`, async t => {
+    const h = fixture(t);
+    prepare(h);
+    const s = recoveringScheduler(t, h);
+    assert.equal(await s.attempts[0].discovered, 0);
+    t.mock.timers.tick(1000);
+    await s.settle();
+    assert.equal(s.launches.length, 1);
+    assert.equal(s.attempts.length, 1);
+  });
+}

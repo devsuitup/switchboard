@@ -97,15 +97,24 @@ end of the last:
   outcome is never recomputed: a resumed `cleanup` record is not watched again.
 - `result`: `writeScheduleRunResult` returns `true` only for a durable
   result: a valid result file already present (first result wins, whoever
-  holds the lock) or this writer's own completed rename. A publication lock
-  with no valid result file returns `false` (re-review F3 of #1233: a lock left
-  by a crashed writer used to be acknowledged and the record deleted with no
-  history). A lock older than `STALE_PUBLICATION_MS` (10 min, the same age at
-  which pruning drops it) is taken over; a younger one is treated as a live
-  writer and left alone. The writer is synchronous and the app is single
-  instance, so a live lock lasts milliseconds; the age only guards against a
-  second process sharing the data directory. A valid file found while holding
-  the lock is kept; an invalid one is replaced. `false` also covers any error.
+  holds the lock) or this writer's own completed publication. A publication
+  lock with no valid result file returns `false` (re-review F3 of #1233: a lock
+  left by a crashed writer used to be acknowledged and the record deleted with
+  no history). A lock older than `STALE_PUBLICATION_MS` (10 min, the same age
+  at which pruning drops it) is taken over; a younger one is treated as a live
+  writer and left alone. An aged lock does not prove its owner died (a
+  suspended process, a slow filesystem), so the lock is not what keeps the
+  first result: publication is `fs.linkSync(tmp, destination)`, which fails
+  with `EEXIST` instead of replacing an existing file (atomic on NTFS and
+  POSIX filesystems; a filesystem without hard links fails every publication,
+  so the record stays in `result` and nothing is acknowledged). A writer whose
+  link loses acknowledges only if the existing file is valid (re-review F2 of
+  #1233: a writer paused past the takeover used to rename over the result the
+  takeover writer had acknowledged). An invalid destination is renamed aside
+  and the link retried; if the file moved aside turns out valid it is linked
+  back instead. Each lock holds a random owner token and is removed only while
+  it still holds that token, so a writer never removes a lock taken over from
+  it. `false` also covers any error.
   The main callback returns that acknowledgement. The record is deleted only
   on `true`, otherwise kept in `result` for the next start, which publishes it
   without cleaning again.
@@ -133,8 +142,16 @@ release scheduling before a slow scan had claimed a still-working run, so a
 second run launched beside it). All attempts share one claim: a job id claimed
 once is refused (`claim` returns `false`) to every later attempt, so a stalled
 scan that finally completes never supervises a run twice. Records are known
-once any attempt settles, since every record an attempt read is claimed at
-read time. A resume source without `discovered` (test stubs claiming
+once any attempt resolves, since every record an attempt read is claimed at
+read time. Only a complete scan resolves: a missing records directory
+(`ENOENT`) counts as an empty store, and a record removed between the listing
+and its read is skipped. Any other error on the directory or on a record read
+(`EACCES`, `EIO`, …) rejects `discovered` after the scan has claimed and started
+supervising every record it could read; the hold is kept, the error logged,
+and the retry timer runs again with the same backoff (re-review F1 of #1233: a
+read error used to count as an empty store, release the hold and launch beside
+a still-working run). A store that keeps failing keeps automatic launches held;
+Run now is not held. A resume source without `discovered` (test stubs claiming
 synchronously) does not gate. Claims are counted per schedule key, so several
 resumed runs of one slug hold it until the last ends. Manual runs are not held.
 
@@ -144,7 +161,7 @@ a full UUID `actualId` starting with it, non-empty cwd, name, filePath and slug,
 and at most a day after it, a known phase and cleanup mode, and a saved
 `result` outside `running`. A record that parses but fails, or does not parse,
 is renamed to `<jobId>.json.corrupt-<ms>` so it leaves the batch for good; a
-read error leaves it in place. During a resumed watch, a state.json naming
+read error leaves it in place and keeps the hold (above). During a resumed watch, a state.json naming
 another session ends the run as `job-missing` with nothing to clean, so the
 deadline never authorizes a stop of a job whose identity does not match.
 A run past its deadline times out at once. A resumed run reports no
