@@ -1,13 +1,11 @@
 # Moving main-process modules
 
 Follow [ADR 0005](decisions/0005-main-process-context-layout.md) and check open work before moving a context.
-The preparatory source map is deliberately empty. For a viewer pilot, set `scripts/source-map.json` to:
-
-```json
-{
-  "file-lists-path.js": "src/main/viewer/file-lists-path.js"
-}
-```
+The source map (`scripts/source-map.json`) is empty between migrations. For a
+new move, map the module's existing root-relative path to its chosen destination
+under `src/main/`. The former viewer pilot,
+`src/main/viewer/file-lists-path.js`, has already moved; do not replay it as a
+move from the repository root.
 
 Create the destination directory and make a pure `git mv` commit first. Keep that commit's full SHA
 for `.git-blame-ignore-revs`, then run:

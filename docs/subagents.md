@@ -34,6 +34,12 @@ Subagent rows have no pin, rename, stop, fork, archive or delete buttons.
 Deleting a session deletes its subagent transcripts with it — see
 [Session browser](session-browser.md#delete).
 
+### Workflow runs
+
+Claude workflow agents are nested under the session that started them and
+grouped by workflow run, rather than listed as independent top-level sessions.
+Codex subagent rollouts are not listed at all: the index skips them.
+
 ## Search
 
 The Sessions tab's [search](session-browser.md#search) covers subagent

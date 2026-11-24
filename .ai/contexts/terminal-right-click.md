@@ -4,7 +4,9 @@
 **Terminal Right-Click** setting (`terminalRightClick`, default `'menu'`) owns
 it: `menu` shows Switchboard's context menu, `paste` pastes the clipboard,
 `none` does nothing, `default` leaves the button to xterm and to the
-application running in the terminal.
+application running in the terminal. Settings labels them *Context menu
+(default)*, *Paste clipboard*, *Do nothing* and *Native (xterm)*
+(`#sv-right-click`, General page, Terminal group).
 
 ## Key files
 
@@ -12,8 +14,30 @@ application running in the terminal.
 |---|---|
 | `public/terminal-context-menu.js` | `setupTerminalContextMenu` (the two listeners below), the menu's items and actions. Dual-mode: a classic `<script>` in the renderer, `require()`-d by `test/terminal-context-menu.test.js`. |
 | `public/terminal-manager.js` | Calls `setupTerminalContextMenu` on the container it passes to `terminal.open()`; the link handler ignores non-left buttons. |
-| `public/app.js` | `window._applyTerminalRightClick` — applies the setting live. |
+| `public/app.js` | `window._applyTerminalRightClick` — applies the setting live; the boot path seeds `terminalRightClickMode` from the global settings. |
+| `public/settings-panel.js` | The `#sv-right-click` select; on save writes `terminalRightClick` and calls `window._applyTerminalRightClick`. |
 | `public/setting-defaults.js` | The default mode. |
+
+## The menu
+
+`showTerminalContextMenu` builds one menu at a time (a `.popover
+terminal-context-menu` at the cursor, flipped back inside the viewport) from
+`buildTerminalMenuItems({ linkUri, hasSelection })`, a pure function;
+`runTerminalMenuAction` maps each item id to its effect. The link is the one
+under the cursor, tracked by the link hover/leave callbacks in
+`terminal-manager.js` and classified by `classifyLinkUri`:
+
+- a `file://` link: **Open in panel** (`openFileInPanel`), **Open in system
+  editor** (`window.api.openPath`), **Copy path**;
+- an `http(s)://` link: **Open in browser** (`window.api.openExternal`),
+  **Copy link**;
+- then, after a separator when a link item was added: **Copy** (only with a
+  selection), **Paste** (`window.api.readClipboard` then `terminal.paste`),
+  **Select all**.
+
+The menu closes on a capture-phase `mousedown` outside it, on Escape, and
+through `closeTerminalContextMenuForSession` when its session's terminal is
+disposed.
 
 ## One right-click is two events, and xterm acts on both
 

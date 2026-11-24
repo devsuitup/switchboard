@@ -1,5 +1,10 @@
 # Building blocks
 
+> The original audit and its numeric source references describe v0.0.94.
+> Targeted factual corrections below reflect current code; uncorrected line
+> numbers, counts and issue-status snapshots are historical, not current
+> source locations. This is not a fresh whole-product audit.
+
 The bricks Switchboard's screens are made of **as they are at v0.0.94
 (f596e28)**: most exist implicitly, as a function or a CSS class family that
 several places re-implement. For each brick: its job, anatomy, variants and
@@ -47,9 +52,8 @@ app was not run. The patterns these bricks serve are in
 - **Merged rows.** The sidebar slot is painted from the OR of the members'
   snapshots (`session-activity-dom.js:27-36, 116-123`).
 - **Behaviour.** Not interactive. No text companion on the slot itself.
-- **Tokens.** Mostly literals (`#4fc3f7`, `#f0a050`, `#3ecf5a`); only the
-  agents-busy glyph and the violet busy spinner use `var(--accent)`
-  (`style.css:1080`, `1091`).
+- **Tokens.** State colors use theme variables in `public/style.css`, with
+  light overrides; the original literal-color inventory is historical.
 - **Used.** Sidebar row (`sidebar.js:1693-1697`), subagent row
   (`sidebar.js:340` `buildSubagentItem`), Agents row (`agents-view.js:224`,
   via `agentRowIcon` `140-149`).

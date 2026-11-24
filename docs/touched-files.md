@@ -67,14 +67,21 @@ Refresh and closing Touched, up to the 50 most recent.
 - Saving keeps the file's line endings (CRLF stays CRLF) and its UTF-8
   byte-order mark, whether or not the file is in a git repository. A file
   outside a repository that mixes line endings is saved with LF.
-- The panel's checks apply to every file: credential paths, binary files, files
-  that are not UTF-8 and files over 2 MB are refused, with the reason above the
-  list.
+- Text editing refuses credential paths, non-UTF-8 content, binary content
+  and files over 2 MB, with a reason. Supported local images display in the
+  panel. A file the panel cannot display can offer **Open with system viewer**
+  for an image or PDF, or **Show in folder**.
+- Local viewers also offer **Open in default app** for supported document
+  types and **Reveal in folder**. These act on the disk file; unsaved edits
+  stay in the editor. Scripts and executables can only be revealed.
 - In a remote session, a present Touched row opens read-only. Terminal links
   remain unavailable; files outside the session's repository open as plain text.
   A successful read also opens as plain text if Git is absent or refuses the
   session directory. Oversized HEAD versions are refused as too large.
   Remote password databases and private key filenames are protected.
+
+Use Touched and terminal path links to open session files, including files
+under `.work-files/`; there is no per-project Work Files tab.
 
 ## Markdown files
 

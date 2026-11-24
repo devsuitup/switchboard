@@ -1,28 +1,17 @@
 # Automation
 
-## Join a scheduled run
+Schedules run recurring headless Claude tasks, or, if you opt in,
+[background sessions you can join](#join-a-scheduled-run). Triggers are JSON
+requests for scripts and harnesses: they can request local session status, open a local
+session, create a named Claude session with a prompt, stop an idle local
+session, or type into an open terminal. Both require Switchboard to be running;
+a schedule can ask to [catch up](#catching-up-a-missed-run) a missed run.
 
-In **Schedules → Create**, enable **Run as a background session (can be joined
-while it runs)**, or add `run-as-background: true` to an existing schedule's
-front matter. This is off by default. Open the running conversation in Sessions
-or Agents to attach to its background job. Its run history links to that same
-conversation. The project must already be trusted by Claude Code; an untrusted
-workspace reports a launch failure.
+Opening uses **`action: "open"`**. The reserved **`type: "open-session"`**
+request is refused as described below; these are different request formats.
 
-This option is local only; remote schedules ignore it. The create form disables
-it for remote and sandboxed projects. A saved schedule using a sandbox, a
-project pre-launch command, a WSL shell or a `max-budget-usd` cap runs headless
-instead, with a visible reason and log entry. Ordinary headless schedules
-retain their current command and lifecycle.
-
-Background runs have a fixed one-hour limit. When the job reports completion or
-reaches its limit, Switchboard stops it and removes the daemon job, keeping the
-transcript. If somebody has joined, the job is left running and the history
-records **left running, joined**. Stop and remove it in Agents when finished.
-A job stopped or removed from Agents before it finished ends the run as
-stopped or as a lost job. If Switchboard closes during a run, the next launch
-resumes watching it, records its result and cleans it up; a run whose hour
-passed meanwhile is recorded as timed out.
+Temporary project-lookup conflicts during startup are retried within the
+trigger's timeout. A retry does not extend that timeout.
 
 ## Read-only session status
 
@@ -67,16 +56,6 @@ open envelope also contains version/type/requestId/kind/from/spawnedBy/forkedFro
 provisionalSessionId, created_at and completed_at. Retrying that UUID will keep
 the same refusal when future builds add opening support.
 
-Two mechanisms run Claude without you at the keyboard:
-
-- **Schedules** — recurring headless runs, defined as Markdown files and fired
-  by a scheduler inside the app.
-- **Triggers** — one-shot requests to open a local session, create one or type
-  into an open session, published as JSON files. Meant for scripts and harnesses.
-
-Both live in the running app: when Switchboard is not running, nothing fires. A
-schedule can ask to [catch up](#catching-up-a-missed-run) a run it missed.
-
 Implementation paths: `src/main/schedules/` contains the scheduler and schedule
 IPC modules; `src/main/triggers/` contains the trigger watcher and context
 (ADR 0005, step 8). The schedule and trigger file directories described below
@@ -113,6 +92,7 @@ The full, self-contained prompt Claude runs each time.
 | `enabled` | Exactly `false` disables the schedule; any other value, or none, leaves it on. [Archiving the folder](session-browser.md#archive-a-folder) can write `enabled: false` | on |
 | `slug` | Groups the runs in the sidebar (they share this slug) | the file name without `schedule-` and `.md` |
 | `catch-up` | `true` runs once, late, a run missed while Switchboard was closed or the machine asleep — see [Catching up a missed run](#catching-up-a-missed-run) | off |
+| `run-as-background` | `true` runs the task as a background session you can join — see [Join a scheduled run](#join-a-scheduled-run) | off |
 | `cli.permission-mode` | `--permission-mode` | `auto` |
 | `cli.allowed-tools` | `--allowedTools` | `Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch` |
 | `cli.model` | `--model` | none |
@@ -178,6 +158,30 @@ runs under its slug; open it to read the result.
 - A schedule in a project archived with **Archive Project** is suspended: the
   scheduler skips the project, and its files are not changed — see
   [Projects](session-browser.md#projects).
+
+### Join a scheduled run
+
+In **Schedules → Create**, enable **Run as a background session (can be joined
+while it runs)**, or add `run-as-background: true` to an existing schedule's
+front matter. This is off by default. Open the running conversation in Sessions
+or Agents to attach to its background job. Its run history links to that same
+conversation. The project must already be trusted by Claude Code; an untrusted
+workspace reports a launch failure.
+
+This option is local only; remote schedules ignore it. The create form disables
+it for remote and sandboxed projects. A saved schedule using a sandbox, a
+project pre-launch command, a WSL shell or a `max-budget-usd` cap runs headless
+instead, with a visible reason and log entry. Ordinary headless schedules
+retain their current command and lifecycle.
+
+Background runs have a fixed one-hour limit. When the job reports completion or
+reaches its limit, Switchboard stops it and removes the daemon job, keeping the
+transcript. If somebody has joined, the job is left running and the history
+records **left running, joined**. Stop and remove it in Agents when finished.
+A job stopped or removed from Agents before it finished ends the run as
+stopped or as a lost job. If Switchboard closes during a run, the next launch
+resumes watching it, records its result and cleans it up; a run whose hour
+passed meanwhile is recorded as timed out.
 
 ### Catching up a missed run
 

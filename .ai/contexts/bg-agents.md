@@ -36,7 +36,7 @@ job to one. `mergeRoster` passes the descriptor to the ownership filter so a
 previous display classification is retained only for the same session/start
 identity. See `cli-session-state.md`, "Own descendants outside Linux".
 
-## Dormant guarded stop ports (#474 A4c2a)
+## Guarded stop ports (#474 A4c2a)
 
 Project deletion's job-file inventory reads `state` through `parseJobState`.
 Even `done`, `stopped` and `failed` records cannot prove worker death from the
@@ -50,7 +50,12 @@ A4c2a adds `checkStop(id, options)` and `runStop(id, options)` properties to the
 callable unsubscribe returned by IPC `init`; `respawnForHandoff` is preserved.
 The existing stop handler delegates to `runStop(id)` and keeps its historical
 return values and permissive unknown/hosted policy. No handler calls another
-handler, and no new production consumer uses strict mode.
+handler. The one strict-mode consumer is project deletion's stop step,
+`src/main/projects/project-delete-stop.js` (`jobOptions` passes
+`{ strict: true, … }` to `checkStop`/`runStop`), wired through
+`project-delete-main.js` with `bg: unsubscribeBgAgents` in `main.js`, and only
+when the request carries `stopBackgroundJobs: true`
+(see [project-delete.md](project-delete.md)).
 
 Strict options are `{ strict: true, jobId, sessionIds, deadline }`, where jobId
 must equal id, sessionIds are the complete expected conversation parts, and
@@ -92,7 +97,7 @@ through this composition and detach the pinned attachment only after death.
 | `src/main/bg-agents/bg-agents-ipc.js` | `get-bg-agents`, `check-bg-agent-verb`, `bg-agent-verb`, `dispatch-bg-agent`, `bg-agent-live-job`, `restore-background-job`, the `bg-agents-changed` push; `respawnForHandoff` on the returned unsubscribe function |
 | `src/main/bg-agents/bg-worker-liveness.js` | Pure: `classifyWorkerLiveness`, `liveWorkerDescriptor` (see "Job states") |
 | `sidebar-bg-sessions.js` | `mergeLocalBackgroundSessions`: local background rows and continuation merging for the sidebar |
-| `session-exit.js` | `runExitHandoffs`, `EXIT_BUSY_WAIT_MS` (see "Exit handoff batch") |
+| `src/main/app/session-exit.js` | `runExitHandoffs`, `EXIT_BUSY_WAIT_MS` (see "Exit handoff batch") |
 | `cli-session-state.js` | `onDescriptorsChanged`, `readAllDescriptors`, `kind`/`jobId` on live-elsewhere |
 | `bridge-session-id.js` | Shared case-sensitive suffix for job `cse_` and descriptor `session_` bridge ids |
 | `src/main/terminals/pty-ops.js` | `detachPty` |
@@ -101,6 +106,9 @@ through this composition and detach the pinned attachment only after death.
 | `public/agents-view.js` | The view; `agentJobIsLive`; `groupAgentEntries` (Group by); `bgAgentSessionIds` for the sidebar badge |
 | `public/resume-guard.js` | A live `kind: 'bg'` descriptor answers `{ attach, cwd }` |
 | `public/dialogs.js` | `showDispatchAgentDialog` |
+| `public/app.js` | `persistWorkingSet`, `runRestore`, `prepareBackgroundRestore` (see "Restore of background sessions"); the Send-to-background confirmation |
+| `public/stop-session-ui.js` | `planSessionStop` (Stop on an attach tab) |
+| `src/main/projects/project-delete-stop.js` | The strict `checkStop`/`runStop` consumer (see "Guarded stop ports") |
 | `public/shortcuts.js` | The rebindable `agentsToggle` (default Primary+Shift+`A`) |
 
 ## Restore of background sessions
@@ -327,7 +335,7 @@ bound. Tests: `test/restore-progressive-661.test.js` (active first, two slots,
 active background first, delayed attach, expired bound, expired bound with the
 active terminal still opening, refused active entry
 with a peer still pending, user selection kept);
-`restore-live-elsewhere` now expects the active entry to open first.
+`test/restore-live-elsewhere.test.js` expects the active entry to open first.
 The remembered active background entry defers to startup policy. Renderer
 rechecks descriptor identity and requires an attach verdict; no interactive
 fallback is allowed after a refusal during background preparation. An interactive
@@ -468,7 +476,7 @@ recheck before effects and never turn a refusal into a silent forced deletion.
 
 The detail uses morphdom, retaining verb button nodes across roster polls and
 state changes while updating their disabled state. Equal-roster polls also
-retain focus; that retention already existed at the PR6 base. A pending job
+retain focus. A pending job
 disables its action buttons before the check and stays held through confirmation
 and execution. Repeated Stop/Delete requests for that job are ignored until
 refusal, cancellation, error or completion releases it. Evidence:
@@ -484,6 +492,14 @@ continuation can therefore badge its conversation row before a new turn is
 indexed. See `session-cache.md`, "Local background sidebar rows", for identity
 and registry-name precedence. This changes the membership marker, not the
 status glyph policy from the indicators audit.
+
+A row whose conversation is hosted by a live background job counts as running
+(#1146): `rowIsRunning` in `public/sidebar.js` adds `rowHasLiveBackgroundJob`
+(`public/session-activity-dom.js`: `backgroundActivityEntry` for the row's head
+id, then `agentJobIsLive`) to the running-schedule and PTY checks. Such a row
+stays out of the project's collapsed "Older" rows (and is promoted in its slug
+group), sorts with the running sessions and passes the Running filter, whatever its last indexed
+message's date. Evidence: `test/dom-older-hosted-bg-1146.test.js`.
 
 ### Job activity (#628)
 
@@ -1093,8 +1109,10 @@ that throws still lets the choice apply for the session. The `<select>` in
   (entry → `{ key, emoji, label }`) is the only lookup: interactive entries
   are `external` whatever their state; a background entry whose state is
   `null` or not a key is `unknown`. Hosted `done` uses the `idle` key and
-  `💤 Idle` header and row label. Order: Active, Blocked, Idle, Done, Stopped,
-  Failed, External, Unknown. "Blocked" matches the row's own state word.
+  `💤 Idle` header and row label; so does the `running` key (a hosted
+  `running` job, see "Job states"). Keys in order: `working` (Active),
+  `blocked`, `idle`, `running` (both Idle), `done`, `stopped`, `failed`,
+  `external`, `unknown`. "Blocked" matches the row's own state word.
   Emojis are literals from the map, never data, and sit in their own
   `aria-hidden` span (`.agents-group-emoji`, `.agents-state-emoji`) so the
   label and the state text stay plain text. Project headers carry no emoji.
@@ -1162,16 +1180,18 @@ that throws still lets the choice apply for the session. The `<select>` in
 `{ projectRoot, worktreeRoot }`: the git project's main working tree and the
 top of the worktree the cwd lives in (the cwd may be a subdirectory).
 `derive-project-path.js`'s `resolveWorktreePath` was not reused: it is
-synchronous, needs the parent to exist, only takes a cwd that is exactly
-`<root>/.claude/worktrees/<name>`, and knows nothing about `git worktree add`
-directories elsewhere.
+synchronous, keeps only ancestors that exist on disk, takes a cwd that is
+exactly `<root>/<layout>/<name>` (layouts `.worktrees`, `.claude-worktrees`,
+`.claude/worktrees`, `.work-files/worktrees`, `WORKTREE_DIRS`), and knows
+nothing about `git worktree add` directories elsewhere.
 
 1. Pattern (pure, no fs): `<root>/.claude/worktrees/<name>[/…]`, either
    separator → `projectRoot = <root>`, `worktreeRoot =
    <root>/.claude/worktrees/<name>`; the lazy match takes the outermost
    `.claude/worktrees`. Works for a directory that no longer exists (a
    finished job whose worktree was removed). Only `.claude/worktrees` is a
-   pattern; `.worktrees` / `.claude-worktrees` go through git when they exist.
+   pattern (`CLAUDE_WORKTREE_RE`); `.worktrees`, `.claude-worktrees` and
+   `.work-files/worktrees` go through git when they exist.
 2. Otherwise, if the cwd is an existing directory: one
    `git -C <cwd> rev-parse --git-common-dir --show-toplevel` through
    `execFile` (argv array, no shell, `cwd` option, `GIT_TIMEOUT_MS` = 2 s).
@@ -1201,8 +1221,9 @@ injectable (`init({ resolveProjectRoots })`) for tests.
 
 Known limits: the cache is never invalidated while the watchers run — a repo
 moved or deleted, a directory that becomes a git repo later, or a git call
-that timed out once keeps its first answer until the window's `closed`
-handler (or a re-init) calls `stop()`. A submodule is grouped as its own
+that timed out once keeps its first answer until `bgAgents.stop()` runs on app
+quit (or a re-init calls `stop()`); the window's `closed` handler only
+unsubscribes the renderer. A submodule is grouped as its own
 project, not under its superproject. Two different spellings of one path
 (symlink, case on Windows) can still make two groups, since the pattern
 branch and the fallback keep the cwd's spelling.
@@ -1328,7 +1349,7 @@ Respawn verb and S1b restore keep `respawnForHandoff` unchanged.
 
 **Busy sessions.** Measured 2026-11-19 (CLI 2.1.302, Windows 11, real
 `claude.exe` in a node-pty ConPTY, throwaway cwd, `--model haiku`, `/bg` then
-`` 300 ms later, during a running 40 s Bash tool; probe copied from the M4
+Enter (`\r`) 300 ms later, during a running 40 s Bash tool; probe copied from the M4
 probe of 2026-10-15): the CLI did not defer. Timeline from Enter: job listed by
 `claude agents` +758 ms; tab descriptor removed +813 ms and `Backgrounding…`
 printed; `kind: "bg"` descriptor with `jobId` +2314 ms, without `status` for
@@ -1440,10 +1461,11 @@ The session header and sidebar context menu call `send-session-to-background`
 for one running local Claude tab. Main refuses plain terminals, attach tabs,
 remote tabs, sandboxed and pre-launch-command sessions, duplicate handoffs,
 unsubmitted composer text, unknown CLI state, open dialogs (`waiting`) and
-shell state before writing. Busy is refused ("Claude is working. Send to
-background once it is idle.") until a busy `/bg` is measured; the live run
-below was idle. Running subagents require an `appConfirm` warning first;
-cancel writes nothing. Composer input, busy or a dialog appearing during the
+shell state before writing. Busy without `force` returns `code: 'busy'`
+("Claude is working. Send to background once it is idle."); the renderer then
+asks "Send to background now?" and retries with `force` (see "Busy
+sessions"). Running subagents require an `appConfirm` warning first;
+cancel writes nothing. Composer input, busy (without `force`) or a dialog appearing during the
 300 ms text-to-Enter gap withholds Enter and names the residue to check. No
 recovery Enter is sent.
 
@@ -1626,7 +1648,8 @@ group elsewhere), except for `--bg`: it may have started the daemon, so only
 the client is killed. The call resolves on `close` so stdout is drained, or
 1 s after `exit` when a daemon holding the pipes keeps `close` from firing. `dispatchArgs` puts `--` before the prompt:
 `--add-dir` is variadic and would otherwise swallow it. A job's own
-`state.json` state wins over the cached CLI list's.
+`state.json` state wins over the cached CLI list's, except a non-hosted
+`running` record, where the listed state wins (see "Job states").
 
 ## Known limits
 
@@ -1725,6 +1748,10 @@ the client is killed. The call resolves on `close` so stdout is drained, or
 
 - `.ai/contexts/ipc-bridge.md` (the bg-agents handlers, the event)
 - `.ai/contexts/cli-session-state.md` (the descriptor hooks)
+- `.ai/contexts/project-delete.md` (the strict stop consumer)
+- `.ai/contexts/window-frame.md` (the exit handoff backend)
+- `.ai/contexts/session-cache.md` (local background sidebar rows)
+- `.ai/contexts/schedule-runner.md` (Windows launches, `SHIM_INVOCATION`)
 - `docs/background-agents.md`, `docs/keyboard-shortcuts.md`
 
 ## Persistent handoff and restore errors (#566)
@@ -1767,7 +1794,7 @@ their stack position and original return focus. A handoff already in progress is
 sandboxed and plain-terminal refusals explain why background handoff is not
 available and offer continued use of the terminal. Informational handoff success
 and restore consent keep their existing transient/question behaviour. The
-Agents view's own error handling belongs to a later #566 slice.
+Agents view's own errors do not go through these notices.
 
 Evidence: `test/dom-row-action-errors.test.js`,
 `test/send-to-background-renderer.test.js`,
