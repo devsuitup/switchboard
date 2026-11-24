@@ -52,6 +52,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/check-changelog.js --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}" --repo "${{ github.repository }}" --pr "${{ github.event.pull_request.number }}"
 
+  docs:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require documentation for app changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/check-docs.js --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}" --repo "${{ github.repository }}" --pr "${{ github.event.pull_request.number }}"
+
   e2e:
     # see docs/e2e.md
     runs-on: ubuntu-latest

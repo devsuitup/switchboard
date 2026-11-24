@@ -823,7 +823,7 @@ See `test/dom-settings-nav.test.js` for the DOM contract.
 | `get-setting` / `set-setting` / `delete-setting` | Generic key/value over `settings` table |
 | `get-settings-by-prefix` | `(prefix)` accepts only the non-empty string `continuationChoice:` and returns an object of matching keys and values; other prefixes throw before reading settings. Bridge: `getSettingsByPrefix`. Used to load continuation choices before restore and reload. |
 | `get-effective-settings` | `(projectPath)` — resolves global + project overrides |
-| `get-harnesses` | `()` → `[{ id, label, available, enabled, isDefault }]` for every registered CLI adapter; `enabled` reflects `global.disabledHarnesses`. Bridge: `getHarnesses`. See cli-harnesses.md ("Picker, toggles and settings"). |
+| `get-harnesses` | `()` → `[{ id, label, available, enabled, isDefault, capabilities }]` for every registered CLI adapter (`capabilities` is a plain copy of the adapter's flags); `enabled` reflects `global.disabledHarnesses`. Bridge: `getHarnesses`. See cli-harnesses.md ("Picker, toggles and settings"). |
 | `get-harness-models` | `(runtime)` → the adapter's model catalog (`[{ slug, label, efforts, defaultEffort, visible }]`, Codex reads `$CODEX_HOME/models_cache.json`), `[]` when it has none. Bridge: `getHarnessModels`. |
 | `get-shell-profiles` | Configured shell list |
 | `get-schedule-creator-command` / `create-schedule-session` / `run-schedule-now` | Schedule integration |
@@ -866,9 +866,10 @@ applies its channel to `autoUpdater.allowPrerelease` immediately. Startup
 applies it before scheduling update checks and logs `stable` or `beta`.
 Automatic downloads remain controlled separately by `autoUpdate`; manual
 checks use the same channel. No downgrade is enabled because the SQLite cache
-only migrates forward. Release promotion changes GitHub's pre-release flag
-without changing the version or binary, so the installed version alone cannot
-reliably identify a beta for the optional About indicator.
+only migrates forward. Since #1199 a beta is versioned `X.Y.Z-beta.N` and
+its final is rebuilt as `X.Y.Z`, so the installed version identifies a beta;
+releases before 0.1.0 were promoted by flag and do not. Channel mechanics are
+in [releasing.md](../../docs/releasing.md#update-channels).
 
 ### File panel (IDE mode)
 

@@ -1,5 +1,7 @@
 'use strict';
 
+const { customArgsForLaunch } = require('../src/main/terminals/shell-profiles');
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -89,7 +91,7 @@ function mainContext() {
     resolveShell: () => ({ path: '/bin/bash' }),
     shellArgs: (_shell, command) => command ? ['-c', command] : ['-i'],
     claudeCommand: (_shell, args, o = {}) => (o.prefix ? o.prefix + ' ' : '') + 'claude ' + args.join(' '), quoteArgvForShell: (_shell, args) => args.join(' '),
-    headlessClaudeLaunch: (shell, args) => ({ program: shell, args: ['-c', 'claude ' + args.join(' ')] }),
+    customArgsForLaunch, headlessClaudeLaunch: (shell, args) => ({ program: shell, args: ['-c', 'claude ' + args.join(' ')] }),
     resolveScheduleSandbox: () => false, isProjectSettingsArchived: () => false,
     activityReporter: { sessionStarted() {} },
     cliSessionState: { trackScheduleRun() {}, ensureWatching: () => true, deliveryPtyStart: () => null },

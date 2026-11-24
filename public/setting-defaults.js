@@ -16,6 +16,7 @@ const SETTING_DEFAULTS = {
   browserMode: 'off',
   sandbox: false,
   preLaunchCmd: '',
+  customArgs: '',
   addDirs: '',
   visibleSessionCount: 10,
   sessionMaxAgeDays: 3,
@@ -45,6 +46,7 @@ const SETTING_DEFAULTS = {
   codexApproval: '',
   codexModel: '',
   codexEffort: '',
+  codexCustomArgs: '',
   showCodexUsage: false,
 };
 
@@ -57,11 +59,11 @@ const DIRECTORY_SCAN_MS = 5000;
 
 const THEME_CHOICES = [['dark', 'Dark'], ['light', 'Light'], ['system', 'System']];
 
-const CODEX_CHOICES = {
+const CODEX_CHOICES = Object.freeze(Object.fromEntries(Object.entries({
   codexSandbox: [['', 'Codex default'], ['read-only', 'Read-only'], ['workspace-write', 'Workspace write'], ['danger-full-access', 'Full access (danger)']],
   codexApproval: [['', 'Codex default'], ['on-request', 'On request'], ['never', 'Never']],
   codexEffort: [['', 'Codex default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max'], ['ultra', 'Ultra']],
-};
+}).map(([key, choices]) => [key, Object.freeze(choices.map(choice => Object.freeze(choice)))])));
 
 const BROWSER_MODES = Object.freeze([
   Object.freeze({ value: 'off', label: 'Off' }),
@@ -83,8 +85,16 @@ function normalizeBrowserSettings(settings, diagnostic = message => console.warn
   return normalized;
 }
 
+function validateCustomArgs(value) {
+  if (typeof value !== 'string') return { ok: false, error: 'Custom arguments must be a string' };
+  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(value)) {
+    return { ok: false, error: 'Custom arguments must not contain newlines or control characters' };
+  }
+  return { ok: true };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { SETTING_DEFAULTS, THEME_CHOICES, CODEX_CHOICES, BROWSER_MODES, normalizeBrowserSettings,
+  module.exports = { SETTING_DEFAULTS, THEME_CHOICES, CODEX_CHOICES, BROWSER_MODES, normalizeBrowserSettings, validateCustomArgs,
     PROJECT_DELETE_PREVIEW_TIMEOUT_MS, PROJECT_DELETE_DIALOG_TIMEOUT_MS, PROJECT_DELETE_FOLLOWUP_TIMEOUT_MS,
     PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS, PROJECT_DELETE_WORKTREE_REMOVE_TIMEOUT_MS, DIRECTORY_SCAN_MS };
 }

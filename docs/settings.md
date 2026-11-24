@@ -77,9 +77,9 @@ next release of the same or a higher version replaces it at quit.
 Builds run from source never check.
 
 Stable is the default channel. Turn on **Receive beta versions** and click
-**Save Settings** to include beta releases in future update checks. The same
-binary serves both channels; the release's GitHub pre-release status decides
-whether it is beta. Turning the switch off never downgrades: an installed beta
+**Save Settings** to include beta releases in future update checks. A beta
+carries a version such as `0.1.0-beta.2`; when the final `0.1.0` comes out,
+beta installs are offered it like stable ones. Turning the switch off never downgrades: an installed beta
 stays in place until a newer stable version is available. A beta that was
 already downloaded before you turned the switch off still installs at the next
 quit. The SQLite cache
@@ -107,6 +107,7 @@ A saved `chrome` setting is read as the matching Browser choice: `true` selects
 | Setting | Key | Default | Effect |
 |---|---|---|---|
 | Pre-launch Command | `preLaunchCmd` | empty | Written in front of the `claude` command, e.g. `aws-vault exec profile --`; restricted to letters, digits, spaces and `- _ . / \ : =` — see [Launching sessions](launching-sessions.md#pre-launch-command) |
+| Custom Arguments | `customArgs` | empty | Appended to Claude commands for new sessions, resumes, forks, schedules and remote launches; project overrides apply only to local launches — see [Custom arguments](launching-sessions.md#custom-arguments) |
 
 #### CLI Agents and Codex
 
@@ -123,6 +124,16 @@ launch entries; its open tabs keep working. At least one CLI must stay enabled.
 | Codex approval | `codexApproval` | Codex default (empty) | `on-request` or `never`, passed as `--ask-for-approval` |
 | Codex model | `codexModel` | Codex default (empty) | A model from the local Codex catalog, passed as `--model` |
 | Codex reasoning effort | `codexEffort` | Codex default (empty) | `low`, `medium`, `high`, `xhigh`, `max` or `ultra`, passed as `model_reasoning_effort` |
+
+**Custom arguments** (`codexCustomArgs`, empty by default) in the Codex section
+applies to Codex new sessions, resumes and forks. It is global, like the other
+Codex launch controls, and independent of Claude's Custom Arguments.
+Both fields reject newlines and control characters. Quote values for the
+selected shell; remote Claude launches use only global arguments, passed to the
+remote POSIX shell as typed. Windows cmd/PowerShell schedules instead split
+literal quoted tokens through the exact Windows launch route; see the linked
+quoting rules. Saving an empty Claude project override disables the global
+arguments for that project's local launches.
 
 **Show Codex usage** (`showCodexUsage`, off by default) displays Codex rate
 limits in the status bar and Stats. When enabled, it reads `CODEX_HOME/auth.json`

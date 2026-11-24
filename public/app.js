@@ -1732,12 +1732,20 @@ async function detachSession(sessionOrId, btn, retryTargets) {
   if (stopped) refreshSidebar();
 }
 
+function harnessBackgroundReason(sessionId) {
+  const runtime = openSessions.get(sessionId)?.session?.runtime;
+  const harness = runtime && window._harnesses?.get(runtime);
+  return harness?.capabilities?.bgJobs === false ? `${harness.label} sessions cannot be sent to the background` : null;
+}
+
 function backgroundActionReason(sessionId) {
   const entry = openSessions.get(sessionId);
   if (!entry || entry.closed || !activePtyIds.has(sessionId)) return 'Open this session in a running terminal to send it to the background';
   if (entry.attach) return 'This session already runs in the background';
   if (entry.session.type === 'terminal') return 'A plain terminal cannot be sent to the background because it has no Claude session';
   if (entry.session.remoteAlias) return 'A remote session cannot be sent to the background from Switchboard';
+  const unsupported = harnessBackgroundReason(sessionId);
+  if (unsupported) return unsupported;
   if (sandboxedSessions.get(sessionId)) return 'This session cannot be sent to the background because it runs in the sandbox and the background worker would run outside it';
   if (entry.backgrounding) return 'Moving to the background…';
   return null;
@@ -2076,6 +2084,11 @@ async function sendSessionToBackground(sessionId) {
 function initTerminalBackgroundControl() {
   const button = document.getElementById('terminal-bg-btn');
   button.addEventListener('click', () => { if (activeSessionId) sendSessionToBackground(activeSessionId); });
+  // see .ai/contexts/cli-harnesses.md ("Capabilities in the renderer")
+  Promise.resolve(window.api.getHarnesses?.()).then(list => {
+    window._harnesses = new Map((Array.isArray(list) ? list : []).filter(h => h?.id).map(h => [h.id, h]));
+    updateTerminalHeader();
+  }).catch(() => {});
   if (window.api.onBgHandoffNotice) window.api.onBgHandoffNotice((id, message) => {
     if (typeof exitHandoffs !== 'undefined' && exitHandoffs.has(id)) return;
     showAppNotice({ id: 'background-progress:' + id, kind: 'info', message });
