@@ -141,7 +141,7 @@ function buildMemoryItem(file) {
   const row = document.createElement('div');
   row.className = 'session-row';
 
-  const isSchedule = !window.schedulesTabEnabled && file.filename.startsWith('schedule-');
+  const isSchedule = !window.schedulesTabEnabled && file.schedule === true;
   const icon = document.createElement('span');
   icon.className = isSchedule ? 'memory-schedule-icon' : 'memory-brain-icon';
   icon.innerHTML = isSchedule

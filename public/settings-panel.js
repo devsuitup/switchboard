@@ -390,7 +390,7 @@
         <div class="settings-field">
           <div class="settings-field-info">
             <span class="settings-label">Schedules tab</span>
-            <div class="settings-description">Show the optional Schedules tab instead of schedule files in Agent Files. Off by default. Takes effect when saved, without a restart; scheduled tasks keep running either way.</div>
+            <div class="settings-description">Show the Schedules tab instead of schedule files in Agent Files. On by default; this setting will be removed in a later release. Takes effect when saved, without a restart; scheduled tasks keep running either way.</div>
           </div>
           <div class="settings-field-control">
             <label class="settings-toggle"><input type="checkbox" id="sv-schedules-tab" ${schedulesTabValue ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>

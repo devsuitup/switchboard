@@ -25,6 +25,7 @@ async function setup(t, settings = {}, beforeInit = () => {}) {
   fs.writeFileSync(path.join(folder, 'seed.jsonl'), JSON.stringify({ type: 'user', cwd: project }));
   fs.writeFileSync(path.join(commands, 'schedule-nightly.md'), 'nightly');
   fs.writeFileSync(path.join(commands, 'deploy.md'), 'deploy');
+  fs.writeFileSync(path.join(project, '.claude', 'schedule-notes.md'), 'notes');
   const dom = new JSDOM(fs.readFileSync(path.join(root, 'public/index.html'), 'utf8'), { runScripts: 'outside-only', url: 'http://localhost' });
   t.after(() => dom.window.close());
   const w = dom.window;
@@ -65,10 +66,17 @@ async function setup(t, settings = {}, beforeInit = () => {}) {
   return { w, calls, get saved() { return saved; }, tab: w.document.querySelector('[data-tab="schedules"]') };
 }
 
-for (const [label, settings] of [['default', {}], ['explicit off', { schedulesTab: false }], ['on', { schedulesTab: true }]]) {
+test('the shipped page starts with the Schedules tab hidden until settings are applied', () => {
+  const dom = new JSDOM(fs.readFileSync(path.join(root, 'public/index.html'), 'utf8'));
+  const tab = dom.window.document.querySelector('[data-tab="schedules"]');
+  assert.equal(tab.hidden, true, 'this fixture guards the first-apply path below');
+  dom.window.close();
+});
+
+for (const [label, settings] of [['fresh profile', null], ['absent', {}], ['upgraded without the key', { sidebarWidth: 300, theme: 'dark' }], ['explicit off', { schedulesTab: false }], ['on', { schedulesTab: true }]]) {
   test(`${label}: tab and Agent Files follow the saved setting`, async t => {
     const h = await setup(t, settings);
-    const enabled = settings.schedulesTab === true;
+    const enabled = settings?.schedulesTab !== false;
     assert.equal(h.tab.hidden, !enabled, 'Schedules tab visibility follows the setting');
     assert.equal(h.tab.disabled, !enabled, 'disabled tab has no keyboard route');
     assert.equal(h.tab.tabIndex, enabled ? 0 : -1);
@@ -99,11 +107,39 @@ for (const [label, settings] of [['default', {}], ['explicit off', { schedulesTa
   });
 }
 
-test('default Agent Files exposes schedule files and Run now', async t => {
-  const h = await setup(t);
-  const schedule = [...h.w.document.querySelectorAll('.memory-item')].find(row => row.textContent.includes('schedule-nightly.md'));
-  assert.ok(schedule, 'default Agent Files restores schedule-nightly.md');
-  assert.ok(schedule.querySelector('[title="Run now"]'), 'default schedule has Run now');
+test('fresh profile: Schedules is on and keyboard reachable without a restart or a Save', async t => {
+  const h = await setup(t, null);
+  assert.equal(h.w.schedulesTabEnabled, true);
+  assert.equal(h.tab.hidden, false);
+  assert.equal(h.tab.disabled, false);
+  assert.equal(h.tab.tabIndex, 0);
+  assert.equal(h.saved, null, 'turning the default on writes nothing');
+  h.w.showSchedules('/p');
+  assert.equal(h.w.activeTab, 'schedules', 'programmatic project navigation works');
+  assert.ok(h.calls.includes('list'));
+  const rows = [...h.w.document.querySelectorAll('.memory-item')];
+  assert.equal(rows.some(row => row.textContent.includes('schedule-nightly.md')), false, 'Agent Files hides runner schedules');
+});
+
+test('a second apply of the same value keeps the tab in step with the setting', async t => {
+  const h = await setup(t, {});
+  h.w._applySchedulesTab(true);
+  assert.equal(h.tab.hidden, false);
+  h.w._applySchedulesTab(false);
+  h.w._applySchedulesTab(false);
+  assert.equal(h.tab.hidden, true);
+  assert.equal(h.tab.disabled, true);
+});
+
+test('explicit off: only runner schedules carry the schedule icon and Run now in Agent Files', async t => {
+  const h = await setup(t, { schedulesTab: false });
+  const rows = [...h.w.document.querySelectorAll('.memory-item')];
+  const notes = rows.find(row => row.textContent.includes('schedule-notes.md'));
+  assert.ok(notes, 'a schedule-named file outside .claude/commands stays listed');
+  assert.equal(notes.querySelector('[title="Run now"]'), null, 'the runner does not run it, so no Run now');
+  assert.equal(notes.querySelector('.memory-schedule-icon'), null);
+  const nightly = rows.find(row => row.textContent.includes('schedule-nightly.md'));
+  assert.ok(nightly.querySelector('.memory-schedule-icon'));
 });
 
 test('startup with the default setting does not rebuild the sidebar', async t => {
@@ -148,7 +184,7 @@ for (const enabled of [false, true]) {
 
 test('global Settings saves the toggle and switches surfaces live in both directions', async t => {
   const h = await setup(t);
-  for (const enabled of [true, false]) {
+  for (const enabled of [false, true]) {
     await h.w.openSettingsViewer('global');
     const toggle = h.w.document.querySelector('#sv-schedules-tab');
     assert.ok(toggle, 'Global Settings exposes Schedules tab');

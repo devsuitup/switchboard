@@ -37,7 +37,7 @@ const SETTING_DEFAULTS = {
   remoteTriggers: false,
   remoteHosts: [],
   remoteRefreshMs: 300000,
-  schedulesTab: false,
+  schedulesTab: true,
   lastSeenVersion: null, // see docs/changelog.md
   // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
   disabledHarnesses: [],

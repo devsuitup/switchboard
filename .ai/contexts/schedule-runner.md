@@ -71,7 +71,7 @@ From `schedule-runner.js`:
 From `schedule-ipc.js`:
 
 - `init(log, runScheduleCommand, isPathAllowed, isProjectArchived)` — wire IPC handlers (`get-schedule-creator-command`, `create-schedule-session`, `run-schedule-now`).
-- `ensureScheduleCreatorCommand()` — on app start, write `SCHEDULE_CREATOR_TEMPLATE` to `~/.claude/commands/create-switchboard-schedule.md` if missing.
+- `ensureScheduleCreatorCommand()` — on app start, write `SCHEDULE_CREATOR_TEMPLATE` to `~/.claude/commands/create-switchboard-schedule.md` when missing, or replace it when its bytes match a known shipped template (see "Schedule creation").
 
 `main.js`'s shared `runScheduleCommand` returns `{ok:false, error}` when the
 project is archived, a sandbox cannot run on this platform, sandbox add-dirs
@@ -629,7 +629,8 @@ SHA-256, `eb28b0b4d916fb22e7b1f3a84d2aa2852436c311ebbc873587a332d3da5950d7`.
 Future edits append the replaced template's hash to
 `SHIPPED_CREATOR_TEMPLATE_SHA256` and update the current pin; the assertion
 failure explains both steps. Every Schedules tab mention in the template and
-welcome text explains Global Settings → Schedules tab, because it defaults off.
+welcome text names Global Settings → Schedules tab, because the setting can
+still turn the tab off (#1239).
 
 Coverage: `schedule-create-file.test.js`, `schedule-creator-template.test.js`
 and `dom-schedule-create.test.js` load shipped code with require or filename-tagged
@@ -638,17 +639,29 @@ VM evaluation; creator tests use disposable homes and stub Electron.
 ## Schedules tab (#792, slice A2)
 
 Global Settings → **Schedules tab** persists `global.schedulesTab`, defaulting
-to `SETTING_DEFAULTS.schedulesTab` (false). Only renderer surfaces are gated.
+to `SETTING_DEFAULTS.schedulesTab` (true since #1239). Only renderer surfaces are gated.
 The startup settings restore and Settings Save call `_applySchedulesTab`:
 hidden/disabled clock tab with tabindex -1 when off, no programmatic route,
-and a return to Sessions when the active tab is disabled. Only an effective
-value change reloads Agent Files if open, cancels schedule refreshes and refreshes
-sidebar notices. Startup applies it after restoring sidebar width and shortcuts,
+and a return to Sessions when the active tab is disabled. `index.html` ships
+the tab hidden and `window.schedulesTabEnabled` starts at the default, so
+`_applySchedulesTab` writes the tab's hidden, disabled and tabindex on every
+call; otherwise the first apply of the default would leave the tab hidden. Only
+an effective value change reloads Agent Files if open, cancels schedule
+refreshes and refreshes sidebar notices.
+
+Absent and explicit `false` are told apart only by the key's presence. Every
+global Save since #792 has written the checkbox state, so a profile that saved
+Global Settings while the default was off holds `false` and keeps the tab off;
+no migration rewrites it, because that value cannot be told from a deliberate
+opt-out. The setting and the Agent Files fallback stay for one release; their
+removal is deferred (#1239). Startup applies it after restoring sidebar width and shortcuts,
 so a tab failure cannot interrupt their restore. Global Save's separate sidebar
 refresh runs only when visible count, maximum age or remote hosts changed (an SDK
 visibility change still reloads projects).
 `file-lists.js` always supplies project command schedules, marked `schedule`;
-Agent Files filters those entries only when the tab is on. Its file search
+Agent Files filters those entries only when the tab is on. With the tab off,
+only entries marked `schedule` get the schedule icon and Run now, so a
+`schedule-*.md` outside a project's `.claude/commands` stays an ordinary file. Its file search
 index keeps them available so switching requires no reindex. With the tab off,
 the prior schedule icon, Run now and editor are restored. Archive choices,
 Undo, re-enable offers and recovery hints use their pre-A2 names and Agent

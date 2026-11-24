@@ -55,8 +55,10 @@ async function openSchedules(app, page, fixture) {
       return globalThis.scheduleFixture;
     });
   }, fixture);
-  await page.evaluate(() => window._applySchedulesTab(true));
-  await page.locator('.sidebar-tab[data-tab="schedules"]').click();
+  const tab = page.locator('.sidebar-tab[data-tab="schedules"]');
+  await expect(tab).toBeVisible();
+  await expect(tab).toBeEnabled();
+  await tab.click();
   const count = fixture.projects.reduce((sum, project) => sum + project.schedules.length, 0);
   await expect(page.locator('#schedules-content .schedule-item')).toHaveCount(count);
 }

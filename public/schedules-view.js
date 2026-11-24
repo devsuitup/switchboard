@@ -3,12 +3,12 @@
 window.schedulesTabEnabled = SETTING_DEFAULTS.schedulesTab;
 
 window._applySchedulesTab = enabled => {
-  if (window.schedulesTabEnabled === enabled) return;
-  window.schedulesTabEnabled = enabled;
   const tab = document.querySelector('.sidebar-tab[data-tab="schedules"]');
   tab.hidden = !enabled;
   tab.disabled = !enabled;
   tab.tabIndex = enabled ? 0 : -1;
+  if (window.schedulesTabEnabled === enabled) return;
+  window.schedulesTabEnabled = enabled;
   if (!enabled) {
     setSchedulesVisible(false);
     if (activeTab === 'schedules') document.querySelector('.sidebar-tab[data-tab="sessions"]').click();
