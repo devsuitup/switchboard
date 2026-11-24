@@ -244,6 +244,7 @@ test('main registers list-schedules with the real backend and instance dependenc
     getSetting: f.deps.getSetting, SETTING_DEFAULTS: { sandbox: false },
     isProjectSettingsArchived: () => true, isKnownProjectRoot: () => false,
     getKnownProjectPaths: () => [], _isKnownProjectRoot: () => false,
+    scheduleHealth: () => ({ suspended: true, reason: 'unreadable', path: '/records', code: 'EACCES', message: 'denied', since: 1, retryMs: 10000, resultFailure: null }),
     require: createRequire(filename),
   }, { filename, lineOffset: source.slice(0, start).split('\n').length - 1 });
   const children = [];
@@ -271,6 +272,9 @@ test('main registers list-schedules with the real backend and instance dependenc
   children[0].emit('exit', 2);
   const reply = await handlers.get('list-schedules')();
   assert.equal(reply.catchUpActive, false);
+  assert.equal(reply.health.suspended, true, 'the listing carries the scheduler health');
+  assert.equal(reply.health.path, '/records');
+  assert.equal(typeof handlers.get('get-schedule-health'), 'function');
   assert.equal(reply.projects[0].archived, true);
   assert.equal(reply.projects[0].known, false);
   assert.equal(reply.projects[0].schedules[0].file, 'schedule-job.md');
@@ -363,7 +367,7 @@ function mainListing(f, env) {
     getCachedByFolder: () => [], cliSessionState: { isScheduleRunLive: () => false },
     process: { env }, path, DB_PATH: path.join(f.root, 'db'), PROJECTS_DIR: path.join(f.root, 'transcripts'),
     getSetting: f.deps.getSetting, SETTING_DEFAULTS: { sandbox: false }, isProjectSettingsArchived: () => false,
-    activeSessions: new Map(), fs: { existsSync: () => true, readdirSync: () => {
+    scheduleHealth: () => ({ suspended: false, resultFailure: null }), activeSessions: new Map(), fs: { existsSync: () => true, readdirSync: () => {
       scans++;
       return known.map(name => ({ name, isDirectory: () => true }));
     } },

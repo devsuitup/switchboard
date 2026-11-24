@@ -29,6 +29,49 @@ let schedulesData = null;
 let schedulesLoadError = null;
 let schedulesInFlight = null;
 
+const scheduleHealthNotices = new Map();
+
+function scheduleRetryText(ms) {
+  return ms >= 60000 ? `${Math.round(ms / 60000)} min` : `${Math.max(1, Math.round(ms / 1000))} s`;
+}
+
+function scheduleSuspensionText(health) {
+  if (!health?.suspended) return null;
+  const retry = health.retryMs ? ` Retrying every ${scheduleRetryText(health.retryMs)}.` : '';
+  if (health.reason === 'slow') return `Automatic schedules are paused: the background-run records have not been read yet.${retry}`;
+  const where = health.path ? ` at ${health.path}` : '';
+  const code = health.code ? ` (${health.code})` : health.message ? ` (${health.message})` : '';
+  return `Automatic schedules are paused: the background-run records${where} could not be read${code}. Fix their permissions.${retry}`;
+}
+
+function scheduleResultFailureText(health) {
+  const failure = health?.resultFailure;
+  return failure ? `A schedule result could not be recorded: ${failure.message}` : null;
+}
+
+function showScheduleHealthNotice(id, message) {
+  if (scheduleHealthNotices.get(id) === message) return;
+  if (message) scheduleHealthNotices.set(id, message); else scheduleHealthNotices.delete(id);
+  if (message) showAppNotice({ id, kind: 'error', message });
+  else clearAppNotice(id);
+}
+
+function applyScheduleHealth(health) {
+  showScheduleHealthNotice('ScheduleSuspended', scheduleSuspensionText(health));
+  showScheduleHealthNotice('ScheduleResultFailure', scheduleResultFailureText(health));
+}
+
+window.api?.onScheduleHealth?.(health => {
+  applyScheduleHealth(health);
+  queueSchedulesReload();
+});
+(async () => {
+  try {
+    const health = await window.api?.getScheduleHealth?.();
+    if (health) applyScheduleHealth(health);
+  } catch {}
+})();
+
 function setSchedulesVisible(visible) {
   schedulesVisible = visible;
   clearTimeout(schedulesTimer);
@@ -217,6 +260,15 @@ function renderSchedules(data) {
     create.title = prerequisite;
   }
   scheduleText(container, 'schedule-help', 'Runs before v0.0.90 carry no schedule marker and are not listed. Runs before results were kept, runs of another instance and runs alive when Switchboard closes have no result recorded.');
+  if (data.health) applyScheduleHealth(data.health);
+  for (const text of [scheduleSuspensionText(data.health), scheduleResultFailureText(data.health)]) {
+    if (!text) continue;
+    const banner = document.createElement('div');
+    banner.className = 'schedule-scan-error schedule-health';
+    banner.setAttribute('role', 'alert');
+    scheduleText(banner, 'schedule-problems', text);
+    container.appendChild(banner);
+  }
   let count = 0;
   for (const project of data.projects) {
     if (!project.schedules.length && !project.scanError) continue;
@@ -450,7 +502,8 @@ function buildScheduleItem(project, schedule, data) {
       : !schedule.enabled ? 'Disabled'
         : fatal.length ? `Never runs: ${fatal.join('; ')}`
           : schedule.nextRunMs === null ? 'No run within a year'
-            : `Next run: ${scheduleTime(schedule.nextRunMs, data.now)}`;
+            : data.health?.suspended ? `Paused: automatic launches are suspended (next run due ${scheduleTime(schedule.nextRunMs, data.now)})`
+              : `Next run: ${scheduleTime(schedule.nextRunMs, data.now)}`;
   scheduleText(item, 'schedule-state', state);
   if (schedule.runAsBackground) scheduleText(item, 'schedule-state', project.remoteAlias ? 'Background option ignored: local schedules only'
     : project.sandboxed ? 'Background unavailable under sandbox: runs headless' : 'Background session: can be joined while it runs');

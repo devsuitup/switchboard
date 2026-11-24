@@ -14,10 +14,14 @@ function scheduleRunFailureHint(failure) {
       : 'See the log for details, then try Run now again.';
 }
 
-function showScheduleRunExit({ name, projectPath, sessionId, manual = false, code, signal, failure, backgroundFallback, outcome, error }) {
+function showScheduleRunExit({ name, projectPath, sessionId, manual = false, code, signal, failure, backgroundFallback, outcome, error, persistenceError }) {
   if (backgroundFallback) {
     showAppNotice({ id: `ScheduleBackground:${projectPath}:${name}`, kind: 'info', message: `Schedule ${name}: ${backgroundFallback}` });
     return;
+  }
+  if (persistenceError) {
+    const subject = manual ? `Manual run of schedule ${name}` : `Schedule ${name}`;
+    showAppNotice({ id: `ScheduleResult:${projectPath}:${name}`, kind: 'error', message: `${subject} finished, but its result was not recorded: ${persistenceError}` });
   }
   if (code === 0) return;
   const id = manual ? `ScheduleRun:${sessionId}` : `ScheduleRun:${projectPath}:${name}`;

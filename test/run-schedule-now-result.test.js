@@ -104,8 +104,8 @@ function setup(t, { sandbox = false, platform = 'linux', refused = false, spawnE
     [SCHEDULE_RUNNER]: {
       parseFrontmatter: require('../src/main/schedules/schedule-runner').parseFrontmatter,
       scheduleFields: require('../src/main/schedules/schedule-runner').scheduleFields,
-      createScheduleSession: schedule => { created.push(schedule); return { sessionId: 'manual-session', jsonlPath: path.join(root, 'seed', 'manual-session.jsonl') }; },
-      buildScheduleCommand: () => ({ claudeArgs: ['--resume', 'manual-session', '--add-dir', refused ? path.join(root, '.claude') : '/refused'] }),
+      createScheduleSession: schedule => { created.push(schedule); return { sessionId: 'c0ffee00-1234-4123-8123-123456789abc', jsonlPath: path.join(root, 'seed', 'c0ffee00-1234-4123-8123-123456789abc.jsonl') }; },
+      buildScheduleCommand: () => ({ claudeArgs: ['--resume', 'c0ffee00-1234-4123-8123-123456789abc', '--add-dir', refused ? path.join(root, '.claude') : '/refused'] }),
     },
   }, [SCHEDULE_RUNNER]);
   ctx.scheduleIpc = ipc;
@@ -174,7 +174,7 @@ for (const [frontmatter, background] of [['', false], ['run-as-background: true\
     assert.equal(result.ok, true);
     assert.equal(h.created[0].runAsBackground, background);
     assert.equal('timeoutMs' in h.created[0], false, 'no timeout is read from the file');
-    assert.deepEqual(h.identity.background && { ...h.identity.background }, background ? { seedPath: path.join(h.root, 'seed', 'manual-session.jsonl') } : undefined,
+    assert.deepEqual(h.identity.background && { ...h.identity.background }, background ? { seedPath: path.join(h.root, 'seed', 'c0ffee00-1234-4123-8123-123456789abc.jsonl') } : undefined,
       'the launcher gets the seed createScheduleSession wrote');
     assert.equal(result.sessionId, 'actual-session', 'Run now answers with the session the launcher reports');
   });
@@ -232,7 +232,7 @@ test('Run now acknowledges success only after the child spawn event', async t =>
   h.children[0].emit('spawn');
   const result = await pending;
   assert.equal(result.ok, true);
-  assert.equal(result.sessionId, 'manual-session');
+  assert.equal(result.sessionId, 'c0ffee00-1234-4123-8123-123456789abc');
   h.children[0].emit('exit', 1);
   assert.equal(result.ok, true);
 });
@@ -252,7 +252,7 @@ test('Run now exit 127 sends its schedule, exit code and PATH diagnosis after la
   const [channel, payload] = h.messages[0];
   assert.equal(channel, 'schedule-run-exit');
   assert.deepEqual(JSON.parse(JSON.stringify(payload)), {
-    name: 'test', manual: true, projectPath: h.root, sessionId: 'manual-session',
+    name: 'test', manual: true, projectPath: h.root, sessionId: 'c0ffee00-1234-4123-8123-123456789abc',
     code: 127, signal: null, failure: 'claude-path',
   });
 });

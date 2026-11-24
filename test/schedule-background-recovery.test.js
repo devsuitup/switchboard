@@ -235,6 +235,7 @@ test('a stalled discovery is retried with a growing delay, and scheduling resume
   t.mock.timers.tick(10000);
   await immediate();
   assert.equal(slow.attempts.length, 2);
+  assert.deepEqual({ ...stop.getHealth(), since: 0 }, { suspended: true, reason: 'slow', path: null, code: null, message: 'not read after 10 s', since: 0, retryMs: 10000 });
   t.mock.timers.tick(19000);
   await immediate();
   assert.equal(slow.attempts.length, 2, 'the second wait is longer than the first');
@@ -242,8 +243,9 @@ test('a stalled discovery is retried with a growing delay, and scheduling resume
   assert.equal(slow.attempts.length, 3);
   await slow.attempts[2].discovered;
   await immediate();
-  assert.match(h.lines.join('\n'), /not read after 20 s \(attempt 2\)/);
+  assert.equal(h.lines.filter(line => line.includes('not read after')).length, 1, 'a stall that persists is logged once');
   assert.match(h.lines.join('\n'), /read after 3 attempts; scheduling resumes/);
+  assert.deepEqual(stop.getHealth(), { suspended: false });
   t.mock.timers.tick(30000);
   for (let i = 0; i < 10; i++) await immediate();
   assert.equal(launches.length, 1, 'the minute tick runs once the records are known');
@@ -361,48 +363,64 @@ function resultFixture(h, file) {
   return { destination, write: value => results.writeScheduleRunResult(runsDir, value, h.log) };
 }
 
-test('a publication lock left without a result keeps the result record instead of acknowledging it', async t => {
+test('an invalid result file keeps the result record and the report names the file', async t => {
   const h = fixture(t);
   const file = h.record(JOB, { phase: 'result', result: { outcome: 'exited', code: 0 }, cleanup: 'stopped and removed' });
   const r = resultFixture(h, file);
-  fs.writeFileSync(r.destination + '.lock', '');
-  const [details] = await bg.resumeBackgroundRuns({ ...h.deps, writeResult: r.write });
-  assert.equal(fs.existsSync(r.destination), false);
-  assert.deepEqual(h.calls, [], 'result-phase recovery never cleans again');
+  fs.writeFileSync(r.destination, '{');
+  const reports = [];
+  const deps = { ...h.deps, writeResult: value => results.publishScheduleRunResult(path.dirname(r.destination), value, h.log), report: value => reports.push(value) };
+  const [details] = await bg.resumeBackgroundRuns(deps);
   assert.equal(details.resultPending, true);
-  assert.equal(saved(file).phase, 'result', 'a lock is not a durable result');
-  assert.equal(fs.existsSync(r.destination + '.lock'), true, 'a recent lock is not taken over');
+  assert.match(details.persistenceError, /unreadable; remove or fix it/);
+  assert.equal(fs.readFileSync(r.destination, 'utf8'), '{', 'the invalid file is not repaired behind the user');
+  assert.equal(saved(file).phase, 'result');
+  assert.ok(reports[0].persistenceError.includes(r.destination));
 });
 
-test('a stale publication lock from a crashed writer is taken over and the result is published', async t => {
+for (const code of ['ENOTSUP', 'EXDEV']) {
+  test(`a store without hard links (${code}) still publishes a recovered result and retires its record`, async t => {
+    const h = fixture(t);
+    const file = h.record(JOB, { phase: 'result', result: { outcome: 'exited', code: 0 }, cleanup: 'stopped and removed' });
+    const r = resultFixture(h, file);
+    const link = () => { throw Object.assign(new Error('hard links not supported'), { code }); };
+    const [details] = await bg.resumeBackgroundRuns({ ...h.deps, writeResult: value => results.publishScheduleRunResult(path.dirname(r.destination), value, h.log, { link }) });
+    assert.equal(details.resultPending, undefined);
+    assert.equal(JSON.parse(fs.readFileSync(r.destination, 'utf8')).cleanup, 'stopped and removed');
+    assert.equal(fs.existsSync(file), false);
+  });
+}
+
+test('a publication failure reaches the report, keeps the record, and is logged once per distinct error', async t => {
   const h = fixture(t);
   const file = h.record(JOB, { phase: 'result', result: { outcome: 'exited', code: 0 }, cleanup: 'stopped and removed' });
   const r = resultFixture(h, file);
-  fs.writeFileSync(r.destination + '.lock', '');
-  const old = new Date(Date.now() - 11 * 60 * 1000);
-  fs.utimesSync(r.destination + '.lock', old, old);
-  const [details] = await bg.resumeBackgroundRuns({ ...h.deps, writeResult: r.write });
-  assert.equal(details.resultPending, undefined);
-  assert.equal(JSON.parse(fs.readFileSync(r.destination, 'utf8')).cleanup, 'stopped and removed');
-  assert.equal(fs.existsSync(r.destination + '.lock'), false);
-  assert.equal(fs.existsSync(file), false);
+  const reports = [];
+  const link = () => { throw Object.assign(new Error('the volume refused the link'), { code: 'EIO' }); };
+  const deps = { ...h.deps, report: value => reports.push(value),
+    writeResult: value => results.publishScheduleRunResult(path.dirname(r.destination), value, h.log, { link }) };
+  for (let i = 0; i < 2; i++) {
+    const [value] = await bg.resumeBackgroundRuns(deps);
+    assert.equal(value.resultPending, true);
+    assert.match(value.persistenceError, /the volume refused the link/);
+    assert.equal(saved(file).phase, 'result');
+  }
+  assert.equal(results.readScheduleRunResults(path.dirname(r.destination), [ACTUAL]).size, 0);
+  assert.equal(reports.length, 2);
+  for (const report of reports) assert.match(report.persistenceError, /the volume refused the link/, 'publication failure is visible in the report sent to the UI');
+  assert.equal(h.lines.filter(line => line.includes('result not recorded')).length, 1, 'retries do not repeat the same warning');
+  assert.equal(h.lines.filter(line => line.includes('Cannot record result')).length, 1);
 });
 
-test('a writer losing to a live publisher is not acknowledged until a result is durable, and the first result stays', t => {
+test('a lock file left by an older version does not block publication', t => {
   const h = fixture(t);
   const runsDir = path.join(h.home, 'race');
   fs.mkdirSync(runsDir);
-  const startedAtMs = Date.now();
-  const input = { sessionId: ACTUAL, filePath: h.filePath, name: 'daily', slug: 'daily', startedAtMs, outcome: 'exited', code: 0 };
-  const late = { ...input, outcome: 'timed-out', error: 'late' };
-  const lock = path.join(runsDir, `${runner.scheduleStateKey({ filePath: h.filePath })}-${startedAtMs}-${ACTUAL}.json.lock`);
-  fs.writeFileSync(lock, '');
-  assert.equal(results.writeScheduleRunResult(runsDir, late, h.log), false, 'the loser has no durable result yet');
-  fs.unlinkSync(lock);
-  assert.equal(results.writeScheduleRunResult(runsDir, input, h.log), true, 'the winner publishes');
-  fs.writeFileSync(lock, '');
-  assert.equal(results.writeScheduleRunResult(runsDir, late, h.log), true, 'a durable result is acknowledged even while locked');
-  assert.equal(JSON.parse(fs.readFileSync(lock.slice(0, -'.lock'.length), 'utf8')).outcome, 'exited', 'first result wins');
+  const input = { sessionId: ACTUAL, filePath: h.filePath, name: 'daily', slug: 'daily', startedAtMs: Date.now(), outcome: 'exited', code: 0 };
+  const lock = path.join(runsDir, `${runner.scheduleStateKey({ filePath: h.filePath })}-${input.startedAtMs}-${ACTUAL}.json.lock`);
+  fs.writeFileSync(lock, 'old writer');
+  assert.equal(results.writeScheduleRunResult(runsDir, input, h.log), true);
+  assert.equal(fs.readFileSync(lock, 'utf8'), 'old writer', 'publication never reads, takes or removes a lock');
 });
 
 test('the result writer acknowledges a write, an existing result and reports a failure', t => {
@@ -522,13 +540,15 @@ function recoveringScheduler(t, h) {
   const start = Math.floor(Date.now() / 60000) * 60000 + 59000;
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: start });
   const launches = [], attempts = [];
+  let changes = 0;
   const stop = runner.startScheduler(h.log, (...args) => { launches.push(args); args[3](); return { ok: true }; }, {
     projects: async () => [h.cwd],
     resumeBackgroundRuns: claim => { const resumed = bg.resumeBackgroundRuns(h.deps, claim); attempts.push(resumed); return resumed; },
+    onHealthChange: () => { changes++; },
   });
   t.after(stop);
   const settle = async (n = 20) => { for (let i = 0; i < n; i++) await immediate(); };
-  return { start, launches, attempts, settle };
+  return { start, launches, attempts, settle, stop, changes: () => changes };
 }
 
 test('a records directory read error keeps automatic launches held until a retry reads the records', async t => {
@@ -594,3 +614,41 @@ for (const [label, prepare] of [['empty', () => {}], ['missing', h => fs.rmSync(
     assert.equal(s.attempts.length, 1);
   });
 }
+
+test('a permanent records read failure is reported by the scheduler and the Schedules listing until discovery succeeds', async t => {
+  const h = fixture(t);
+  const { buildScheduleList } = require('../src/main/schedules/schedule-list');
+  const failure = failingRead(t, 'readdir', h.recordsDir);
+  const s = recoveringScheduler(t, h);
+  const deps = { scheduleProjects: () => ({ list: async () => [h.cwd] }), getCachedByFolder: () => [], isScheduleRunLive: () => false,
+    catchUpActive: false, projectsDir: h.home, runsDir: path.join(h.home, 'results'), now: () => s.start };
+  const healthy = await buildScheduleList(deps);
+  assert.deepEqual(healthy.health, { suspended: false, resultFailure: null });
+  await s.attempts[0].discovered.catch(() => {});
+  for (const wait of [10000, 20000, 40000, 80000, 160000, 300000, 300000]) {
+    t.mock.timers.tick(wait);
+    await s.settle();
+  }
+  assert.equal(s.attempts.length, 8);
+  assert.equal(s.launches.length, 0, 'the hold itself is unchanged');
+  assert.equal(h.lines.filter(line => line.includes('automatic launches stay suspended')).length, 1, 'the same failure is logged once');
+  const health = s.stop.getHealth();
+  assert.equal(health.suspended, true);
+  assert.equal(health.reason, 'unreadable');
+  assert.equal(health.code, 'EACCES');
+  assert.equal(path.resolve(health.path), path.resolve(h.recordsDir));
+  assert.equal(health.retryMs, 300000);
+  assert.ok(Number.isFinite(health.since));
+  const held = await buildScheduleList({ ...deps, schedulerHealth: () => ({ ...s.stop.getHealth(), resultFailure: null }) });
+  assert.notDeepEqual(held, healthy, 'Schedules listing must expose suspended automatic scheduling');
+  assert.equal(held.health.suspended, true);
+  const announced = s.changes();
+  assert.ok(announced >= 1, 'the suspension is announced');
+  failure.on = false;
+  t.mock.timers.tick(300000);
+  await s.settle();
+  assert.equal(await s.attempts[8].discovered, 0);
+  await s.settle();
+  assert.deepEqual(s.stop.getHealth(), { suspended: false }, 'a successful discovery clears the suspension');
+  assert.equal(s.changes(), announced + 1, 'the recovery is announced');
+});

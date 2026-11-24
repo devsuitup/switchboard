@@ -3,7 +3,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { renameWithRetry } = require('../shared/atomic-write');
 const { scheduleStateKey } = require('./schedule-runner');
 
 const RESULT_NAME = /^([0-9a-f]{16})-(\d+)-([0-9a-f-]{36})\.json$/;
@@ -52,34 +51,62 @@ function pruneScheduleRunResults(runsDir, key, keep = 20) {
   }
 }
 
-function claimPublication(lock, owner) {
-  const open = () => {
-    const fd = fs.openSync(lock, 'wx');
-    try { fs.writeSync(fd, owner); } catch (error) { fs.closeSync(fd); releasePublication(lock, owner); throw error; }
-    return fd;
-  };
-  try { return open(); }
-  catch (error) { if (error.code !== 'EEXIST') throw error; }
+const LINK_UNSUPPORTED = new Set(['ENOTSUP', 'EPERM', 'EISDIR', 'EXDEV', 'EINVAL', 'ENOSYS']);
+const loggedFailures = new Map();
+const failureListeners = new Set();
+let latestFailure = null;
+
+function setLatestFailure(failure) {
+  if (latestFailure === failure) return;
+  latestFailure = failure;
+  for (const listener of failureListeners) { try { listener(failure); } catch {} }
+}
+
+function onResultFailureChange(listener) {
+  failureListeners.add(listener);
+  return () => failureListeners.delete(listener);
+}
+
+function createExclusive(file, text) {
+  const fd = fs.openSync(file, 'wx');
   try {
-    if (fs.statSync(lock).mtimeMs >= Date.now() - STALE_PUBLICATION_MS) return undefined;
-    fs.unlinkSync(lock);
-  } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  try { return open(); }
-  catch (error) { if (error.code === 'EEXIST') return undefined; throw error; }
+    fs.writeFileSync(fd, text);
+    fs.fsyncSync(fd);
+  } catch (error) {
+    try { fs.closeSync(fd); } catch {}
+    try { fs.unlinkSync(file); } catch {}
+    throw error;
+  }
+  fs.closeSync(fd);
 }
 
-function releasePublication(lock, owner) {
-  try { if (fs.readFileSync(lock, 'utf8') === owner) fs.unlinkSync(lock); } catch {}
-}
-
-function linkNew(from, to, link) {
-  try { link(from, to); return true; }
+function createNew(file, text) {
+  try { createExclusive(file, text); return true; }
   catch (error) { if (error.code === 'EEXIST') return false; throw error; }
 }
 
-function writeScheduleRunResult(runsDir, input, log, { link = fs.linkSync } = {}) {
-  let tmp, aside, lock, lockFd;
-  const owner = crypto.randomUUID();
+function publishNew(tmp, destination, text, link) {
+  try { link(tmp, destination); return true; }
+  catch (error) {
+    if (error.code === 'EEXIST') return false;
+    if (LINK_UNSUPPORTED.has(error.code)) return createNew(destination, text);
+    throw error;
+  }
+}
+
+function resultFailure(destination, error, log, sessionId) {
+  const failure = { path: destination || null, code: error.code || null, message: error.message, at: Date.now() };
+  setLatestFailure(failure);
+  const key = destination || '';
+  if (loggedFailures.get(key) !== failure.message) {
+    loggedFailures.set(key, failure.message);
+    log.warn(`[schedule] Cannot record result for ${sessionId}:`, failure.message);
+  }
+  return { ok: false, error: failure };
+}
+
+function publishScheduleRunResult(runsDir, input, log, { link = fs.linkSync } = {}) {
+  let tmp, destination;
   try {
     const { sessionId, filePath, name, slug, manual = false, dueMs = null, startedAtMs,
       endedAtMs = Date.now(), outcome, code = null, signal = null, error = null } = input;
@@ -93,47 +120,37 @@ function writeScheduleRunResult(runsDir, input, log, { link = fs.linkSync } = {}
     if (typeof input.jobId === 'string') record.jobId = input.jobId;
     if (typeof input.cleanup === 'string') record.cleanup = input.cleanup;
     if (typeof input.warning === 'string') record.warning = input.warning;
+    const text = JSON.stringify(record) + '\n';
     fs.mkdirSync(runsDir, { recursive: true });
-    const destination = path.join(runsDir, filename);
-    lock = destination + '.lock';
-    const match = RESULT_NAME.exec(filename);
-    const durable = () => {
-      try { return validRecord(JSON.parse(fs.readFileSync(destination, 'utf8')), match); } catch { return false; }
-    };
-    lockFd = claimPublication(lock, owner);
-    const keepFirst = () => {
-      log.info(`[schedule] Result already recorded for ${sessionId}; keeping the first`);
-      return true;
-    };
-    if (lockFd === undefined) {
-      if (durable()) return keepFirst();
-      log.warn(`[schedule] Result of ${sessionId} is being published by another writer; not acknowledged yet`);
-      return false;
-    }
-    if (durable()) return keepFirst();
+    destination = path.join(runsDir, filename);
     tmp = path.join(runsDir, `.${filename}.${crypto.randomUUID()}.tmp`);
-    fs.writeFileSync(tmp, JSON.stringify(record) + '\n', { flag: 'wx' });
-    if (!linkNew(tmp, destination, link)) {
-      if (durable()) return keepFirst();
-      aside = path.join(runsDir, `.${filename}.${crypto.randomUUID()}.tmp`);
-      renameWithRetry(destination, aside);
-      let source = tmp;
-      try { if (validRecord(JSON.parse(fs.readFileSync(aside, 'utf8')), match)) source = aside; } catch {}
-      if (!linkNew(source, destination, link)) return durable();
-      if (source === aside) return keepFirst();
+    createExclusive(tmp, text);
+    if (publishNew(tmp, destination, text, link)) pruneScheduleRunResults(runsDir, key);
+    else {
+      let valid = false;
+      try { valid = validRecord(JSON.parse(fs.readFileSync(destination, 'utf8')), RESULT_NAME.exec(filename)); } catch {}
+      if (!valid) {
+        return resultFailure(destination, Object.assign(new Error(`The result file ${destination} is unreadable; remove or fix it`),
+          { code: 'EBADRESULT' }), log, sessionId);
+      }
+      log.info(`[schedule] Result already recorded for ${sessionId}; keeping the first`);
     }
-    pruneScheduleRunResults(runsDir, key);
-    return true;
+    loggedFailures.delete(destination);
+    setLatestFailure(null);
+    return { ok: true };
   } catch (error) {
-    log.warn(`[schedule] Cannot record result for ${input.sessionId}:`, error.message);
-    return false;
+    return resultFailure(destination, error, log, input.sessionId);
   } finally {
-    for (const file of [tmp, aside]) if (file) { try { fs.unlinkSync(file); } catch {} }
-    if (lockFd !== undefined) {
-      try { fs.closeSync(lockFd); } catch {}
-      releasePublication(lock, owner);
-    }
+    if (tmp) { try { fs.unlinkSync(tmp); } catch {} }
   }
+}
+
+function writeScheduleRunResult(runsDir, input, log, options) {
+  return publishScheduleRunResult(runsDir, input, log, options).ok;
+}
+
+function latestResultFailure() {
+  return latestFailure;
 }
 
 function validRecord(record, match) {
@@ -174,4 +191,5 @@ function readScheduleRunResults(runsDir, sessionIds) {
   return results;
 }
 
-module.exports = { scheduleRunsDir, classifyRunExit, writeScheduleRunResult, pruneScheduleRunResults, readScheduleRunResults };
+module.exports = { scheduleRunsDir, classifyRunExit, writeScheduleRunResult, publishScheduleRunResult, latestResultFailure, onResultFailureChange,
+  pruneScheduleRunResults, readScheduleRunResults };

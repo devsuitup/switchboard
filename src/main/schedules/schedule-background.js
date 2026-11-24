@@ -21,6 +21,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const PHASES = new Set(['running', 'cleanup', 'result']);
 const CLEANUP_MODES = new Set(['stop', 'rm', 'none']);
 const ANSI = /\x1b\[[0-9;]*m/g;
+const loggedPublishFailures = new Map();
+let lastDiscoveryFailure = null;
 
 function backgroundRefusal({ sandbox, preLaunchCmd, shell, argv = [] }) {
   if (dispatchRefusal({ sandbox, preLaunchCmd }) || /(?:^|[/\\])wsl(?:\.exe)?$/i.test(shell || '')) {
@@ -129,19 +131,30 @@ function publish(run, d) {
   const sessionId = run.actualId || run.sessionId;
   const { outcome, code = null, error = null, stderr = '' } = run.result;
   const { cleanup, warning } = run;
-  let published = false;
+  let published = false, persistenceError = null;
   try {
-    published = !!d.writeResult({ sessionId, filePath: run.filePath, name: run.name, slug: run.slug, manual: !!run.manual,
+    const written = d.writeResult({ sessionId, filePath: run.filePath, name: run.name, slug: run.slug, manual: !!run.manual,
       dueMs: run.dueMs ?? null, startedAtMs: run.startedAtMs, outcome, code, signal: null, error, stderr,
       ...(run.jobId ? { jobId: run.jobId } : {}), ...(cleanup ? { cleanup } : {}), ...(warning ? { warning } : {}) });
-  } catch (failure) { d.log?.warn(`[schedule] ${run.runName}: cannot record the result:`, failure.message); }
-  if (published) forgetRun(run, d);
-  else if (run.actualId && persistRun(run, d)) d.log?.warn(`[schedule] ${run.runName}: result not recorded; job ${run.jobId} keeps its record for the next start`);
+    published = written === true || written?.ok === true;
+    if (!published) persistenceError = written?.error?.message || 'the result could not be written';
+  } catch (failure) { persistenceError = failure.message; }
+  if (published) { forgetRun(run, d); loggedPublishFailures.delete(run.jobId || sessionId); }
+  else {
+    const retained = run.actualId && persistRun(run, d);
+    const notice = `${persistenceError}${retained ? `; job ${run.jobId} keeps its record for the next start` : ''}`;
+    if (loggedPublishFailures.get(run.jobId || sessionId) !== notice) {
+      loggedPublishFailures.set(run.jobId || sessionId, notice);
+      d.log?.warn(`[schedule] ${run.runName}: result not recorded: ${notice}`);
+    }
+  }
   const line = `[schedule] ${run.runName}: ${outcome}${error ? ` — ${error}` : ''}${cleanup ? `; ${cleanup}` : ''}${warning ? `; ${warning}` : ''}`;
   if (outcome === 'exited' && code === 0) d.log?.info(line); else d.log?.error(line);
-  try { d.report({ name: run.name, projectPath: run.cwd, sessionId, manual: !!run.manual, code, signal: null, outcome, error, stderr: stderr || error || '' }); }
-  catch (failure) { d.log?.warn(`[schedule] ${run.runName}: cannot report the result:`, failure.message); }
-  return published;
+  try {
+    d.report({ name: run.name, projectPath: run.cwd, sessionId, manual: !!run.manual, code, signal: null, outcome, error, stderr: stderr || error || '',
+      ...(persistenceError ? { persistenceError } : {}) });
+  } catch (failure) { d.log?.warn(`[schedule] ${run.runName}: cannot report the result:`, failure.message); }
+  return persistenceError ? { published: false, persistenceError } : { published: true };
 }
 
 async function settle(run, d) {
@@ -154,9 +167,9 @@ async function settle(run, d) {
     }
     run.phase = 'result';
   }
-  const published = publish(run, d);
+  const { published, persistenceError } = publish(run, d);
   return { ...run.result, ...(run.cleanup ? { cleanup: run.cleanup } : {}), ...(run.warning ? { warning: run.warning } : {}),
-    ...(published ? {} : { resultPending: true }) };
+    ...(published ? {} : { resultPending: true, persistenceError }) };
 }
 
 async function watchJob(run, d) {
@@ -293,10 +306,13 @@ async function discoverBackgroundRuns(deps, claim = () => () => {}) {
   let names;
   try { names = (await fs.promises.readdir(d.recordsDir)).filter(name => /^[0-9a-f]{8}\.json$/.test(name)).sort().slice(0, MAX_RECORD_READS); }
   catch (error) {
-    if (error.code === 'ENOENT') return [];
-    d.log?.warn('[schedule] Cannot read the background run records:', error.message);
+    if (error.code === 'ENOENT') { lastDiscoveryFailure = null; return []; }
+    if (lastDiscoveryFailure !== error.message) d.log?.warn('[schedule] Cannot read the background run records:', error.message);
+    lastDiscoveryFailure = error.message;
+    if (!error.path) error.path = d.recordsDir;
     throw error;
   }
+  lastDiscoveryFailure = null;
   const runs = [];
   for (const file of names) {
     if (runs.length >= MAX_RESUMED_RUNS) break;
@@ -305,6 +321,7 @@ async function discoverBackgroundRuns(deps, claim = () => () => {}) {
     catch (error) {
       if (error.code === 'ENOENT') continue;
       d.log?.warn(`[schedule] Cannot read the background run record ${file}:`, error.message);
+      if (!error.path) error.path = path.join(d.recordsDir, file);
       runs.failure = runs.failure || error;
       continue;
     }

@@ -53,7 +53,12 @@ function setup(t, options = {}) {
   const activeSessions = new Map(options.joined ? [[ACTUAL, { isAttach: true, attachJobId: JOB, pty: {}, exited: false }]] : []);
   const context = vm.createContext({
     require: name => {
-      if (name.endsWith('/schedule-run-results')) return { scheduleRunsDir: () => home, writeScheduleRunResult: (_dir, record) => { records.push(record); return options.writeAck ?? true; } };
+      if (name.endsWith('/schedule-run-results')) {
+        return { scheduleRunsDir: () => home, publishScheduleRunResult: (_dir, record) => {
+          records.push(record);
+          return options.writeAck ?? true ? { ok: true } : { ok: false, error: { message: 'the result store refused the write' } };
+        } };
+      }
       if (name.endsWith('/schedule-background')) {
         const mod = localRequire(name);
         return { ...mod,
@@ -188,6 +193,7 @@ test('the main result callback returns the writer acknowledgement, and a refused
   assert.equal(saved.phase, 'result');
   assert.equal(saved.result.outcome, 'exited');
   assert.equal(saved.cleanup, 'stopped and removed');
+  assert.match(h.reports.at(-1).persistenceError, /the result store refused the write/, 'the report carries the persistence error');
   assert.equal(h.context.scheduleBackgroundDeps().writeResult({ sessionId: ACTUAL }), true, 'a record without a schedule file has nothing to publish');
 });
 

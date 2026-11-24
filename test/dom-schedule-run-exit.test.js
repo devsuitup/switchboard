@@ -149,3 +149,12 @@ test('manual run wording uses the plain schedule name and the manual flag', t =>
   assert.match(alert.textContent, /^Manual run of schedule nightly exited with code 1/);
   assert.doesNotMatch(alert.textContent, /Schedule Manual run/);
 });
+
+test('a successful run whose result was not recorded says so', t => {
+  const h = setup(t);
+  h.exit({ name: 'Nightly', projectPath: '/p', manual: false, sessionId: 'ok', code: 0, persistenceError: 'The result file /r/x.json is unreadable; remove or fix it' });
+  const alert = h.document.querySelector('[role="alert"]');
+  assert.equal(alert.dataset.noticeId, 'ScheduleResult:/p:Nightly');
+  assert.match(alert.textContent, /^Schedule Nightly finished, but its result was not recorded: The result file \/r\/x\.json is unreadable; remove or fix it/);
+  assert.doesNotMatch(h.document.body.textContent, /exited with code/);
+});

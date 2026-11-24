@@ -366,6 +366,15 @@ const closedSessions = new Map();
 // see .ai/contexts/touched-files.md ("One route into Touched")
 const exitedRemoteSessionIds = new Set();
 let stopScheduler;
+function scheduleHealth() {
+  const resultFailure = require('./src/main/schedules/schedule-run-results').latestResultFailure();
+  return { ...(stopScheduler?.getHealth?.() || { suspended: false }), resultFailure };
+}
+function notifyScheduleHealth() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+  mainWindow.webContents.send('schedule-health', scheduleHealth());
+}
+require('./src/main/schedules/schedule-run-results').onResultFailureChange(notifyScheduleHealth);
 let flushWindowBounds = async () => {};
 let flushProjectsBeforeExit = async () => {};
 
@@ -1836,8 +1845,11 @@ ipcMain.handle('list-schedules', () => {
     getSetting, defaultSandbox: SETTING_DEFAULTS.sandbox,
     isArchived: isProjectSettingsArchived,
     isKnownProject: projectPath => _isKnownProjectRoot(projectPath, knownProjectPaths),
+    schedulerHealth: scheduleHealth,
   });
 });
+
+ipcMain.handle('get-schedule-health', () => scheduleHealth());
 
 // --- IPC: get-memories ---
 ipcMain.handle('get-memories', async () => {
@@ -4376,8 +4388,8 @@ if (!app.isPackaged) {
         isJoined: (id, jobId) => [...activeSessions.values()].some(s => !s.exited && s.pty && s.isAttach && s.attachJobId === jobId)
           || cliSessionState.readAllDescriptors().some(d => ((id && d.sessionId === id) || d.jobId === jobId) && d.kind !== 'bg'),
         writeResult: record => {
-          const { scheduleRunsDir, writeScheduleRunResult } = require('./src/main/schedules/schedule-run-results');
-          return !record.filePath || writeScheduleRunResult(scheduleRunsDir(path.dirname(DB_PATH)), record, log);
+          const { scheduleRunsDir, publishScheduleRunResult } = require('./src/main/schedules/schedule-run-results');
+          return !record.filePath || publishScheduleRunResult(scheduleRunsDir(path.dirname(DB_PATH)), record, log);
         },
         report: payload => scheduleIpc.reportRunExit(mainWindow, payload),
       };
@@ -4386,11 +4398,12 @@ if (!app.isPackaged) {
       const startedAtMs = Date.now();
       const sessionId = claudeArgv[claudeArgv.indexOf('--resume') + 1];
       const recordResult = details => {
-        if (!filePath) return;
-        const { scheduleRunsDir, writeScheduleRunResult } = require('./src/main/schedules/schedule-run-results');
-        writeScheduleRunResult(
+        if (!filePath) return null;
+        const { scheduleRunsDir, publishScheduleRunResult } = require('./src/main/schedules/schedule-run-results');
+        const written = publishScheduleRunResult(
           scheduleRunsDir(path.dirname(DB_PATH)),
           { sessionId, filePath, name, slug, manual, dueMs, startedAtMs, ...details }, log);
+        return written.ok ? null : written.error.message;
       };
       try {
         const runName = manual ? `Manual run ${name}` : name;
@@ -4485,10 +4498,10 @@ if (!app.isPackaged) {
         child.on('exit', (code, signal) => {
           if (stderr.trim()) log.error(`[schedule] ${runName} stderr:\n${stderr.trim()}`);
           log.info(`[schedule] ${runName} finished (exit ${code})`);
-          recordResult({ outcome: signal ? 'signal' : 'exited', code, signal, sandbox, stderr });
+          const persistenceError = recordResult({ outcome: signal ? 'signal' : 'exited', code, signal, sandbox, stderr });
           scheduleIpc.reportRunExit(mainWindow, {
             name, projectPath: cwd, sessionId: claudeArgv[claudeArgv.indexOf('--resume') + 1],
-            manual, code, signal, sandbox, stderr,
+            manual, code, signal, sandbox, stderr, ...(persistenceError ? { persistenceError } : {}),
           });
           activityReporter.sessionEnded(activityId);
           if (onDone) onDone();
@@ -4524,6 +4537,7 @@ if (!app.isPackaged) {
         stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'),
         projects: async () => (await scheduleProjects().list()).filter(p => !isProjectSettingsArchived(p)),
         resumeBackgroundRuns: claim => require('./src/main/schedules/schedule-background').resumeBackgroundRuns(scheduleBackgroundDeps(), claim),
+        onHealthChange: notifyScheduleHealth,
       });
 
       try {

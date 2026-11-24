@@ -253,12 +253,13 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
   });
 }
 
-function reportRunExit(window, { name, projectPath, sessionId, manual = false, code, signal, sandbox, stderr, backgroundFallback, outcome, error }) {
-  if ((code === 0 && !backgroundFallback) || !window || window.isDestroyed() || window.webContents.isDestroyed()) return;
+function reportRunExit(window, { name, projectPath, sessionId, manual = false, code, signal, sandbox, stderr, backgroundFallback, outcome, error, persistenceError }) {
+  if ((code === 0 && !backgroundFallback && !persistenceError) || !window || window.isDestroyed() || window.webContents.isDestroyed()) return;
   window.webContents.send('schedule-run-exit', {
     name, projectPath, sessionId, manual, code, signal: signal || null,
     failure: classifyRunExit({ code, sandbox, stderr }),
     ...(backgroundFallback ? { backgroundFallback } : {}),
+    ...(persistenceError ? { persistenceError } : {}),
     ...(outcome && outcome !== 'exited' ? { outcome, error: error || null } : {}),
   });
 }

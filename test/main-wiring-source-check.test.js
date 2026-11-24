@@ -244,3 +244,14 @@ test('main-wiring source check: the keystroke path writes through pty-ops', () =
     'terminal-input.js must call writePty(session, data, sessionId)',
   );
 });
+
+test('scheduler health reaches the Schedules listing, its own IPC and a push to the window', () => {
+  assert.match(mainSrc, /schedulerHealth: scheduleHealth,/);
+  assert.match(mainSrc, /ipcMain\.handle\('get-schedule-health', \(\) => scheduleHealth\(\)\)/);
+  assert.match(mainSrc, /onHealthChange: notifyScheduleHealth,/);
+  assert.match(mainSrc, /onResultFailureChange\(notifyScheduleHealth\)/);
+  assert.match(mainSrc, /webContents\.send\('schedule-health', scheduleHealth\(\)\)/);
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
+  assert.match(preload, /getScheduleHealth: \(\) => ipcRenderer\.invoke\('get-schedule-health'\)/);
+  assert.match(preload, /onScheduleHealth: callback => ipcRenderer\.on\('schedule-health'/);
+});

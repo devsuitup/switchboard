@@ -95,29 +95,43 @@ end of the last:
   9 attempts in all the run is recorded with `cleanup abandoned after 9
   attempts: …`. A joined user takes the job over and ends the phase. The
   outcome is never recomputed: a resumed `cleanup` record is not watched again.
-- `result`: `writeScheduleRunResult` returns `true` only for a durable
-  result: a valid result file already present (first result wins, whoever
-  holds the lock) or this writer's own completed publication. A publication
-  lock with no valid result file returns `false` (re-review F3 of #1233: a lock
-  left by a crashed writer used to be acknowledged and the record deleted with
-  no history). A lock older than `STALE_PUBLICATION_MS` (10 min, the same age
-  at which pruning drops it) is taken over; a younger one is treated as a live
-  writer and left alone. An aged lock does not prove its owner died (a
-  suspended process, a slow filesystem), so the lock is not what keeps the
-  first result: publication is `fs.linkSync(tmp, destination)`, which fails
-  with `EEXIST` instead of replacing an existing file (atomic on NTFS and
-  POSIX filesystems; a filesystem without hard links fails every publication,
-  so the record stays in `result` and nothing is acknowledged). A writer whose
-  link loses acknowledges only if the existing file is valid (re-review F2 of
-  #1233: a writer paused past the takeover used to rename over the result the
-  takeover writer had acknowledged). An invalid destination is renamed aside
-  and the link retried; if the file moved aside turns out valid it is linked
-  back instead. Each lock holds a random owner token and is removed only while
-  it still holds that token, so a writer never removes a lock taken over from
-  it. `false` also covers any error.
-  The main callback returns that acknowledgement. The record is deleted only
-  on `true`, otherwise kept in `result` for the next start, which publishes it
-  without cleaning again.
+- `result`: `publishScheduleRunResult` returns `{ ok: true }` only for a
+  durable result: this writer's own completed publication, or a valid result
+  file already present (first result wins). Anything else returns
+  `{ ok: false, error: { path, code, message, at } }`; `writeScheduleRunResult`
+  is the boolean form. Publication writes the full record to a unique
+  same-directory temp file (`wx`, fsync), then `fs.linkSync(tmp, destination)`,
+  which fails with `EEXIST` instead of replacing an existing file (atomic on
+  NTFS and POSIX filesystems), then removes the temp file. A destination
+  published this way is never partial, so there is no lock and no repair
+  (re-review F2 and F4 of #1233: a stealable publication lock and an automatic
+  repair that moved an invalid destination aside could delete or replace a
+  result another writer had already acknowledged). On `EEXIST` a valid
+  destination is acknowledged; an invalid one (external corruption, an older
+  version, an interrupted fallback creation) is never moved, renamed or
+  deleted: the writer returns the error `The result file <path> is unreadable;
+  remove or fix it` (code `EBADRESULT`). A link that fails with `ENOTSUP`,
+  `EPERM`, `EISDIR` (libuv's mapping of `ERROR_INVALID_FUNCTION`, FAT/exFAT on
+  Windows), `EXDEV`, `EINVAL` or `ENOSYS` means the store has no hard links
+  (re-review F3 of #1233): the writer falls back to exclusive creation of the
+  destination (`wx`, write, fsync, close; `EEXIST` follows the same rule, and a
+  write failure removes the file it created). That path is not atomic for a
+  concurrent reader: a reader racing the creation can see a partial file and
+  report it unreadable, and a crash between creation and write leaves an
+  invalid destination for the user to remove. Any other failure returns the
+  error. The latest failure is kept (`latestResultFailure()`, cleared by the
+  next successful publication) and announced to listeners
+  (`onResultFailureChange`); a failure is logged once per destination and
+  message. Lock files left by older versions are ignored and pruned like
+  stale temp files.
+  The main callback returns that result. The record is deleted only on
+  `ok`, otherwise kept in `result` for the next start, which publishes it
+  without cleaning again; the settled details carry `resultPending` and
+  `persistenceError`, the report sent through `reportRunExit` carries
+  `persistenceError` (sent even for a code-zero exit), and the warning is
+  logged once per job and distinct error. The headless launcher's
+  `recordResult` returns the error message and its exit report carries it the
+  same way.
 
 The result is published after cleanup settles, so a run whose cleanup is still
 pending has no history entry yet. A launch-time failure without a confirmed
@@ -151,7 +165,26 @@ supervising every record it could read; the hold is kept, the error logged,
 and the retry timer runs again with the same backoff (re-review F1 of #1233: a
 read error used to count as an empty store, release the hold and launch beside
 a still-working run). A store that keeps failing keeps automatic launches held;
-Run now is not held. A resume source without `discovered` (test stubs claiming
+Run now is not held. A rejection is logged once per distinct message, and a
+stall once until it is resolved or turns into a rejection.
+
+Suspension is visible (re-review F1 of #1233: an unreadable store used to stop
+every automatic schedule with only log lines). `stop.getHealth()` returns
+`{ suspended: false }`, or `{ suspended: true, reason, path, code, message,
+since, retryMs }` with `reason` `unreadable` (a rejection; `path` is the
+directory or record that failed, filled in by `discoverBackgroundRuns` when the
+error has none) or `slow` (the wait expired with no answer). `onHealthChange`
+is called on every change and on each rejection; the suspension clears only
+when a discovery resolves. Main composes `scheduleHealth()` = scheduler health
+plus `resultFailure` (`latestResultFailure()`), passes it to
+`buildScheduleList` as `schedulerHealth` (the listing returns it as `health`),
+serves it on `get-schedule-health`, and pushes it on `schedule-health` when
+either part changes. The renderer (`public/schedules-view.js`) shows an
+app-level error notice for each part (ids `ScheduleSuspended`,
+`ScheduleResultFailure`), shown whether or not the Schedules tab is enabled
+and replaced only when the text changes; the tab also shows a banner with the
+same text and states each next run as `Paused: automatic launches are
+suspended (next run due …)`. A resume source without `discovered` (test stubs claiming
 synchronously) does not gate. Claims are counted per schedule key, so several
 resumed runs of one slug hold it until the last ends. Manual runs are not held.
 
@@ -974,14 +1007,14 @@ Preparation exceptions retain their original message. Signal outcomes require
 a non-empty signal string, refused/spawn-error require string error text, and
 exited requires an integer exitCode; inconsistent records are unreadable.
 
-Publication uses a same-directory temp file written with wx, then
-renameWithRetry. A per-result wx lock serializes publishers; an existing final
-file is kept. This preserves first-completion semantics without exposing a
-partial JSON destination or allowing rename to replace a previous result on
-Windows. Temp and owned lock files are removed on failure. A process killed
-during publication can leave a temp/lock file; readers ignore it. Per-key pruning
-removes that key's publication temp/lock files whose mtime is older than ten
-minutes, retaining recent artifacts, unrelated names and other keys.
+Publication is the temp file plus no-overwrite hard link described under
+`result` above, with exclusive creation as the fallback on stores without hard
+links; an existing final file is kept, and an invalid one is reported, never
+replaced. The temp file is removed on success and on failure. A process killed
+during publication can leave a temp file; readers ignore it. Per-key pruning
+removes that key's temp files, and lock files left by older versions, whose
+mtime is older than ten minutes, retaining recent artifacts, unrelated names
+and other keys.
 After a write, pruning keeps the 20 newest starts of that key and ignores
 unlink errors. `pruneScheduleRunResults(dir, key, 0)` also serves schedule
 deletion (see "Delete a schedule"). Other keys and transcripts are untouched; renamed files can

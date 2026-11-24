@@ -283,8 +283,28 @@ test('write failure never changes launcher acknowledgement or exit notice', asyn
   assert.equal((await h.run()).ok, true);
   assert.doesNotThrow(() => h.children[0].emit('exit', 2));
   assert.equal(h.messages[0][1].code, 2);
+  assert.ok(h.messages[0][1].persistenceError, 'the exit notice carries the persistence error');
   assert.equal(h.done, 1);
   assert.ok(h.warnings.length, 'failed persistence warns');
+});
+
+test('a successful headless run whose result cannot be written is still reported, with the error', async t => {
+  const h = launcher(t);
+  fs.writeFileSync(h.runsDir, 'not a directory');
+  assert.equal((await h.run()).ok, true);
+  h.children[0].emit('exit', 0, null);
+  assert.equal(h.messages.length, 1, 'a code-zero exit is reported when its result was not recorded');
+  assert.equal(h.messages[0][0], 'schedule-run-exit');
+  assert.equal(h.messages[0][1].code, 0);
+  assert.match(h.messages[0][1].persistenceError, /\S/);
+});
+
+test('a successful headless run whose result is recorded sends no notice', async t => {
+  const h = launcher(t);
+  assert.equal((await h.run()).ok, true);
+  h.children[0].emit('exit', 0, null);
+  assert.deepEqual(h.messages, []);
+  assert.equal(h.records().length, 1);
 });
 
 function pausedPublisher(t, f, during) {
@@ -301,12 +321,10 @@ function pausedPublisher(t, f, during) {
   return { a, destination, paused: () => paused };
 }
 
-test('a publisher paused past the stale-lock age never replaces the result the takeover acknowledged', t => {
+test('a publisher that loses the publication race acknowledges the result already published', t => {
   const f = fixture(t);
   let acknowledged, published;
   const p = pausedPublisher(t, f, (destination, a) => {
-    const old = new Date(Date.now() - 11 * 60 * 1000);
-    fs.utimesSync(destination + '.lock', old, old);
     acknowledged = a.writeScheduleRunResult(f.runsDir, { ...f.input, outcome: 'timed-out', code: null, error: 'late' }, f.log);
     published = fs.readFileSync(destination, 'utf8');
   });
@@ -318,19 +336,83 @@ test('a publisher paused past the stale-lock age never replaces the result the t
   assert.deepEqual(fs.readdirSync(f.runsDir), [path.basename(p.destination)], 'no lock or temporary file is left');
 });
 
-test('a paused publisher releases only its own lock, never the one of the writer that took over', t => {
-  const f = fixture(t);
-  let lockAfterTakeover;
-  const p = pausedPublisher(t, f, destination => {
-    const old = new Date(Date.now() - 11 * 60 * 1000);
-    fs.utimesSync(destination + '.lock', old, old);
-    fs.unlinkSync(destination + '.lock');
-    fs.writeFileSync(destination + '.lock', 'another writer');
-    lockAfterTakeover = destination + '.lock';
+function destinationOf(f) {
+  return path.join(f.runsDir, `${scheduleStateKey({ filePath: f.filePath })}-${f.input.startedAtMs}-${f.input.sessionId}.json`);
+}
+
+test('an invalid result file is never moved, replaced or deleted, and the failure names it', t => {
+  const f = fixture(t), a = api();
+  const destination = destinationOf(f);
+  fs.mkdirSync(f.runsDir, { recursive: true });
+  fs.writeFileSync(destination, '{');
+  for (const name of ['renameSync', 'unlinkSync', 'rmSync']) {
+    const native = fs[name];
+    t.mock.method(fs, name, function(target, ...args) {
+      assert.notEqual(path.resolve(String(target)), destination, `${name} must not touch the result file`);
+      return native.call(fs, target, ...args);
+    });
+  }
+  const written = a.publishScheduleRunResult(f.runsDir, f.input, f.log);
+  assert.equal(written.ok, false);
+  assert.equal(written.error.path, destination);
+  assert.match(written.error.message, /unreadable; remove or fix it/);
+  assert.ok(written.error.message.includes(destination));
+  assert.equal(a.writeScheduleRunResult(f.runsDir, { ...f.input, code: 1 }, f.log), false);
+  assert.equal(fs.readFileSync(destination, 'utf8'), '{', 'the invalid file stays as it was');
+  assert.deepEqual(fs.readdirSync(f.runsDir), [path.basename(destination)], 'nothing is set aside');
+  assert.deepEqual(a.latestResultFailure()?.path, destination);
+  assert.equal(f.warnings.length, 1, 'the same failure is logged once');
+  t.mock.restoreAll();
+  fs.unlinkSync(destination);
+  assert.equal(a.writeScheduleRunResult(f.runsDir, f.input, f.log), true, 'a removed file can be published again');
+  assert.equal(a.latestResultFailure(), null, 'a successful publication clears the failure');
+});
+
+test('a result acknowledged by one writer survives every later writer', t => {
+  const f = fixture(t), a = api();
+  assert.equal(a.writeScheduleRunResult(f.runsDir, { ...f.input, code: 1 }, f.log), true);
+  const first = fs.readFileSync(destinationOf(f), 'utf8');
+  for (const code of [2, 3]) assert.equal(a.writeScheduleRunResult(f.runsDir, { ...f.input, code }, f.log), true);
+  assert.equal(a.writeScheduleRunResult(f.runsDir, f.input, f.log, { link: () => { throw Object.assign(new Error('transient link error'), { code: 'EIO' }); } }), false);
+  assert.equal(fs.readFileSync(destinationOf(f), 'utf8'), first, 'the first acknowledged bytes stay');
+});
+
+test('publication creates no lock file another writer could steal', t => {
+  const f = fixture(t), a = api();
+  const opened = [];
+  const native = fs.openSync;
+  t.mock.method(fs, 'openSync', function(file, ...args) { opened.push(String(file)); return native.call(fs, file, ...args); });
+  assert.equal(a.writeScheduleRunResult(f.runsDir, f.input, f.log), true);
+  assert.deepEqual(opened.filter(file => file.endsWith('.lock')), []);
+  assert.deepEqual(fs.readdirSync(f.runsDir), [path.basename(destinationOf(f))]);
+});
+
+for (const code of ['ENOTSUP', 'EPERM', 'EISDIR', 'EXDEV', 'EINVAL', 'ENOSYS']) {
+  test(`a store without hard links (${code}) publishes by exclusive creation and keeps the first result`, t => {
+    const f = fixture(t), a = api();
+    const link = () => { throw Object.assign(new Error('hard links not supported'), { code }); };
+    assert.equal(a.writeScheduleRunResult(f.runsDir, f.input, f.log, { link }), true);
+    assert.equal(f.read()[0].exitCode, 2);
+    assert.equal(a.writeScheduleRunResult(f.runsDir, { ...f.input, code: 7 }, f.log, { link }), true, 'an existing valid result is acknowledged');
+    assert.equal(f.read()[0].exitCode, 2, 'exclusive creation never overwrites');
+    assert.deepEqual(fs.readdirSync(f.runsDir), [path.basename(destinationOf(f))], 'no temporary file is left');
   });
-  assert.equal(p.a.writeScheduleRunResult(f.runsDir, f.input, f.log), true);
-  assert.equal(fs.existsSync(lockAfterTakeover), true, 'the replacement lock is left to its owner');
-  assert.equal(fs.readFileSync(lockAfterTakeover, 'utf8'), 'another writer');
+}
+
+test('an exclusive creation that cannot write removes its own partial file and reports the failure', t => {
+  const f = fixture(t), a = api();
+  const link = () => { throw Object.assign(new Error('hard links not supported'), { code: 'ENOTSUP' }); };
+  const native = fs.fsyncSync;
+  let calls = 0;
+  t.mock.method(fs, 'fsyncSync', function(fd) {
+    if (++calls === 2) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    return native.call(fs, fd);
+  });
+  const written = a.publishScheduleRunResult(f.runsDir, f.input, f.log, { link });
+  assert.equal(written.ok, false);
+  assert.equal(written.error.code, 'ENOSPC');
+  assert.equal(written.error.path, destinationOf(f));
+  assert.deepEqual(fs.readdirSync(f.runsDir), [], 'neither a partial result nor a temporary file is left');
 });
 
 test('the temporary directory supports the no-overwrite publication', t => {

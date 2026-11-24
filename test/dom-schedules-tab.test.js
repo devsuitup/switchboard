@@ -12,13 +12,14 @@ function setup(t, run = () => ({ ok: true }), { render = true } = {}) {
   t.after(() => { dom.window.setSchedulesVisible(false); dom.window.close(); });
   const ctx = dom.getInternalVMContext();
   const calls = [];
+  const healthListeners = [];
   const project = { projectPath: '/p', shortName: 'p', known: true, archived: false, schedules: [] };
   const schedule = { file: 'schedule-nightly.md', filePath: '/p/schedule-nightly.md', name: 'Nightly', slug: 'nightly', cron: '* * * * *', cronText: 'every min', enabled: true, linked: false, problems: [], nextRunMs: Date.now() + 60000, catchUp: false, runs: [] };
   project.schedules.push(schedule);
   const data = { now: Date.now(), catchUpActive: true, projects: [project] };
   const w = dom.window;
   w.api = { runScheduleNow: async filePath => { calls.push(filePath); return run(); }, listSchedules: async () => data,
-    setScheduleEnabled: async () => ({ ok: true }), readMemory: async () => '' };
+    setScheduleEnabled: async () => ({ ok: true }), readMemory: async () => '', onScheduleHealth: listener => { healthListeners.push(listener); } };
   w.activeTab = 'schedules';
   w.formatDate = () => 'today';
   w.ICONS = { schedule: () => '<svg></svg>' };
@@ -39,14 +40,15 @@ function setup(t, run = () => ({ ok: true }), { render = true } = {}) {
     vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx, { filename });
   }
   w.schedulesTabEnabled = true;
-  if (!render) return { dom, w, project, schedule, data, calls };
+  const emitHealth = health => healthListeners.forEach(listener => listener(health));
+  if (!render) return { dom, w, project, schedule, data, calls, emitHealth };
   w.renderSchedules(data);
   const button = w.document.querySelector('.schedule-run-btn');
   const titles = [];
   new w.MutationObserver(records => titles.push(...records.map(record => record.oldValue), button.title))
     .observe(button, { attributes: true, attributeFilter: ['title'], attributeOldValue: true });
   w.setSchedulesVisible(true);
-  return { dom, w, project, schedule, data, calls, get button() { return w.document.querySelector('.schedule-run-btn'); }, titles, opened };
+  return { dom, w, project, schedule, data, calls, emitHealth, get button() { return w.document.querySelector('.schedule-run-btn'); }, titles, opened };
 }
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -866,4 +868,37 @@ test('a superseded failed Retry leaves Retry unavailable until the newer reload 
   pending[1](new Error('newer failure'));
   await settle();
   assert.equal(kept.disabled, false);
+});
+
+const SUSPENDED = { suspended: true, reason: 'unreadable', path: '/data/schedule-state/background', code: 'EACCES', message: 'permission denied', since: 1, retryMs: 300000 };
+
+test('a suspended scheduler shows a banner naming the records and marks next runs as paused, until the listing is healthy', async t => {
+  const h = setup(t);
+  h.data.health = { ...SUSPENDED, resultFailure: null };
+  await h.w.loadSchedules();
+  const banner = h.w.document.querySelector('#schedules-content .schedule-health');
+  assert.ok(banner, 'the Schedules tab shows the suspension');
+  assert.equal(banner.getAttribute('role'), 'alert');
+  assert.equal(banner.textContent, 'Automatic schedules are paused: the background-run records at /data/schedule-state/background could not be read (EACCES). Fix their permissions. Retrying every 5 min.');
+  assert.match(h.w.document.querySelector('.schedule-state').textContent, /^Paused: automatic launches are suspended \(next run due /);
+  assert.equal(h.w.document.querySelectorAll('[data-notice-id="ScheduleSuspended"]').length, 1, 'an app notice is shown as well');
+  h.data.health = { suspended: false, resultFailure: null };
+  await h.w.loadSchedules();
+  assert.equal(h.w.document.querySelector('#schedules-content .schedule-health'), null);
+  assert.match(h.w.document.querySelector('.schedule-state').textContent, /^Next run: /);
+  assert.equal(h.w.document.querySelector('[data-notice-id="ScheduleSuspended"]'), null, 'the notice clears after a successful discovery');
+});
+
+test('the suspension reaches the user while the Schedules tab is disabled', t => {
+  const h = setup(t, undefined, { render: false });
+  h.w.schedulesTabEnabled = false;
+  h.emitHealth({ ...SUSPENDED, resultFailure: null });
+  const notice = h.w.document.querySelector('[data-notice-id="ScheduleSuspended"]');
+  assert.ok(notice, 'an app-level notice is shown without the tab');
+  assert.match(notice.textContent, /Automatic schedules are paused: the background-run records at \/data\/schedule-state\/background could not be read \(EACCES\)/);
+  h.emitHealth({ ...SUSPENDED, resultFailure: null });
+  assert.equal(h.w.document.querySelectorAll('[data-notice-id="ScheduleSuspended"]').length, 1);
+  h.emitHealth({ suspended: false, resultFailure: { path: '/r/x.json', code: 'EBADRESULT', message: 'The result file /r/x.json is unreadable; remove or fix it', at: 1 } });
+  assert.equal(h.w.document.querySelector('[data-notice-id="ScheduleSuspended"]'), null);
+  assert.match(h.w.document.querySelector('[data-notice-id="ScheduleResultFailure"]').textContent, /A schedule result could not be recorded: The result file \/r\/x\.json is unreadable; remove or fix it/);
 });

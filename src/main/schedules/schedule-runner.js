@@ -714,7 +714,7 @@ async function setListedScheduleEnabled(filePath, enabled, { scheduleProjects, s
  * @param {string} [opts.stateDir] - This instance's catch-up record directory; without it, catch-up schedules run on cron only
  * @returns {function} stop - Call to stop the scheduler
  */
-function startScheduler(log, runCommand, { resumeSource, stateDir, projects, resumeBackgroundRuns } = {}) {
+function startScheduler(log, runCommand, { resumeSource, stateDir, projects, resumeBackgroundRuns, onHealthChange } = {}) {
   let running = true;
   let lastTickMinute = null;
   const runningTasks = new Set();
@@ -828,6 +828,11 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects, res
 
   let hold = null;
   let discoveryTimer = null;
+  let suspension = null;
+  const setSuspension = value => {
+    suspension = value;
+    try { onHealthChange?.(); } catch (err) { log.warn('[schedule] Cannot report the scheduler state:', err?.message || err); }
+  };
   const runCheck = onTick => {
     if (hold) {
       hold.onTick = hold.onTick || !!onTick;
@@ -870,6 +875,7 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects, res
       known = true;
       clearTimeout(discoveryTimer);
       if (attempts > 1) log.info(`[schedule] Background run records read after ${attempts} attempts; scheduling resumes`);
+      if (suspension) setSuspension(null);
       release();
     };
     const discover = () => {
@@ -886,13 +892,22 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects, res
       }
       hold = current;
       const attempt = attempts;
-      Promise.resolve(resumed.discovered).then(settleHold, err => {
-        log.warn(`[schedule] Cannot read the background run records (attempt ${attempt}); automatic launches stay suspended, retrying:`, err?.message || err);
-      });
       const waitMs = Math.min(DISCOVERY_WAIT_MS * 2 ** (attempts - 1), DISCOVERY_RETRY_MAX_MS);
+      Promise.resolve(resumed.discovered).then(settleHold, err => {
+        if (known || !running) return;
+        const message = String(err?.message || err);
+        if (suspension?.message !== message) {
+          log.warn(`[schedule] Cannot read the background run records (attempt ${attempt}); automatic launches stay suspended, retrying:`, message);
+        }
+        setSuspension({ reason: 'unreadable', path: err?.path || null, code: err?.code || null, message,
+          since: suspension?.since ?? Date.now(), retryMs: waitMs });
+      });
       discoveryTimer = setTimeout(() => {
         if (known || !running) return;
-        log.warn(`[schedule] Background run records not read after ${waitMs / 1000} s (attempt ${attempts}); automatic launches stay suspended until they are, retrying`);
+        if (!suspension) {
+          log.warn(`[schedule] Background run records not read after ${waitMs / 1000} s (attempt ${attempts}); automatic launches stay suspended until they are, retrying`);
+          setSuspension({ reason: 'slow', path: null, code: null, message: `not read after ${waitMs / 1000} s`, since: Date.now(), retryMs: waitMs });
+        }
         discover();
       }, waitMs);
       discoveryTimer?.unref?.();
@@ -917,6 +932,7 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects, res
     if (initialTimer._interval) clearInterval(initialTimer._interval);
   }
   stop.getLastTickMinute = () => lastTickMinute;
+  stop.getHealth = () => (suspension ? { suspended: true, ...suspension } : { suspended: false });
   return stop;
 }
 
