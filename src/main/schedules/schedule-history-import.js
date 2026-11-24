@@ -11,6 +11,7 @@ const MARKER = 'scheduleHistoryImported';
 const SEED_FIRST_BYTES = 8 * 1024;
 const SEED_MAX_BYTES = 64 * 1024;
 const BATCH = 32;
+const RETRY_MS = 5 * 60 * 1000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO = '(\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z)';
 const HEADING_RE = new RegExp(`^Scheduled Task(?: \\(catch-up: due ${ISO}, started ${ISO}\\))?: `);
@@ -43,11 +44,17 @@ function isoTime(value) {
   return typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 }
 
-function sameFolder(a, b) {
+function samePath(a, b) {
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
-function seedAttribution(line, { sessionId, folder }) {
+function pathForms(target, realpath) {
+  const forms = new Set([path.resolve(target)]);
+  try { forms.add(realpath(target)); } catch {}
+  return [...forms];
+}
+
+function seedAttribution(line, { sessionId, folder, projectPath, realpath = fs.realpathSync }) {
   let seed;
   try { seed = JSON.parse(line); } catch { return null; }
   if (!seed || typeof seed !== 'object' || Array.isArray(seed)) return null;
@@ -56,7 +63,11 @@ function seedAttribution(line, { sessionId, folder }) {
   if (type !== 'user' || parentUuid !== null || seed.sessionId !== sessionId) return null;
   if (typeof uuid !== 'string' || !UUID_RE.test(uuid) || !UUID_RE.test(sessionId)) return null;
   if (typeof slug !== 'string' || !slug || !isoTime(timestamp)) return null;
-  if (typeof cwd !== 'string' || !path.isAbsolute(cwd) || !sameFolder(encodeProjectPath(cwd), folder)) return null;
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd) || !samePath(encodeProjectPath(cwd), folder)) return null;
+  if (projectPath !== undefined) {
+    const owners = pathForms(projectPath, realpath);
+    if (!pathForms(cwd, realpath).some(form => owners.some(owner => samePath(form, owner)))) return null;
+  }
   if (!message || typeof message !== 'object' || Object.keys(message).sort().join() !== 'content,role') return null;
   if (message.role !== 'user' || typeof message.content !== 'string') return null;
   const heading = HEADING_RE.exec(message.content);
@@ -91,13 +102,15 @@ function writeStore(file, store) {
 function createScheduleHistoryImport(deps) {
   const { dataDir, projectsDir, scheduleProjects, listSchedules, getCachedByFolder,
     isIndexReady = () => true, isMarked, mark, onProgress = () => {}, onSettled = () => {}, log = console,
-    readHead = readSeedLine, pause = () => new Promise(resolve => setImmediate(resolve)), realpath = fs.realpathSync } = deps;
+    readHead = readSeedLine, pause = () => new Promise(resolve => setImmediate(resolve)), realpath = fs.realpathSync,
+    now = Date.now, retryMs = RETRY_MS } = deps;
   const file = storeFileOf(dataDir);
   let store = readStore(file);
   let state = store && isMarked() ? 'done' : 'pending';
   let error = null;
   let running = null;
   let imported = null;
+  let retryAt = 0;
 
   function importedRuns() {
     if (imported) return imported;
@@ -108,13 +121,23 @@ function createScheduleHistoryImport(deps) {
     return imported;
   }
 
-  function status() {
-    const unattributed = Object.values(store?.projects || {}).reduce((sum, entry) => sum + (entry?.unattributed || 0), 0);
+  function status(projectPaths = null) {
+    const listed = projectPaths && new Set(projectPaths);
+    const unattributed = Object.entries(store?.projects || {})
+      .reduce((sum, [projectPath, entry]) => sum + (!listed || listed.has(projectPath) ? entry?.unattributed || 0 : 0), 0);
     return error ? { state, unattributed, error } : { state, unattributed };
   }
 
   async function importProject(projectPath) {
-    const slugs = new Set(listSchedules([projectPath]).map(schedule => schedule.slug).filter(Boolean));
+    let scanError = null;
+    const schedules = listSchedules([projectPath], { onScanError: (_projectPath, error) => { scanError ||= error; } });
+    const unreadable = scanError || schedules.find(schedule => schedule.readError)?.readError;
+    if (unreadable) throw Object.assign(new Error(`schedules of ${projectPath} could not be read: ${unreadable.message}`), { code: unreadable.code });
+    const slugs = new Set(schedules.map(schedule => schedule.slug).filter(Boolean));
+    const claimed = new Set();
+    for (const [owner, entry] of Object.entries(store?.projects || {})) {
+      if (owner !== projectPath) for (const sessionId of Object.keys(entry?.runs || {})) claimed.add(sessionId);
+    }
     const folders = new Set([encodeProjectPath(projectPath)]);
     try { folders.add(encodeProjectPath(realpath(projectPath))); } catch {}
     const runs = {};
@@ -123,7 +146,7 @@ function createScheduleHistoryImport(deps) {
     const seen = new Set();
     for (const folder of folders) {
       for (const row of await getCachedByFolder(folder)) {
-        if (seen.has(row.sessionId) || row.scheduleSlug || row.parentSessionId || !UUID_RE.test(row.sessionId || '')) continue;
+        if (seen.has(row.sessionId) || claimed.has(row.sessionId) || row.scheduleSlug || row.parentSessionId || !UUID_RE.test(row.sessionId || '')) continue;
         const lookalike = LOOKALIKE_RE.test(row.firstPrompt || row.summary || '');
         if (!lookalike && !slugs.has(row.slug)) continue;
         seen.add(row.sessionId);
@@ -134,9 +157,9 @@ function createScheduleHistoryImport(deps) {
           if (readError.code === 'ENOENT') continue;
           throw readError;
         }
-        const attribution = line === null ? null : seedAttribution(line, { sessionId: row.sessionId, folder });
+        const attribution = line === null ? null : seedAttribution(line, { sessionId: row.sessionId, folder, projectPath, realpath });
         if (attribution && slugs.has(attribution.slug)) runs[row.sessionId] = { slug: attribution.slug, folder, created: attribution.created, dueMs: attribution.dueMs };
-        else if (!attribution && lookalike) unattributed++;
+        else if (!attribution && lookalike && (line === null || !seedAttribution(line, { sessionId: row.sessionId, folder }))) unattributed++;
       }
     }
     return { runs, unattributed };
@@ -147,28 +170,34 @@ function createScheduleHistoryImport(deps) {
     error = null;
     try {
       if (!store) store = { v: 1, projects: {} };
+      let firstFailure = null;
       for (const projectPath of await scheduleProjects().list()) {
         if (Object.hasOwn(store.projects, projectPath)) continue;
-        const entry = await importProject(projectPath);
-        store = { ...store, projects: { ...store.projects, [projectPath]: entry } };
-        writeStore(file, store);
-        imported = null;
-        onProgress(projectPath);
+        try {
+          const entry = await importProject(projectPath);
+          const next = { ...store, projects: { ...store.projects, [projectPath]: entry } };
+          writeStore(file, next);
+          store = next;
+          imported = null;
+          onProgress(projectPath);
+        } catch (failure) { firstFailure ||= failure; }
         await pause();
       }
+      if (firstFailure) throw firstFailure;
       await mark();
       state = 'done';
       log.info?.(`[schedules] Imported ${importedRuns().size} run(s) made before the schedule marker`);
     } catch (failure) {
       state = 'failed';
       error = failure.message;
-      log.warn?.(`[schedules] Run history import stopped, resumed at the next Schedules listing: ${failure.message}`);
+      retryAt = now() + retryMs;
+      log.warn?.(`[schedules] Run history import incomplete, retried in ${Math.round(retryMs / 60000)} min: ${failure.message}`);
     }
     onSettled(state);
   }
 
   function ensureStarted() {
-    if (running || state === 'done') return;
+    if (running || state === 'done' || state === 'failed' && now() < retryAt) return;
     if (!isIndexReady()) { state = 'waiting'; return; }
     running = run().finally(() => { running = null; });
   }
@@ -176,4 +205,4 @@ function createScheduleHistoryImport(deps) {
   return { ensureStarted, status, importedRuns, whenIdle: () => running || Promise.resolve() };
 }
 
-module.exports = { MARKER, SEED_MAX_BYTES, storeFileOf, readSeedLine, seedAttribution, createScheduleHistoryImport };
+module.exports = { MARKER, RETRY_MS, SEED_MAX_BYTES, storeFileOf, readSeedLine, seedAttribution, createScheduleHistoryImport };

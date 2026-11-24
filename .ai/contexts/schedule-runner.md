@@ -1213,8 +1213,12 @@ of the project, an ISO `timestamp` that round-trips, `message` with exactly
 `role: 'user'` and a string content starting with an E1 or E2 heading (for E2
 the `started` time must equal `timestamp` and `due` must not be later), and an
 absolute `cwd` that encodes to the transcript's folder (case-insensitive on
-Windows). Anything else is not imported. E3 and later rows already have
-`scheduleSlug` and are skipped.
+Windows) and equals the registry project's path, literally or after `realpath`
+on either side. The folder encoding is lossy (`/work/project-a` and
+`/work/project/a` share one folder), so the folder check alone would hand one
+seed to two projects. A seed already stored for another project is skipped, so
+each seed has one owner. Anything else is not imported. E3 and later rows
+already have `scheduleSlug` and are skipped.
 
 ### What hid runs before the import
 
@@ -1234,6 +1238,9 @@ leaves them as they are.
   It returns at once; the listing never awaits the import. Startup does not
   start it. It waits (`state: 'waiting'`) until `isInitialScanComplete()`, so
   a half-built index cannot mark an incomplete import as done.
+- **Schedules first.** A project's schedules are listed with `onScanError`. A
+  commands-folder read error, or a schedule file with `readError`, fails that
+  project; an unreadable inventory is never stored as an empty one.
 - **Candidates from the index.** Per registry project, `getCachedByFolder` for
   both folders; rows without `scheduleSlug` or `parentSessionId` whose `slug`
   names a current schedule of the project or whose `firstPrompt` starts with
@@ -1245,20 +1252,29 @@ leaves them as they are.
 - **Store.** `<dataDir>/schedule-history/imported.json`, `{ v: 1, projects:
   { <registry path>: { runs: { <sessionId>: { slug, folder, created, dueMs } },
   unattributed } } }`, written atomically (temp + `renameWithRetry`) after each
-  project, then `onProgress` sends `schedule-history-imported` (preload
+  project. The in-memory store takes the project only after that write
+  succeeds, so a failed publication leaves the project to the retry. Then
+  `onProgress` sends `schedule-history-imported` (preload
   `onScheduleHistoryImported`); the tab queues its debounced reload. A project
   present in the store is not read again.
 - **Marker.** When every registry project is stored, `writer.mergeGlobal({
   scheduleHistoryImported: true })`. Marker and readable store: nothing runs.
   A missing or unreadable store reruns the import, which is idempotent (same
-  attributions, same JSON). A read error other than ENOENT stops the pass
-  (`state: 'failed'`, error kept), keeps finished projects and resumes at the
-  next listing; no marker is written. Projects added to the registry after the
-  marker are not imported.
+  attributions, same JSON). Projects added to the registry after the marker
+  are not imported.
+- **Failure and retry.** A failing project (transcript read error other than
+  ENOENT, unreadable schedules, failed store write) does not stop the others.
+  The pass ends `failed` with the first error, writes no marker and keeps the
+  projects it stored. `onSettled` still reloads the tab so the note shows the
+  failure, but `ensureStarted` refuses to retry before `RETRY_MS` (5 min): the
+  reload its own notification causes cannot restart the pass. The tab's minute
+  refresh retries after that; a new launch retries at its first listing.
 - **Listing.** `buildScheduleList({ historyImport })` also takes rows whose
-  session ID the store attributes to this schedule in the same folder, adds
-  `imported: true` and `dueMs`, and returns `history: { state, unattributed,
-  error? }`. Results are still read by session ID; none exists for these.
+  session ID the store attributes to this schedule, in the same folder and the
+  same registry project, adds `imported: true` and `dueMs`, and returns
+  `history: { state, unattributed, error? }`, with `unattributed` summed over
+  the projects listed now. Results are still read by session ID; none exists
+  for these.
 - **Renderer.** An imported run without a result says `Result unknown
   (imported)`, with ` — replied` or ` — no reply recorded`. The `schedule-help`
   note is built by `scheduleHistoryNote`: import pending/waiting/running,
@@ -1270,5 +1286,8 @@ Regressions: `test/schedule-history-import.test.js` (era fixtures written in
 each version's seed shape and indexed through `readSessionDisplayHeader`,
 hand-started and forged look-alikes, idempotence, resume after a failed
 project, non-blocking listing, index wait, 4 000 rows with 300 candidates, byte
-cap), `test/dom-schedules-tab.test.js` (outcome text, note only on gaps, reload
-on progress) and `test/schedule-list.test.js` (main wiring).
+cap, and the review regressions of #1253: a failed store publication, an
+unreadable commands folder or schedule file, two projects sharing an encoded
+folder, and the failure-reload loop), `test/dom-schedules-tab.test.js` (outcome
+text, note only on gaps, reload on progress) and `test/schedule-list.test.js`
+(main wiring).

@@ -1868,7 +1868,7 @@ function scheduleHistory() {
   const notify = () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('schedule-history-imported'); };
   scheduleHistoryImport = createScheduleHistoryImport({
     dataDir: path.dirname(DB_PATH), projectsDir: PROJECTS_DIR, scheduleProjects, getCachedByFolder,
-    listSchedules: projectPaths => listScheduleFiles(projectPaths, { getSetting, defaultSandbox: SETTING_DEFAULTS.sandbox }),
+    listSchedules: (projectPaths, options) => listScheduleFiles(projectPaths, { getSetting, defaultSandbox: SETTING_DEFAULTS.sandbox, ...options }),
     isIndexReady: isInitialScanComplete, isMarked: () => getSetting('global')?.[SCHEDULE_HISTORY_MARKER] === true,
     mark: () => writer.mergeGlobal({ [SCHEDULE_HISTORY_MARKER]: true }), onProgress: notify, onSettled: notify, log,
   });

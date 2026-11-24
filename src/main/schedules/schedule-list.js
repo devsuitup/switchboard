@@ -50,7 +50,8 @@ async function buildScheduleList(deps) {
     const schedules = [];
     for (const schedule of files.filter(s => s.projectPath === projectPath)) {
       const rows = [...cached.values()].filter(({ row, folder }) => schedule.slug !== null && (row.scheduleSlug === schedule.slug
-        || !row.scheduleSlug && imported.get(row.sessionId)?.slug === schedule.slug && imported.get(row.sessionId).folder === folder))
+        || !row.scheduleSlug && imported.get(row.sessionId)?.slug === schedule.slug && imported.get(row.sessionId).folder === folder
+          && imported.get(row.sessionId).projectPath === projectPath))
         .sort((a, b) => Date.parse(b.row.created) - Date.parse(a.row.created)).slice(0, 20);
       const runs = [];
       for (const { row, folder } of rows) {
@@ -77,7 +78,7 @@ async function buildScheduleList(deps) {
   try { results = readScheduleRunResults(deps.runsDir, runs.map(run => run.sessionId)); }
   catch { results = new Map(runs.map(run => [run.sessionId, { unreadable: true }])); }
   for (const run of runs) run.result = results.get(run.sessionId) || null;
-  return { now, catchUpActive, projects, history: historyImport ? historyImport.status() : null, health: deps.schedulerHealth ? deps.schedulerHealth() : { suspended: false, resultFailure: null } };
+  return { now, catchUpActive, projects, history: historyImport ? historyImport.status(projectPaths) : null, health: deps.schedulerHealth ? deps.schedulerHealth() : { suspended: false, resultFailure: null } };
 }
 
 module.exports = { buildScheduleList };

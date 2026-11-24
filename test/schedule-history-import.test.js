@@ -68,8 +68,8 @@ function fixture(t) {
     projects.push(projectPath);
     const folder = encodeProjectPath(projectPath);
     fs.mkdirSync(path.join(projectsDir, folder), { recursive: true });
-    rowsByFolder.set(folder, []);
-    return { projectPath, folder };
+    if (!rowsByFolder.has(folder)) rowsByFolder.set(folder, []);
+    return { projectPath, folder, commands };
   };
   const writeSession = (project, records, { sessionId = records.find(r => r.sessionId)?.sessionId, index = true } = {}) => {
     const file = path.join(projectsDir, project.folder, `${sessionId}.jsonl`);
@@ -96,7 +96,7 @@ function fixture(t) {
     return createScheduleHistoryImport({
       dataDir, projectsDir,
       scheduleProjects: () => ({ list: async () => [...projects] }),
-      listSchedules: projectPaths => listScheduleFiles(projectPaths, { home: home.home, platform: 'linux' }),
+      listSchedules: (projectPaths, options) => listScheduleFiles(projectPaths, { home: home.home, platform: 'linux', ...options }),
       getCachedByFolder: async folder => rowsByFolder.get(folder) || [],
       isIndexReady: () => true,
       isMarked: () => settings.scheduleHistoryImported === true,
@@ -325,4 +325,134 @@ test('the seed reader reads a bounded head and refuses a first line past its cap
   fs.writeFileSync(file, '{"a":1}\n' + 'y'.repeat(SEED_MAX_BYTES * 4));
   assert.equal(await readSeedLine(file), '{"a":1}');
   assert.ok(SEED_MAX_BYTES <= 64 * 1024);
+});
+
+test('a failed store publication leaves its project to the retry and the marker waits for it (R1)', async t => {
+  const f = fixture(t);
+  const a = f.addProject('a', { journal: '' });
+  const b = f.addProject('b', { journal: '' });
+  const ida = f.writeSession(a, [seedV025(crypto.randomUUID(), { cwd: a.projectPath, slug: 'journal', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const idb = f.writeSession(b, [seedV025(crypto.randomUUID(), { cwd: b.projectPath, slug: 'journal', prompt: 'Write', timestamp: '2026-05-03T07:00:00.000Z' })]);
+  const { storeFileOf } = require('../src/main/schedules/schedule-history-import');
+  const file = storeFileOf(f.dataDir);
+  const rename = fs.renameSync;
+  let publications = 0;
+  const mocked = t.mock.method(fs, 'renameSync', (from, to) => {
+    if (to === file && ++publications === 2) throw Object.assign(new Error('injected EIO publishing the second project'), { code: 'EIO' });
+    return rename(from, to);
+  });
+  let clock = 0;
+  const importer = f.make({ now: () => clock });
+  importer.ensureStarted();
+  await importer.whenIdle();
+  assert.equal(importer.status().state, 'failed');
+  assert.equal(f.marks.length, 0);
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).projects), [a.projectPath]);
+  assert.deepEqual([...importer.importedRuns().keys()], [ida], 'an unpublished project is not committed in memory');
+  mocked.mock.restore();
+  clock += 10 * 60 * 1000;
+  importer.ensureStarted();
+  await importer.whenIdle();
+  assert.equal(importer.status().state, 'done');
+  assert.equal(f.marks.length, 1);
+  const restarted = f.make();
+  restarted.ensureStarted();
+  await restarted.whenIdle();
+  assert.deepEqual([...restarted.importedRuns().keys()].sort(), [ida, idb].sort(), 'both projects survive a restart');
+});
+
+for (const [name, inject] of [
+  ['its .claude/commands folder', (t, p) => {
+    const readdir = fs.readdirSync;
+    return t.mock.method(fs, 'readdirSync', (dir, ...args) => {
+      if (path.resolve(String(dir)) === path.resolve(p.commands)) throw Object.assign(new Error('injected EACCES reading schedules'), { code: 'EACCES' });
+      return readdir(dir, ...args);
+    });
+  }],
+  ['one of its schedule files', (t, p) => {
+    const readFile = fs.readFileSync;
+    return t.mock.method(fs, 'readFileSync', (file, ...args) => {
+      if (path.resolve(String(file)) === path.join(p.commands, 'schedule-journal.md')) throw Object.assign(new Error('injected EACCES reading a schedule'), { code: 'EACCES' });
+      return readFile(file, ...args);
+    });
+  }],
+]) {
+  test(`a project whose ${name} cannot be read stays retryable instead of being stored as empty (R2)`, async t => {
+    const f = fixture(t);
+    const p = f.addProject('notes', { journal: '' });
+    const id = f.writeSession(p, [seedV025(crypto.randomUUID(), { cwd: p.projectPath, slug: 'journal', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+    const mocked = inject(t, p);
+    const first = f.make();
+    first.ensureStarted();
+    await first.whenIdle();
+    assert.equal(first.status().state, 'failed');
+    assert.match(first.status().error, /EACCES/);
+    assert.equal(f.marks.length, 0);
+    mocked.mock.restore();
+    const recovered = f.make();
+    recovered.ensureStarted();
+    await recovered.whenIdle();
+    assert.equal(recovered.status().state, 'done');
+    const runs = schedulesOf(await f.list(recovered), 'journal').runs;
+    assert.deepEqual(runs.map(run => run.sessionId), [id]);
+  });
+}
+
+test('a seed belongs to the project its cwd names, not to another path with the same encoded folder (R3)', async t => {
+  const f = fixture(t);
+  const owner = f.addProject('project-a', { journal: '' });
+  const other = f.addProject(path.join('project', 'a'), { journal: '' });
+  assert.notEqual(owner.projectPath, other.projectPath);
+  assert.equal(owner.folder, other.folder, 'the two paths share one transcript folder');
+  const id = f.writeSession(owner, [seedV025(crypto.randomUUID(), { cwd: owner.projectPath, slug: 'journal', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const historyImport = f.make();
+  historyImport.ensureStarted();
+  await historyImport.whenIdle();
+  assert.equal(historyImport.importedRuns().get(id).projectPath, owner.projectPath);
+  const listing = await f.list(historyImport);
+  const runsOf = projectPath => listing.projects.find(project => project.projectPath === projectPath).schedules[0].runs.map(run => run.sessionId);
+  assert.deepEqual(runsOf(owner.projectPath), [id]);
+  assert.deepEqual(runsOf(other.projectPath), [], 'the colliding project does not list it');
+  assert.equal(listing.history.unattributed, 0, 'a valid seed of another project is not a gap');
+});
+
+test('a failed import is not restarted by the reload its own notification causes (R4)', async t => {
+  const f = fixture(t);
+  const { JSDOM } = require('jsdom');
+  const vm = require('node:vm');
+  const dom = new JSDOM('<div id="schedules-content"></div>', { runScripts: 'outside-only' });
+  const w = dom.window;
+  t.after(() => { w.setSchedulesVisible(false); w.close(); });
+  let notify;
+  let attempts = 0;
+  let clock = 0;
+  const importer = f.make({
+    now: () => clock,
+    scheduleProjects: () => ({ list: async () => { attempts++; throw Object.assign(new Error('persistent EIO in registry'), { code: 'EIO' }); } }),
+    onSettled: () => notify(),
+  });
+  w.SETTING_DEFAULTS = { schedulesTab: true };
+  w.api = {
+    onScheduleHistoryImported: callback => { notify = callback; },
+    listSchedules: async () => {
+      importer.ensureStarted();
+      await importer.whenIdle();
+      return { projects: [], history: importer.status() };
+    },
+  };
+  w.clearAppNotice = () => {};
+  w.showAppNotice = () => {};
+  const filename = path.join(__dirname, '../public/schedules-view.js');
+  vm.runInContext(fs.readFileSync(filename, 'utf8'), dom.getInternalVMContext(), { filename });
+  w.renderSchedules = () => {};
+  w.Date.now = () => 30000;
+  w.setSchedulesVisible(true);
+  await new Promise(resolve => setTimeout(resolve, 2150));
+  assert.equal(importer.status().state, 'failed');
+  assert.equal(attempts, 1, 'one opening runs the failed import once');
+  const { RETRY_MS } = require('../src/main/schedules/schedule-history-import');
+  clock += RETRY_MS;
+  importer.ensureStarted();
+  await importer.whenIdle();
+  assert.equal(attempts, 2, 'the import is retried once the back-off has passed');
 });

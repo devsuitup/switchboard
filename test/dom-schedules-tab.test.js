@@ -1116,7 +1116,7 @@ test('the note about older runs appears only when the history has gaps', t => {
   assert.match(note(), /Importing the runs made before v0\.0\.90/);
   h.data.history = { state: 'failed', unattributed: 0, error: 'EIO: i/o error' };
   h.w.renderSchedules(h.data);
-  assert.match(note(), /could not be imported \(EIO: i\/o error\).*retried/);
+  assert.match(note(), /could not be imported \(EIO: i\/o error\).*retries within a few minutes/);
   h.data.history = { state: 'done', unattributed: 2 };
   h.w.renderSchedules(h.data);
   assert.match(note(), /2 sessions start like a scheduled run but could not be attributed to a schedule reliably/);

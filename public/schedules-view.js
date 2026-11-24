@@ -268,7 +268,7 @@ function scheduleHistoryNote(data) {
   const parts = [];
   const history = data.history;
   if (history && ['pending', 'waiting', 'running'].includes(history.state)) parts.push('Importing the runs made before v0.0.90; they appear here as each project is read.');
-  if (history?.state === 'failed') parts.push(`The runs made before v0.0.90 could not be imported (${history.error}); the import is retried the next time this tab loads.`);
+  if (history?.state === 'failed') parts.push(`The runs made before v0.0.90 could not be imported (${history.error}); Switchboard retries within a few minutes while this tab is open, and at the next launch.`);
   if (history?.unattributed > 0) {
     parts.push(`${history.unattributed} session${history.unattributed === 1 ? ' starts' : 's start'} like a scheduled run but could not be attributed to a schedule reliably, so ${history.unattributed === 1 ? 'it is' : 'they are'} not listed; ${history.unattributed === 1 ? 'it stays' : 'they stay'} in Sessions.`);
   }
