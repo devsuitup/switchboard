@@ -5,6 +5,30 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const childProcess = require('node:child_process');
+const { isolatedHome } = require('./fixtures/isolated-home.cjs');
+
+const realHome = process.env.SWITCHBOARD_TEST_REAL_HOME || os.homedir();
+const suiteProjects = () => {
+  try { return fs.readdirSync(path.join(realHome, '.claude', 'projects')).filter(name => name.includes('schedule-bg-recovery-')); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+};
+const projectsBefore = new Set(suiteProjects());
+const processes = [];
+for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) {
+  const native = childProcess[name];
+  childProcess[name] = (...args) => {
+    processes.push([name, ...args.filter(arg => typeof arg === 'string' || Array.isArray(arg))]);
+    throw new Error(`the background recovery suite must never start a process: ${name} ${JSON.stringify(args[0])}`);
+  };
+  test.after(() => { childProcess[name] = native; });
+}
+test.after(() => {
+  assert.deepEqual(processes, [], 'no test may start a process, the claude CLI least of all');
+  assert.deepEqual(suiteProjects().filter(name => !projectsBefore.has(name)), [], 'scheduled seeds must stay in the disposable home');
+});
+isolatedHome(test, { realHome }).install();
+
 const bg = require('../src/main/schedules/schedule-background');
 const runner = require('../src/main/schedules/schedule-runner');
 const results = require('../src/main/schedules/schedule-run-results');
