@@ -261,6 +261,8 @@ const rendererCrossFileGlobals = {
   storedActivitySnapshot: 'readonly',
   snapshotForLocal: 'readonly',
   localSessionForStatus: 'readonly',
+  localDescriptorAttention: 'readonly',
+  backgroundReleasesDescriptorAttention: 'readonly',
   indexLocalMergedMemberRows: 'readonly',
   seedRemoteActivity: 'readonly',
   rekeyActivityState: 'readonly',

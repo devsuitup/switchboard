@@ -326,6 +326,14 @@ test('an explicit attention event takes over from descriptor-owned attention', (
   assert.equal(s.snapshot().attention, true);
 });
 
+test('a repeated waiting descriptor does not take ownership of an explicit attention (#1246)', () => {
+  const s = createSessionState('local-pty');
+  s.apply({ type: 'attention', active: true });
+  s.apply({ type: 'descriptorStatus', status: 'waiting', at: 1, attention: true });
+  s.apply({ type: 'descriptorStatus', status: 'busy', at: 2, attention: true });
+  assert.equal(s.snapshot().attention, true);
+});
+
 test('a waiting descriptor does not light attention on a session known dead', () => {
   const s = createSessionState('remote-ssh');
   s.apply({ type: 'liveness', value: 'dead' });

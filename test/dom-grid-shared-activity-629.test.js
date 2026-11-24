@@ -125,8 +125,8 @@ for (const attached of [false, true]) {
         check('waiting', true);
         if (attention === 'osc') ctx.window.setAttention(session.sessionId, true, 'onTerminalNotification');
         if (attention === 'descriptor') {
-          ctx.window.localPtyState(session.sessionId).apply({ type: 'descriptorStatus', status: 'waiting', attention: true });
-          ctx.window.applyStateClasses(session.sessionId, ctx.window.storedActivitySnapshot(session.sessionId));
+          entry = { ...entry, status: 'waiting' };
+          push();
         }
         check(attention === 'none' ? 'waiting' : 'attention', true);
         render();
@@ -135,8 +135,8 @@ for (const attached of [false, true]) {
         check(attention === 'none' ? 'waiting' : 'attention', true);
         if (attention === 'osc') ctx.window.setAttention(session.sessionId, false, 'onTerminalNotification');
         if (attention === 'descriptor') {
-          ctx.window.localPtyState(session.sessionId).apply({ type: 'descriptorStatus', status: 'busy', attention: false });
-          ctx.window.applyStateClasses(session.sessionId, ctx.window.storedActivitySnapshot(session.sessionId));
+          entry = { ...entry, status: 'idle' };
+          push();
         }
         check('waiting', true);
         entry = { ...entry, state: 'working' };
