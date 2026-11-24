@@ -494,7 +494,8 @@ schedule calculations.
 
 Runs are cache rows with the effective `scheduleSlug` in either the registry
 path's encoded folder or its disk-real path's encoded folder, deduplicated by
-session id, newest first, at most 20 per schedule. For these rows only, the
+session id, newest first, at most 20 per schedule, together with the
+rows the history import attributed to it (see "Imported history"). For these rows only, the
 listing streams the transcript until its first assistant record; both
 `type: assistant` and `type: message, role: assistant` count. A second user
 record never proves a reply. Unreadable transcripts give `replied: null`;
@@ -1168,3 +1169,106 @@ does not cover the schedule editor. The existing save and watch contract stays.
 History navigation resolves physical run IDs through `rowSessionIds` in local
 merged rows. It passes the full row to `openSession`, preserving the existing
 continuation and live-elsewhere resume guards.
+
+## Imported history (#1252)
+
+### What each version left on disk
+
+Established from `git show <sha>:schedule-runner.js` (later
+`src/main/schedules/schedule-runner.js`), `createScheduleSession` and
+`buildScheduleCommand` of each era. Every era launches `claude --resume <id> -p
+...` on a transcript Switchboard seeded itself; the CLI appends its own records
+to that same `<id>.jsonl`.
+
+| Era | First release | Seed (line 1 of `<projectsDir>/<folder>/<id>.jsonl`) | Imported? |
+|---|---|---|---|
+| E0 `f1332a9c` | none: replaced by `546586b3` before the v0.0.25 tag | `file-history-snapshot`, then a CLI-like `user` record (`isSidechain: false`, `userType: external`, `version: '1.0.0'`, `gitBranch: 'main'`, `slug`, `todos`, `permissionMode`) whose content is the bare prompt | No: never shipped in a fork release, and its first message is the bare prompt |
+| E1 `546586b3` | v0.0.25 | exactly `{ type: 'user', parentUuid: null, uuid, sessionId, cwd, slug, timestamp, message: { role: 'user', content: 'Scheduled Task: ' + prompt } }` | Yes |
+| E2 `14957f88` | v0.0.87 | E1, with the catch-up heading `Scheduled Task (catch-up: due <ISO>, started <timestamp>): ` | Yes, `dueMs` kept |
+| E3 `d8ee5d1a` | v0.0.90 | E1/E2 plus `scheduleSlug` | Already listed by the marker |
+| E4 `a65ad493` | v0.0.104 | E3, plus a result record under `<dataDir>/schedule-runs` | Already listed, with a result |
+| E5 `c0a424ab` | 0.1.0 | background runs: the seed moves to a `schedule-provenance` record | Already listed |
+
+E1/E2 headless runs then carry CLI records (`version`, `userType`,
+`isSidechain`, `entrypoint: 'sdk-cli'`, `-p` prompt `Run the scheduled task`).
+A session started by hand never has Switchboard's seed on line 1: every CLI
+`user` record carries `isSidechain`, `userType`, `version`, `entrypoint` and
+more (checked read-only against a local CLI transcript: `cwd, entrypoint,
+gitBranch, isSidechain, message, origin, parentUuid, permissionMode, promptId,
+promptSource, sessionId, timestamp, turnOrigin, turnPosition, type, userType,
+uuid, version`), and its first line is usually a metadata record
+(`permission-mode`, `custom-title`, `last-prompt`). The local machine had no
+scheduled transcript, so the E1/E2 shapes come from the code, not from data.
+
+Other old records give no per-run history: the catch-up state
+(`schedule-state/<key>-<minuteMs>.json`, v0.0.87) keeps only the latest handled
+minute per schedule, and `[schedule] Triggering:` log lines are unstructured
+and rotated. Results exist only from v0.0.104.
+
+**Reliable attribution** (`seedAttribution` in
+`src/main/schedules/schedule-history-import.js`): line 1 parses to an object
+with exactly E1's eight keys, `type: 'user'`, `parentUuid: null`, UUID `uuid`,
+`sessionId` equal to the file name, a nonempty `slug` naming a current schedule
+of the project, an ISO `timestamp` that round-trips, `message` with exactly
+`role: 'user'` and a string content starting with an E1 or E2 heading (for E2
+the `started` time must equal `timestamp` and `due` must not be later), and an
+absolute `cwd` that encodes to the transcript's folder (case-insensitive on
+Windows). Anything else is not imported. E3 and later rows already have
+`scheduleSlug` and are skipped.
+
+### What hid runs before the import
+
+The listing (`buildScheduleList`) took index rows with `scheduleSlug` equal to
+the schedule's slug, in the registry path's encoded folder and its realpath's,
+newest first, capped at 20. So E1/E2 runs were never listed; marked runs were
+hidden only past the 20 newest (by design: Show history in Sessions), after a
+slug rename or under a project missing from the registry. Marked runs without a
+result (E3, or alive at quit, or another instance) were listed with **No result
+recorded**; no transcript record can recover their exit code, so the import
+leaves them as they are.
+
+### Design
+
+- **Trigger.** `list-schedules` in `main.js` creates the importer once
+  (`scheduleHistory()`) and calls `ensureStarted()` before building the list.
+  It returns at once; the listing never awaits the import. Startup does not
+  start it. It waits (`state: 'waiting'`) until `isInitialScanComplete()`, so
+  a half-built index cannot mark an incomplete import as done.
+- **Candidates from the index.** Per registry project, `getCachedByFolder` for
+  both folders; rows without `scheduleSlug` or `parentSessionId` whose `slug`
+  names a current schedule of the project or whose `firstPrompt` starts with
+  `Scheduled Task`. Other rows are never opened, so the cost scales with
+  candidates, not with the size of the history.
+- **Bounded reads.** `readSeedLine` reads 8 KiB, then at most 64 KiB in total,
+  and returns line 1 or null. One read at a time, a `pause()` (setImmediate)
+  every 32 candidates and after each project.
+- **Store.** `<dataDir>/schedule-history/imported.json`, `{ v: 1, projects:
+  { <registry path>: { runs: { <sessionId>: { slug, folder, created, dueMs } },
+  unattributed } } }`, written atomically (temp + `renameWithRetry`) after each
+  project, then `onProgress` sends `schedule-history-imported` (preload
+  `onScheduleHistoryImported`); the tab queues its debounced reload. A project
+  present in the store is not read again.
+- **Marker.** When every registry project is stored, `writer.mergeGlobal({
+  scheduleHistoryImported: true })`. Marker and readable store: nothing runs.
+  A missing or unreadable store reruns the import, which is idempotent (same
+  attributions, same JSON). A read error other than ENOENT stops the pass
+  (`state: 'failed'`, error kept), keeps finished projects and resumes at the
+  next listing; no marker is written. Projects added to the registry after the
+  marker are not imported.
+- **Listing.** `buildScheduleList({ historyImport })` also takes rows whose
+  session ID the store attributes to this schedule in the same folder, adds
+  `imported: true` and `dueMs`, and returns `history: { state, unattributed,
+  error? }`. Results are still read by session ID; none exists for these.
+- **Renderer.** An imported run without a result says `Result unknown
+  (imported)`, with ` — replied` or ` — no reply recorded`. The `schedule-help`
+  note is built by `scheduleHistoryNote`: import pending/waiting/running,
+  failed (with its error), sessions that look like a run but failed the check
+  (`unattributed`), and any listed non-running run without a result. No gap,
+  no note.
+
+Regressions: `test/schedule-history-import.test.js` (era fixtures written in
+each version's seed shape and indexed through `readSessionDisplayHeader`,
+hand-started and forged look-alikes, idempotence, resume after a failed
+project, non-blocking listing, index wait, 4 000 rows with 300 candidates, byte
+cap), `test/dom-schedules-tab.test.js` (outcome text, note only on gaps, reload
+on progress) and `test/schedule-list.test.js` (main wiring).

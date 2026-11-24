@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- The Schedules tab now lists the runs your schedules made before v0.0.90: the first time it opens, it imports them in the background, project by project, marked **Result unknown (imported)**. Only sessions that still start with the exact record Switchboard wrote for a run are imported, never a session you started yourself; the note about older runs appears only when the history has gaps. (#1252)
+
 ## v0.1.0-beta.1 — 2026-11-24
 
 ### New

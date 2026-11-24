@@ -87,7 +87,8 @@ function spawnPty(file, args, opts) {
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell, claudeCommand, headlessClaudeLaunch, customArgsForLaunch } = require('./src/main/terminals/shell-profiles');
-const { startScheduler, scheduleLaunchRefusal, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./src/main/schedules/schedule-runner');
+const { startScheduler, scheduleLaunchRefusal, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled, listScheduleFiles } = require('./src/main/schedules/schedule-runner');
+const { createScheduleHistoryImport, MARKER: SCHEDULE_HISTORY_MARKER } = require('./src/main/schedules/schedule-history-import');
 const { buildScheduleList } = require('./src/main/schedules/schedule-list');
 const { migrateSchedulesTabWithinBound } = require('./src/main/schedules/schedules-tab-migration');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
@@ -1844,7 +1845,10 @@ ipcMain.handle('delete-schedule-file', (_event, filePath) =>
 
 ipcMain.handle('list-schedules', () => {
   const knownProjectPaths = [...getKnownProjectPaths()];
+  const historyImport = scheduleHistory();
+  historyImport.ensureStarted();
   return buildScheduleList({
+    historyImport,
     scheduleProjects, getCachedByFolder, isScheduleRunLive: cliSessionState.isScheduleRunLive,
     catchUpActive: !process.env.SWITCHBOARD_DATA_DIR,
     stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'), projectsDir: PROJECTS_DIR,
@@ -1857,6 +1861,19 @@ ipcMain.handle('list-schedules', () => {
 });
 
 ipcMain.handle('get-schedule-health', () => scheduleHealth());
+
+let scheduleHistoryImport = null;
+function scheduleHistory() {
+  if (scheduleHistoryImport) return scheduleHistoryImport;
+  const notify = () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('schedule-history-imported'); };
+  scheduleHistoryImport = createScheduleHistoryImport({
+    dataDir: path.dirname(DB_PATH), projectsDir: PROJECTS_DIR, scheduleProjects, getCachedByFolder,
+    listSchedules: projectPaths => listScheduleFiles(projectPaths, { getSetting, defaultSandbox: SETTING_DEFAULTS.sandbox }),
+    isIndexReady: isInitialScanComplete, isMarked: () => getSetting('global')?.[SCHEDULE_HISTORY_MARKER] === true,
+    mark: () => writer.mergeGlobal({ [SCHEDULE_HISTORY_MARKER]: true }), onProgress: notify, onSettled: notify, log,
+  });
+  return scheduleHistoryImport;
+}
 
 // --- IPC: get-memories ---
 ipcMain.handle('get-memories', async () => {

@@ -244,6 +244,7 @@ test('main registers list-schedules with the real backend and instance dependenc
     getSetting: f.deps.getSetting, SETTING_DEFAULTS: { sandbox: false },
     isProjectSettingsArchived: () => true, isKnownProjectRoot: () => false,
     getKnownProjectPaths: () => [], _isKnownProjectRoot: () => false,
+    ...historyImportWiring(),
     scheduleHealth: () => ({ suspended: true, reason: 'unreadable', path: '/records', code: 'EACCES', message: 'denied', since: 1, retryMs: 10000, resultFailure: null }),
     require: createRequire(filename),
   }, { filename, lineOffset: source.slice(0, start).split('\n').length - 1 });
@@ -274,6 +275,7 @@ test('main registers list-schedules with the real backend and instance dependenc
   assert.equal(reply.catchUpActive, false);
   assert.equal(reply.health.suspended, true, 'the listing carries the scheduler health');
   assert.equal(reply.health.path, '/records');
+  assert.deepEqual(reply.history, { state: 'waiting', unattributed: 0 }, 'the import waits for the initial index scan');
   assert.equal(typeof handlers.get('get-schedule-health'), 'function');
   assert.equal(reply.projects[0].archived, true);
   assert.equal(reply.projects[0].known, false);
@@ -353,6 +355,14 @@ test('unreadable state remains unknown rather than an unrecorded catch-up', asyn
   assert.equal((await f.build()).projects[0].schedules[0].catchUpDueMs, null);
 });
 
+function historyImportWiring() {
+  const runner = require('../src/main/schedules/schedule-runner');
+  const historyImport = require('../src/main/schedules/schedule-history-import');
+  return { createScheduleHistoryImport: historyImport.createScheduleHistoryImport, SCHEDULE_HISTORY_MARKER: historyImport.MARKER,
+    listScheduleFiles: runner.listScheduleFiles, isInitialScanComplete: () => false, writer: { mergeGlobal: async () => {} },
+    log: { info() {}, warn() {} }, mainWindow: null };
+}
+
 function mainListing(f, env) {
   const filename = path.join(__dirname, '..', 'main.js');
   const source = fs.readFileSync(filename, 'utf8');
@@ -365,6 +375,7 @@ function mainListing(f, env) {
     buildScheduleList: require('../src/main/schedules/schedule-list').buildScheduleList,
     scheduleProjects: () => ({ list: async () => [...known, path.join(f.root, 'unknown')] }),
     getCachedByFolder: () => [], cliSessionState: { isScheduleRunLive: () => false },
+    ...historyImportWiring(),
     process: { env }, path, DB_PATH: path.join(f.root, 'db'), PROJECTS_DIR: path.join(f.root, 'transcripts'),
     getSetting: f.deps.getSetting, SETTING_DEFAULTS: { sandbox: false }, isProjectSettingsArchived: () => false,
     scheduleHealth: () => ({ suspended: false, resultFailure: null }), activeSessions: new Map(), fs: { existsSync: () => true, readdirSync: () => {
