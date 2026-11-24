@@ -805,3 +805,65 @@ test('older and hidden-tab responses cannot replace newer schedules (#1237)', as
   await hidden;
   assert.equal(h.w.document.querySelector('.schedule-name').textContent, 'Newer');
 });
+
+const scheduleScanError = h => {
+  h.project.schedules = [];
+  h.project.scanError = { code: 'EACCES', message: 'permission denied' };
+  h.w.renderSchedules(h.data);
+};
+
+for (const outcome of ['success', 'failure', 'hidden failure']) {
+  test(`the load error notice stays while its Retry is pending and settles with the reload: ${outcome} (#1237)`, async t => {
+    const h = setup(t, undefined, { render: false });
+    h.w.api.listSchedules = async () => { throw new Error('offline'); };
+    h.w.setSchedulesVisible(true);
+    await settle();
+    let finish;
+    h.w.api.listSchedules = () => new Promise((resolve, reject) => {
+      finish = outcome === 'success' ? () => resolve(h.data) : () => reject(new Error('still offline'));
+    });
+    listNotice(h).querySelector('.app-notice-action').click();
+    assert.ok(listNotice(h), 'the notice remains while Retry is pending');
+    if (outcome === 'hidden failure') h.w.setSchedulesVisible(false);
+    finish();
+    await settle();
+    if (outcome === 'success') assert.equal(listNotice(h), null, 'a successful reload clears the notice');
+    else assert.ok(listNotice(h), 'a failed Retry leaves the notice in place');
+  });
+}
+
+for (const where of ['project', 'row']) {
+  test(`a failed ${where} Retry makes the kept Retry controls usable again (#1237)`, async t => {
+    const h = setup(t);
+    await settle();
+    if (where === 'project') scheduleScanError(h);
+    else {
+      Object.assign(h.schedule, { readError: { code: 'EACCES', message: 'permission denied' }, problems: ['could not read the file (EACCES)'] });
+      h.w.renderSchedules(h.data);
+    }
+    const kept = h.w.document.querySelector(where === 'project' ? '.schedule-project .schedule-retry-btn' : '.schedule-item .schedule-retry-btn');
+    h.w.api.listSchedules = async () => { throw new Error('offline'); };
+    kept.click();
+    assert.equal(kept.disabled, true, 'Retry is unavailable while its reload is pending');
+    await settle();
+    assert.equal(kept.disabled, false, 'the kept Retry is available once the reload has failed');
+    assert.equal(h.w.document.querySelector('.schedule-load-error .schedule-retry-btn').disabled, false);
+  });
+}
+
+test('a superseded failed Retry leaves Retry unavailable until the newer reload settles (#1237)', async t => {
+  const h = setup(t);
+  await settle();
+  scheduleScanError(h);
+  const pending = [];
+  h.w.api.listSchedules = () => new Promise((resolve, reject) => pending.push(reject));
+  const kept = h.w.document.querySelector('.schedule-project .schedule-retry-btn');
+  kept.click();
+  h.w.loadSchedules();
+  pending[0](new Error('older failure'));
+  await settle();
+  assert.equal(kept.disabled, true, 'a stale failure does not reopen Retry while a newer reload is pending');
+  pending[1](new Error('newer failure'));
+  await settle();
+  assert.equal(kept.disabled, false);
+});

@@ -83,7 +83,7 @@ async function loadSchedules() {
       schedulesLoadError = String(error?.message || error);
       renderSchedulesLoadError();
       showAppNotice({ id: 'listSchedules', kind: 'error', message: `Schedules could not be loaded: ${schedulesLoadError}. Use Retry in the Schedules tab.`,
-        actionLabel: 'Retry', onAction: () => { document.querySelector('.sidebar-tab[data-tab="schedules"]')?.click(); retrySchedules(); } });
+        actionLabel: 'Retry', dismissOnAction: false, onAction: () => { document.querySelector('.sidebar-tab[data-tab="schedules"]')?.click(); retrySchedules(); } });
     } finally {
       if (schedulesInFlight === load) schedulesInFlight = null;
     }
@@ -126,6 +126,7 @@ function renderSchedulesLoadError() {
   const create = container.querySelector('.schedule-create-btn');
   if (create) create.after(box);
   else container.prepend(box);
+  for (const button of container.querySelectorAll('.schedule-retry-btn')) button.disabled = false;
   if (focused) retry.focus({ preventScroll: true });
 }
 
