@@ -376,8 +376,10 @@ function localDescriptorAttention(sessionId, session) {
 
 // see .ai/contexts/session-state.md ("Descriptor-owned attention")
 function backgroundReleasesDescriptorAttention(sessionId, session, row, selection) {
-  return !!(typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId, row, selection))
-    || session.status !== 'waiting' || !localDescriptorAttention(sessionId, session);
+  if (session.status !== 'waiting' || !localDescriptorAttention(sessionId, session)) return true;
+  if (typeof selectBackgroundActivity !== 'function' || typeof backgroundActivityIsForeground !== 'function') return false;
+  selection ||= selectBackgroundActivity(sessionId, row);
+  return !!selection.entry && !backgroundActivityIsForeground(sessionId, row, selection);
 }
 
 // Thin wrapper over the local-pty adapter's own persisted state — see .ai/contexts/session-state.md ("The local-pty adapter")

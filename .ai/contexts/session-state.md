@@ -1172,12 +1172,15 @@ local callers, `snapshotForLocal` and `seedLocalTranscriptDescriptor`:
   row is not a background job, so the background projection stays the only
   path that maps a background job's `waiting` to attention. For a background
   row they send `releaseDescriptorAttention` instead
-  (`backgroundReleasesDescriptorAttention`) when the projection owns the row
-  (`backgroundActivityEntry` returns a job), or when the descriptor no longer
-  supports it (not `waiting`, active session, older than the transcript). A
-  foreground `waiting` that raised attention before the row became a job
-  cannot outlive the handover; a stale job marker that the projection ignores
-  (#767) keeps the interactive row's attention while it still waits. Explicit
+  (`backgroundReleasesDescriptorAttention`) when the descriptor no longer
+  supports it (not `waiting`, active session, older than the transcript), or
+  when the background projection owns the row: a selected entry for which
+  `backgroundActivityIsForeground` is false, the same test
+  `backgroundActivitySnapshot` applies before projecting the job. A selected
+  entry alone is not ownership: with a PTY here, an unhosted stale job stays
+  selected while the projection leaves the row foreground (#767), and the
+  interactive question keeps its attention. A foreground `waiting` that raised
+  attention before a real handover to a live job cannot outlive it. Explicit
   OSC attention stays, and the projection still raises attention when the job
   itself waits.
 

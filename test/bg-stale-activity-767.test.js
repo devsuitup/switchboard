@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { setupSidebarDom } = require('./dom-setup');
+const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 const { parseJobState, mergeRoster } = require('../src/main/bg-agents/bg-agents-roster');
 
 const SID = 'aaaaaaaa-1234-4321-abcd-123456789abc';
@@ -62,4 +62,66 @@ for (const state of ['working', 'blocked']) {
       });
     }
   }
+}
+
+for (const owned of [true, false]) {
+  for (const state of ['working', 'blocked']) {
+    test(`[767] a waiting interactive session newer than its transcript keeps attention beside a stale ${state} job (${owned ? 'owned-PTY' : 'outside-terminal'}) (#1246)`, t => {
+      const h = setupSidebarDom();
+      t.after(() => h.destroy());
+      const row = { sessionId: SID, projectPath: '/repo', status: 'waiting', statusUpdatedAt: AT,
+        waitingFor: 'Choose a branch', summary: 'Interactive question' };
+      h.window.sessionMap.set(SID, row);
+      h.window.activeSessionId = 'other';
+      if (owned) {
+        h.window.activePtyIds.add(SID);
+        h.window.openSessions.set(SID, { session: row, attach: false });
+      }
+      const render = () => h.sidebar.renderProjects([makeSampleProject({ projectPath: '/repo', sessions: [row] })], true);
+      h.emitHeadTurn(SID, 'open', { revision: 1, lastEntryAt: AT - 1000 });
+      if (!owned) h.emitSessionTranscriptActivity({ sessionId: SID, at: AT - 1000 });
+      render();
+      const attention = () => h.document.getElementById(`si-${SID}`).querySelector('.session-icon').classList.contains('session-icon--attention');
+      assert.equal(attention(), true, 'precondition: the waiting descriptor raised attention');
+      const descriptor = { kind: 'interactive', sessionId: SID, pid: 12345, cwd: '/repo', status: 'waiting', statusUpdatedAt: AT };
+      const job = parseJobState(JSON.stringify({ state, sessionId: SID, updatedAt: new Date(AT - 2000).toISOString() }));
+      const roster = mergeRoster({ cli: [], jobs: new Map([[JOB, job]]), descriptors: [descriptor], isOwnPid: () => owned });
+      assert.equal(roster.find(e => e.id === JOB).hosted, false);
+      Object.assign(row, { bgJobId: JOB, bgSessionId: SID });
+      h.evalPublic('agents-view.js');
+      h.window.applyAgentsSnapshot({ roster, daemonReachable: true });
+      const selected = h.window.selectBackgroundActivity(SID, row);
+      if (owned) {
+        assert.ok(selected.entry, 'an owned PTY keeps the stale entry selected');
+        assert.equal(h.window.backgroundActivityIsForeground(SID, row, selected), true, 'the projection leaves the row foreground');
+      } else assert.equal(selected.entry, null, 'outside the terminal the stale entry is not selected');
+      for (let i = 0; i < 3; i++) render();
+      assert.equal(attention(), true, 'a stale unhosted job must not clear a foreground question');
+    });
+  }
+}
+
+for (const owned of [true, false]) {
+  test(`[767] a hosted waiting job keeps attention through every refresh (${owned ? 'owned-PTY' : 'outside-terminal'}) (#1246)`, t => {
+    const h = setupSidebarDom();
+    t.after(() => h.destroy());
+    const id = 'hosted-wait';
+    const row = { sessionId: id, status: 'waiting', statusUpdatedAt: 2000 };
+    h.window.sessionMap.set(id, row);
+    h.window.activeSessionId = 'other';
+    if (owned) h.window.activePtyIds.add(id);
+    const render = () => h.sidebar.renderProjects([makeSampleProject({ sessions: [row] })], true);
+    h.emitHeadTurn(id, 'open', { revision: 1, lastEntryAt: 1000 });
+    if (!owned) h.emitSessionTranscriptActivity({ sessionId: id, at: 1000 });
+    render();
+    h.evalPublic('agents-view.js');
+    Object.assign(row, { bgJobId: 'wait-job', bgSessionId: id });
+    const roster = [{ id: 'wait-job', sessionId: id, kind: 'background', state: 'blocked', hosted: true, status: 'waiting' }];
+    for (let i = 0; i < 5; i++) {
+      h.window.applyAgentsSnapshot({ roster, daemonReachable: true });
+      assert.equal(h.window.storedActivitySnapshot(id, row).attention, true);
+      render();
+      assert.equal(h.document.getElementById(`si-${id}`).querySelector('.session-icon').classList.contains('session-icon--attention'), true);
+    }
+  });
 }
