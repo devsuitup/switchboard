@@ -852,7 +852,11 @@ focus to the list container and becomes `schedulesPendingTopFocus`, a focused
 row Retry hands focus to its row through `focusScheduleControl`. The pending
 target applies only while the container still has focus, so focus moved
 elsewhere during the request stays there. A failed reload re-enables the Retry
-buttons it keeps. Hiding the tab clears the pending target. Nothing here
+buttons it keeps and restores both pending targets, the row one through
+`restorePendingScheduleFocus` (only while focus is still parked on that row).
+When a render keeps the row but not its focused control (a recovered row loses
+its Retry), `focusScheduleControl` falls back to the row's first enabled action,
+then to Create, then to the list container. Hiding the tab clears the pending target. Nothing here
 touches focus outside `#schedules-content`, so the create form keeps its
 fields and focus across background refreshes, and closing it focuses the
 current Create button.

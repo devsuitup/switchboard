@@ -909,6 +909,40 @@ test('a pending row Retry holds focus on its row and returns to the replacement 
   await settle();
   assert.notEqual(retry(), first);
   assert.equal(h.w.document.activeElement, retry(), 'the row Retry regains focus after the refresh');
+  Object.assign(h.schedule, { readError: null, problems: [] });
+  h.w.api.listSchedules = async () => h.data;
+  retry().click();
+  await settle();
+  assert.equal(retry(), null, 'the recovered row no longer offers Retry');
+  const action = h.w.document.querySelector('.schedule-item .schedule-actions button:not(:disabled)');
+  assert.ok(action);
+  assert.equal(h.w.document.activeElement, action, 'the recovered row hands focus to its first available action');
+});
+
+test('a failed row Retry re-enables the row Retry and returns focus to it, unless focus moved (#1238)', async t => {
+  const h = setup(t);
+  await settle();
+  Object.assign(h.schedule, { readError: { code: 'EACCES', message: 'permission denied' }, problems: ['could not read the file (EACCES)'] });
+  h.w.renderSchedules(h.data);
+  let fail;
+  h.w.api.listSchedules = () => new Promise((_, reject) => { fail = () => reject(new Error('offline')); });
+  const retry = h.w.document.querySelector('.schedule-item .schedule-retry-btn');
+  retry.focus();
+  retry.click();
+  assert.equal(h.w.document.activeElement, h.w.document.querySelector('.schedule-item'), 'the disabled row Retry hands focus to its row');
+  fail();
+  await settle();
+  assert.equal(retry.disabled, false, 'the kept row Retry can be used again');
+  assert.equal(h.w.document.activeElement, retry, 'focus returns to the row Retry');
+  h.w.api.listSchedules = () => new Promise((_, reject) => { fail = () => reject(new Error('offline')); });
+  retry.click();
+  const elsewhere = h.w.document.createElement('button');
+  h.w.document.body.appendChild(elsewhere);
+  elsewhere.focus();
+  fail();
+  await settle();
+  assert.equal(retry.disabled, false);
+  assert.equal(h.w.document.activeElement, elsewhere, 'the failure does not steal the newer focus choice');
 });
 
 test('a failed project Retry re-enables the kept Retry and returns focus to it (#1238)', async t => {
