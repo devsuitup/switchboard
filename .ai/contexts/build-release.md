@@ -113,8 +113,23 @@ main pushes run Node 22/Linux+Windows. Matrix keys remain `node-version`, then
 `test (22, ubuntu-latest)`. No step depends on a Node 20 or Windows/Node 20
 cell. Linux real-bwrap enforcement stays on every Linux test cell; patch
 coverage stays on PR Node 22/Linux only. Lint and e2e still run for every PR
-and main push; changelog stays PR-only. Test jobs have 25 minutes; lint,
-changelog and e2e have 10 each.
+and main push; changelog and docs stay PR-only. Test jobs have 25 minutes; lint,
+changelog, docs and e2e have 10 each.
+
+The `docs` job invokes `scripts/check-docs.js` with the PR base/head SHAs and
+repository/PR number, full checkout history and `GH_TOKEN`. It reuses
+`check-changelog.js`'s app-path classification and label validation, reads a
+NUL-delimited `git diff --name-only --no-renames <base>...<head>`, and fetches
+current labels via `gh api`. App changes need a changed `docs/`, `.ai/contexts/`
+or `README.md` path, or the exact `no-docs` label; non-app changes pass.
+Errors reading inputs fail closed with exit 2; missing docs exits 1.
+`test/check-docs.test.js` loads the real script with plain require and a VM
+with a filename, substituting only command execution for the CLI checks.
+The rule and PR-body requirements are in [changelog.md](../../docs/changelog.md#documentation-in-the-same-pr).
+The gate does not assess relevance, require both doc categories, or parse the
+PR body. Adding the label requires a job rerun, as for `no-changelog`.
+Creating the label and making `docs` a required check are separate repository
+administration actions; this workflow does neither.
 
 Linux runs the full Node suite with coverage. Every non-Linux runner runs
 `node scripts/run-tests.js --platform-only` without c8; its matrix and job
