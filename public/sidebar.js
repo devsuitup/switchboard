@@ -146,6 +146,29 @@ function rowIsRunning(session, includePending = true) {
     || rowSessionIds(session).some(id => activePtyIds.has(id) || (includePending && pendingSessions.has(id)));
 }
 
+function groupIsStale(rows) {
+  if (rows.some(row => rowIsRunning(row))) return false;
+  const mostRecent = rows[0]?.modified;
+  return !!mostRecent && (Date.now() - new Date(mostRecent)) > sessionMaxAgeDays * 86400000;
+}
+
+function autoCollapseHeader(header) {
+  header.classList.add('collapsed');
+  header.dataset.autoCollapsed = '1';
+}
+
+function applyAgeCollapse(header, stale) {
+  if (searchMatchIds !== null || showStarredOnly || showRunningOnly) header.dataset.autoCollapsed = 'filter';
+  else if (stale()) autoCollapseHeader(header);
+}
+
+function carryGroupCollapse(fromEl, toEl) {
+  const collapsed = fromEl.classList.contains('collapsed');
+  if (fromEl.dataset.autoCollapsed === (collapsed ? '1' : 'filter')) return;
+  toEl.classList.toggle('collapsed', collapsed);
+  delete toEl.dataset.autoCollapsed;
+}
+
 function olderArchiveKeepReason(session) {
   const ids = [...new Set([...rowSessionIds(session), rowHeadId(session)])];
   if (ids.includes(activeSessionId)) return 'active session on screen';
@@ -1712,19 +1735,10 @@ function renderProjects(projects, resort, { keepFocus = false } = {}) {
     const offerNotice = buildReenableNotice(project, fId);
     if (offerNotice) sessionsList.prepend(offerNotice);
 
-    // Auto-collapse if project path is missing, most recent session is older than threshold, or project matched with no sessions
-    if (project.missing) {
-      header.classList.add('collapsed');
-    } else if (project._projectMatchedOnly) {
-      header.classList.add('collapsed');
-    } else if (project.reenableOffer) {
-      // see .ai/contexts/session-cache.md ("Archived projects", re-enable offers)
-    } else if (searchMatchIds === null && !showStarredOnly && !showRunningOnly) {
-      const mostRecent = filtered[0]?.modified;
-      if (mostRecent && (Date.now() - new Date(mostRecent)) > sessionMaxAgeDays * 86400000) {
-        header.classList.add('collapsed');
-      }
-    }
+    // see .ai/contexts/session-cache.md ("Sidebar group auto-collapse")
+    if (project.missing || project._projectMatchedOnly) autoCollapseHeader(header);
+    const ageRuleApplies = !project.missing && !project._projectMatchedOnly && !project.reenableOffer;
+    const childRows = [];
 
     group.appendChild(header);
     group.appendChild(sessionsList);
@@ -1781,18 +1795,14 @@ function renderProjects(projects, resort, { keepFocus = false } = {}) {
       const wtOfferNotice = buildReenableNotice(wt, wtFId);
       if (wtOfferNotice) wtSessionsList.prepend(wtOfferNotice);
 
-      // Auto-collapse worktree if stale
-      if (!wt.reenableOffer && searchMatchIds === null && !showStarredOnly && !showRunningOnly) {
-        const mostRecent = wtResult.filtered[0]?.modified;
-        if (mostRecent && (Date.now() - new Date(mostRecent)) > sessionMaxAgeDays * 86400000) {
-          wtHeader.classList.add('collapsed');
-        }
-      }
+      childRows.push(...wtResult.filtered);
+      if (!wt.reenableOffer) applyAgeCollapse(wtHeader, () => groupIsStale(wtResult.filtered));
 
       wtGroup.appendChild(wtHeader);
       wtGroup.appendChild(wtSessionsList);
       sessionsList.appendChild(wtGroup);
     }
+    if (ageRuleApplies) applyAgeCollapse(header, () => groupIsStale(filtered) && !childRows.some(row => rowIsRunning(row)));
 
     newSidebar.appendChild(group);
   }
@@ -1836,14 +1846,10 @@ function renderProjects(projects, resort, { keepFocus = false } = {}) {
       if (fromEl.classList.contains('session-item') && fromEl.querySelector('.session-rename-input')) {
         return false;
       }
-      if (fromEl.classList.contains('project-header')) {
-        if (fromEl.classList.contains('collapsed')) {
-          toEl.classList.add('collapsed');
-        } else {
-          toEl.classList.remove('collapsed');
-        }
+      if (fromEl.classList.contains('project-header') || fromEl.classList.contains('worktree-header')) {
+        carryGroupCollapse(fromEl, toEl);
       }
-      if (fromEl.classList.contains('slug-group') || fromEl.classList.contains('worktree-header')) {
+      if (fromEl.classList.contains('slug-group')) {
         if (fromEl.classList.contains('collapsed')) {
           toEl.classList.add('collapsed');
         } else {
@@ -2248,6 +2254,7 @@ function rebindSidebarEvents(projects) {
     }
     header.onclick = (e) => {
       if (e.target.closest('.project-delete-btn') || e.target.closest('.project-stop-all-btn') || e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn') || e.target.closest('.project-remap-btn') || e.target.closest('.remote-host-refresh-btn')) return;
+      delete header.dataset.autoCollapsed;
       header.classList.toggle('collapsed');
     };
   }
@@ -2333,6 +2340,7 @@ function rebindSidebarEvents(projects) {
     }
     wtHeader.onclick = (e) => {
       if (e.target.closest('.project-stop-all-btn') || e.target.closest('.worktree-new-btn') || e.target.closest('.worktree-hide-btn') || e.target.closest('.worktree-delete-btn')) return;
+      delete wtHeader.dataset.autoCollapsed;
       wtHeader.classList.toggle('collapsed');
     };
   });

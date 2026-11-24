@@ -6,6 +6,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - A local session waiting on a question from Claude now shows the orange attention mark in the sidebar instead of the working spinner, as it already did for permission prompts and remote sessions. The mark clears once the question is answered, and is not shown on the session you are looking at. (#1246)
+- A project or worktree holding a running session or a live background job is no longer collapsed in the sidebar because its last activity looks old, which hid a long-running background session after a fresh start. A group collapsed automatically opens again once it has recent activity; a group you collapse yourself stays collapsed. (#1249)
 
 ## v0.1.0-beta.1 — 2026-11-24
 
