@@ -19,10 +19,11 @@ async function resolveDefaultSessionOptions(project) {
   options.browserMode = effective.browserMode === undefined ? SETTING_DEFAULTS.browserMode : effective.browserMode;
   if (effective.sandbox && window.api.platform === 'linux') options.sandbox = true;
   if (effective.preLaunchCmd) options.preLaunchCmd = effective.preLaunchCmd;
+  if (effective.customArgs !== undefined) options.customArgs = effective.customArgs;
   if (effective.addDirs) options.addDirs = effective.addDirs;
   if (effective.mcpEmulation === false) options.mcpEmulation = false;
   // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
-  for (const key of ['codexSandbox', 'codexApproval', 'codexModel', 'codexEffort']) {
+  for (const key of ['codexSandbox', 'codexApproval', 'codexModel', 'codexEffort', 'codexCustomArgs']) {
     if (effective[key]) options[key] = effective[key];
   }
   return options;
@@ -457,6 +458,8 @@ async function showSessionLaunchDialog(project, opener, session = null) {
     }
     const preLaunch = dialog.querySelector(`#${prefix}-pre-launch`).value.trim();
     if (preLaunch) options.preLaunchCmd = preLaunch;
+    const customArgsKey = codex ? 'codexCustomArgs' : 'customArgs';
+    if (effective[customArgsKey] !== undefined) options[customArgsKey] = effective[customArgsKey];
     options.addDirs = dialog.querySelector(`#${prefix}-add-dirs`).value.trim();
     close(!!session);
     if (session) openSession(session, options);

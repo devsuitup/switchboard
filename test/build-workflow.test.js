@@ -78,8 +78,15 @@ test('publish waits for every build and retains the default success gate on tags
   const { publish, ...buildJobs } = workflow.jobs;
   const needs = Array.isArray(publish.needs) ? publish.needs : [publish.needs];
   assert.deepEqual(needs.toSorted(), Object.keys(buildJobs).toSorted());
-  assert.deepEqual(needs, ['build']);
+  assert.deepEqual(needs, ['build', 'release-tag']);
   assert.equal(publish.if, "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')");
+  assert.equal(workflow.jobs['release-tag'].if, publish.if, 'the tag check runs on exactly the pushes that publish');
+});
+
+test('a final release compares its notes with the previous final, a beta with the previous tag', () => {
+  const notes = workflow.jobs.publish.steps.find(step => step.name === 'Fill in release notes').run;
+  assert.match(notes, /\*-\*\) PREV_TAG="\$\(git describe --tags --abbrev=0 "\$\{TAG\}\^"/);
+  assert.match(notes, /\*\) PREV_TAG="\$\(git describe --tags --abbrev=0 --exclude '\*-\*' "\$\{TAG\}\^"/);
 });
 
 test('dispatch never publishes, including on a tag ref', () => {

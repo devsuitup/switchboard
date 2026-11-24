@@ -188,7 +188,7 @@ function setupSidebarDom({ loadTaskRegistry = true, indexOrder = false } = {}) {
 
   const ctx = dom.getInternalVMContext();
   window.sandboxedSessions = new Map();
-  loadAppFunctions(ctx, { functions: ['backgroundActionReason'] });
+  loadAppFunctions(ctx, { functions: ['harnessBackgroundReason', 'backgroundActionReason'] });
   const read = (expr) => vm.runInContext(expr, ctx);
 
   return {

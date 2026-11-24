@@ -500,7 +500,7 @@ for (const type of ['remote', 'sandboxed', 'terminal', 'pending']) {
     h.window.openSessions.set('s1', { session: h.session, closed: false, backgrounding: type === 'pending' });
     h.window.activePtyIds.add('s1');
     h.window.sandboxedSessions = new Map(type === 'sandboxed' ? [['s1', true]] : []);
-    const { sendSessionToBackground, backgroundActionReason } = loadAppFunctions(h.context, { functions: ['sendSessionToBackground', 'backgroundActionReason'] });
+    const { sendSessionToBackground, backgroundActionReason } = loadAppFunctions(h.context, { functions: ['sendSessionToBackground', 'harnessBackgroundReason', 'backgroundActionReason'] });
     h.window.backgroundActionReason = backgroundActionReason;
     await sendSessionToBackground('s1');
     const el = h.document.querySelector('#app-notices .app-notice');

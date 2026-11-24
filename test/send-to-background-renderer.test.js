@@ -6,6 +6,9 @@ const vm = require('node:vm');
 const { setup } = require('./continuations-harness');
 const { loadAppFunctions } = require('./app-source');
 const { setupSidebarDom } = require('./dom-setup');
+const path = require('node:path');
+const { inventory } = require('../src/main/app/session-exit');
+const { backgroundRefusal } = require('../src/main/bg-agents/bg-handoff');
 
 for (const failure of ['refusal', 'rejection', 'missing result']) {
   test(`failed manual background attach ${failure} leaves the saved working set unchanged`, async t => {
@@ -60,7 +63,7 @@ function handoff(t, { result = { ok: true, sessionId: 'new', jobId: '1234abcd', 
   `, h.ctx, { filename: __filename });
   if (agents) h.ctx.activeSubagentsByParent.set('old', new Set(Array.from({ length: agents }, (_, n) => n)));
   if (existing) vm.runInContext("openSessions.set('new', { session: rows.find(row => row.sessionId === 'new'), attach: false });", h.ctx, { filename: __filename });
-  const app = loadAppFunctions(h.ctx, { functions: ['sendSessionToBackground', 'backgroundActionReason', 'rekeySessionEnvironment'] });
+  const app = loadAppFunctions(h.ctx, { functions: ['sendSessionToBackground', 'harnessBackgroundReason', 'backgroundActionReason', 'rekeySessionEnvironment'] });
   return { ...h, app: { ...h.app, ...app }, calls, destroyed, notices, confirmations };
 }
 
@@ -299,4 +302,74 @@ test('R-S2 GUARD same-id handoff attaches once at original tab position', async 
   assert.equal(h.spawned[0].options.type, 'attach');
   assert.equal(h.spawned[0].options.jobId, 'aaaaaaaa');
   assert.deepEqual([...h.ctx.openSessions.keys()], before);
+});
+
+function harnessHeader(t, harnesses) {
+  const h = handoff(t);
+  const doc = h.dom.window.document;
+  doc.body.innerHTML = '<button id="terminal-bg-btn"></button><button id="terminal-refresh-btn"></button>';
+  h.ctx.terminalHeaderStatus = doc.createElement('span');
+  h.ctx.terminalStopBtn = doc.createElement('button');
+  h.ctx.paintTerminalHeaderStatus = () => {};
+  h.ctx.lastSessionExit = () => null;
+  h.ctx.updatePtyTitle = () => {};
+  h.dom.window.api.getHarnesses = async () => harnesses;
+  const app = loadAppFunctions(h.ctx, { functions: ['initTerminalBackgroundControl', 'updateTerminalHeader'] });
+  app.initTerminalBackgroundControl();
+  const show = session => {
+    h.ctx.openSessions.get('old').session = { sessionId: 'old', ...session };
+    app.updateTerminalHeader();
+    return { reason: h.app.backgroundActionReason('old'), button: doc.getElementById('terminal-bg-btn') };
+  };
+  return { ...h, show };
+}
+
+const CLAUDE = { id: 'claude', label: 'Claude', capabilities: { bgJobs: true } };
+
+test('R16: a Codex tab shows Send to background disabled with a reason naming the CLI; a Claude tab is unchanged', async t => {
+  const h = harnessHeader(t, [CLAUDE, { id: 'codex', label: 'Codex', capabilities: { bgJobs: false } }]);
+  await new Promise(resolve => setImmediate(resolve));
+  const codex = h.show({ runtime: 'codex' });
+  assert.equal(codex.reason, 'Codex sessions cannot be sent to the background');
+  assert.equal(codex.button.style.display, '');
+  assert.equal(codex.button.disabled, true);
+  assert.equal(codex.button.getAttribute('aria-disabled'), 'true');
+  assert.equal(codex.button.title, 'Codex sessions cannot be sent to the background');
+  for (const session of [{ runtime: 'claude' }, {}]) {
+    const claude = h.show(session);
+    assert.equal(claude.reason, null);
+    assert.equal(claude.button.style.display, '');
+    assert.equal(claude.button.disabled, false);
+    assert.match(claude.button.title, /^Send to background/);
+  }
+});
+
+test('R17: the renderer reads the harness capability, not the runtime name', async t => {
+  const h = harnessHeader(t, [CLAUDE, { id: 'codex', label: 'Codex', capabilities: { bgJobs: true } }, { id: 'other', label: 'Other CLI', capabilities: { bgJobs: false } }]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.show({ runtime: 'codex' }).reason, null);
+  const other = h.show({ runtime: 'other' });
+  assert.equal(other.reason, 'Other CLI sessions cannot be sent to the background');
+  assert.equal(other.button.disabled, true);
+});
+
+test('R18: the exit dialog names the CLI for a Codex tab main refuses as unreadable; a Claude tab keeps the reason from main', async t => {
+  const h = harnessHeader(t, [CLAUDE, { id: 'codex', label: 'Codex', capabilities: { bgJobs: false } }]);
+  await new Promise(resolve => setImmediate(resolve));
+  const exit = loadAppFunctions(h.ctx, { sourcePath: path.join(__dirname, '..', 'public', 'file-panel.js'), functions: ['exitBackgroundRows', 'confirmSessionExit'] });
+  const dialog = async runtime => {
+    h.show({ runtime });
+    const snapshot = inventory(new Map([['old', { kind: 'local-pty', runtime, pty: {}, cwd: '/repo' }]]), record => backgroundRefusal(record, undefined));
+    assert.equal(snapshot.rows[0].background, 'refused');
+    assert.match(snapshot.rows[0].reason, /cannot read this session/);
+    let options;
+    h.ctx.showChoiceDialog = async o => { options = o; return null; };
+    await exit.confirmSessionExit({ action: 'quit', snapshot });
+    assert.equal(options.secondaryAction, null);
+    return options.message.join('\n');
+  };
+  const codex = await dialog('codex');
+  assert.match(codex, /Codex sessions cannot be sent to the background/);
+  assert.doesNotMatch(codex, /cannot read this session/);
+  assert.match(await dialog('claude'), /cannot read this session/);
 });

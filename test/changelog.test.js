@@ -57,6 +57,21 @@ test('compareVersions orders numerically, not as text: 0.0.100 is greater than 0
   assert.equal(compareVersions('0.0.84', '0.0.84'), 0);
 });
 
+test('compareVersions puts a beta before its final release and orders betas by number', () => {
+  assert.equal(compareVersions('0.1.0-beta.1', '0.1.0'), -1);
+  assert.equal(compareVersions('0.1.0', '0.1.0-beta.9'), 1);
+  assert.equal(compareVersions('0.1.0-beta.10', '0.1.0-beta.9'), 1);
+  assert.equal(compareVersions('v0.1.0-beta.2', '0.1.0-beta.2'), 0);
+  assert.equal(compareVersions('0.1.0-beta.1', '0.0.109'), 1);
+  assert.equal(compareVersions('0.1.1-beta.1', '0.1.0'), 1);
+});
+
+test('compareVersions throws on a pre-release that is not -beta.N', () => {
+  for (const bad of ['0.1.0-rc.1', '0.1.0-beta', '0.1.0-beta.0', '0.1.0-alpha.1', '0.1.0-beta.1.2', '0.1.0+build']) {
+    assert.throws(() => compareVersions(bad, '0.0.1'), TypeError, `accepted ${bad}`);
+  }
+});
+
 test('compareVersions accepts a leading v on either side', () => {
   assert.equal(compareVersions('v0.0.85', '0.0.84'), 1);
   assert.equal(compareVersions('0.0.84', 'v0.0.84'), 0);
@@ -316,6 +331,42 @@ test('the menu entry gives nothing and an error when the current version has no 
   assert.match(broken.error, /no version section/);
 });
 
+const BETA_SAMPLE = [
+  '# Changelog', '',
+  '## Unreleased', '',
+  '## v0.1.0-beta.2 — 2026-11-25', '', '### Fixed', '- Second beta. (#11)', '',
+  '## v0.1.0-beta.1 — 2026-11-24', '', '### New', '- First beta. (#10)', '',
+  '## v0.0.100 — 2026-10-03', '', '### Fixed', '- Hundredth. (#8)', '',
+  '---', '',
+].join('\n');
+
+test('parseChangelog reads a -beta.N version heading', () => {
+  assert.deepEqual(parseChangelog(BETA_SAMPLE, { strict: true }).versions.map((v) => [v.version, v.date]), [
+    ['0.1.0-beta.2', '2026-11-25'], ['0.1.0-beta.1', '2026-11-24'], ['0.0.100', '2026-10-03'],
+  ]);
+  for (const bad of ['## v0.1.0-rc.1 — 2026-11-24', '## v0.1.0-beta — 2026-11-24']) {
+    assert.throws(() => parseChangelog(BETA_SAMPLE.replace('## v0.1.0-beta.1 — 2026-11-24', bad)), /malformed heading/, bad);
+  }
+});
+
+test('a beta install updated from stable is shown its betas; the next beta shows only its own section', () => {
+  const fromStable = whatsNewOnStartup({ currentVersion: '0.1.0-beta.2', lastSeenVersion: '0.0.100', existingInstall: true, readChangelog: reader(BETA_SAMPLE) });
+  assert.deepEqual(fromStable.sections.map((s) => s.version), ['0.1.0-beta.2', '0.1.0-beta.1']);
+  const fromBeta = whatsNewOnStartup({ currentVersion: '0.1.0-beta.2', lastSeenVersion: '0.1.0-beta.1', existingInstall: true, readChangelog: reader(BETA_SAMPLE) });
+  assert.deepEqual(fromBeta.sections.map((s) => s.version), ['0.1.0-beta.2']);
+  assert.deepEqual(whatsNewForVersion({ currentVersion: '0.1.0-beta.1', readChangelog: reader(BETA_SAMPLE) }).sections.map((s) => s.version), ['0.1.0-beta.1']);
+});
+
+test('once the betas are folded into the final, a beta install and a stable install both get the final section', () => {
+  const folded = BETA_SAMPLE
+    .replace('## v0.1.0-beta.2 — 2026-11-25\n\n### Fixed\n- Second beta. (#11)\n\n', '')
+    .replace('## v0.1.0-beta.1 — 2026-11-24', '## v0.1.0 — 2026-11-26');
+  for (const lastSeenVersion of ['0.1.0-beta.2', '0.0.100']) {
+    const result = whatsNewOnStartup({ currentVersion: '0.1.0', lastSeenVersion, existingInstall: true, readChangelog: reader(folded) });
+    assert.deepEqual(result.sections.map((s) => s.version), ['0.1.0'], lastSeenVersion);
+  }
+});
+
 test('the repository CHANGELOG.md parses, and has a section for the version in package.json', () => {
   const text = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
   const { unreleased, versions } = parseChangelog(text, { strict: true });
@@ -325,6 +376,9 @@ test('the repository CHANGELOG.md parses, and has a section for the version in p
   for (let i = 1; i < versions.length; i++) {
     assert.equal(compareVersions(versions[i - 1].version, versions[i].version), 1, 'versions must be newest first');
   }
+  const finals = new Set(versions.map((v) => v.version).filter((v) => !v.includes('-')));
+  const unfolded = versions.filter((v) => v.version.includes('-') && finals.has(v.version.split('-')[0]));
+  assert.deepEqual(unfolded.map((v) => v.version), [], 'beta sections must be folded into their final release section');
 });
 
 test('electron-builder packages CHANGELOG.md', () => {

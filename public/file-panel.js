@@ -912,7 +912,7 @@ async function confirmSessionExit(detail, changed) {
       const n = typeof activeSubagentsByParent !== 'undefined' ? activeSubagentsByParent.get(row.id)?.size || 0 : 0;
       if (n) line += ' · ' + n + ' running subagent' + (n === 1 ? '' : 's') + ' may stop';
     } else if (row.type === 'session') {
-      const reason = row.reason || (typeof backgroundActionReason === 'function' && backgroundActionReason(row.id));
+      const reason = (typeof harnessBackgroundReason === 'function' && harnessBackgroundReason(row.id)) || row.reason || (typeof backgroundActionReason === 'function' && backgroundActionReason(row.id));
       if (reason) line += ' · ' + reason;
     }
     rowParts.set(row, [...parts, line.slice(prefixLength)]);

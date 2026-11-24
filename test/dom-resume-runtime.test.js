@@ -56,6 +56,29 @@ const plain = value => JSON.parse(JSON.stringify(value));
 
 for (const runtime of ['claude', 'codex']) {
   for (const resume of [false, true]) {
+    for (const custom of ['  --label "quoted value"  ', '']) {
+      test(`${resume ? 'Resume' : 'New'} ${runtime}: forwards only its custom arguments (${custom ? 'verbatim' : 'explicit empty'})`, async t => {
+        const key = runtime === 'codex' ? 'codexCustomArgs' : 'customArgs';
+        const otherKey = runtime === 'codex' ? 'customArgs' : 'codexCustomArgs';
+        const h = setup(t, { [key]: custom, [otherKey]: '--other-runtime' });
+        let options;
+        h.window.launchNewSession = (_project, value) => { options = value; };
+        if (resume) {
+          await h.window.showResumeSessionDialog(session(runtime));
+          options = (await h.submit())[3];
+        } else {
+          await h.window.showNewSessionDialog({ projectPath: '/repo', runtime });
+          h.document.querySelector('.new-session-start-btn').click();
+        }
+        assert.equal(options[key], custom, 'runtime custom arguments survive the shared form unchanged');
+        assert.equal(Object.hasOwn(options, otherKey), false, 'the other runtime custom arguments must not leak');
+      });
+    }
+  }
+}
+
+for (const runtime of ['claude', 'codex']) {
+  for (const resume of [false, true]) {
     test(`${resume ? 'Resume' : 'New'} ${runtime}: Enter on a select keeps the dialog open without launching`, async t => {
       const h = setup(t);
       const launches = [];
