@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.1.0-beta.1 — 2026-11-24
+
 ### New
 - Local schedules can opt into background sessions that you can join while they run, with a one-hour limit and automatic cleanup when nobody has joined; a run in progress when Switchboard closes is picked up again at the next launch. If the saved runs cannot be read, automatic schedules pause and a notice names the folder to fix; a result that cannot be recorded is reported instead of silently missing. (#611)
 - Local file viewers now offer **Open in default app** for supported documents and **Reveal in folder**, including Memory, Activity traces and files opened from Touched or terminal paths. Unsaved edits stay in the editor; scripts and executables can only be revealed. (#1203)
@@ -14,6 +16,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### Changed
 - The Schedules tab is now on by default, so schedule files leave Agent Files for it on first launch, without a restart. For this release it can still be turned off in Global Settings → Automation → Schedules, which keeps schedule files and Run now in Agent Files. The first launch of this version turns the tab on once even if you saved Global Settings before, since earlier versions saved it as off with every Save; if you turn it off afterwards, it stays off. Scheduled tasks run as before. (#1239)
 - Footer usage gauges are grouped under Claude and Codex, share Week and 5h window labels, and hide with their CLI setting. (#1208)
+- Beta releases now carry their own version, such as `0.1.0-beta.1`, and their notes appear in What's new. With **Receive beta versions** on, you get each beta and then the final version, which stable installs receive too. (#1199)
 
 ### Fixed
 - In the Schedules tab, the minute and after-change refreshes no longer drop keyboard focus from Create schedule or Retry, and a Retry that stays pending keeps focus in the tab. At narrow sidebar widths, schedule actions wrap onto the next line and long paths, names and refusals wrap instead of running out of the sidebar. (#1238)
