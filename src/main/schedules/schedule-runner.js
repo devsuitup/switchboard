@@ -656,11 +656,7 @@ function buildScheduleCommand(sessionId, schedule) {
   return { claudeArgs: args };
 }
 
-/**
- * Pass over every minute up to now for the catch-up schedules of these projects,
- * so a run that fell due while a project was archived is not replayed.
- * see .ai/contexts/schedule-runner.md ("Archive")
- */
+// see .ai/contexts/schedule-runner.md ("Launch invariants", Project Archive)
 function skipMissedRuns(log, projects, stateDir, lastTickMinute = null) {
   for (const schedule of scanSchedules(log, projects)) skipMissedRunsOf(schedule, stateDir, lastTickMinute);
 }
