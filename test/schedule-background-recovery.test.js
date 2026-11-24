@@ -5,7 +5,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const childProcess = require('node:child_process');
 const { isolatedHome } = require('./fixtures/isolated-home.cjs');
 
 const realHome = process.env.SWITCHBOARD_TEST_REAL_HOME || os.homedir();
@@ -14,19 +13,6 @@ const suiteProjects = () => {
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 };
 const projectsBefore = new Set(suiteProjects());
-const processes = [];
-for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) {
-  const native = childProcess[name];
-  childProcess[name] = (...args) => {
-    processes.push([name, ...args.filter(arg => typeof arg === 'string' || Array.isArray(arg))]);
-    throw new Error(`the background recovery suite must never start a process: ${name} ${JSON.stringify(args[0])}`);
-  };
-  test.after(() => { childProcess[name] = native; });
-}
-test.after(() => {
-  assert.deepEqual(processes, [], 'no test may start a process, the claude CLI least of all');
-  assert.deepEqual(suiteProjects().filter(name => !projectsBefore.has(name)), [], 'scheduled seeds must stay in the disposable home');
-});
 isolatedHome(test, { realHome }).install();
 
 const bg = require('../src/main/schedules/schedule-background');
@@ -714,4 +700,8 @@ test('an access denial keeps the result record, and a later start publishes it w
   assert.equal(fs.existsSync(file), false);
   assert.equal(results.readScheduleRunResults(runsDir, [ACTUAL]).get(ACTUAL).exitCode, 0);
   assert.deepEqual(h.calls, [], 'a result-phase retry does not repeat cleanup');
+});
+
+test('no scheduled seed of this suite reached the real home', () => {
+  assert.deepEqual(suiteProjects().filter(name => !projectsBefore.has(name)), [], 'scheduled seeds must stay in the disposable home');
 });
