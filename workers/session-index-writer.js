@@ -9,6 +9,7 @@ const { assertHarnessSettings } = require('../harnesses');
 const { createProjectDeleteProgress, commitTransaction } = require('../src/main/projects/project-delete-progress');
 const { completeProjectDeletion, bindDeletionProducer, assertDeletionProducer } = require('../src/main/projects/project-delete-writer');
 const { folderReadWitness } = require('../src/main/session-index/full-read-state');
+const { journalCommands, writerClock } = require('../session-index-writer-client');
 
 // see .ai/contexts/session-index-writer.md
 const db = openSessionIndexStore({ readonly: false, onPinChange: pinChange => parentPort.postMessage({ pinChange }) });
@@ -29,9 +30,9 @@ const assertWorkflow = message => {
 let running = false, interactiveBurst = 0;
 const backgroundCommands = new Set(['effects', 'upsertCachedSessions', 'replaceSessionMetrics', 'upsertSearchEntries',
   'applySearchFileBatch', 'setCachedEntrypoints', 'setCachedCustomTitles', 'deleteCachedFolder', 'deleteSearchFolder', 'deleteSearchType', 'dropRemoteFolder', 'cleanupWorktree', 'certifyFullReads', 'deriveCachedNames']);
-const journalCommands = new Set(['querySessionRequestOutcome', 'claimSessionResultNamespace', 'recordSessionResultPublication',
-  'recordConsumedSessionStatusRequest', 'recordSessionRequestConflict']);
 const chunkWallTimeMs = 10;
+const timing = message => message.receivedAt === undefined ? {}
+  : { timing: { receivedAt: message.receivedAt, startedAt: message.startedAt, finishedAt: writerClock() } };
 
 const busyCounts = new Map();
 function flushBusyCounts() {
@@ -177,7 +178,11 @@ async function drain() {
     if (!journalCommands.has(message.command)) interactiveBurst = backgroundCommands.has(message.command) ? 0 : interactiveBurst + 1;
     try {
       assertWorkflow(message);
-      if (!message.started) { message.started = true; parentPort.postMessage({ id: message.id, started: true }); }
+      if (!message.started) {
+        message.started = true;
+        if (message.receivedAt !== undefined) message.startedAt = writerClock();
+        parentPort.postMessage({ id: message.id, started: true });
+      }
       message.iterator ||= commandUnits(message);
       message.pending ||= [];
       const unit = message.pending[0] || message.iterator.next();
@@ -191,7 +196,7 @@ async function drain() {
         if (message.command === 'deriveCachedNames') message.result = message.namesDerived ?? true;
         parentPort.postMessage({ id: message.id, ...(message.producerError ? { error: { message: message.producerError.message, code: message.producerError.code } }
           : { result: message.command === 'effects' ? { committedRevision: message.committedRevision } : message.result }),
-          ...(message.mutated ? { settings: settings() } : {}) });
+          ...(message.mutated ? { settings: settings() } : {}), ...timing(message) });
       } else {
         if (message.bindingError) throw message.bindingError;
         if (['close', 'drain', 'measurements', 'getProjectDeletionState', 'readProjectDeletionScope', 'readProjectDeletionSnapshot', 'readProjectDeletionRevision', 'listProjectDeletionOperations', 'querySessionRequestOutcome', 'readProjectArchiveEpochs', 'fenceWorkflow', 'retireWorkflow'].includes(message.command)) message.result = unit.value();
@@ -261,7 +266,7 @@ async function drain() {
       }
     } catch (error) {
       pendingDeletionHistory.delete(message);
-      parentPort.postMessage({ id: message.id, error: { message: error.message, code: error.code }, settings: settings() });
+      parentPort.postMessage({ id: message.id, error: { message: error.message, code: error.code }, settings: settings(), ...timing(message) });
     }
     await yieldTurn();
   }
@@ -271,6 +276,7 @@ async function drain() {
 const heartbeat = setInterval(() => parentPort.postMessage({ heartbeat: true }), 1000);
 heartbeat.unref();
 parentPort.on('message', message => {
+  if (journalCommands.has(message.command)) message.receivedAt = writerClock();
   if (['completeProjectDeletion', 'fenceProjectDeletion'].includes(message.command)) pendingDeletionHistory.add(message);
   try { message.producerBinding = bindDeletionProducer(db, message.command, message.args, pendingDeletionHistory.size > 0); }
   catch (error) { message.bindingError = error; }

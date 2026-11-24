@@ -29,10 +29,43 @@ wait, nor authorize splitting that atomic replacement without a publication
 protocol. Worker receive/start/finish timestamps and main loop delay are needed
 to distinguish queueing, an indivisible unit and delayed ACK delivery live.
 
+The client (`session-index-writer-client.js`) now owns this measurement; the
+facade no longer times journal commands. A journal command is stamped when the
+client enqueues it and posts it; the worker stamps it on receipt, when it picks
+it (first `started`) and just before its final answer, and returns those three
+in a `timing` field on journal answers only; the client stamps the ACK on
+arrival. Both threads use `performance.timeOrigin + performance.now()`, so
+cross-thread spans carry the sub-millisecond skew between the threads' origins.
+Only when the whole wait reaches 200 ms does it log one line:
+
+`[session-index-writer] journal command <name> waited <total> ms (main queue <a> ms, to worker <b> ms, worker queue <c> ms, worker run <d> ms, ack <e> ms)`
+
+- main queue: enqueue → `postMessage` on main (writer not ready, or 32 requests
+  already in flight).
+- to worker: `postMessage` → the worker's `message` handler (transport, or the
+  worker's own event loop busy in a synchronous unit).
+- worker queue: receipt → picked by `drain` (units of other commands ahead of
+  it; journal priority applies only between units).
+- worker run: picked → answer posted (its own SQL).
+- ack: answer posted → handled on main. A large value here is main-loop
+  starvation, not writer work.
+
+A phase the answer could not report (worker failure, timeout, an answer without
+`timing`) prints `n/a`. Below the threshold nothing is logged; the cost is five
+clock reads per journal command and none for other commands. To attribute a
+live stall, capture this line together with `main.loop` from the activity
+trace: turn Debug Mode on (Settings → Advanced → Diagnostics, see
+`docs/activity-trace.md`) after starting the app with
+`SWITCHBOARD_MAIN_LOOP_HISTOGRAM=1`, so `main.loop` carries `maxMs`/`p99Ms`.
+`test/session-index-writer-journal-phases-1192.test.js` checks the split with
+an injected clock and the worker's stamps on a real writer thread.
+
 `beginFullIndex` can reject a non-startup producer's global revision after an
-unrelated committed write. The facade reports this as `full index begin outcome
-unknown`; a received `WRITER_STALE` response actually proves this begin was
-refused before mutation. The guard must not be removed. Startup producers use
+unrelated committed write. A received `WRITER_STALE` response proves this begin
+was refused before mutation, so the facade logs it as `full index begin refused
+(stale): <message>`; any other failure (timeout, worker exit) still logs `full
+index begin outcome unknown: <message>`. Only the wording differs; the folder
+stays unpublished either way. The guard must not be removed. Startup producers use
 an affected-folder witness instead. Any retry change must preserve the effects
 revision checks and certificate/publication fencing.
 
