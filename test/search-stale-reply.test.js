@@ -283,7 +283,7 @@ test('Schedules tab drives the real listing lifecycle, hides search and stops re
   assert.equal(listed, 1, 'opening the tab lists schedules');
   assert.equal(ctx.window.searchBar.style.display, 'none');
   assert.equal(ctx.document.getElementById('schedules-content').style.display, '');
-  assert.match(ctx.document.getElementById('schedules-content').textContent, /No schedules found/);
+  assert.match(ctx.document.getElementById('schedules-content').textContent, /Add a local project from Sessions, then return here/);
   assert.equal(ctx.delays.at(-1), 58500, 'the refresh aligns with the next minute');
   ctx.flushTimers();
   await new Promise(resolve => setImmediate(resolve));
