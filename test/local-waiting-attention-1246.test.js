@@ -144,3 +144,42 @@ test('a local row without a PTY here, live elsewhere and waiting, shows attentio
   s.descriptor('busy', waitingAt + 5000);
   assert.equal(s.item().classList.contains('needs-attention'), false, 'released when the descriptor leaves waiting');
 });
+
+for (const ptyHere of [true, false]) {
+  test(`descriptor-owned attention is released when the descriptor disappears (${ptyHere ? 'PTY here' : 'no PTY here'})`, t => {
+    const s = setup(t, { ptyHere });
+    s.headTurn([prompt, askQuestion]);
+    if (!ptyHere) s.ctx.emitSessionTranscriptActivity({ sessionId: s.id, at: waitingAt - 50 });
+    s.render();
+    assertAttention(s, 'precondition: waiting raised attention');
+    delete s.row.status;
+    delete s.row.statusUpdatedAt;
+    delete s.row.waitingFor;
+    s.render();
+    assert.equal(s.item().classList.contains('needs-attention'), false, 'no descriptor, no descriptor-owned attention');
+    assert.equal(s.icon().classList.contains('session-icon--attention'), false);
+  });
+}
+
+test('a newer transcript entry after the descriptor disappeared leaves no attention', t => {
+  const s = setup(t);
+  s.headTurn([prompt, askQuestion]);
+  s.render();
+  assertAttention(s, 'precondition: waiting raised attention');
+  delete s.row.status;
+  delete s.row.statusUpdatedAt;
+  s.headTurn([prompt, askQuestion, answer]);
+  assert.equal(s.item().classList.contains('needs-attention'), false, 'the answer reached the transcript');
+  s.render();
+  assert.equal(s.item().classList.contains('needs-attention'), false);
+});
+
+test('an OSC attention survives the descriptor disappearing', t => {
+  const s = setup(t);
+  s.headTurn([prompt, askQuestion]);
+  s.ctx.read('setAttention')(s.id, true, 'onTerminalNotification');
+  delete s.row.status;
+  delete s.row.statusUpdatedAt;
+  s.render();
+  assertAttention(s, 'explicit OSC attention is not the descriptor\'s to clear');
+});

@@ -385,11 +385,13 @@ function snapshotForLocal(sessionId, session, selection) {
     // session.status present is itself the liveness signal — see .ai/contexts/cli-session-state.md
     state.apply({ type: 'liveness', value: 'alive' });
     if (!background) state.apply({ type: 'descriptorStatus', status: sess.status, at: sess.statusUpdatedAt, attention: localDescriptorAttention(sessionId, sess) });
-  } else if (!sess?.remoteAlias && state.snapshot().liveness === 'alive'
-    && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId))) {
-    localPtyStates.delete(sessionId);
-    state = localPtyState(sessionId);
-    state.apply({ type: 'liveness', value: 'unknown' });
+  } else {
+    state.apply({ type: 'releaseDescriptorAttention' });
+    if (state.snapshot().liveness === 'alive' && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId))) {
+      localPtyStates.delete(sessionId);
+      state = localPtyState(sessionId);
+      state.apply({ type: 'liveness', value: 'unknown' });
+    }
   }
   return background ? { ...state.snapshot(), backgroundJob: true, descriptorStatus: sess?.status, waitingFor: sess?.waitingFor } : state.snapshot();
 }

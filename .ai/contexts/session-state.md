@@ -1162,6 +1162,12 @@ local callers, `snapshotForLocal` and `seedLocalTranscriptDescriptor`:
   and the later entry releases a descriptor-owned attention it raised. With no
   head timestamp the descriptor is not ordered and `waiting` raises it; with a
   head timestamp and no `statusUpdatedAt` it does not.
+- **Descriptor absent**: a refresh where the local row has no descriptor
+  `status` sends `releaseDescriptorAttention` to the local-pty adapter, PTY
+  here or not, so a dialog whose descriptor disappeared (or whose answer only
+  reached the transcript) cannot keep the attention. Explicit OSC attention
+  and the rest of the PTY state stay; the transcript adapter already drops its
+  whole state on that loss.
 - **Background (#785)**: both callers apply `descriptorStatus` only when the
   row is not a background job, so the background projection stays the only
   path that maps a background job's `waiting` to attention.
