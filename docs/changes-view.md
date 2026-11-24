@@ -12,7 +12,8 @@ local session it is an editor for those files. It works the same for local and
 it. Every session has the button. The panel shows one of:
 
 - the list of changed files;
-- **No changes**, when the working tree is clean;
+- **No changes**, when the working tree is clean (**No changes in the session
+  directory** when subagent worktree groups are also listed);
 - **This directory is not a git repository.**, when the session runs outside a
   repository. After a `git init` there, the files are listed from the next
   refresh;

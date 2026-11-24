@@ -1,5 +1,9 @@
 # Context: trigger-watcher
 
+**Purpose**: lets external harness scripts inject keyboard input into open PTY sessions without any Electron IPC.  The primary use case is the token-usage harness calling `/compact` on a session when it detects a high context-window fill. It also carries typed read-only requests (`session-status`), versioned open/new/stop actions, and the shared result namespace described below.
+
+The trigger file contract (fields, result JSON, `expectedCwd`, `wrote`, `steps_total`, `waited_ms`) is specified for users in [automation](../../docs/automation.md); this context covers the implementation. Per-tab delivery is decided in [ADR 0003](../../docs/decisions/0003-trigger-delivery-per-tab.md).
+
 ## Windows startup PID publication (#1083)
 
 ConPTY returns the same PTY object with PID zero before its output worker
@@ -165,19 +169,24 @@ Main-process modules `trigger-watcher.js` and `trigger-context.js` live in
 `src/main/triggers/` (ADR 0005, step 8). The watcher's lazy tab mutex import is
 `../terminals/tab-input-lock`; its home based trigger directory is unchanged.
 
-**Purpose**: lets external harness scripts inject keyboard input into open PTY sessions without any Electron IPC.  The primary use case is the token-usage harness calling `/compact` on a session when it detects a high context-window fill.
-
 ## Key files
 
-| File | LOC | Role |
-|---|---|---|
-| `src/main/triggers/trigger-watcher.js` | ~2170 | The entire module: directory setup, `fs.watch` listener, idle-wait logic, single + chained trigger processing, submit-with-verify busy-rise/fall polling, input validation, PTY write, result file. |
-| `src/main/triggers/trigger-name.js` | ~30 | The new-session name rules: unpaired-surrogate test, `requestedName`/`actualName` result fields, marker naming provenance and its recovery validation (see "Naming a new session"). |
-| `src/main/triggers/trigger-context.js` | ~420 | `createTriggerContext({ activeSessions, log, getCliStatus, projectsDir, getLiveDescriptor, resolveSessionId, remote })` — builds the whole `ctx` object out of `main.js`'s session map, including the pinned per-tab delivery binding (`pinDelivery`) and the descriptor fallback lookup (`lookupDeliveryFallback`). |
-| `transcript-turn.js` | ~230 | Whether a session transcript's main turn is closed, read from its tail; backs `ctx.getTranscriptTurn` (see "Transcript fallback while the descriptor stays busy"). |
-| `src/main/terminals/terminal-input.js` | ~35 | `handleTerminalInput(activeSessions, sessionId, data, now)` — the body of the `terminal-input` IPC handler; feeds `session.composerState`. |
-| `src/main/terminals/tab-input-lock.js` | ~35 | The per-tab mutex (`acquireTabInput`), shared with the Send to background action (`tryAcquireTabInput`; see "Re-keyed sessions"). |
-| `main.js` (wiring) | ~20 | `require('./src/main/triggers/trigger-watcher').start(createTriggerContext({ … }))` in the `app.whenReady` block, right after `startScheduler`, plus the one-line `terminal-input` registration. |
+| File | Role |
+|---|---|
+| `src/main/triggers/trigger-watcher.js` | The watcher core: directory setup, `fs.watch` listener, idle-wait logic, single + chained trigger processing, submit-with-verify busy-rise/fall polling, input validation, PTY write, result file. |
+| `src/main/triggers/trigger-name.js` | The new-session name rules: unpaired-surrogate test, `requestedName`/`actualName` result fields, marker naming provenance and its recovery validation (see "Naming a new session"). |
+| `src/main/triggers/trigger-context.js` | `createTriggerContext({ activeSessions, log, getCliStatus, projectsDir, lifecycle, sessionRequests, statusSources, getLiveDescriptor, resolveSessionId, remote })` — builds the whole `ctx` object out of `main.js`'s session map, including the pinned per-tab delivery binding (`pinDelivery`) and the descriptor fallback lookup (`lookupDeliveryFallback`). |
+| `src/main/triggers/trigger-actions.js` | Versioned (`version`/`action`) requests: `validateTrigger`, `resolveProject` (with its transient-conflict retry), the new-session limiter, open/new/stop execution (`createTriggerActions`). |
+| `src/main/triggers/trigger-launch.js` | `acquireOpen` (per-id open FIFO) and `validateTriggerOpen`, the main-process launch checks. |
+| `src/main/triggers/trigger-renderer-bridge.js` | `createTriggerRendererBridge`: the renderer broker for open/new and stop (see "Renderer broker and open lifecycle"). |
+| `src/main/triggers/session-request-contract.js` | The typed request parser (`parseSessionRequest`, `statusEnvelope`, `openRefusal`). |
+| `src/main/triggers/session-request-namespace.js` | `createSessionRequestNamespace`: ownership of the shared result namespace. |
+| `src/main/triggers/session-request-publication.js` | `createSessionRequestPublication`: durable result publication (temp write, fsync, rename). |
+| `src/main/triggers/session-status.js` | `createSessionStatus`: the `session-status` answer, fed by main's `statusSources`. |
+| `transcript-turn.js` | Whether a session transcript's main turn is closed, read from its tail; backs `ctx.getTranscriptTurn` (see "Transcript fallback while the descriptor stays busy"). |
+| `src/main/terminals/terminal-input.js` | `handleTerminalInput(activeSessions, sessionId, data, now)` — the body of the `terminal-input` IPC handler; feeds `session.composerState`. |
+| `src/main/terminals/tab-input-lock.js` | The per-tab mutex (`acquireTabInput`), shared with the Send to background action (`tryAcquireTabInput`; see "Re-keyed sessions"). |
+| `main.js` (wiring) | `require('./src/main/triggers/trigger-watcher').start(createTriggerContext({ … }))` in the `app.whenReady` block, right after `startScheduler`, plus the one-line `terminal-input` registration. |
 
 ## Public surface
 
@@ -551,7 +560,7 @@ The watcher dispatches parsed objects with an own `version` or `action` property
 to `src/main/triggers/trigger-actions.js`, before legacy command validation or
 remote delivery. Objects with neither property still use the existing legacy
 command/chain/key path, including its delivery, locking and publication rules.
-Session ruling for #1022BFIX: spec §3 (line 161) takes precedence. Neither
+Neither
 `version` nor `action` means legacy dispatch, including arrays, null, numbers
 and strings under UUID-shaped filenames of either case. They retain their
 exact legacy result shapes, including null's generic internal-error result
@@ -1258,8 +1267,7 @@ and isolated running instance.
 Tests exercise the real file watcher with a fake descriptor source and the
 real context/indexer for host enablement. Polling tests keep a ref'd interval
 in `finally`-protected test scope for Node 20/22; production timers stay unref'd.
-U4 and U20 are guard-only tests. Mutation artifacts and commands are recorded
-in the local PR body.
+U4 and U20 are guard-only tests.
 
 ## The submission contract
 
@@ -3100,12 +3108,12 @@ several timing-sensitive tests still failed:
 
 **What a real clock injection would take** (out of scope for issue #260;
 `trigger-watcher.js` had 29 `setTimeout`/`Date.now()` call sites across
-~1384 lines at the time; it is ~2170 lines today): thread a clock object (`{ now(), setTimeout(), clearTimeout() }`,
+~1384 lines at the time): thread a clock object (`{ now(), setTimeout(), clearTimeout() }`,
 the pattern already used in `remote-watch.js`, `remote-index.js`, and
 `remote-activity.js`) through `pollLoop`, `waitForIdle`, `waitForComposerFree`,
 `submitWithVerify`, and `waitForBusyFall` — the five functions that own a
 wall-clock wait — plus the `fs.watch` debounce in `start()`. Every test that
-asserts a specific `waited_ms`/`elapsed` value (roughly 20 of the ~120 tests
+asserts a specific `waited_ms`/`elapsed` value (roughly 20 of the ~130 tests
 in the file, concentrated in the "submit-verify", "chain", and "waitForBusyFall
 settle window" sections) would then drive a fake clock instead of real
 `setTimeout`, making the pass/fail boundary exact instead of a tolerance
@@ -3123,5 +3131,5 @@ observation layer.
 - If you rename `session.composerState` or stop feeding it from `src/main/terminals/terminal-input.js`, `getComposerState` returns `null` and **every trigger renounces with `not sent`** — the safe direction, but the channel goes silent.  Tests for the model live in `test/composer-state.test.js`; the handler and the ctx are exercised in `test/terminal-input-handler.test.js` and `test/trigger-context.test.js`, and `test/main-wiring-source-check.test.js` reads `main.js` as text to check the remaining glue is still written down (source only — it proves nothing at runtime).
 - If you rename `activeSessions` or change the structure (`session.pty` → `session.ptyProcess`), update `getPtyForSession` and `isSessionBusy` in `trigger-context.js`, and `handleTerminalInput` in `src/main/terminals/terminal-input.js`.
 - If you rename `session.cwd` in `main.js`, update `getPtyForSession` in `trigger-context.js` — the target guard silently falls back to "indeterminate" (refuses every guarded trigger) rather than throwing, so this one fails quiet, not loud.
-- If you rename `session.projectFolder` or `session.realSessionId` in `main.js`, update `getTranscriptTurn` in `trigger-context.js` — it returns `null` and the transcript fallback silently never fires (chains wait for the descriptor as before).
+- If you rename `session.projectFolder` or `session.realSessionId` in `main.js`, update `transcriptPath` and the scoped `getTranscriptTurn` (built on `createTranscriptTurnReader`) in `trigger-context.js` — it returns `null` and the transcript fallback silently never fires (chains wait for the descriptor as before).
 - Tests live in `test/trigger-watcher.test.js`.  They use `SWITCHBOARD_TRIGGERS_DIR` env override — do not hardcode paths there.

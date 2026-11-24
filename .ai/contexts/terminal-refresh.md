@@ -7,6 +7,20 @@ running, with `aria-disabled` and a tooltip explaining why. The sidebar menu
 disables its entry when no terminal is open or its entry is closed. Neither
 control starts a process. A hidden open terminal is revealed for refresh.
 
+## Key files
+
+| File | Role |
+|---|---|
+| `public/terminal-manager.js` | Flush cadence and fallback, visible/hidden buffers and their trims, `requestTerminalRefresh` / `scheduleTerminalFit`, grid refits, the WebGL warm list, the live late-reply filter. |
+| `public/terminal-replay-queries.js` | The shared query matcher (`removeCursorPositionQueries`) for hidden replay and main's reattach buffer. |
+| `src/main/terminals/terminal-resize.js` | `createTerminalResizeHandler`: the `terminal-resize` IPC, the refresh nudge and its restoration (`PTY_REFRESH_DELAY_MS`, `PTY_FIRST_RESIZE_DELAY_MS`). |
+| `src/main/terminals/pty-size.js` | The PTY size upper bounds (`MAX_COLS` 1000, `MAX_ROWS` 500). |
+| `src/main/terminals/output-buffer.js` | Main's reattach buffer, filtered with the same matcher. |
+| `src/main/app/power-log.js` | `createPowerLog`: the `[power]` log lines, the `terminal-backlog-request` on resume/unlock, validation of the renderer's `terminal-backlog` summary. |
+| `public/header-controls.js` | The Refresh button's place in `#terminal-header-session`. |
+
+Tests are listed under "Verification" at the end.
+
 ## Pending output and standby (#1037)
 
 `terminal-manager.js` keeps the usual 33 ms flush cadence. Each requested

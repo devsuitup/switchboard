@@ -11,8 +11,16 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
 | File | Role |
 |---|---|
 | `session-cache.js` | Calls `enumerateSessionFiles(folderPath)` (`read-session-file.js`), which walks root, ordinary/legacy subagent and workflow agent transcripts. Sets `subagentType` from JSONL metadata. |
-| `db.js` (read side of `session-index-store.js`) | `session_cache` row has `parentSessionId`, `agentId`, `subagentType`, `workflowRunId` columns. `getCachedByParent(parentSessionId)` returns all children. |
+| `db.js` (read side of `session-index-store.js`) | `session_cache` row has `parentSessionId`, `agentId`, `subagentType`, `workflowRunId` columns. `getCachedByParent(parentSessionId)` (`session-index-store.js`) returns all children. Writes go through the writer worker (`session-index-writer.js`, `workers/session-index-writer.js`; see [session-index-writer.md](session-index-writer.md)), not the reader. |
 | `read-session-file.js` | `readSessionDisplayHeader()` extracts `agentId` + `isSidechain` flags from the first 256 KB. |
+| `subagent-attribution.js` | `classifyTranscriptPath`, `agentIdFromBasename`, `subagentParentFromParts`, `isWorkflowRunId`: which project-relative path is a root, ordinary/legacy subagent or workflow agent transcript (see "Workflow agent transcripts (#875)"). |
+| `workers/task-records.js` | Worker (driven by `task-records-client.js`) that reads task records and parent head turns from transcripts into a main-side `createTaskRegistry` (see "CLI task lifecycle and shared registry (issue #624)"). |
+
+### Lifecycle (main)
+
+| File | Role |
+|---|---|
+| `session-transitions.js` | Detects spawn/completion of local subagents (settle tick, stability ladder, late re-announce) and emits `subagent-spawned` / `subagent-completed` to the renderer. See "Not resurrecting finished subagents" and "The liveness signal needs a clock of its own". |
 
 ### IPC bridge (main ↔ renderer)
 
@@ -22,7 +30,7 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
 | `list-subagents(parentSessionId)` | Returns all subagent rows for a parent (used by the sidebar nesting) |
 | `start-subagent-watch(parentSessionId, agentId)` | Begin tailing the subagent's JSONL; emits `subagent-watch-event` per change |
 | `stop-subagent-watch(watchId)` | Tear down the watch |
-| Events (main → renderer): `subagent-spawned`, `subagent-completed`, `subagent-watch-event` | Live status changes |
+| Events (main → renderer): `subagent-watch-event` (from the `start-subagent-watch` handler in `main.js`); `subagent-spawned`, `subagent-completed` (from `session-transitions.js`, not `main.js` handlers) | Live status changes |
 
 ### UI
 
@@ -30,12 +38,14 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
 |---|---|
 | `public/sidebar.js` | Renders the "Orphan subagents" collapsible group; nests subagents under their parent in worktree/session groups; click handler routes subagent items to the transcript view. |
 | `public/jsonl-viewer.js` | `showSubagentTranscript(session)` — read-only render of the subagent's JSONL with `mergeLocalCommandEntries` + `renderJsonlEntry` + a "Resume in terminal anyway" escape banner. |
+| `public/task-registry.js` | `createTaskRegistry`: the shared per-parent child registry that sidebar and grid project (#624/#627). |
+| `public/subagent-timing.js` | `SUBAGENT_LIVE_TTL_MS`, the one TTL shared by renderer and main (see "One TTL, one definition"). |
 
 ## Public surface (for code that wants to integrate)
 
 - From renderer code: `window.api.readSubagentJsonl`, `window.api.listSubagents`, `window.api.startSubagentWatch`, `window.api.stopSubagentWatch`, listeners `window.api.onSubagentSpawned/Completed/WatchEvent`
 - From renderer JS: `showSubagentTranscript(session)` (cross-file global, declared in `eslint.config.js` rendererCrossFileGlobals)
-- From sidebar UI: subagent rows carry `dataset.subagent = true` and `dataset.parentId = parentSessionId` for downstream wiring
+- From sidebar UI: subagent rows built by `buildSubagentItem` (`public/sidebar.js`) carry `dataset.subagent = '1'` and `dataset.sessionId`; there is no `dataset.parentId` — the parent is read from the cached row's `session.parentSessionId`
 
 ## Invariants
 
@@ -47,8 +57,8 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
 
 ## Non-obvious behaviors
 
-- **The parent JSONL doesn't contain the subagent's text** — it just records a `subagent-spawn` event. The actual conversation lives in the child JSONL. The viewer pieces them together via `mergeLocalCommandEntries`.
-- **Orphan subagents** (no findable parent in cache) are surfaced in a dedicated `.sidebar-orphan-subagents` group in the sidebar, **collapsed by default**. State is persisted per-project in `localStorage['orphanExpanded:' + projectPath]`.
+- **The parent JSONL doesn't contain the subagent's text** — it records the `Agent` tool use and its result. The actual conversation lives in the child JSONL, which the viewer reads on its own through `read-subagent-jsonl`; `mergeLocalCommandEntries` only folds local-command / bash-input entries inside that transcript.
+- **Orphan subagents** (no findable parent in cache) are surfaced in a dedicated `.sidebar-orphan-subagents` group in the sidebar, **collapsed by default**. State is persisted per-project in `localStorage['orphanExpanded:' + projectStateKey(project)]` — the path for a local project, `folderId(projectPath, remoteAlias)` for a remote one.
 - **Subagent status badges**: originally (PR #48) derived from the most recent JSONL line — `isSidechain: true` meant active, completion was inferred from mtime stability. Since #624/#627 the shared task registry decides, and the parent row shows a running count instead of per-child badges (see below).
 - **The "Resume in terminal anyway" button** in the transcript view bypasses the routing and calls the original `openSession` opener. This is intentional — for the rare debugging case where a user genuinely wants to re-enter the subagent's session.
 
@@ -979,8 +989,7 @@ contexts, all of which have to keep working:
 
 `eslint.config.js` carries the constant in `rendererCrossFileGlobals` for the
 consumers, and gives the *producing* file its own block that switches that
-global `off` — otherwise `no-redeclare` flags the single definition, which is
-what the eight standing warnings on `shortcuts.js` are.
+global `off` — otherwise `no-redeclare` flags the single definition.
 
 ### The renderer safety nets had no clock either
 
@@ -1020,7 +1029,7 @@ and expiry clock have now been removed. Renderer integration tests confirm
 that both views derive their agent set from the same registry and that primary
 completion removes overlapping fallback evidence on both surfaces.
 
-## Subagent children inside a slug group (issue #128 ask 4, rehab-plan.md A3)
+## Subagent children inside a slug group (issue #128 ask 4)
 
 - **The bug**: `buildSlugGroup()` used to append its sessions via the raw
   `buildSessionItem(session)`, never through `appendSubagentChildren()` — only
@@ -1202,10 +1211,10 @@ was about. Row order inside each list is unchanged; only membership is.
 
 Clicking the toggle builds the remainder there and then, removes the toggle,
 and records the list in the `expandedSubagentRest` localStorage set
-(`p:<parentSessionId>` for a parent's children, `o:<projectPath>` for a
+(`p:<parentSessionId>` for a parent's children, `o:<projectStateKey>` for a
 project's orphan bucket). The next render reads that set *before* splitting
 and builds the whole list, so what the user expanded survives morphdom —
-same mechanism as `expandedSubagents` and `orphanExpanded:<projectPath>`,
+same mechanism as `expandedSubagents` and `orphanExpanded:<projectStateKey>`,
 including the one-shot GC that drops `p:` entries whose session is gone from
 `sessionMap`.
 

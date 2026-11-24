@@ -30,6 +30,17 @@ menu under the button. On macOS the same menu is in the system menu bar and
 The menu is installed on every platform, so its keyboard shortcuts work
 everywhere, whether or not it is on screen. Alt and F10 do not open it.
 
+## Closing
+
+**Quit** is Cmd+Q on macOS and Ctrl+Q on Linux; Windows offers **Exit** in
+the menu and window close with Alt+F4. User-initiated close checks unsaved edits
+and asks about local work, with a background move available for eligible
+Claude sessions. See [Closing the app](session-restore.md#closing-the-app) for
+restore and external operating-system exit limits.
+
+The window strip follows **Dark**, **Light** or **System** in
+[Settings → General → Appearance](settings.md#general).
+
 ## Zoom
 
 | Keys (Windows, Linux) | Keys (macOS) | Effect |

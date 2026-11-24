@@ -11,7 +11,8 @@ the same strip across the rest of the window.
 
 | File | Role |
 |---|---|
-| `window-frame.js` | `windowFrameOptions(platform)` (the `BrowserWindow` options), `applicationMenuTemplate(appName, { onWhatsNew, onQuit, platform })` (the menu; Help → What's new calls `onWhatsNew`, see `docs/changelog.md`; Quit/Exit calls `onQuit`, see "Closing the window"), `KEYBOARD_ROLES`, `STRIP_HEIGHT`, `zoomKey()` and `nextZoomLevel()` (the zoom keys), `menuPopupPoint()` (where the menu button pops the menu up). |
+| `src/main/app/window-frame.js` | `windowFrameOptions(platform)` (the `BrowserWindow` options), `applicationMenuTemplate(appName, { onWhatsNew, onQuit, platform })` (the menu; Help → What's new calls `onWhatsNew`, see `docs/changelog.md`; Quit/Exit calls `onQuit`, see "Closing the window"), `KEYBOARD_ROLES`, `STRIP_HEIGHT`, `zoomKey()` and `nextZoomLevel()` (the zoom keys), `menuPopupPoint()` (where the menu button pops the menu up). |
+| `src/main/app/window-theme.js` | `installWindowTheme()`: the theme palette for the overlay and the window background, refreshed on a saved theme or an OS change. See [theme.md](theme.md). |
 | `main.js` | Spreads `windowFrameOptions(process.platform)` into the `BrowserWindow`; `buildMenu()` installs the template; the `popup-app-menu` IPC opens it under the menu button. |
 | `preload.js` | `window.api.popupAppMenu(x, y)`. |
 | `public/window-strip.js` | Marks `<body>` with `window-frameless`, `platform-<os>` and, while full screen, `window-full-screen`; wires `#app-menu-btn`. Dual-mode: a classic `<script>`, `require()`-d by the test. |
@@ -23,7 +24,7 @@ the same strip across the rest of the window.
 
 Appearance adds a palette override before BrowserWindow construction and refreshes
 the background/caption overlay on saved theme or OS changes. The geometry stays
-in `window-frame.js`; the palette controller is `window-theme.js`. See [theme.md](theme.md).
+in `src/main/app/window-frame.js`; the palette controller is `src/main/app/window-theme.js`. See [theme.md](theme.md).
 
 | Platform | Options | Controls |
 |---|---|---|
@@ -31,8 +32,9 @@ in `window-frame.js`; the palette controller is `window-theme.js`. See [theme.md
 | Linux | `titleBarStyle: 'hidden'`, `titleBarOverlay` | Electron's `OpaqueFrameView` draws minimise, maximise, close at the top-right. The order is fixed in Electron and does not follow `org.gnome.desktop.wm.preferences button-layout`. |
 | macOS | `titleBarStyle: 'hidden'`, `trafficLightPosition` | The system traffic lights, moved to sit vertically centred in the strip. |
 
-The overlay's height is `STRIP_HEIGHT` (32 DIP) and its colour is
-`--surface-chrome`, so it reads as part of the strip. `--strip-height` in
+The overlay's height is `STRIP_HEIGHT` (32 DIP) and its colour matches
+`--surface-chrome` (`STRIP_COLOR` in the frame options, then the theme
+palette's `color` through `setTitleBarOverlay`), so it reads as part of the strip. `--strip-height` in
 `style.css` equals `STRIP_HEIGHT`, and the test holds that. The two units
 differ under zoom: the overlay stays 32 DIP, while 32 CSS px shrink below
 100 %. The strip and the headers therefore take
@@ -94,9 +96,10 @@ inside a drag region never receives the mouse. `no-drag` is therefore set on:
 
 - every interactive element: `button, input, select, textarea, a, [role="button"], [contenteditable]`;
 - the text a user copies from a header, or whose `title` tooltip must show (the
-  renderer gets no hover inside a drag region): `#terminal-header-id`,
+  renderer gets no hover inside a drag region): `#terminal-header-status`,
+  `#terminal-header-id`,
   every session-header control (`#terminal-header-session [data-header-kind]`),
-  `#jsonl-viewer-session-id`, `.viewer-toolbar-path`;
+  `#jsonl-viewer-session-id`, `.viewer-toolbar-path`, `#agents-viewer-header label`;
 - every overlay that can open over the strip: `.new-session-popover`,
   `.terminal-context-menu`, `.new-session-overlay`, `.add-project-overlay`, `.whats-new-overlay`, `.modal-overlay`,
   `.jsonl-screenshot-fullscreen`, `#update-toast`, `.restore-toast`. A new
@@ -129,7 +132,7 @@ The session state sits before `#terminal-header-name` in the shared 6 px
 top, bottom and left margins cover the largest shared blur or spread inside
 the clipping name containers. It is in the no-drag list so its tooltip shows.
 
-`updateTerminalHeader` (`app.js`) calls `paintTerminalHeaderStatus` to put the
+`updateTerminalHeader` (`app.js`) calls `paintTerminalHeaderStatus` (`public/session-activity-dom.js`) to put the
 shared activity and ranked lifecycle in the slot's `title` and `aria-label`
 (`role="img"`). `lifecycleLabel` in `public/process-exit.js` includes Open here,
 attachment and location, known job outcomes, recorded exits and unknown
@@ -250,7 +253,7 @@ move and resize the window: `Super`+drag on GNOME, `Alt`+`F7`/`Alt`+`F8`, or
 ## Closing the window
 
 User menu Quit (Exit on Windows), Restart to update and window close enter
-one attempt in `session-exit.js` through `unsaved-guard.js`. Unsaved edits
+one attempt in `src/main/app/session-exit.js` through `src/main/app/unsaved-guard.js`. Unsaved edits
 first ask Save/Discard/Cancel. Only after that choice does local work ask
 Stop/Move/Cancel when sessions can move, otherwise Stop/Cancel. Cancel stays
 focused; Enter on Cancel, Escape, the backdrop and × cancel.

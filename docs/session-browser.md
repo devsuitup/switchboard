@@ -1,7 +1,8 @@
 # Session Browser
 
-The left sidebar lists every Claude Code session Switchboard has indexed from
-`~/.claude/projects`, grouped by project.
+The left sidebar lists indexed Claude Code sessions from `~/.claude/projects`
+and Codex sessions from `~/.codex/sessions` (or `$CODEX_HOME/sessions`), grouped
+by project. Disabled CLIs are hidden.
 
 ![Switchboard](../build/screenshot.png)
 
@@ -14,6 +15,9 @@ From left to right:
   system menu bar).
 - **Sessions** — the session list described on this page.
 - **Agent Files** — see [Agent Files and session files](memory-workfiles.md).
+- **Schedules** — optional, enabled in Settings → Automation; see
+  [Automation](automation.md#schedules).
+
 - **Stats** — see [Stats](activity-stats.md).
 - **Global settings** (gear) — see [Settings reference](settings.md).
 - **Hide sidebar** — collapses the sidebar to a narrow column; the same button
@@ -33,7 +37,7 @@ Below the tabs, on the Sessions tab, a row of buttons:
 | Re-sort sessions | Sorts the list again; between re-sorts, rows keep their place as they update |
 | Add project | Opens the Add Project dialog |
 
-"Open here" and "pinned" exclude each other: turning one on turns the other off.
+"Running" and "pinned" exclude each other: turning one on turns the other off.
 "Today" combines with either.
 
 ## Projects
@@ -53,7 +57,8 @@ Buttons on a project header:
 | New session (`+`) | The launch menu — see [Launching sessions](launching-sessions.md) |
 
 A project on a [remote host](remote-hosts.md) carries a host status dot and a
-**Reconnect** button instead, and its `+` is disabled.
+**Reconnect** button. Its `+` starts a remote session when the host supports
+launching; otherwise it is disabled with the reason in its tooltip.
 
 **Add Project** takes a folder path (typed or picked with **Browse**). It creates
 `~/.claude/projects/<encoded path>/` and, if that folder holds no transcript, a
@@ -88,12 +93,17 @@ A project whose directory no longer exists is shown with a warning icon and
 starts collapsed. Its sessions cannot be opened (tooltip: *Project path no
 longer exists — use "Change path" to fix*). **Change project path** on its
 header picks the directory's new location and rewrites the `cwd` recorded in
-every transcript of that project, subagent transcripts included, so the
+the project's Claude transcripts, subagent transcripts included, so the
 sessions resume there — from Switchboard and from the `claude` CLI. Each file
 is rewritten through a temporary copy and a rename. The rewrite is refused
 while a non-panel terminal of that project is running. A notice explains this
 before the folder picker or confirmation opens; stop those sessions first.
 The panel shell does not block a path change.
+
+Codex rows carry a **Codex** badge and use the Codex thread name when
+available. Click to resume, or use **Fork session** to fork with Codex. The
+project **+** menu also offers Codex when enabled. Codex deletion is refused;
+see [Codex sessions](launching-sessions.md#codex-sessions).
 
 ## Session rows
 

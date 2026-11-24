@@ -430,6 +430,11 @@ that image's binary; `env -u APPDIR` clears it.
 The same rules apply as above: its own data and triggers directories, and no
 session resumed that is live elsewhere.
 
+After a launch and before cleanup, the helper stops the managed browser for
+that data directory. If it cannot confirm the browser exited, it reports
+**Browser exit uncertain** and retains the directory; cleanup also retains
+the worktree in that case.
+
 ## Cleaning up
 
 ```bash

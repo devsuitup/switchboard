@@ -218,7 +218,7 @@ explicit preload name `removeProjectLegacy`; both new UI entries use token-shape
 initial recovery before enabling these callbacks and retain #1090's background
 worker-incarnation gate.
 
-## Trigger renderer broker (#1022, slice C)
+## `get-projects` source-extraction fixtures
 
 Source-extraction fixtures for `get-projects` load both the IPC registration
 and `getProjectsSnapshot`, with the main-relative require, structured cloning
@@ -234,6 +234,8 @@ the remote-resize test's open/reattach/launch block with a main-relative require
 and statically checks the excluded background-continuation exit contexts for
 `writer.releaseLiveSession`. The complete Electron integration tests remain
 separate qualification; these probes do not replace their assertions.
+
+## Trigger renderer broker (#1022, slice C)
 
 Main instantiates `createTriggerRendererBridge`, binds it to each window and
 supplies it to the watcher. The renderer registers `handleTriggerSessionAction`
@@ -514,11 +516,15 @@ main-log entry point.
 
 | File | LOC | Role |
 |---|---|---|
-| `preload.js` | ~270 | The `contextBridge.exposeInMainWorld('api', {...})` block. Every renderer-facing function. |
-| `main.js` | ~4100 | The `ipcMain.handle('<name>', ...)` and `ipcMain.on('<name>', ...)` handlers, scattered throughout. |
-| `src/main/schedules/schedule-ipc.js` | ~220 | **Also registers IPC handlers** (`get-schedule-creator-command`, `create-schedule-session`, `run-schedule-now`) — `init()` is called from `main.js`, but a `main.js`-only search for `ipcMain.handle` misses these three. Audit both files. |
-| `src/main/bg-agents/bg-agents-ipc.js` | ~130 | **Also registers IPC handlers** (`get-bg-agents`, `check-bg-agent-verb`, `bg-agent-verb`, `dispatch-bg-agent`, `bg-agent-live-job`, `restore-background-job`) and sends `bg-agents-changed` — `init()` is called from `main.js`, so a `main.js`-only search for `ipcMain.handle` misses these six. Audit both files. |
-| `unsaved-guard.js` | ~440 | **Also registers IPC handlers** for the exit flow (`exit-attempt-snapshot`, `exit-background`, `exit-background-cancel`, `unsaved-check-phase`, `unsaved-pong`, `unsaved-dialog`, `unsaved-ready`, `unsaved-check-ack`, `unsaved-check-result`, `unsaved-check-reason-done`) through the `ipcMain` it is handed by `createUnsavedGuard`. See window-frame.md. |
+| `preload.js` | ~300 | The `contextBridge.exposeInMainWorld('api', {...})` block. Every renderer-facing function. |
+| `main.js` | ~4700 | The `ipcMain.handle('<name>', ...)` and `ipcMain.on('<name>', ...)` handlers, scattered throughout. |
+| `src/main/schedules/schedule-ipc.js` | ~265 | **Also registers IPC handlers** (`get-schedule-creator-command`, `create-schedule-session`, `run-schedule-now`) — `init()` is called from `main.js`, but a `main.js`-only search for `ipcMain.handle` misses these three. Audit both files. |
+| `src/main/bg-agents/bg-agents-ipc.js` | ~310 | **Also registers IPC handlers** (`get-bg-agents`, `check-bg-agent-verb`, `bg-agent-verb`, `dispatch-bg-agent`, `bg-agent-live-job`, `restore-background-job`) and sends `bg-agents-changed` — `init()` is called from `main.js`, so a `main.js`-only search for `ipcMain.handle` misses these six. Audit both files. |
+| `src/main/app/unsaved-guard.js` | ~440 | **Also registers IPC handlers** for the exit flow (`exit-attempt-snapshot`, `exit-background`, `exit-background-cancel`, `unsaved-check-phase`, `unsaved-pong`, `unsaved-dialog`, `unsaved-ready`, `unsaved-check-ack`, `unsaved-check-result`, `unsaved-check-reason-done`) through the `ipcMain` it is handed by `createUnsavedGuard`. See window-frame.md. |
+| `src/main/projects/project-delete-ipc.js` | ~50 | **Also registers IPC handlers** (`preview-project-delete`, `delete-project`, `project-delete-state`) from a `channels` array in `registerProjectDeleteIpc`, so even a grep for the literal `ipcMain.handle('<name>'` misses them. |
+| `src/main/triggers/trigger-renderer-bridge.js` | ~285 | **Also registers IPC handlers** (`trigger-actions-ready`, `trigger-session-action-result`) and sends `trigger-session-action` — `createTriggerRendererBridge`. |
+| `src/main/app/window-theme.js` | ~25 | **Also registers** the synchronous `get-initial-theme` (`installWindowTheme`). See theme.md. |
+| `src/main/app/ui-notice-log.js` | ~140 | **Also registers** `ui-notice-log` (`installUiNoticeLog`). |
 
 ## Public surface (IPC inventory)
 
@@ -540,8 +546,8 @@ consent and avoid recovery during a system exit. See window-frame.md.
 | `get-projects` | `(showArchived)` | `Project[]` | Sidebar payload. Reads from cache. |
 | `get-active-sessions` | — | `{sessionId, busy}[]` | Currently open PTY sessions plus each one's live `_cliBusy` flag — see "Busy-state reconciliation" below. |
 | `get-active-terminals` | — | `Terminal[]` | Active PTY identifiers |
-| `open-terminal` | `(id, projectPath, isNew, sessionOptions)` | `{ok, error?, mcpState, mcpError?}` | Spawn or attach a PTY. |
-| `send-session-to-background` | `(id)` | `{ok, oldSessionId?, sessionId?, jobId?, cwd?, respawned?, attached?, code?, error?}` | One local handoff, fresh continuation plus live bg descriptor proof; holds the original PTY exit. A session whose conversation is already held by its own stopped background job is not sent through `/bg`: it gets `/exit`, then that job is respawned (`respawned: true`; `bg-handoff.js`'s `respawnRoute`, #785). `bg-handoff-notice(id, message)` pushes the terminal confirmation notice. See bg-agents.md. |
+| `open-terminal` | `(id, projectPath, isNew, sessionOptions, initialSize, triggerRequestId?)` | `{ok, error?, mcpState, mcpError?}` | Spawn or attach a PTY. |
+| `send-session-to-background` | `(id, {force?}?)` | `{ok:true, oldSessionId, jobId, sessionId, cwd} \| {ok:false, code, error}` | One local handoff, fresh continuation plus live bg descriptor proof; holds the original PTY exit. `code` is `busy` \| `refused` \| `write-failed` \| `timeout` \| `cancelled` \| `failed` (`bg-handoff.js`); `force: true` sends a busy session anyway. A conversation already held by a background job is refused ("already runs in background job …", `handleSendToBackground` in `main.js`); there is no respawn route any more (#1134). `bg-handoff-notice(id, message)` pushes the terminal confirmation notice. See bg-agents.md. |
 | `session-live-elsewhere` | `(id)` | `{pid, cwd, startedAt} \| null` | Whether another process (another Switchboard, a CLI in a terminal) is running session `id`: a live pid in `~/.claude/sessions/` and no PTY for it in this instance. Called by `openSession` before a resume; see `.ai/contexts/cli-session-state.md` ("Live elsewhere"). |
 | `sessions-live-elsewhere` | `(ids)` | `{[id]: {pid, cwd, startedAt}}` | The same check for a working-set restore batch, answered from one scan of `~/.claude/sessions/`; ids that are not live are absent, and at most 200 ids are looked up. Called once by `runRestore`; see `.ai/contexts/cli-session-state.md` ("Live elsewhere"). |
 | `stop-session` | `(id)` | `{ok}` | Kill the PTY for `id`. Local only — a remote-attach session's PTY is the local ssh attach client, so this only detaches it; see `remote-stop-session` for the real remote "stop". |
@@ -908,7 +914,7 @@ every call, and the absolute path built from it is used and discarded there.
 
 | IPC | Args | Returns | Notes |
 |---|---|---|---|
-| `session-touched-files` | `(sessionId)` | `{ok, files, unresolved, omitted, coverage} \| {ok:false, reason?, error}` | The files the session's file tools touched, from its transcript and its subagents'. `files` rows are `{path, state, openable, tools, count, sources}` with `state` one of `present`, `gone`, `unreadable`, `refused`, `not-file`; `unresolved` rows carry the raw text and a reason, never a `path`. `reason` may be `no-transcript`; local and mirrored remote sessions are accepted and a `sub:` id is refused. Remote disk failures keep rows `unknown`, not `gone`. Full design: `.ai/contexts/touched-files.md`. |
+| `session-touched-files` | `(sessionId, {diskInfo?, windowDays?}?)` | `{ok, files, unresolved, omitted, coverage} \| {ok:false, reason?, error}` | The files the session's file tools touched, from its transcript and its subagents'. `files` rows are `{path, state, openable, tools, count, sources}` with `state` one of `present`, `gone`, `unreadable`, `refused`, `not-file`, `unknown` (remote rows until the host answers); `unresolved` rows carry the raw text and a reason, never a `path`. `reason` may be `no-transcript`; local and mirrored remote sessions are accepted and a `sub:` id is refused. Remote disk failures keep rows `unknown`, not `gone`. Full design: `.ai/contexts/touched-files.md`. |
 
 This is the one handler whose *output* is a list of absolute paths taken from
 attacker-influenced data. Listing is not opening: the renderer opens a row
@@ -948,7 +954,11 @@ An unknown remote target never falls back to local disk IO.
 | `terminal-resize` | Resize PTY columns/rows |
 | `close-terminal` | Renderer signals tab closed |
 | `mcp-diff-response` | Diff accept/reject from MCP IDE mode |
-| `activity-trace` | Renderer probe → the trace file. Registered **only** when `SWITCHBOARD_ACTIVITY_TRACE` is set (see below) |
+| `activity-trace` | Renderer probe → the trace file. Registered unconditionally; the trace writer drops the record while tracing is off (see below) |
+| `session-projection-changed` | Projection diagnostic record; main-frame sender only, validated by `validateSessionProjectionRecord` — see "Projects conflicts and projection diagnostics" below |
+| `terminal-backlog` | Renderer backlog record for the power log; main-frame sender only — see "Terminal backlog" above |
+| `ui-notice-log` | One notice/dialog record for `main.log` — see "UI notice log" above |
+| `trigger-session-action-result` | The renderer's answer to `trigger-session-action` — see "Trigger renderer broker" above |
 | `activity-focus` / `activity-titles` | Focused session and running-session titles for ActivityWatch — see activitywatch.md |
 | `updater-close` | The updater window closed |
 | `main-error-notices-ready` | No arguments; active renderer has installed the main-error listener. Arms delivery and flushes pending errors. |
@@ -957,7 +967,7 @@ An unknown remote target never falls back to local disk IO.
 
 ### Events (main → renderer)
 
-`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification` (`sessionId, message, kind` — `kind` is the session harness's `classifyNotification` verdict, see cli-harnesses.md), `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`
+`terminal-data`, `session-detected` (preload listener only: main never emits it, see "Busy-state reconciliation"), `process-exited`, `remote-resize-allowed`, `terminal-notification` (`sessionId, message, kind` — `kind` is the session harness's `classifyNotification` verdict, see cli-harnesses.md), `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`, `terminal-backlog-request`, `trigger-session-action`, `schedule-run-exit`, `project-delete-recovery`
 
 `onProjectsChanged(callback)` forwards the main-side `{ cause: string[] }`
 payload. Schedules filters these causes before queuing a bounded debounce;
@@ -1754,14 +1764,14 @@ What Switchboard sets *after* cleaning stays: the plain terminal's `CLAUDECODE=1
 
 ## If you change this, also check
 
-- **Three places per new IPC**: handler in `main.js`, bridge entry in `preload.js`, caller in `public/*.js` (and maybe `eslint.config.js` if you expose a new global).
+- **Three places per new IPC**: handler in `main.js` or the context module that owns it (see Key files), bridge entry in `preload.js`, caller in `public/*.js` (and maybe `eslint.config.js` if you expose a new global).
 - `eslint.config.js` `rendererCrossFileGlobals` — renderer functions exposed across `<script>` tags must be declared
 - Any new event needs both an `ipcRenderer.on` in preload and an `mainWindow.webContents.send` in main
 - If you change argument shapes, the renderer callers break silently (no type check) — search for callers before changing signatures
 
 ## How to add a new IPC
 
-1. `main.js`: `ipcMain.handle('my-thing', (_event, arg1, arg2) => { /* validate, do, return */ })` — place near related handlers, not at random.
+1. Main: `ipcMain.handle('my-thing', (_event, arg1, arg2) => { /* validate, do, return */ })` — near related handlers in `main.js`, or in the `src/main/<context>/` module that owns the area (ADR 0005; see Key files), not at random.
 2. `preload.js`: `myThing: (arg1, arg2) => ipcRenderer.invoke('my-thing', arg1, arg2)` — add to the alphabetical-ish block.
 3. Renderer: `const result = await window.api.myThing(...)`
 4. Test: prefer a unit test for the main-side logic (extract to a pure function the handler calls); jsdom integration tests for renderer side.

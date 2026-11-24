@@ -43,21 +43,20 @@ mints its own id. Filename identity does not replace the fork parser's synthetic
 subagent ids. `assertHarness()` checks the boolean and both method types;
 semantic conformance is exercised against isolated storage in contract tests.
 
-#821 must provide Codex's false `groupsByProject`, nullable
+The Codex adapter (below) supplies false `groupsByProject`, nullable
 `folderForProject`/`deriveProjectPath`, rollout filename `sessionIdFromPath`,
 directory-taking `listTranscripts`, authoritative `sessionFile`, and
 `needsIdDetection({isNew})` returning true for fresh launches (including forks).
-Its launcher must ignore a temporary/pre-assigned id for a fresh Codex launch,
-while using the real id for resume. It must also provide the remaining fork
-contract methods and capability flags. Main's existing Claude launch behavior
-is unchanged here: routing the detection predicate, transcript matching and
-identity reconciliation into the lifecycle remains work for #821 before Codex
-can be launched. Merely passing `assertHarness()` does not implement that flow.
+Its launcher ignores a temporary/pre-assigned id for a fresh Codex launch and
+uses the real id for resume. Merely passing `assertHarness()` does not make a
+CLI launchable: the detection predicate, transcript matching and identity
+reconciliation are routed into the lifecycle by "Launching through the
+harness" below.
 
 `assertHarness()` validates metadata, methods, boolean capability flags and
 the optional usage provider. Features use `capabilities` (`subagents`,
 `continuations`, `liveElsewhere`, `bgJobs`, `ideBridge`, `sandbox`, `schedule`,
-`remote`), rather than runtime-name comparisons. These flags describe the CLI
+`remote`, `deleteTranscript`; `CAPABILITIES` in `harnesses/contract.js`), rather than runtime-name comparisons. These flags describe the CLI
 integration; existing platform, host and settings checks still decide whether
 a feature is usable for a particular launch.
 
@@ -95,8 +94,7 @@ value is parsed but not offered. There is no MCP configuration, browser process
 or browser capability contract. Main calls the builder synchronously at the
 existing launch extraction anchors.
 
-No session-cache, sidebar background-session, trigger, schedule or renderer
-routing changes here. No Codex adapter is registered in this phase.
+The registry (`harnesses/index.js`) holds the Claude and Codex adapters.
 `harnesses/**` ships in `build.files`, receives Node ESLint rules and is
 included in the module-layout resolver. No new top-level JS file is added,
 so `test/fixtures/root-app-modules.json` remains unchanged.
@@ -108,8 +106,8 @@ perform no schema changes, so `session-index-store.js` prepares its
 `cacheUpsert` statement on first use: a readonly open of a pre-#820 store has
 no `runtime` column yet, and preparing the statement eagerly would fail the
 open. Existing named-column upserts retain their old arguments and preserve
-the new columns on update; populating these fields from other runtimes belongs
-to a later phase.
+the new columns on update. Codex rows fill both (`runtime: 'codex'`,
+`sessionFile`; "Codex adapter" below).
 
 Tests: `harness-contract.test.js`, `harness-launch.test.js`,
 `harness-schema.test.js`, `module-layout.test.js`, `session-launch-guards.test.js`.
@@ -181,9 +179,9 @@ re-shaped for the fork's contract. Measured against 237 rollouts on
   joins the folder freshness stamp so a `/rename` with no transcript change is
   picked up by the next reconcile pass, not by the watcher (the index sits
   outside the sessions root).
-- Capabilities: all false, plus `deleteTranscript: false` (new flag, Claude
-  true). Activity methods exist for the contract; routing them into main is
-  #823.
+- Capabilities: all false, including `deleteTranscript` (Claude true)
+  (`harnesses/codex.js`, `capabilities`). Its activity methods are routed into
+  main as described in "Busy and attention per harness" below.
 
 ## Launching through the harness (#822)
 
@@ -351,18 +349,20 @@ Tests: `harness-activity.test.js` (title and notification tables for both
 adapters, the renderer function through `loadAppFunctions`, the extracted
 `wireSessionPty` fed Codex titles and OSC 9 messages).
 
-## Picker, toggles and settings (#824, partial)
+## Picker, toggles and settings (#824)
 
 Port of the picker and toggles of Ali Basiri's `ecd687f0`, `62e10fb9` and
-`e0cd4dde`. The usage gauge (`3ca3d19d`, codex-auth of `ee656523`) is **not**
-in this branch: it reads `~/.codex/auth.json` and calls an undocumented
-chatgpt.com endpoint, and JB decided (2026-10-28) it must be opt-in and off by
-default; nothing here fetches it, so no token leaves the machine.
+`e0cd4dde`. The Codex usage gauge is a separate, opt-in feature (#1139, off by
+default, `showCodexUsage`): `src/main/usage/codex-usage.js` reads
+`$CODEX_HOME/auth.json` (default `~/.codex`) and calls a chatgpt.com endpoint only when the setting
+is on, behind the `get-codex-usage` IPC. It does not go through the contract's
+optional `usageProvider`. See ipc-bridge.md, "Opt-in Codex usage (#1139)",
+for the fetch, backoff and footer grouping (#1209).
 
 - Settings (`public/setting-defaults.js`): `disabledHarnesses: []` — the
   disabled list, so a CLI added later defaults to on — and `codexSandbox`,
   `codexApproval`, `codexModel`, `codexEffort`, all `''` meaning "leave it to
-  codex's own config". `resolveDefaultSessionOptions` copies the non-empty
+  codex's own config", and `showCodexUsage: false`. `resolveDefaultSessionOptions` copies the non-empty
   Codex keys into the launch options; the Codex builder validates them and the
   Claude builder ignores them.
 - Guard: `assertHarnessSettings(fields)` (`harnesses/index.js`) refuses a
@@ -411,10 +411,11 @@ default; nothing here fetches it, so no token leaves the machine.
   same options bag; the Codex builder validates them, Claude's ignores them.
   The settings panel locks the last checked toggle; the writer refuses an
   all-off patch anyway.
-- Settings panel: a global "CLI Agents" section with one toggle per
-  registered CLI (lock on the last one, "Not installed here" for an unavailable
-  one) and, when Codex is registered, four selects for sandbox, approval,
-  model (from `get-harness-models`) and effort. The section is global only;
+- Settings panel: a global "CLI Agents" section on the Sessions page
+  (Settings → Sessions) with one toggle per registered CLI (lock on the last
+  one, "Not installed here" for an unavailable one) and, when Codex is
+  registered, the **Show Codex usage** toggle and a "Codex" group of four
+  selects for sandbox, approval, model (from `get-harness-models`) and effort. The section is global only;
   project scope keeps its Claude overrides.
 
 Tests: `harness-settings.test.js` (defaults, guard and writer refusal,
