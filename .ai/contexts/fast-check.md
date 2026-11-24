@@ -18,11 +18,13 @@ working tree does not fail the check.
 
 ESLint and tests run using `process.execPath`, without a shell. Selected tests
 run one file per process using `--test --test-concurrency=1` and a 120-second
-timeout. The full runner runs most files together at concurrency 4; this is
-one file at a time. The trigger files it isolates (`ISOLATED_FILES`, exported
-by `scripts/run-tests.js`) run without `--test-timeout`, as the full runner
-does, under a 10-minute process cap: `trigger-watcher.test.js` alone took 82 s
-on the workstation. Git, lint, spawn and test failures fail the check. The script
+timeout. The full runner runs most files together at up to 4 workers
+(`stageOneConcurrency()` in `scripts/run-tests.js`, overridable with
+`SWITCHBOARD_TEST_CONCURRENCY`); this is one file at a time. The trigger files
+it isolates (`ISOLATED_FILES`, exported by `scripts/run-tests.js`:
+`trigger-watcher`, `trigger-delivery` and `trigger-continuation-delivery`) run
+without `--test-timeout`, as the full runner does, under a 10-minute process
+cap, because they legitimately run for minutes. Git, lint, spawn and test failures fail the check. The script
 checks working-tree content for the staged paths, as conventional hooks do;
 it does not reconstruct partially staged blobs. Naming matches are heuristic;
 required CI and `task check` cover unrelated regressions.

@@ -1,9 +1,12 @@
 # Session index writer — ADR 0004 slice 1b, step 1
 
 Scope: one writable WAL connection in a Node worker; one main-side readonly
-connection remains for the existing synchronous reads. Independent read workers,
-removal of main's connection and general outcome recovery belong to step 2.
-The dormant #474 A4b1 deletion substrate below provides operation-specific receipts.
+connection remains for the existing synchronous reads. Readonly query workers
+(`workers/projects-query.js`, `workers/search-query.js`,
+`workers/file-lists-query.js`) already serve the Projects, search and file-list
+reads; removing main's own readonly connection and general outcome recovery are
+not done (ADR 0004 slice 1b names no further step). The #474 A4b1 deletion
+substrate below provides operation-specific receipts.
 
 Deletion completion/readback session notifications carry a second argument
 `{operationId, expectedProjectEpoch, committedRevision}`. Receipts can be reread
@@ -135,7 +138,9 @@ S1b3 owns typed status dispatch/evidence. A pending legacy/action claim never
 permits re-executing an uncertain old effect; existing #1022 recovery remains
 responsible for reconciling it.
 
-## Dormant project deletion substrate (#474 A4b1)
+<a id="dormant-project-deletion-substrate-474-a4b1"></a>
+
+## Project deletion substrate (#474 A4b1)
 
 Writable schema reconciliation adds `project_delete_fences`,
 `project_delete_operations` and `project_delete_units`, with project/state and
@@ -146,7 +151,7 @@ are prepared lazily on first use; header/fence/progress writes, unit results
 and bounded receipt maintenance statements are prepared only by a writable
 connection. Readonly connections can read deletion tables after migration.
 
-`src/main/projects/project-delete-progress.js` owns the dormant admission,
+`src/main/projects/project-delete-progress.js` owns the admission,
 staging, effect transaction hook, status, fence and restart primitives.
 `commitTransaction` is shared with the worker's existing transaction/BUSY
 wrapper: the hook receives the exact next revision and writes progress before
@@ -158,7 +163,9 @@ and durable snapshot digest before claiming an epoch and inserting the header.
 An optional synchronous first-effect hook shares that transaction and records
 the first unit result/cursor there. It requires a completely staged bounded
 manifest; larger manifests stage before a later effect transaction. This is a
-trusted backend seam, with no worker command for admission or effects. The
+trusted backend seam: admission and effects run only inside the worker's
+`completeProjectDeletion` command (`src/main/projects/project-delete-writer.js`,
+A4b4 below), never as separate worker commands. The
 manifest hash binds the supplied manifest and ordered targets. Staging admits
 at most 16 units per transaction and defers targets using the production
 savepoint budget with progress/revision overhead reserved. Effects run one unit
@@ -178,14 +185,15 @@ survive receipt removal. Each admit/apply/fence/recover call performs at most
 one purge transaction; large receipts leave excess terminal headers for later
 calls. Snapshot reads retain no hard wall-time bound.
 
-Only `getProjectDeletionState`, `readProjectDeletionScope` and
-`fenceProjectDeletion` are forwarded by the typed facade. The two read ports
+A4b1 forwarded `getProjectDeletionState`, `readProjectDeletionScope` and
+`fenceProjectDeletion` through the typed facade; A4b4 and A4c1 below add
+`completeProjectDeletion`, `reserveProjectDeletion` and the bounded snapshot
+reads. The two A4b1 read ports
 run consistent reads directly on the worker connection without revision or
 settings-mirror publication. Fence is a service-boundary operation with the
 existing BUSY retry policy and publishes a settings ACK only when it changed
 the revision. It rereads durable state after sealing. Epoch checks reject an
-old buffered/unsent unit when it eventually reaches the dormant effect seam;
-there is no completion generator to cancel in this slice.
+old buffered/unsent unit when it eventually reaches the effect seam.
 
 `absent` and `inProgress` give no terminal proof. Only a matching absent fence
 can record `notStarted`. Missing/expired receipts after epoch advancement give
@@ -199,15 +207,16 @@ Scope readback supplies raw persisted rows, metadata/provenance, folder mappings
 settings-key presence and conservative cross-project ownership evidence. It is
 not proof of runtime inventory, metadata-only orphan ownership or settings
 erasure safety. A4b3 owns that validation and the shared identity/hash extraction.
-No archive-workflow exclusion, metadata deletion engine, complete command,
-main/IPC/UI caller or general producer cancellation is added here. See
-[project-delete.md](project-delete.md) for the remaining slice boundaries.
+The archive-workflow exclusion, metadata engine, complete command and the
+main/IPC/UI callers (`src/main/projects/project-delete-main.js`, the
+`preview-project-delete` / `project-delete-state` IPC) came in later slices; see
+[project-delete.md](project-delete.md).
 
 The #820 column reconcile adds `runtime TEXT DEFAULT 'claude'` and `sessionFile TEXT`
 on writable opens only, without setting `mustReindex` or deleting rows. Existing
 named-column upserts are unchanged. See [cli-harnesses.md](cli-harnesses.md).
 
-`hideProject(entry, kind, scope?)` persists optional `{ alias }`
+`hideProject(entry, kind, scope, proof)` (`session-index-commands.js`) persists optional `{ alias }`
 records in `global.hiddenProjectScopes` through the existing writer command.
 For `kind: 'archive'`, that same atomic patch records `Date.now()` in the additive
 `global.hiddenProjectArchivedAt[entry]` map. The archive IPC already uses this
@@ -245,8 +254,9 @@ both use 100 ms. The writer sets WAL and synchronous=NORMAL.
 session-index-writer.js owns the transport and main-side filesystem orchestration.
 session-index-writer-client.js follows the house Worker factory/event pattern.
 workers/session-index-writer.js opens the writable store inside its thread.
-The worker path uses path.join(__dirname,'workers',...). package.json already ships
-root *.js and workers/**/* and unpacks better-sqlite3 and node-pty through
+The worker path uses path.join(__dirname,'workers',...). package.json `build.files`
+ships root *.js, `src/**/*` (the main-side `src/main/projects/*` writer modules),
+`harnesses/**` and workers/**/* and unpacks better-sqlite3 and node-pty through
 the normal dependency packaging. No native rebuild is introduced.
 
 The optional `onSessionsChanged(ids, change)` observer runs after the write ACK
@@ -344,7 +354,8 @@ control commands and before any other interactive or background command; a
 journal selection neither increments nor resets the interactive burst counter
 (#1073). The lane cannot starve indexing indefinitely: the trigger watcher keeps
 at most eight triggers in flight, each issuing three or four journal commands
-separated by delivery work. The facade times each journal command from
+separated by delivery work (`MAX_INFLIGHT` in
+`src/main/triggers/trigger-watcher.js`). The facade times each journal command from
 `send()` to its ACK and logs one `warn` line,
 `[session-index-writer] journal command <name> waited <n> ms`, when the wait
 reaches 200 ms (`journalWaitWarnMs`); a shorter wait logs nothing, so an
@@ -359,7 +370,11 @@ to rebuild. Replies with no effects or retained live rows bypass the cache
 computation queue, so a scan's outstanding folder ACK cannot delay first paint.
 The Projects relay handles conflicts both before queue execution and at writer
 admission: progress conflicts invalidate the job, and final conflicts use its
-three-snapshot budget, then reject with PROJECTS_SNAPSHOT_CONFLICT and notify the renderer through the existing conflict recovery route.
+dispatch budget (main passes `maxDiscards: 1`; a deletion epoch conflict gets
+one more read-only build; the client default is three), then reject with
+PROJECTS_SNAPSHOT_CONFLICT. Main does not notify the renderer immediately: one
+coalesced five-second retry re-reads the snapshot (#1210; see
+[session-cache.md](session-cache.md)).
 Search publication reads the current name and cached summary on the writer.
 
 An effects message is not one atomic transaction. Its admitted chunks remain
@@ -367,9 +382,9 @@ committed if an interactive command changes the revision between chunks.
 WRITER_STALE rejects the remainder and its view; it does not roll back those
 earlier chunks. The Projects relay rebuilds from a new SQLite snapshot rather
 than replaying the old effect list. Source refresh upserts are repeatable, and
-writer-owned name precedence preserves an intervening user rename. After three
-conflicts no stale view is published; admitted chunks remain and the existing
-conflict notification requests a fresh load. This is the bounded-chunk repair
+writer-owned name precedence preserves an intervening user rename. Once the
+dispatch budget is spent no stale view is published; admitted chunks remain and
+main's coalesced retry requests a fresh load. This is the bounded-chunk repair
 contract, also used for already acknowledged folder progress in #718/#719.
 `test/session-index-effects-retry-719b.test.js` exercises the shipped drain with
 real disposable SQLite: partial commit, interleaved rename, stale remainder
@@ -590,8 +605,7 @@ remap completion during close, atomic metric visibility, old-build reopening,
 oversized archive/continuation values and complete FTS batches. Injected clocks cover
 chunk adaptation, execution deadlines, heartbeats, restart windows and bounded exit.
 Tests use temporary isolated data dirs. No live application process or packaged
-build is used by these tests. The report in .work-files/codex-report-6166c.md records
-the final executed file census and packaged qualification checklist.
+build is used by these tests.
 
 ## Project deletion completion (A4b4)
 
@@ -616,7 +630,8 @@ binding of already queued producers at deletion start still covers earlier
 receipts. With neither pending deletion nor durable history, producers retain
 their constant-time early exit without ownership queries or path resolution.
 The facade holds archive exclusion through unknown outcomes and only releases
-after terminal/no-late-commit proof. No main/IPC/UI caller is connected yet.
+after terminal/no-late-commit proof. The main-side caller is
+`src/main/projects/project-delete-main.js`; see project-delete.md.
 
 Archive retirement exhausting three snapshot conflicts returns the computed
 project list without persisting the stale decision, as before A4b4. Reserved
@@ -635,8 +650,13 @@ refuses remaining effects with WRITER_STALE while preserving admitted batches.
 Main compares the ACK with db.getSetting('_writer_revision', { fresh: true }),
 which reads the persisted readonly store instead of the settings mirror. Ordinary
 settings reads retain the acknowledged mirror. No-op applies retain the pre-await baseline.
-Only post-ACK accepted final results advance projectsReconciledAt, including
-accepted callerless reconciliation. Archive retirement and shutdown keep their
+projectsReconciledAt advances on an accepted reconciliation (the client's
+`accepted` callback, including callerless reconciliation, and a successful
+`reconcile` request in `getProjectsSnapshot`) and when a population run resolves
+`ok` with the initial scan complete (#1185). A separate
+`projectsReconcileAttemptedAt` records every admitted attempt, failed ones
+included, and gates the five-second interval (#1210). Reconciliation is
+also skipped while indexing is not finished (`canReconcile: isIndexingFinished`). Archive retirement and shutdown keep their
 independent budgets and admission rules.
 
 ## Bounded deletion reads and generation observation (#474 A4c1)
@@ -675,7 +695,8 @@ history guard and preserves the committed ACK/settings bookkeeping. The original
 transaction error path is unchanged. The full worker is tested with a real guarded
 SQLite fixture and the real client/facade; generation replacement uses a fake
 worker in `test/session-index-writer-recovery.test.js`, without Electron.
-# Full-content publication (#1144 A1)
+
+## Full-content publication (#1144 A1)
 
 The writable store reconciles nullable `session_cache.fullReadStamp` and
 `cache_meta.fullIndexVersion/fullIndexConfig/fullIndexPending` columns through

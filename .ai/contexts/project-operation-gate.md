@@ -2,9 +2,11 @@
 
 `src/main/shared/project-operation-gate.js` exports the main-process singleton
 `projectOperationGate`, a factory for isolated tests, and `PROJECT_OPERATION_ERROR`.
-The dormant A4c3 deletion service now calls the factory; main still has no
-deletion caller and there is no renderer API. This slice takes
-`no-changelog` when published.
+Project deletion (`src/main/projects/project-delete.js`, wired in `main.js`
+through `createProjectDeleteMain` with `gate: projectOperationGate`) is the
+holder; launch surfaces are the admitters. See [project-delete.md](project-delete.md).
+A refused launch shows the constant's text: "A project operation is in progress.
+Wait for it to finish before starting a session."
 
 `tryAdmit(projectPath, alias = null)` synchronously checks and reserves admission.
 It returns `null` when held, otherwise an idempotent `{ release() }` reservation.
@@ -21,26 +23,37 @@ release on success, refusal, rejection or throw. It is a spawn reservation, not
 a lifetime lock for an already running session.
 
 `hold(projectPath, alias = null)` synchronously refuses subsequent admissions for
-that identity and returns `{ ready, release() }`. The future operation caller
-must await `ready` before inspecting/stopping the admitted work, hold through the
+that identity and returns `{ ready, release() }`. The operation caller
+(`acquire` in `project-delete.js`) awaits `ready` before inspecting/stopping the admitted work, hold through the
 whole operation, and release only after known non-submission or terminal /
 noLateCommit evidence. The IPC reply timeout does not release the hold. A4c3
 also reserves the separate archive workflow gate and awaits both readiness
 promises before revalidation, stopping or fencing. Unknown outcomes remain
 main-owned through navigation, disposal and worker replacement. `ready` drains every previously
 admitted launch; holding does not cancel those launches. A second simultaneous
-hold throws the shared operation error. Releasing a hold is idempotent and allows
-admission again. Releasing and reacquiring while launches drain preserves both
-drain notifications. Empty entries are removed; there are no timers.
+hold throws the shared operation error, as does a hold on a key inside a held
+tree. Releasing a hold is idempotent and allows admission again. Releasing and
+reacquiring while launches drain preserves both drain notifications. Empty
+entries are removed; there are no timers.
+
+`holdTree(projectPath, alias = null)` (#1105) holds a whole subtree: while it is
+held, `tryAdmit`/`tryAdmitAll` refuse (`null`) any key equal to or under the
+root on the same host, and `hold` throws for such a key. It throws the shared
+operation error when the root overlaps another held tree (either direction) or
+contains a key under an exact `hold`. Its `ready` waits for every admitted
+launch at or under the root to drain. Release is idempotent. Deletion takes one
+`holdTree` per selected linked worktree beside its exact `hold` on the project,
+and awaits all readiness promises together with the archive reservation.
 
 Local keys use the shared realpath normalizer, absolute paths and Windows case
 folding. Remote keys use alias plus normalized POSIX path, preserve path case,
-and never consult the local filesystem. Keys are exact identities, not directory
-prefixes; another host, child worktree or another project is independent. Launch
+and never consult the local filesystem. For `tryAdmit*` and `hold`, keys are
+exact identities, not directory prefixes; another host, child worktree or
+another project is independent. Only `holdTree` matches by prefix. Launch
 callers with both project membership and a distinct spawn cwd reserve both keys.
 Remote symlink equivalence requires a canonical path from the caller.
 
-Admissions at this base:
+Admissions:
 
 - Scheduler tick and catch-up reserve before any catch-up baseline/minute claim
   or transcript creation, retaining admission until the launcher acknowledgement.
@@ -58,7 +71,8 @@ Admissions at this base:
   roster reconciliation. Restore reserves the main-owned saved working-set
   `projectPath` through classification, respawn and descriptor discovery;
   `attachOnly` is exempt. Parsed job state has no cwd field, so it is not used
-  as a guessed identity. A4 must reconcile saved project membership in its preview.
+  as a guessed identity; deletion's inventory unions saved working-set
+identities with active tabs instead (see project-delete.md).
 - Agents-view `bg-agent-verb` respawn reserves the matching saved background
   entry's `projectPath` through the respawn acknowledgement and releases in
   `finally`. Saved entries match by `attachJobId`, or by restore's job lookup for

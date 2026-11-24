@@ -51,6 +51,11 @@ The animations advance in discrete steps rather than smoothly, to keep the
 app's idle CPU use low
 ([decision 0002](decisions/0002-discrete-steps-sidebar-animations.md)).
 
+Codex tabs use the same Working, Needs your attention and Response ready
+indicators. Codex title spinner frames indicate work, **action required**
+indicates attention, and **approval requested** notifications ask for attention.
+These signals are separate from the Claude signals below.
+
 ## Where the states come from
 
 - **Working** follows the spinner glyph Claude Code puts at the start of the
@@ -80,6 +85,15 @@ shared activity label without the sidebar's CLI status detail.
 
 [Debug mode](activity-trace.md) records every one of these signals, and what
 the sidebar did with it, when an indicator looks wrong.
+
+## Notice history
+
+Notices and question dialogs record their appearance, dismissals and answers
+in the application log. The history is bounded, including an hourly limit for
+repeated events. Common credentials are masked; session titles and prompts
+are excluded, while project paths remain. Restore and Restart clicks are
+identified. Manage old logs in
+[Settings → Advanced → Diagnostics](activity-trace.md#deleting-older-log-files).
 
 ## Status bar
 
