@@ -162,6 +162,7 @@ function renderSchedulesLoadError() {
   for (const button of container.querySelectorAll('.schedule-retry-btn')) button.disabled = false;
   if (top) restoreScheduleTopFocus(container, top);
   else schedulesPendingTopFocus = null;
+  restorePendingScheduleFocus();
 }
 
 function showSchedules(projectPath) {
@@ -425,7 +426,14 @@ function focusScheduleControl(filePath, controlName) {
   const control = [...(row?.querySelectorAll('[data-schedule-control]') || [])].find(el => el.dataset.scheduleControl === controlName);
   schedulesPendingFocus = control?.disabled ? { filePath, control: controlName } : null;
   if (control?.disabled) row.focus({ preventScroll: true });
-  else control?.focus({ preventScroll: true });
+  else if (control) control.focus({ preventScroll: true });
+  else {
+    const container = document.getElementById('schedules-content');
+    const create = container?.querySelector('.schedule-create-btn');
+    const next = row?.querySelector('.schedule-actions button:not(:disabled)') || (create && !create.disabled ? create : container);
+    if (next === container && container) container.tabIndex = -1;
+    next?.focus({ preventScroll: true });
+  }
 }
 
 function restorePendingScheduleFocus() {
