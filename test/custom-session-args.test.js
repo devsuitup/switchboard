@@ -48,9 +48,17 @@ for (const shell of ['/bin/bash', 'cmd.exe', 'powershell.exe', 'wsl.exe']) {
   test(`${shell}: raw arguments follow quoted generated arguments`, () => {
     const opts = { windows: true, env: {}, customArgs: raw };
     const base = profiles.claudeCommand(shell, ['--resume', ID], { ...opts, customArgs: '' });
-    assert.equal(profiles.claudeCommand(shell, ['--resume', ID], opts), base + ' ' + raw);
+    assert.equal(profiles.claudeCommand(shell, ['--resume', ID], opts), base + (shell === 'powershell.exe' ? ' -- ' : ' ') + raw);
   });
 }
+
+test('the PowerShell helper ends its own parameters before raw custom arguments', () => {
+  const command = profiles.claudeCommand('powershell.exe', ['--resume', ID], { windows: true, env: {}, customArgs: '-__s x -- --tail' });
+  assert.equal(command, `__switchboard_launch 'claude' '--resume' '${ID}' -- -__s x -- --tail`);
+  const source = profiles.shellArgs('powershell.exe', command, [], { windows: true })[2].slice(0, -command.length);
+  assert.ok(!/param\s*\(/i.test(source), source);
+  assert.ok(source.startsWith('function __switchboard_launch{$__sbCmd=$args[0];$args=@($args|Select-Object -Skip 1);'), source);
+});
 
 for (const runtime of ['claude', 'codex']) {
   for (const mode of ['new', 'resume', 'fork']) {

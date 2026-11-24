@@ -165,7 +165,7 @@ function isWslShell(shellPath) {
 const psLiteral = text => "'" + text.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&') + "'";
 
 // see .ai/contexts/trigger-watcher.md ("Naming a new session")
-const PS_PREAMBLE = "function __switchboard_launch{param([string]$__sbCmd)"
+const PS_PREAMBLE = "function __switchboard_launch{$__sbCmd=$args[0];$args=@($args|Select-Object -Skip 1);"
   + "$c=Get-Command $__sbCmd -ErrorAction Stop|Select-Object -First 1;$f=$c.Source;$t='';"
   + "if($c.CommandType -eq 'ExternalScript'){"
   + "$a=Get-Command $__sbCmd -CommandType Application -ErrorAction SilentlyContinue|Where-Object{[IO.Path]::GetDirectoryName($_.Source) -eq [IO.Path]::GetDirectoryName($c.Source) -and $_.Source -match '\\.(cmd|bat)$'}|Select-Object -First 1;"
@@ -257,7 +257,7 @@ function claudeCommand(shellPath, argv, { env, cwd, prefix = '', windows = isWin
   const quoted = quoteArgvForShell(shellPath, argv, { env, cwd, wrapped });
   const plain = (wrapped ? prefix + ' ' : '') + binary + ' ' + quoted + suffix;
   if (!(windows && isPowerShellShell(shellPath))) return plain;
-  const helper = powershellLaunch(argv, prefix, binary) + suffix;
+  const helper = powershellLaunch(argv, prefix, binary) + (customArgs ? ' -- ' + customArgs : '');
   if (fitsCommandLine(shellPath, helper, extraArgs)) return helper;
   const baseline = ide ? (wrapped ? prefix + ' ' : '') + binary + ' ' + quoteArgvForShell(shellPath, argv.slice(0, -1), { env, cwd, wrapped }) + ' --ide' + suffix : plain;
   if (!fitsCommandLine(shellPath, baseline, extraArgs)) return helper;

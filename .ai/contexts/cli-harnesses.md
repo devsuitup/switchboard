@@ -22,8 +22,17 @@ shell encoding to `claudeCommand`; each receives only its own selected field.
 Custom text is raw shell syntax appended after generated argv, before prefix/cwd
 and SSH/tmux transport wrapping. It is not one argv token. PowerShell's helper
 receives the shell-parsed custom tokens and preserves its native argv encoding;
-command-length checks include the suffix. The helper's binary parameter is
-`$__sbCmd`, so CLI flags such as `-n` and `-N` stay in its argument list.
+command-length checks include the suffix. Custom text is appended after the
+generated argv, behind a bare `--`: `__switchboard_launch '<program>' '<token>'...
+-- <custom text>`. The helper declares no `param()` block and takes the program
+from `$args[0]`, shifting the rest (`$__sbCmd=$args[0];$args=@($args|Select-Object
+-Skip 1)`): a named parameter could be bound by an abbreviated flag in custom
+text (`-__s x` replaced the launched program). PowerShell consumes the first bare
+`--` of any function call as its end-of-parameters marker, even without
+`param()`, so the generated `--` is the one consumed and a `--` typed in custom
+text reaches the program, as it does when PowerShell runs a native command
+directly. Both measured on Windows PowerShell 5.1. A `-name:value` token is still
+split in two by PowerShell's parser before the helper runs.
 Windows cmd/PowerShell schedules split literal quoted custom tokens, append them
 to generated argv and keep the existing direct executable/npm target resolution
 (see `schedule-runner.md`, "Windows launches"). Sandbox replacement commands
