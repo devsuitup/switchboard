@@ -1001,6 +1001,27 @@ continuation indexes, the cache's public sidebar operation and shipped DOM
 rendering before/after indexing. `test/dom-sidebar-bg-badge.test.js` also pins
 merged-member badge lookup.
 
+## Sidebar group auto-collapse (#1249)
+
+`renderProjects` collapses a project or worktree header on its own when the
+project path is missing, the project matched a search with no session, or the
+group is stale: its first row (after the running/starred sort) is older than
+`sessionMaxAgeDays`. A group holding a running row is never stale
+(`groupIsStale` checks `rowIsRunning`, which covers live PTYs, pending spawns,
+running schedules and live background jobs). This matters on a cold start: a
+background job shown from its descriptor alone carries `modified =
+descriptor.startedAt`, which is days old for a long-running job.
+
+Automatic and user collapses are told apart by `data-auto-collapsed="1"`, set
+only by `autoCollapseHeader`. A header click removes the marker before
+toggling. The morphdom hook (`carryGroupCollapse`) keeps the previous state of
+an expanded header and of a header the user collapsed, and drops the marker on
+the new element; for a header still marked automatic it keeps the freshly
+computed state, so an automatic collapse is re-evaluated on every render and
+lifts once its reason is gone (the row starts running, the cache gives it a
+current date, a search or the Starred/Running filter is on). Nothing is
+persisted: a restart recomputes every header.
+
 ## Bridge history divergence
 
 Issue #524: a shared `bridgeSessionId` is not proof that all messages before a

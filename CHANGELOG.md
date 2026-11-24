@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- A project or worktree holding a running session or a live background job is no longer collapsed in the sidebar because its last activity looks old, which hid a long-running background session after a fresh start. A group collapsed automatically opens again once it has recent activity; a group you collapse yourself stays collapsed. (#1249)
+
 ## v0.1.0-beta.1 — 2026-11-24
 
 ### New
