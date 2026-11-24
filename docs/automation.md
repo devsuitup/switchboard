@@ -240,8 +240,8 @@ past runs stay in Sessions. Linked files can be opened and run, but must be
 enabled, disabled or deleted at their source.
 
 The tab refreshes on open, after actions, on project changes and every minute
-while visible. Deleting a project also refreshes the visible Schedules or Agent
-Files list. No search is offered here. Invalid files show their problems;
+while visible. A project deletion that was still unresolved and completes later
+also refreshes the open Agent Files list. No search is offered here. Invalid files show their problems;
 unknown projects cannot be run or opened. Archived projects stay suspended even
 if their schedules are enabled.
 
