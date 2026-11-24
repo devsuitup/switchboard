@@ -1144,14 +1144,58 @@ cli-session-state.md. OSC 9 does not reach Switchboard from a tmux pane on a
 host, so the descriptor is the only signal an unattached remote row has.
 
 `applyRemoteDescriptor` passes `attention: true` on its `descriptorStatus`
-event. Only the remote adapter does: local callers send the same event without
-it and never get attention from the descriptor reducer. Background projections
-separately map a live `waiting` descriptor to attention without applying that
-event to the state machine (#785). The reducer's rule:
+event. Local rows pass it too (#1246): Claude Code sends no OSC 9 attention for
+an `AskUserQuestion` dialog, only a later `idle` "waiting for your input", so a
+local row blocked on a question would otherwise keep the open head's spinner.
+`localDescriptorAttention` (session-activity-dom.js) computes the flag for both
+local callers, `snapshotForLocal` and `seedLocalTranscriptDescriptor`:
+
+- **Active session**: `false` for the session that is `activeSessionId`, the
+  rule `onTerminalNotification` applies to OSC attention. The user is looking at
+  the dialog; focusing a flagged row also releases it (`false` releases
+  descriptor-owned attention, and `clearNotifications` clears it). Leaving the
+  session while the dialog is still open raises it again at the next refresh.
+- **Stale ordering**: `false` when the head turn's `lastEntryAt` is not older
+  than the descriptor's `statusUpdatedAt`, the same transcript-entry ordering
+  the head projection's `idleNewer` applies to descriptor idle. A `waiting`
+  read before the answer's `tool_result` was written cannot re-raise attention,
+  and the later entry releases a descriptor-owned attention it raised. With no
+  head timestamp the descriptor is not ordered and `waiting` raises it; with a
+  head timestamp and no `statusUpdatedAt` it does not.
+- **Descriptor absent**: a refresh where the local row has no descriptor
+  `status` sends `releaseDescriptorAttention` to the local-pty adapter, PTY
+  here or not, so a dialog whose descriptor disappeared (or whose answer only
+  reached the transcript) cannot keep the attention. Explicit OSC attention
+  and the rest of the PTY state stay; the transcript adapter already drops its
+  whole state on that loss.
+- **Background (#785)**: both callers apply `descriptorStatus` only when the
+  row is not a background job, so the background projection stays the only
+  path that maps a background job's `waiting` to attention. For a background
+  row they send `releaseDescriptorAttention` instead
+  (`backgroundReleasesDescriptorAttention`) when the descriptor no longer
+  supports it (not `waiting`, active session, older than the transcript), or
+  when the background projection owns the row: a selected entry for which
+  `backgroundActivityIsForeground` is false, the same test
+  `backgroundActivitySnapshot` applies before projecting the job. A selected
+  entry alone is not ownership: with a PTY here, an unhosted stale job stays
+  selected while the projection leaves the row foreground (#767), and the
+  interactive question keeps its attention. A foreground `waiting` that raised
+  attention before a real handover to a live job cannot outlive it. Explicit
+  OSC attention stays, and the projection still raises attention when the job
+  itself waits.
+
+The spinner is the icon slot: attention outranks the busy rung there. The
+row's `cli-busy` class keeps following `snapshot.busy` beside `needs-attention`
+(PR #282 review, "classes is no longer read by applyStateClasses" below), so an
+open head waiting on a question carries both row classes and the attention slot.
+
+The reducer's rule:
 
 - `waiting` with `attention: true` and liveness not dead sets attention,
   clears busy / waitingForInput / responseReady like an `attention` event, and
-  records that the descriptor owns it.
+  records that the descriptor owns it — unless attention is already set, so a
+  repeated `waiting` cannot take over an explicit attention (each local refresh
+  re-applies the descriptor).
 - Any other status (`busy`, `idle`, `shell`, none), a `liveness: dead` event,
   or an `attention` event releases it — but only when the descriptor owns it. An
   attention raised by an explicit `attention` event is never cleared by a

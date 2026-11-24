@@ -367,6 +367,21 @@ function writeIconSlot(el, icon, title, text, session, lifecycle) {
   el.dataset.glyph = icon.glyph || '';
 }
 
+// see .ai/contexts/session-state.md ("Descriptor-owned attention")
+function localDescriptorAttention(sessionId, session) {
+  if (typeof activeSessionId !== 'undefined' && sessionId === activeSessionId) return false;
+  const lastEntryAt = headTurns.get(sessionId)?.lastEntryAt;
+  return !Number.isFinite(lastEntryAt) || Number.isFinite(session.statusUpdatedAt) && session.statusUpdatedAt > lastEntryAt;
+}
+
+// see .ai/contexts/session-state.md ("Descriptor-owned attention")
+function backgroundReleasesDescriptorAttention(sessionId, session, row, selection) {
+  if (session.status !== 'waiting' || !localDescriptorAttention(sessionId, session)) return true;
+  if (typeof selectBackgroundActivity !== 'function' || typeof backgroundActivityIsForeground !== 'function') return false;
+  selection ||= selectBackgroundActivity(sessionId, row);
+  return !!selection.entry && !backgroundActivityIsForeground(sessionId, row, selection);
+}
+
 // Thin wrapper over the local-pty adapter's own persisted state — see .ai/contexts/session-state.md ("The local-pty adapter")
 function snapshotForLocal(sessionId, session, selection) {
   let state = localPtyState(sessionId);
@@ -377,12 +392,15 @@ function snapshotForLocal(sessionId, session, selection) {
   if (sess && sess.status !== undefined) {
     // session.status present is itself the liveness signal — see .ai/contexts/cli-session-state.md
     state.apply({ type: 'liveness', value: 'alive' });
-    if (!background) state.apply({ type: 'descriptorStatus', status: sess.status, at: sess.statusUpdatedAt });
-  } else if (!sess?.remoteAlias && state.snapshot().liveness === 'alive'
-    && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId))) {
-    localPtyStates.delete(sessionId);
-    state = localPtyState(sessionId);
-    state.apply({ type: 'liveness', value: 'unknown' });
+    if (!background) state.apply({ type: 'descriptorStatus', status: sess.status, at: sess.statusUpdatedAt, attention: localDescriptorAttention(sessionId, sess) });
+    else if (backgroundReleasesDescriptorAttention(sessionId, sess, localActivityRow(sessionId, session), selection)) state.apply({ type: 'releaseDescriptorAttention' });
+  } else {
+    state.apply({ type: 'releaseDescriptorAttention' });
+    if (state.snapshot().liveness === 'alive' && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId))) {
+      localPtyStates.delete(sessionId);
+      state = localPtyState(sessionId);
+      state.apply({ type: 'liveness', value: 'unknown' });
+    }
   }
   return background ? { ...state.snapshot(), backgroundJob: true, descriptorStatus: sess?.status, waitingFor: sess?.waitingFor } : state.snapshot();
 }

@@ -269,8 +269,8 @@ Facts established by measurement, not by documentation:
   `input needed`, `dialog open`, `goal proposal`, `worker request`,
   `sandbox request`), and `statusUpdatedAt` is rewritten on each status write.
   No permission dialog occurred during the 295-sample measurement above, so no
-  live descriptor was captured during a dialog. A remote row lights the
-  attention state from it (see session-state.md, "Descriptor-owned attention");
+  live descriptor was captured during a dialog. A remote row, and a local
+  row that is not the active session (#1246), lights the attention state from it (see session-state.md, "Descriptor-owned attention");
   the remote index keeps `waitingFor` only as a trimmed string of at most 64
   characters without control characters, and drops anything else.
   The local `parseState` path accepts `waitingFor` only as a non-empty string

@@ -5,6 +5,16 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { isolatedHome } = require('./fixtures/isolated-home.cjs');
+
+const realHome = process.env.SWITCHBOARD_TEST_REAL_HOME || os.homedir();
+const suiteProjects = () => {
+  try { return fs.readdirSync(path.join(realHome, '.claude', 'projects')).filter(name => name.includes('schedule-bg-recovery-')); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+};
+const projectsBefore = new Set(suiteProjects());
+isolatedHome(test, { realHome }).install();
+
 const bg = require('../src/main/schedules/schedule-background');
 const runner = require('../src/main/schedules/schedule-runner');
 const results = require('../src/main/schedules/schedule-run-results');
@@ -690,4 +700,8 @@ test('an access denial keeps the result record, and a later start publishes it w
   assert.equal(fs.existsSync(file), false);
   assert.equal(results.readScheduleRunResults(runsDir, [ACTUAL]).get(ACTUAL).exitCode, 0);
   assert.deepEqual(h.calls, [], 'a result-phase retry does not repeat cleanup');
+});
+
+test('no scheduled seed of this suite reached the real home', () => {
+  assert.deepEqual(suiteProjects().filter(name => !projectsBefore.has(name)), [], 'scheduled seeds must stay in the disposable home');
 });
