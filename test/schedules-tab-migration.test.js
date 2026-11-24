@@ -175,6 +175,33 @@ test('a migration that answers within the bound returns its result and does not 
   assert.equal(shown(s.global()), true);
 });
 
+test('a Settings merge applies its patch and removals over the stored object and keeps the marker (#1239)', () => {
+  const s = store({ schedulesTab: false, theme: 'dark', chrome: { legacy: true }, sidebarWidth: 300 });
+  const commands = createWriterCommands(s.db);
+  assert.equal(launch(s), 'turned-on');
+  commands.mergeGlobal({ schedulesTab: false, theme: 'light' }, ['chrome']);
+  assert.deepEqual(s.global(), { theme: 'light', sidebarWidth: 300, [MARKER]: true, schedulesTab: false });
+  assert.equal(launch(s), 'none', 'the explicit off saved after the migration survives the next launch');
+  commands.mergeGlobal({ sidebarWidth: 320 });
+  assert.deepEqual(s.global(), { theme: 'light', sidebarWidth: 320, [MARKER]: true, schedulesTab: false });
+});
+
+test('a Settings merge on a profile with no global settings writes its patch alone (#1239)', () => {
+  const s = store();
+  createWriterCommands(s.db).mergeGlobal({ schedulesTab: false }, ['chrome']);
+  assert.deepEqual(s.global(), { schedulesTab: false });
+  assert.equal(launch(s), 'turned-on', 'an unmigrated profile still migrates');
+});
+
+test('keepMigrationMarker carries a committed marker into a replacement that lacks it, and nothing else (#1239)', () => {
+  const { keepMigrationMarker } = require('../src/main/schedules/schedules-tab-migration');
+  assert.deepEqual(keepMigrationMarker({ [MARKER]: true }, { theme: 'dark' }), { theme: 'dark', [MARKER]: true });
+  assert.deepEqual(keepMigrationMarker({ theme: 'dark' }, { theme: 'light' }), { theme: 'light' });
+  assert.deepEqual(keepMigrationMarker(null, { theme: 'light' }), { theme: 'light' });
+  assert.deepEqual(keepMigrationMarker({ [MARKER]: true }, { [MARKER]: false }), { [MARKER]: false });
+  assert.equal(keepMigrationMarker({ [MARKER]: true }, null), null);
+});
+
 function writerLaunch(dir, scenario) {
   const result = spawnSync(require('electron'), ['-e', `
     const assert = require('node:assert/strict');
@@ -208,6 +235,26 @@ test('through the real writer, the migrated value is what main reads, and a seco
     writerLaunch(dir, `
       assert.equal(await writer.migrateSchedulesTabDefault(), 'none');
       assert.deepEqual(db.getSetting('global'), { theme: 'dark', ${MARKER}: true, schedulesTab: false });
+    `);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('through the real writer, a whole-object replacement or a Settings merge after the migration keeps the marker (#1239)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'schedules-tab-migration-'));
+  try {
+    writerLaunch(dir, `
+      await writer.setSetting('global', { schedulesTab: false, theme: 'dark', chrome: {} });
+      assert.equal(await writer.migrateSchedulesTabDefault(), 'turned-on');
+      await writer.setSetting('global', { schedulesTab: false, theme: 'dark', chrome: {}, openWorkingSet: [] });
+      assert.deepEqual(db.getSetting('global'), { schedulesTab: false, theme: 'dark', chrome: {}, openWorkingSet: [], ${MARKER}: true });
+      await writer.mergeGlobal({ theme: 'light' }, ['chrome']);
+      assert.deepEqual(db.getSetting('global'), { schedulesTab: false, theme: 'light', openWorkingSet: [], ${MARKER}: true });
+    `);
+    writerLaunch(dir, `
+      assert.equal(await writer.migrateSchedulesTabDefault(), 'none');
+      assert.equal(db.getSetting('global').schedulesTab, false);
     `);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

@@ -785,11 +785,13 @@
     const controlValue = control => String(control.type === 'checkbox' ? control.checked : control.value);
     let initialHosts;
     let initialShortcuts;
+    const editedControls = new Set();
     function dirtySnapshot() {
       return { values: trackedControls.map(controlValue), hosts: JSON.stringify(remoteHosts), shortcuts: JSON.stringify(scShortcuts) };
     }
     function resetDirty(snapshot = dirtySnapshot()) {
       trackedControls.forEach((control, index) => { control.dataset.initial = snapshot.values[index]; });
+      editedControls.clear();
       initialHosts = snapshot.hosts;
       initialShortcuts = snapshot.shortcuts;
       updateDirty();
@@ -803,6 +805,16 @@
     resetDirty();
     form.addEventListener('input', updateDirty);
     form.addEventListener('change', updateDirty);
+    form.addEventListener('change', event => editedControls.add(event.target));
+    if (!isProject) {
+      window._syncUntouchedGlobalToggle = (id, checked) => {
+        const control = form.isConnected && form.querySelector('#' + id);
+        if (!control || editedControls.has(control) || controlValue(control) !== control.dataset.initial) return;
+        control.checked = checked;
+        control.dataset.initial = controlValue(control);
+        updateDirty();
+      };
+    }
 
     // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
     const harnessToggles = [...settingsViewerBody.querySelectorAll('.sv-harness-toggle')];

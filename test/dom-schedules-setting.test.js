@@ -8,6 +8,8 @@ const os = require('node:os');
 const { JSDOM } = require('jsdom');
 const { encodeProjectPath } = require('../encode-project-path');
 const { listMemories } = require('../file-lists');
+const { createWriterCommands } = require('../session-index-commands');
+const { migrateSchedulesTabDefault } = require('../src/main/schedules/schedules-tab-migration');
 
 const root = path.join(__dirname, '..');
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -36,10 +38,13 @@ async function setup(t, settings = {}, beforeInit = () => {}) {
     functions: ['isProjectDeleting', 'projectDeletionKey', 'paintProjectDeletionBusy'], declarations: ['deletingProjectKeys', 'projectDeletionUnavailable'] });
   const calls = [];
   let saved = settings;
+  const db = { getSetting: () => saved, setSetting: (_key, value) => { saved = value; } };
+  const writer = createWriterCommands(db);
   w.api = new Proxy({
     platform: 'win32',
     getSetting: async () => saved,
     setSetting: async (_key, value) => { saved = value; },
+    mergeGlobalSettings: async (patch, remove) => { writer.mergeGlobal(patch, remove); },
     getMemories: async () => listMemories({ claudeDir, projectsDir, activeProjectPaths: [project] }, p => fs.readFileSync(p, 'utf8')).view,
     listSchedules: async () => { calls.push('list'); return { now: Date.now(), projects: [] }; },
     runScheduleNow: async file => { calls.push(file); return { ok: true }; },
@@ -63,7 +68,7 @@ async function setup(t, settings = {}, beforeInit = () => {}) {
   evalSlice(init, src.indexOf('})();', init) + 5);
   await settle();
   await w.loadMemories();
-  return { w, calls, get saved() { return saved; }, tab: w.document.querySelector('[data-tab="schedules"]') };
+  return { w, calls, db, writer, get saved() { return saved; }, tab: w.document.querySelector('[data-tab="schedules"]') };
 }
 
 test('the shipped page starts with the Schedules tab hidden until settings are applied', () => {
@@ -219,4 +224,67 @@ test('global Settings saves the toggle and switches surfaces live in both direct
   }
   await h.w.openSettingsViewer('project', '/p');
   assert.equal(h.w.document.querySelector('#sv-schedules-tab'), null, 'the setting is global only');
+});
+
+test('an untouched stale Settings toggle follows a late migration, so its Save keeps the tab on (#1239)', async t => {
+  let migrated;
+  const h = await setup(t, { schedulesTab: false }, w => { w.api.onSchedulesTabMigrated = callback => { migrated = callback; }; });
+  await h.w.openSettingsViewer('global');
+  const toggle = h.w.document.querySelector('#sv-schedules-tab');
+  assert.equal(toggle.checked, false, 'the form opened before the migration committed');
+  assert.equal(migrateSchedulesTabDefault(h.db), 'turned-on');
+  await migrated();
+  assert.equal(h.tab.hidden, false);
+  assert.equal(toggle.checked, true, 'the untouched toggle follows the committed value');
+  assert.equal(h.w.document.querySelector('#sv-unsaved').textContent, '', 'following the stored value is not an unsaved change');
+  h.w.document.querySelector('#sv-save-btn').click();
+  await settle();
+  assert.equal(h.saved.schedulesTab, true, 'an untouched Save does not opt out');
+  assert.equal(h.saved.schedulesTabDefaultMigrated, true);
+  assert.equal(h.tab.hidden, false);
+});
+
+test('a toggle the user changed keeps its value when the migration lands under an open form (#1239)', async t => {
+  let migrated;
+  const h = await setup(t, { schedulesTab: false }, w => { w.api.onSchedulesTabMigrated = callback => { migrated = callback; }; });
+  await h.w.openSettingsViewer('global');
+  const toggle = h.w.document.querySelector('#sv-schedules-tab');
+  for (const checked of [true, false]) {
+    toggle.checked = checked;
+    toggle.dispatchEvent(new h.w.Event('change', { bubbles: true }));
+  }
+  assert.equal(migrateSchedulesTabDefault(h.db), 'turned-on');
+  await migrated();
+  assert.equal(toggle.checked, false, 'an edited off is the user choice');
+  h.w.document.querySelector('#sv-save-btn').click();
+  await settle();
+  assert.equal(h.saved.schedulesTab, false);
+  assert.equal(h.tab.hidden, true);
+  assert.equal(migrateSchedulesTabDefault(h.db), 'none', 'the next launch keeps the explicit off');
+});
+
+test('an explicit off queued behind the migration keeps its marker, so the next launch does not turn the tab back on (#1239)', async t => {
+  let migrated;
+  const h = await setup(t, { schedulesTab: false }, w => { w.api.onSchedulesTabMigrated = callback => { migrated = callback; }; });
+  await h.w.openSettingsViewer('global');
+  const toggle = h.w.document.querySelector('#sv-schedules-tab');
+  for (const checked of [true, false]) {
+    toggle.checked = checked;
+    toggle.dispatchEvent(new h.w.Event('change', { bubbles: true }));
+  }
+  const merge = h.w.api.mergeGlobalSettings;
+  let queued, acknowledge;
+  h.w.api.mergeGlobalSettings = (...args) => { queued = args; return new Promise(resolve => { acknowledge = resolve; }); };
+  h.w.document.querySelector('#sv-save-btn').click();
+  await settle();
+  assert.ok(queued, 'Settings submitted while the migration was pending');
+  assert.equal(migrateSchedulesTabDefault(h.db), 'turned-on');
+  await merge(...queued);
+  acknowledge();
+  await settle();
+  await migrated();
+  assert.equal(h.saved.schedulesTab, false, 'the explicit off is applied');
+  assert.equal(h.saved.schedulesTabDefaultMigrated, true, 'the merge kept the committed marker');
+  assert.equal(migrateSchedulesTabDefault(h.db), 'none');
+  assert.equal(h.tab.hidden, true);
 });

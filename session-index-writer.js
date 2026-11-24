@@ -313,6 +313,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       return lease.completion;
     },
     async patchGlobal(fields) { return request('patchGlobal', fields); },
+    async mergeGlobal(fields, remove = []) { return request('mergeGlobal', fields, remove); },
     async migrateSchedulesTabDefault() { return request('migrateSchedulesTabDefault'); },
     async renameSession(id, name) { return request('renameSession', id, name); },
     async rekeySessionMeta(from, to) { return request('rekeySessionMeta', from, to); },

@@ -469,6 +469,7 @@ function settingsDom(t, h) {
   dom.window.api = new Proxy({
     platform: 'win32', getSetting: async key => h.getSetting(key), getShellProfiles: async () => [],
     setSetting: async (key, value) => { h.setSetting(key, value); return { ok: true }; },
+    mergeGlobalSettings: async (patch, remove = []) => { const next = { ...h.getSetting('global'), ...patch }; for (const key of remove) delete next[key]; h.setSetting('global', next); return { ok: true }; },
     archiveProjectSettings: async (...args) => { calls.push(['archive', ...args]); return (await h.archive(...args)); },
     previewProjectDelete: async request => ({ ok: true, token: 'preview', plan: { project: { projectPath: h.projectPath }, fingerprint: 'fp',
       categories: { sessions: { available: true, selected: request.options.sessions }, settings: { available: true, selected: request.options.settings } }, refusals: [] } }),

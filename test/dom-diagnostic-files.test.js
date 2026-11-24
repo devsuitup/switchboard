@@ -30,6 +30,7 @@ function setup(t) {
     getDiagnosticFiles: async days => { requests.push(['preview', days]); return plan; },
     pruneDiagnosticFiles: async (...args) => { requests.push(['delete', ...args]); return { deleted: [], skipped: [], failed: [{ filePath: '<locked>', code: 'EPERM', error: 'denied' }] }; },
   }, { get: (target, key) => target[key] || (() => Promise.resolve({})) });
+  w.api.mergeGlobalSettings = require('./fixtures/merge-global-settings.cjs')(w.api);
   loadAppFunctions(ctx, { functions: ['saveGlobalSettings'], declarations: ['_persistChain'] });
   loadAppFunctions(ctx, { sourcePath: path.join(root, 'public/sidebar.js'), functions: ['isProjectDeleting', 'projectDeletionKey', 'paintProjectDeletionBusy'], declarations: ['deletingProjectKeys', 'projectDeletionUnavailable'] });
   for (const file of ['setting-defaults.js', 'utils.js', 'shortcuts.js', 'terminal-themes.js', 'remote-enrol-panel.js', 'archived-manager.js', 'activity-trace-panel.js', 'settings-panel.js']) {

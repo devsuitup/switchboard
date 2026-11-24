@@ -820,7 +820,8 @@ See `test/dom-settings-nav.test.js` for the DOM contract.
 
 | IPC | Notes |
 |---|---|
-| `get-setting` / `set-setting` / `delete-setting` | Generic key/value over `settings` table |
+| `get-setting` / `set-setting` / `delete-setting` | Generic key/value over `settings` table. `set-setting('global', value)` replaces the whole object, except that the writer carries a committed `schedulesTabDefaultMigrated` marker over when `value` lacks it (see schedule-runner.md, "Schedules tab"). |
+| `merge-global-settings` | `(patch, remove?)` — bridge `mergeGlobalSettings`. The writer command `mergeGlobal` reads the stored `global`, applies `patch`, deletes each `remove` key, runs the harness guard and writes, in one writer turn. `saveGlobalSettings` (renderer: global Settings Save, sidebar width, sidebar removals) uses it instead of a renderer read followed by `set-setting`, so a write landing between the two (the startup migration, a main-side `patchGlobal`) is never overwritten by a stale snapshot. Same main-side reactions as `set-setting('global')` (theme, Codex usage, update channel, harness watchers). A non-object patch throws; non-string `remove` entries are dropped. See session-index-writer.md. |
 | `get-settings-by-prefix` | `(prefix)` accepts only the non-empty string `continuationChoice:` and returns an object of matching keys and values; other prefixes throw before reading settings. Bridge: `getSettingsByPrefix`. Used to load continuation choices before restore and reload. |
 | `get-effective-settings` | `(projectPath)` — resolves global + project overrides |
 | `get-harnesses` | `()` → `[{ id, label, available, enabled, isDefault, capabilities }]` for every registered CLI adapter (`capabilities` is a plain copy of the adapter's flags); `enabled` reflects `global.disabledHarnesses`. Bridge: `getHarnesses`. See cli-harnesses.md ("Picker, toggles and settings"). |
@@ -968,7 +969,15 @@ An unknown remote target never falls back to local disk IO.
 
 ### Events (main → renderer)
 
-`terminal-data`, `session-detected` (preload listener only: main never emits it, see "Busy-state reconciliation"), `process-exited`, `remote-resize-allowed`, `terminal-notification` (`sessionId, message, kind` — `kind` is the session harness's `classifyNotification` verdict, see cli-harnesses.md), `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`, `terminal-backlog-request`, `trigger-session-action`, `schedule-run-exit`, `project-delete-recovery`
+`terminal-data`, `session-detected` (preload listener only: main never emits it, see "Busy-state reconciliation"), `process-exited`, `remote-resize-allowed`, `terminal-notification` (`sessionId, message, kind` — `kind` is the session harness's `classifyNotification` verdict, see cli-harnesses.md), `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`, `terminal-backlog-request`, `trigger-session-action`, `schedule-run-exit`, `project-delete-recovery`, `schedules-tab-migrated`
+
+`schedules-tab-migrated` carries no payload; preload `onSchedulesTabMigrated(callback)`
+calls `callback()` with no argument. Main sends it at most once per launch, only
+when the one-time Schedules tab migration finished after the startup wait and
+returned `turned-on`; an in-time result, `marked`, `none` or a failure sends
+nothing. The renderer re-reads `global`, applies the tab and updates an open
+Settings form's untouched Schedules toggle. See
+[schedule-runner.md](schedule-runner.md), "Schedules tab".
 
 `onProjectsChanged(callback)` forwards the main-side `{ cause: string[] }`
 payload. Schedules filters these causes before queuing a bounded debounce;

@@ -356,6 +356,7 @@ function persistence(h) {
     restoreAwaitingConsent: [], restoreInFlight: new Map(), restoreSavedIndex: new Map(), restorePlanner: null });
   h.w.api.getSetting = async () => structuredClone(global);
   h.w.api.setSetting = async (key, value) => { h.calls.writes.push([key, value]); global = structuredClone(value); };
+  h.w.api.mergeGlobalSettings = require('./fixtures/merge-global-settings.cjs')(h.w.api);
   loadAppFunctions(h.context, { functions: ['persistWorkingSet', 'pendingRestoreEntries', 'saveGlobalSettings'], declarations: ['_persistChain'] });
   h.w.flushProjectDeletionWrites = () => vm.runInContext('_persistChain', h.context);
   return () => global;
@@ -522,19 +523,22 @@ test('Global Settings deferred by deletion apply in-window and persist after its
     input.value = value;
     input.dispatchEvent(new h.w.Event('input'));
   }
-  let read;
-  const getSetting = h.w.api.getSetting;
-  h.w.api.getSetting = () => new Promise(resolve => { read = resolve; });
+  let release;
+  const merge = h.w.api.mergeGlobalSettings;
+  h.w.api.mergeGlobalSettings = () => new Promise(resolve => { release = resolve; });
+  const earlier = h.w.saveGlobalSettings({ sidebarWidth: 200 });
+  await flush();
+  h.w.api.mergeGlobalSettings = merge;
   h.document.querySelector('#sv-save-btn').click();
   await flush();
   h.w.setProjectDeletionWritesBlocked(h.p, true);
-  read({ chrome: true });
+  release();
+  await earlier;
   await flush();
   assert.deepEqual(applied, { count: 23, age: 42, theme: theme.value }, 'deferred settings must apply immediately in this window');
   assert.equal(h.w.remoteHostLabel('box'), 'Test host');
   assert.doesNotMatch(h.document.querySelector('#app-notices').textContent, /not saved|save again/i);
   assert.equal(h.calls.writes.length, 0, 'the deletion must still hold persistence');
-  h.w.api.getSetting = getSetting;
   saved().hiddenProjects = ['/deleted'];
   h.w.setProjectDeletionWritesBlocked(h.p, false);
   await flush(); await h.w.flushProjectDeletionWrites();

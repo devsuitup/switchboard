@@ -201,11 +201,7 @@ function saveGlobalSettings(patch, { remove = [] } = {}) {
   };
   const write = _persistChain.then(async () => {
     if (window.projectDeletionWritesBlocked || epoch !== window.projectDeletionWriteEpoch) return defer();
-    const current = await window.api.getSetting('global');
-    if (window.projectDeletionWritesBlocked || epoch !== window.projectDeletionWriteEpoch) return defer();
-    const settings = { ...current, ...patch };
-    for (const key of remove) delete settings[key];
-    await window.api.setSetting('global', settings);
+    await window.api.mergeGlobalSettings(patch, remove);
     return true;
   });
   _persistChain = write.catch(error => console.warn('[switchboard] failed to persist global settings', error));
@@ -3266,7 +3262,9 @@ setTimeout(() => {
 (async () => {
   window.api.onSchedulesTabMigrated?.(async () => {
     const latest = await window.api.getSetting('global');
-    window._applySchedulesTab(latest?.schedulesTab ?? SETTING_DEFAULTS.schedulesTab);
+    const enabled = latest?.schedulesTab ?? SETTING_DEFAULTS.schedulesTab;
+    window._applySchedulesTab(enabled);
+    window._syncUntouchedGlobalToggle?.('sv-schedules-tab', enabled);
   });
   const global = await window.api.getSetting('global');
   if (global) {

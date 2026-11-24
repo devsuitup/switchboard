@@ -13,6 +13,11 @@ function migratedGlobal(global) {
   return next;
 }
 
+function keepMigrationMarker(stored, next) {
+  if (stored?.[MARKER] !== true || !next || typeof next !== 'object' || Array.isArray(next) || Object.hasOwn(next, MARKER)) return next;
+  return { ...next, [MARKER]: true };
+}
+
 function migrateSchedulesTabDefault(db) {
   const before = db.getSetting('global');
   const next = migratedGlobal(before);
@@ -44,4 +49,4 @@ async function migrateSchedulesTabWithinBound(writer, log, { waitMs = STARTUP_WA
   return PENDING;
 }
 
-module.exports = { STARTUP_WAIT_MS, migrateSchedulesTabDefault, migrateSchedulesTabOnStartup, migrateSchedulesTabWithinBound };
+module.exports = { STARTUP_WAIT_MS, keepMigrationMarker, migrateSchedulesTabDefault, migrateSchedulesTabOnStartup, migrateSchedulesTabWithinBound };

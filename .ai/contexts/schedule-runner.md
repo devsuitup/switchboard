@@ -673,7 +673,12 @@ background; if it then returns `turned-on`, main sends `schedules-tab-migrated`
 (preload `onSchedulesTabMigrated`). The renderer registers that listener at the
 top of its settings-restore block, before its first `get-setting`, and on the
 event re-reads `global` and calls `_applySchedulesTab`, so the tab appears
-without a restart. Invokes resolve in order, so a stale first read always
+without a restart. An open global Settings form is reconciled through
+`_syncUntouchedGlobalToggle`: the Schedules checkbox takes the re-read value
+only if the user has not changed it since the form opened or was last saved
+(any `change` event counts, even one back to the initial value), and its
+baseline moves with it so it is not reported unsaved; an edited off is kept, and
+an untouched Save then writes the migrated value instead of the stale off. Invokes resolve in order, so a stale first read always
 applies before the event's fresh one; an event sent before the page loaded is
 lost, but the page's first read then already sees the committed value. A late
 `marked` or `none` changes nothing visible and sends nothing. Without the
@@ -682,8 +687,11 @@ so the default applies, and writes the marker in the same `global` write; a
 missing `global` gets `{ schedulesTabDefaultMigrated: true }`, so a fresh
 profile that turns the tab off later is not migrated at its next launch. A
 non-object `global` is left alone. With the marker present it does nothing, and
-renderer Saves merge into the stored object, so the marker survives and a
-`false` saved after the update is honoured. A failed write is logged, leaves
+renderer Saves merge into the stored object inside the writer
+(`merge-global-settings`, writer command `mergeGlobal`), so a Save queued while
+the migration is pending cannot drop the marker it committed, and a `false`
+saved after the update is honoured at the next launch. Whole-object
+`setSetting('global')` writes (the working-set persist) also keep the marker. A failed write is logged, leaves
 `global` unchanged and does not stop startup; the next launch retries. The
 marker is written by main only, never by Settings Save, so a failed migration
 followed by a Save of the stale off state is still migrated. The setting and the Agent Files fallback stay for one release; their

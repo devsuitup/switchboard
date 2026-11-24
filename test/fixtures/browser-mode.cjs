@@ -35,6 +35,7 @@ function setup({ rows = {}, effective = {}, platform = 'linux' } = {}) {
     createTerminalEntry: () => ({ initialSize: {}, terminal: { write() {} } }),
     syncPtySizeAfterOpen() {}, showSession() {},
   });
+  window.api.mergeGlobalSettings = require('./merge-global-settings.cjs')(window.api);
   loadAppFunctions(dom.getInternalVMContext(), { functions: ['saveGlobalSettings'], declarations: ['_persistChain'] });
   loadAppFunctions(dom.getInternalVMContext(), { sourcePath: path.join(__dirname, '../../public/sidebar.js'),
     functions: ['isProjectDeleting', 'projectDeletionKey', 'paintProjectDeletionBusy'], declarations: ['deletingProjectKeys', 'projectDeletionUnavailable'] });
