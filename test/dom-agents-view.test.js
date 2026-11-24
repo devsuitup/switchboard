@@ -90,6 +90,7 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
     readMemory: async () => 'memory text',
     getSetting: async () => ({}),
     setSetting: async () => ({ ok: true }),
+    mergeGlobalSettings: async () => ({ ok: true }),
     getShellProfiles: async () => [],
     getAppVersion: async () => '0.0.0',
     onUpdaterEvent: () => {},

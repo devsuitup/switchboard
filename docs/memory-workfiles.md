@@ -24,12 +24,11 @@ project-root file is looked up by the literal name `agents.md`. On a
 case-sensitive filesystem (Linux by default), uppercase `AGENTS.md` is not
 listed; on Windows and on default (case-insensitive) macOS volumes it is.
 
-With **Schedules tab** off in Global Settings (the default), project command
-files named `schedule-*.md` stay in Agent Files and its search results, with
-**Run now** and the editor. Turning the setting on moves them to the
-**Schedules** tab, where you can run, turn them on or off, and open them — see
-[Automation](automation.md#schedules). The filename match is case-sensitive;
-other Markdown files remain here.
+Project command files named `schedule-*.md` are managed in the
+[Schedules tab](schedules.md), which is on by default, and are left out of
+Agent Files and its search results. With **Schedules tab** turned off in Global
+Settings (possible this release only), they stay here with **Run now** and the
+editor. The filename match is case-sensitive; other Markdown files remain here.
 
 The editor offers:
 

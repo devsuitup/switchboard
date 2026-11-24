@@ -214,9 +214,10 @@ one run.
 Claude session primed to write a schedule file: describe the task and when it
 should run, and it writes `.claude/commands/schedule-<slug>.md`. Its
 instructions come from `~/.claude/commands/create-switchboard-schedule.md`,
-which Switchboard writes at startup when the file is missing and never
-overwrites afterwards — edit it to change how schedules are created, delete it
-to get the current template back.
+which Switchboard writes at startup when the file is missing. It replaces the
+file only when its exact bytes match an earlier shipped template; an edited
+copy is kept. Edit it to change how schedules are created, delete it to get the
+current template back.
 
 Writing the file by hand works the same. Being in `.claude/commands/`, a
 schedule is also a slash command: `/schedule-<name>` runs its prompt in any
@@ -224,56 +225,12 @@ session.
 
 ### Run now
 
-The **Schedules tab** option in **Global Settings** is off by default. With it
-off, schedule files appear in **Agent Files**, where you can open them or use
-**Run now**. Saving the option switches these surfaces immediately, without a
-restart. Scheduled tasks and their result records keep running with either setting.
-
-When enabled, the **Schedules** tab (clock icon, after Agent Files) lists scheduled tasks by
-project, including disabled tasks and archived projects. Each task shows its
-schedule in plain words, local next-run time, enabled state and up to 20 recent
-runs. **Run now** starts a run at once. **Turn on** and **Turn off** edit its
-front matter; turning it back on skips runs missed while it was off, including
-after Archive and Undo. **Open** edits the schedule file. **Delete** asks for
-confirmation, then removes the file and its catch-up and run-result records;
-past runs stay in Sessions. Linked files can be opened and run, but must be
-enabled, disabled or deleted at their source.
-
-The tab refreshes on open, after actions, on project changes and every minute
-while visible. A project deletion that was still unresolved and completes later
-also refreshes the open Agent Files list. No search is offered here. Invalid files show their problems;
-unknown projects cannot be run or opened. Archived projects stay suspended even
-if their schedules are enabled.
-
-A schedule file Switchboard cannot read (for example, a permissions error) stays
-in the list with the error; its schedule is shown as unknown, and only
-**Delete** and **Retry** are available until a read succeeds. A project whose
-`.claude/commands` folder cannot be read shows the error and **Retry** instead
-of an empty list. Check the file or folder permissions and path, then press
-**Retry**. If the list itself cannot be loaded, the tab says so with **Retry**;
-after a failed refresh it keeps the last loaded list and labels it with its
-time. With no registered project, add a local project from Sessions first;
-with only archived projects, unarchive one in **Settings → Archived**.
-
-A running task says **Running**. Recorded outcomes show the exit code, signal,
-launch refusal or spawn failure and are kept across restarts. Runs without a
-record say **No result recorded** with a transcript hint, including **replied;
-exit code unknown** when a reply exists. Reply text does not prove a successful exit. Use
-**Show history in Sessions** for older runs; runs predating v0.0.90 have no
-schedule marker and cannot be attributed.
-
-Use **Create schedule** at the top of the tab to choose a registered project,
-name, slug, five-field cron expression and prompt. Enabled defaults to on;
-catch-up defaults to off. Optional CLI fields cover permission mode, allowed
-tools, model, budget, a one-line appended system prompt and additional
-directories (one per line, with no commas). **Default (auto)** uses the
-runner's auto permission mode. Invalid fields stay in the form with an error.
-Archived projects must be unarchived first, and sandbox restrictions match
-those of a scheduled run. Existing filenames and effective slugs are preserved.
-The project header's **Create scheduled task** command remains available.
-Switchboard updates its installed creator command only when its exact bytes
-match an official shipped template; customized commands are kept. Its text
-points to the Schedules tab (Global Settings → Automation → Schedules → Schedules tab).
+Schedules are listed, run, turned on or off, created, edited and deleted in
+the [Schedules tab](schedules.md), which is on by default. For this release it
+can be turned off in Global Settings; schedule files and **Run now** then
+appear in **Agent Files** instead — see
+[Turning the tab off](schedules.md#turning-the-tab-off). Scheduled tasks and
+their result records keep running with either setting.
 
 **Run now** ignores `cron` and
 `enabled`, and does not wait for a run of the same schedule that is still going.

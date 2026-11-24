@@ -37,7 +37,8 @@ The initial BrowserWindow options include its background and the themed caption
 overlay before construction. Dark now explicitly sets native `backgroundColor`
 to `#111118` before first paint (accepted startup difference); saved global
 changes refresh existing window colors (`windowTheme.refresh()` in the
-`set-setting` handler, global key only).
+`writeGlobalSettings`, shared by the `set-setting` handler for the global key and
+`merge-global-settings`).
 macOS retains its native traffic lights. The new synchronous IPC carries only the
 normalized theme name and runs without filesystem IO in the handler.
 

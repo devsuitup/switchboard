@@ -433,7 +433,8 @@ for the fetch, backoff and footer grouping (#1209).
   `detectSessionTransitions` for each changed folder, but skips the workflow
   snapshot reads, `writer.refreshFolder` and `dropFolderRows`, re-checking the
   enabled state between awaited folder writes. Work already submitted to the
-  writer can finish. `set-setting` calls `restartHarnessWatchers` when the list
+  writer can finish. `set-setting('global')` and `merge-global-settings`
+  (both through main's `writeGlobalSettings`) call `restartHarnessWatchers` when the list
   changes: it restarts the harness watchers and opens the projects watcher only
   if none is running, so toggling Codex never drops the Claude watcher's queued
   batch.
@@ -446,8 +447,8 @@ for the fetch, backoff and footer grouping (#1209).
   checks the root itself; the cold scan walks nothing).
 - IPC: `get-harnesses` and `get-harness-models(runtime)` (generic names
   rather than upstream's `get-codex-models`; see ipc-bridge.md). No
-  `harnesses-changed` event: the toggle goes through `set-setting`, which
-  already triggers `projects-changed`, and the picker asks on every open.
+  `harnesses-changed` event: the toggle goes through `merge-global-settings`
+  (global Settings Save), which already triggers `projects-changed`, and the picker asks on every open.
 - Picker: `showNewSessionPopover` renders the Claude entries at once and, when
   `getHarnesses` answers, inserts one `popover-option[data-runtime]` per
   enabled non-default CLI before Terminal (keyboard order follows), then

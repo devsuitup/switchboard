@@ -98,6 +98,7 @@ contextBridge.exposeInMainWorld('api', {
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
   getSettingsByPrefix: (prefix) => ipcRenderer.invoke('get-settings-by-prefix', prefix),
   setSetting: (key, value) => ipcRenderer.invoke('set-setting', key, value),
+  mergeGlobalSettings: (patch, remove) => ipcRenderer.invoke('merge-global-settings', patch, remove),
   deleteSetting: (key) => ipcRenderer.invoke('delete-setting', key),
   getEffectiveSettings: (projectPath) => ipcRenderer.invoke('get-effective-settings', projectPath),
   getHarnesses: () => ipcRenderer.invoke('get-harnesses'),
@@ -203,6 +204,7 @@ contextBridge.exposeInMainWorld('api', {
   onSubagentCompleted: (cb) => ipcRenderer.on('subagent-completed', (_e, payload) => cb(payload)),
   onSubagentWatchEvent: (cb) => ipcRenderer.on('subagent-watch-event', (_e, payload) => cb(payload)),
   onBgAgentsChanged: (cb) => ipcRenderer.on('bg-agents-changed', (_e, payload) => cb(payload)),
+  onSchedulesTabMigrated: (callback) => ipcRenderer.on('schedules-tab-migrated', () => callback()),
   onProjectsChanged: (callback) => {
     ipcRenderer.on('projects-changed', (_event, payload) => callback(payload));
   },

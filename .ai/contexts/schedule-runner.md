@@ -71,7 +71,7 @@ From `schedule-runner.js`:
 From `schedule-ipc.js`:
 
 - `init(log, runScheduleCommand, isPathAllowed, isProjectArchived)` — wire IPC handlers (`get-schedule-creator-command`, `create-schedule-session`, `run-schedule-now`).
-- `ensureScheduleCreatorCommand()` — on app start, write `SCHEDULE_CREATOR_TEMPLATE` to `~/.claude/commands/create-switchboard-schedule.md` if missing.
+- `ensureScheduleCreatorCommand()` — on app start, write `SCHEDULE_CREATOR_TEMPLATE` to `~/.claude/commands/create-switchboard-schedule.md` when missing, or replace it when its bytes match a known shipped template (see "Schedule creation").
 
 `main.js`'s shared `runScheduleCommand` returns `{ok:false, error}` when the
 project is archived, a sandbox cannot run on this platform, sandbox add-dirs
@@ -640,7 +640,8 @@ SHA-256, `eb28b0b4d916fb22e7b1f3a84d2aa2852436c311ebbc873587a332d3da5950d7`.
 Future edits append the replaced template's hash to
 `SHIPPED_CREATOR_TEMPLATE_SHA256` and update the current pin; the assertion
 failure explains both steps. Every Schedules tab mention in the template and
-welcome text explains Global Settings → Schedules tab, because it defaults off.
+welcome text names Global Settings → Schedules tab, because the setting can
+still turn the tab off (#1239).
 
 Coverage: `schedule-create-file.test.js`, `schedule-creator-template.test.js`
 and `dom-schedule-create.test.js` load shipped code with require or filename-tagged
@@ -649,17 +650,71 @@ VM evaluation; creator tests use disposable homes and stub Electron.
 ## Schedules tab (#792, slice A2)
 
 Global Settings → **Schedules tab** persists `global.schedulesTab`, defaulting
-to `SETTING_DEFAULTS.schedulesTab` (false). Only renderer surfaces are gated.
+to `SETTING_DEFAULTS.schedulesTab` (true since #1239). Only renderer surfaces are gated.
 The startup settings restore and Settings Save call `_applySchedulesTab`:
 hidden/disabled clock tab with tabindex -1 when off, no programmatic route,
-and a return to Sessions when the active tab is disabled. Only an effective
-value change reloads Agent Files if open, cancels schedule refreshes and refreshes
-sidebar notices. Startup applies it after restoring sidebar width and shortcuts,
+and a return to Sessions when the active tab is disabled. `index.html` ships
+the tab hidden and `window.schedulesTabEnabled` starts at the default, so
+`_applySchedulesTab` writes the tab's hidden, disabled and tabindex on every
+call; otherwise the first apply of the default would leave the tab hidden. Only
+an effective value change reloads Agent Files if open, cancels schedule
+refreshes and refreshes sidebar notices.
+
+Every global Save since #792 has written the checkbox state, so a stored
+`false` from before #1239 is not an opt-out. On the first launch of 0.1.0,
+`src/main/schedules/schedules-tab-migration.js` runs once in the writer worker
+(`migrateSchedulesTabDefault`, started in `main.js` right after
+`INSTALL_PREDATES_LAUNCH` is read and before any window exists). Startup waits
+for it through `migrateSchedulesTabWithinBound`, at most `STARTUP_WAIT_MS`
+(2000 ms): a writer command's 30 s timeout is armed only once the worker
+reports it started, and a queued command has no admission deadline, so a
+stalled writer could otherwise hold the first window for 30 s or more. Within the bound the first render reads the result. Past it,
+main logs a warning, creates the window, and lets the migration finish in the
+background; if it then returns `turned-on`, main sends `schedules-tab-migrated`
+(preload `onSchedulesTabMigrated`). The renderer registers that listener at the
+top of its settings-restore block, before its first `get-setting`, and on the
+event re-reads `global` and calls `_applySchedulesTab`, so the tab appears
+without a restart. An open global Settings form is reconciled through
+`_syncUntouchedGlobalToggle`: the Schedules checkbox takes the re-read value
+only if the user has not changed it since the form opened or was last saved
+(any `change` event counts, even one back to the initial value), and its
+baseline moves with it so it is not reported unsaved; an edited off is kept.
+Global Save sends `schedulesTab` only when that checkbox had a `change` event
+since the form opened or was last saved (a change back to off counts), so an
+untouched Save submitted before the migration commits cannot write the stale
+off. When the field was not sent, Save re-reads `global` after the write is
+acknowledged and applies the stored effective value to the tab and, unless the
+checkbox was edited while the Save was in flight, to the checkbox and its
+baseline. Each `change` event stamps the control with a new edit generation;
+Save records the generations it submitted, and its acknowledgement clears a
+control's edited mark only if no newer change happened meanwhile, so a toggle
+flipped again during the Save stays edited and the next Save sends it. Only the
+Schedules field depends on this mark; every other global field is always sent. Invokes resolve in order, so a stale first read always
+applies before the event's fresh one; an event sent before the page loaded is
+lost, but the page's first read then already sees the committed value. A late
+`marked` or `none` changes nothing visible and sends nothing. Without the
+`schedulesTabDefaultMigrated` marker it deletes a stored `schedulesTab: false`,
+so the default applies, and writes the marker in the same `global` write; a
+missing `global` gets `{ schedulesTabDefaultMigrated: true }`, so a fresh
+profile that turns the tab off later is not migrated at its next launch. A
+non-object `global` is left alone. With the marker present it does nothing, and
+renderer Saves merge into the stored object inside the writer
+(`merge-global-settings`, writer command `mergeGlobal`), so a Save queued while
+the migration is pending cannot drop the marker it committed, and a `false`
+saved after the update is honoured at the next launch. The working-set persist
+writes only `openWorkingSet` through the same merge, so a snapshot it would have
+read before the migration cannot bring back the old off. A failed write is logged, leaves
+`global` unchanged and does not stop startup; the next launch retries. The
+marker is written by main only, never by Settings Save, so a failed migration
+followed by a Save of the stale off state is still migrated. The setting and the Agent Files fallback stay for one release; their
+removal is deferred (#1239). Startup applies it after restoring sidebar width and shortcuts,
 so a tab failure cannot interrupt their restore. Global Save's separate sidebar
 refresh runs only when visible count, maximum age or remote hosts changed (an SDK
 visibility change still reloads projects).
 `file-lists.js` always supplies project command schedules, marked `schedule`;
-Agent Files filters those entries only when the tab is on. Its file search
+Agent Files filters those entries only when the tab is on. With the tab off,
+only entries marked `schedule` get the schedule icon and Run now, so a
+`schedule-*.md` outside a project's `.claude/commands` stays an ordinary file. Its file search
 index keeps them available so switching requires no reindex. With the tab off,
 the prior schedule icon, Run now and editor are restored. Archive choices,
 Undo, re-enable offers and recovery hints use their pre-A2 names and Agent

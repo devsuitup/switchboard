@@ -77,22 +77,32 @@ test('saving global appearance refreshes the native window after persistence', a
   const start = main.indexOf("ipcMain.handle('set-setting',");
   const end = main.indexOf('\n});', start) + '\n});'.length;
   assert.ok(start >= 0 && end > start);
-  let handler;
+  const handlers = new Map();
   const calls = [];
   const context = vm.createContext({
-    ipcMain: { handle: (_, fn) => { handler = fn; } },
+    ipcMain: { handle: (name, fn) => { handlers.set(name, fn); } },
     getSetting: () => ({}),
     setSetting: async () => { await Promise.resolve(); calls.push('persisted'); },
+    writer: { mergeGlobal: async patch => { await Promise.resolve(); calls.push('merged'); return patch; } },
     windowTheme: { refresh: () => calls.push('refresh') },
     codexUsage: { settingsChanged() {} }, applyUpdateChannel() {},
     restartHarnessWatchers() {}, notifyRendererProjectsChanged() {},
   });
+  vm.runInContext(require('./app-source').extractFunction(main, 'writeGlobalSettings'), context, { filename });
   vm.runInContext(main.slice(start, end), context, { filename });
+  const mergeStart = main.indexOf("ipcMain.handle('merge-global-settings',");
+  assert.ok(mergeStart >= 0);
+  vm.runInContext(main.slice(mergeStart, main.indexOf('\n});', mergeStart) + '\n});'.length), context, { filename });
+  const handler = handlers.get('set-setting');
   await handler({}, 'global', { theme: 'light' });
   assert.deepEqual(calls, ['persisted', 'refresh']);
   calls.length = 0;
   await handler({}, 'project', { theme: 'dark' });
   assert.deepEqual(calls, ['persisted']);
+  calls.length = 0;
+  await handlers.get('merge-global-settings')({}, { theme: 'dark' }, ['chrome']);
+  assert.deepEqual(calls, ['merged', 'refresh'], 'a Settings merge refreshes the window after the writer commits');
+  await assert.rejects(handlers.get('merge-global-settings')({}, ['theme']), /Invalid global settings patch/);
 });
 
 test('Dark and Light apply synchronously and ignore OS changes', t => {

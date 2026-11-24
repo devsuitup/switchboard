@@ -72,6 +72,7 @@ function setup(stored, { packaged = true, defaults = SETTING_DEFAULTS } = {}) {
   vm.runInContext(updaterInit, context, { filename: 'main.js' });
   vm.runInContext(extractFunction(source, 'resetUpdateAttempt'), context);
   vm.runInContext(extractFunction(source, 'applyUpdateChannel'), context, { filename: 'main.js' });
+  vm.runInContext(extractFunction(source, 'writeGlobalSettings'), context, { filename: 'main.js' });
   vm.runInContext(source.slice(...settingsHandler.range), context, { filename: 'main.js' });
   vm.runInContext(source.slice(...startupBlock.range), context, { filename: 'main.js' });
   return { updater, logs, checks, timers, save: (key, value) => handlers.get('set-setting')(null, key, value) };

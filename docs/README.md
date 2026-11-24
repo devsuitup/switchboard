@@ -23,6 +23,7 @@ links are in the [README](../README.md#download).
 | [Changes view](changes-view.md) | A session's git status and diffs, with an editor for local sessions |
 | [Touched files](touched-files.md) | The files a session's file tools touched, including outside any repository |
 | [Agent Files and session files](memory-workfiles.md) | Agent Files for `CLAUDE.md` and memory; Touched and terminal links open session files; schedules have their own tab |
+| [Schedules tab](schedules.md) | Listing, running, turning on or off, creating, editing and deleting scheduled tasks; turning the tab off this release |
 | [Stats](activity-stats.md) | Heatmap, totals, per-model tokens, rate limits |
 | [Session restore](session-restore.md) | Reopening the open sessions at the next launch |
 | [Remote hosts](remote-hosts.md) | Observing, attaching to and stopping sessions on SSH hosts |

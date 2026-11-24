@@ -23,6 +23,7 @@ function setup(t, projects = []) {
     setSetting: async (key, value) => { saved[key] = value; },
     getShellProfiles: async () => [], getHarnesses: async () => [],
   }, { get: (target, key) => target[key] || (() => Promise.resolve({})) });
+  w.api.mergeGlobalSettings = require('./fixtures/merge-global-settings.cjs')(w.api);
   loadAppFunctions(ctx, { functions: ['saveGlobalSettings'], declarations: ['_persistChain'] });
   loadAppFunctions(ctx, { sourcePath: path.join(root, 'public/sidebar.js'), functions: ['folderId', 'isProjectDeleting', 'projectDeletionKey', 'paintProjectDeletionBusy'], declarations: ['deletingProjectKeys', 'projectDeletionUnavailable'] });
   for (const file of ['setting-defaults.js', 'utils.js', 'modal-stack.js', 'choice-dialog.js', 'app-dialogs.js', 'app-notices.js', 'shortcuts.js', 'terminal-themes.js', 'remote-enrol-panel.js', 'archived-manager.js', 'settings-panel.js']) {

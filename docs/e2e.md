@@ -127,8 +127,8 @@ and the absence of new Unicode directories in the checkout after teardown.
 fixture (long Windows paths, a long name and refusal, disabled, malformed,
 linked, unreadable, archived-project and unknown-project rows, a project whose
 folder cannot be read, 20 history entries), so no schedule file or CLI run is
-involved. It turns the tab on with `window._applySchedulesTab(true)`, the call
-Settings → Save makes. Its screenshots (one per size, zoom, theme and sidebar
+involved. It relies on the tab being on by default in a fresh profile, so it
+also checks the startup path that reveals the tab. Its screenshots (one per size, zoom, theme and sidebar
 width, plus the create form) and the sidebar width each combination actually
 got (a 600 px sidebar can shrink in a small zoomed window) go to the test output
 directory and the report annotations; CI uploads them only when the job fails.

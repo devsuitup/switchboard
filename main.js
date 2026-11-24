@@ -89,6 +89,7 @@ function spawnPty(file, args, opts) {
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell, claudeCommand, headlessClaudeLaunch, customArgsForLaunch } = require('./src/main/terminals/shell-profiles');
 const { startScheduler, scheduleLaunchRefusal, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./src/main/schedules/schedule-runner');
 const { buildScheduleList } = require('./src/main/schedules/schedule-list');
+const { migrateSchedulesTabWithinBound } = require('./src/main/schedules/schedules-tab-migration');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS, normalizeBrowserSettings,
@@ -257,6 +258,11 @@ const { setStarred, setArchived, deleteCachedSession, deleteCachedFolder,
 
 // see docs/changelog.md ("What's new in the app")
 const INSTALL_PREDATES_LAUNCH = getSetting('global') !== null || isInitialScanComplete();
+await migrateSchedulesTabWithinBound(writer, log, {
+  onLateChange: () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('schedules-tab-migrated');
+  },
+});
 
 async function sweepContinuationChoices() {
   if (!isInitialScanComplete()) return;
@@ -1896,20 +1902,30 @@ ipcMain.handle('get-settings-by-prefix', (_event, prefix) => {
   return Object.fromEntries(listSettingKeys(prefix).map(key => [key, getSetting(key)]));
 });
 
-ipcMain.handle('set-setting', async (_event, key, value) => {
-  const disabledBefore = key === 'global' ? JSON.stringify(getSetting('global')?.disabledHarnesses || []) : null;
-  const usageBefore = key === 'global' ? getSetting('global')?.showCodexUsage : undefined;
-  await setSetting(key, value);
-  if (key === 'global') {
-    windowTheme.refresh();
-    if (value?.showCodexUsage !== usageBefore) codexUsage.settingsChanged();
-    applyUpdateChannel();
-    // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
-    if (JSON.stringify(value?.disabledHarnesses || []) !== disabledBefore) {
-      restartHarnessWatchers();
-      notifyRendererProjectsChanged('settings');
-    }
+async function writeGlobalSettings(write) {
+  const disabledBefore = JSON.stringify(getSetting('global')?.disabledHarnesses || []);
+  const usageBefore = getSetting('global')?.showCodexUsage;
+  const value = await write();
+  windowTheme.refresh();
+  if (value?.showCodexUsage !== usageBefore) codexUsage.settingsChanged();
+  applyUpdateChannel();
+  // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
+  if (JSON.stringify(value?.disabledHarnesses || []) !== disabledBefore) {
+    restartHarnessWatchers();
+    notifyRendererProjectsChanged('settings');
   }
+}
+
+ipcMain.handle('set-setting', async (_event, key, value) => {
+  if (key === 'global') await writeGlobalSettings(async () => { await setSetting(key, value); return value; });
+  else await setSetting(key, value);
+  return { ok: true };
+});
+
+ipcMain.handle('merge-global-settings', async (_event, patch, remove) => {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new TypeError('Invalid global settings patch');
+  const keys = Array.isArray(remove) ? remove.filter(key => typeof key === 'string') : [];
+  await writeGlobalSettings(() => writer.mergeGlobal(patch, keys));
   return { ok: true };
 });
 
