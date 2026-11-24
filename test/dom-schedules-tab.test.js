@@ -1083,3 +1083,62 @@ test('the result notice counts the other unresolved results', t => {
   h.emitHealth({ suspended: false, resultFailure: { path: '/r/a.json', code: 'EBADRESULT', message: 'The result file /r/a.json is unreadable; remove or fix it', at: 1, count: 3 }, revision: 1 });
   assert.match(h.w.document.querySelector('[data-notice-id="ScheduleResultFailure"] .app-notice-message').textContent, /remove or fix it \(2 other results also not recorded\)$/);
 });
+
+test('an imported run without a result says result unknown (imported), never an exit code', t => {
+  const h = setup(t);
+  const run = { sessionId: 'old', created: '2026-05-02T07:00Z', replied: true, messageCount: 3, running: false, result: null, imported: true, dueMs: null };
+  assert.equal(h.w.scheduleOutcome(run), 'Result unknown (imported) — replied');
+  assert.equal(h.w.scheduleOutcome({ ...run, replied: false }), 'Result unknown (imported) — no reply recorded');
+  assert.equal(h.w.scheduleOutcome({ ...run, replied: null }), 'Result unknown (imported)');
+  assert.doesNotMatch(h.w.scheduleOutcome(run), /Exit|Failed/);
+  h.schedule.runs = [run];
+  h.w.renderSchedules(h.data);
+  assert.match(h.w.document.querySelector('.schedule-history-run').textContent, /Result unknown \(imported\)/);
+});
+
+test('the note about older runs appears only when the history has gaps', t => {
+  const h = setup(t);
+  const note = () => h.w.document.querySelector('.schedule-help')?.textContent || null;
+  const recorded = { sessionId: 'a', created: '2026-11-08T12:00Z', replied: true, messageCount: 2, running: false, result: { outcome: 'exited', exitCode: 0, failure: null } };
+  h.schedule.runs = [recorded];
+  h.data.history = { state: 'done', unattributed: 0 };
+  h.w.renderSchedules(h.data);
+  assert.equal(note(), null, 'a complete history shows no note');
+  h.data.history = null;
+  h.w.renderSchedules(h.data);
+  assert.equal(note(), null);
+
+  h.data.history = { state: 'running', unattributed: 0 };
+  h.w.renderSchedules(h.data);
+  assert.match(note(), /Importing the runs made before v0\.0\.90/);
+  h.data.history = { state: 'waiting', unattributed: 0 };
+  h.w.renderSchedules(h.data);
+  assert.match(note(), /Importing the runs made before v0\.0\.90/);
+  h.data.history = { state: 'failed', unattributed: 0, error: 'EIO: i/o error' };
+  h.w.renderSchedules(h.data);
+  assert.match(note(), /could not be imported \(EIO: i\/o error\).*retries within a few minutes/);
+  h.data.history = { state: 'done', unattributed: 2 };
+  h.w.renderSchedules(h.data);
+  assert.match(note(), /2 sessions start like a scheduled run but could not be attributed to a schedule reliably/);
+  assert.doesNotMatch(note(), /no result recorded/i);
+
+  h.data.history = { state: 'done', unattributed: 0 };
+  h.schedule.runs = [recorded, { ...recorded, sessionId: 'b', result: null }];
+  h.w.renderSchedules(h.data);
+  assert.match(note(), /no result recorded/i);
+  h.schedule.runs = [recorded, { ...recorded, sessionId: 'c', result: null, running: true }];
+  h.w.renderSchedules(h.data);
+  assert.equal(note(), null, 'a running run is not a gap');
+});
+
+test('an import progress event reloads the visible tab', async t => {
+  let notify;
+  let loads = 0;
+  const h = setup(t, undefined, { api: { onScheduleHistoryImported: listener => { notify = listener; } } });
+  assert.equal(typeof notify, 'function', 'the tab subscribes to import progress');
+  const original = h.w.api.listSchedules;
+  h.w.api.listSchedules = async () => { loads++; return original(); };
+  notify();
+  await new Promise(resolve => setTimeout(resolve, 950));
+  assert.equal(loads, 1);
+});

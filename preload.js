@@ -118,6 +118,7 @@ contextBridge.exposeInMainWorld('api', {
   runScheduleNow: (filePath) => ipcRenderer.invoke('run-schedule-now', filePath),
   onScheduleRunExit: callback => ipcRenderer.on('schedule-run-exit', (_event, result) => callback(result)),
   onScheduleHealth: callback => ipcRenderer.on('schedule-health', (_event, health) => callback(health)),
+  onScheduleHistoryImported: callback => ipcRenderer.on('schedule-history-imported', () => callback()),
   getShellProfiles: () => ipcRenderer.invoke('get-shell-profiles'),
 
   browseFolder: () => ipcRenderer.invoke('browse-folder'),

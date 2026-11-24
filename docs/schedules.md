@@ -44,11 +44,27 @@ search.
 - **Open** edits the schedule file in the editor.
 - **Delete** asks for confirmation, then removes the file and its catch-up and
   run-result records. Past runs stay in Sessions.
-- **Show history in Sessions** shows older runs. Runs predating v0.0.90 carry
-  no schedule marker and cannot be attributed.
+- **Show history in Sessions** shows older runs.
 
 A linked file can be opened and run, but must be turned on or off and deleted
 at its source.
+
+## Runs made before v0.0.90
+
+Runs made before v0.0.90 carry no schedule marker. The first time the tab
+lists your schedules, Switchboard imports them once, in the background, one
+project at a time: the list appears at once and the imported runs join it as
+each project is read. A session counts as a run of a schedule only if its
+transcript still begins with the exact record Switchboard wrote to start that
+run, with the schedule's slug and the project's own path; a session you started
+yourself never matches, even with the same title. Imported runs say
+**Result unknown (imported)**: Switchboard kept no result for them and does not
+invent one. Sessions that start like a scheduled run but fail this check are
+counted in the note at the top of the tab and stay in Sessions. Each schedule
+lists its 20 newest runs, marked or imported. The note at the top of the tab
+appears only while the import runs, when it failed (Switchboard retries
+a few minutes later while the tab is open, and at the next launch), when some sessions could not be attributed, or when
+a listed run has no recorded result.
 
 ## Editing a schedule
 
@@ -83,7 +99,8 @@ A running task says **Running**. A recorded outcome shows the exit code,
 signal, launch refusal or spawn failure, and is kept across restarts. A run
 without a record says **No result recorded** with a transcript hint, or
 **replied; exit code unknown** when a reply exists: a reply does not prove a
-successful exit.
+successful exit. An imported run says **Result unknown (imported)**, with
+whether its transcript has a reply.
 
 ## Errors and special projects
 

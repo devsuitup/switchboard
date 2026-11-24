@@ -67,6 +67,7 @@ function applyScheduleHealth(health) {
   showScheduleHealthNotice('ScheduleResultFailure', scheduleResultFailureText(health));
 }
 
+window.api?.onScheduleHistoryImported?.(() => queueSchedulesReload());
 window.api?.onScheduleHealth?.(health => {
   applyScheduleHealth(health);
   queueSchedulesReload();
@@ -255,11 +256,25 @@ function scheduleOutcome(run) {
     }
     return 'Unknown: result record unreadable';
   }
+  if (run.imported) return 'Result unknown (imported)' + (run.replied === true ? ' — replied' : run.replied === false ? ' — no reply recorded' : '');
   const hint = run.replied === true ? 'replied; exit code unknown'
     : run.replied === null ? 'Unknown'
       : run.messageCount === 1 ? '(refused or not started, run by another instance, run before results were kept, or Switchboard closed during the run)'
         : 'started; no reply recorded';
   return `No result recorded — ${hint}`;
+}
+
+function scheduleHistoryNote(data) {
+  const parts = [];
+  const history = data.history;
+  if (history && ['pending', 'waiting', 'running'].includes(history.state)) parts.push('Importing the runs made before v0.0.90; they appear here as each project is read.');
+  if (history?.state === 'failed') parts.push(`The runs made before v0.0.90 could not be imported (${history.error}); Switchboard retries within a few minutes while this tab is open, and at the next launch.`);
+  if (history?.unattributed > 0) {
+    parts.push(`${history.unattributed} session${history.unattributed === 1 ? ' starts' : 's start'} like a scheduled run but could not be attributed to a schedule reliably, so ${history.unattributed === 1 ? 'it is' : 'they are'} not listed; ${history.unattributed === 1 ? 'it stays' : 'they stay'} in Sessions.`);
+  }
+  const runs = data.projects.flatMap(project => project.schedules.flatMap(schedule => schedule.runs || []));
+  if (runs.some(run => !run.running && !run.result)) parts.push('Runs made before v0.0.104, runs of another instance and runs alive when Switchboard closed have no result recorded.');
+  return parts.length ? parts.join(' ') : null;
 }
 
 function scheduleText(parent, className, text) {
@@ -302,7 +317,8 @@ function renderSchedules(data) {
     create.setAttribute('aria-describedby', hint.id);
     create.title = prerequisite;
   }
-  scheduleText(container, 'schedule-help', 'Runs before v0.0.90 carry no schedule marker and are not listed. Runs before results were kept, runs of another instance and runs alive when Switchboard closes have no result recorded.');
+  const historyNote = scheduleHistoryNote(data);
+  if (historyNote) scheduleText(container, 'schedule-help', historyNote);
   if (data.health) applyScheduleHealth(data.health);
   const health = data.health ? scheduleHealthApplied : null;
   for (const text of [scheduleSuspensionText(health), scheduleResultFailureText(health)]) {

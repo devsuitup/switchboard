@@ -25,7 +25,8 @@ async function hasAssistant(filePath) {
 async function buildScheduleList(deps) {
   const { scheduleProjects, getCachedByFolder, isScheduleRunLive, catchUpActive, stateDir, projectsDir,
     getSetting = () => null, defaultSandbox = false, isArchived = () => false, isKnownProject = () => false,
-    now: clock = Date.now } = deps;
+    now: clock = Date.now, historyImport = null } = deps;
+  const imported = historyImport ? historyImport.importedRuns() : new Map();
   const now = clock();
   const nowMinute = Math.floor(now / MINUTE_MS) * MINUTE_MS;
   const projectPaths = await scheduleProjects().list();
@@ -48,13 +49,16 @@ async function buildScheduleList(deps) {
     }
     const schedules = [];
     for (const schedule of files.filter(s => s.projectPath === projectPath)) {
-      const rows = [...cached.values()].filter(({ row }) => schedule.slug !== null && row.scheduleSlug === schedule.slug)
+      const rows = [...cached.values()].filter(({ row, folder }) => schedule.slug !== null && (row.scheduleSlug === schedule.slug
+        || !row.scheduleSlug && imported.get(row.sessionId)?.slug === schedule.slug && imported.get(row.sessionId).folder === folder
+          && imported.get(row.sessionId).projectPath === projectPath))
         .sort((a, b) => Date.parse(b.row.created) - Date.parse(a.row.created)).slice(0, 20);
       const runs = [];
       for (const { row, folder } of rows) {
         runs.push({ sessionId: row.sessionId, created: row.created, messageCount: row.messageCount,
           replied: await hasAssistant(path.join(projectsDir, folder, `${row.sessionId}.jsonl`)),
-          running: isScheduleRunLive(row.sessionId), result: null });
+          running: isScheduleRunLive(row.sessionId), result: null,
+          ...(row.scheduleSlug ? {} : { imported: true, dueMs: imported.get(row.sessionId).dueMs }) });
       }
       let catchUpDueMs = null;
       const runnable = !schedule.problems.some(problem => !problem.startsWith('slug shared with '));
@@ -74,7 +78,7 @@ async function buildScheduleList(deps) {
   try { results = readScheduleRunResults(deps.runsDir, runs.map(run => run.sessionId)); }
   catch { results = new Map(runs.map(run => [run.sessionId, { unreadable: true }])); }
   for (const run of runs) run.result = results.get(run.sessionId) || null;
-  return { now, catchUpActive, projects, health: deps.schedulerHealth ? deps.schedulerHealth() : { suspended: false, resultFailure: null } };
+  return { now, catchUpActive, projects, history: historyImport ? historyImport.status(projectPaths) : null, health: deps.schedulerHealth ? deps.schedulerHealth() : { suspended: false, resultFailure: null } };
 }
 
 module.exports = { buildScheduleList };
