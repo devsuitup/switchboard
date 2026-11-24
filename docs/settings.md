@@ -77,9 +77,9 @@ next release of the same or a higher version replaces it at quit.
 Builds run from source never check.
 
 Stable is the default channel. Turn on **Receive beta versions** and click
-**Save Settings** to include beta releases in future update checks. The same
-binary serves both channels; the release's GitHub pre-release status decides
-whether it is beta. Turning the switch off never downgrades: an installed beta
+**Save Settings** to include beta releases in future update checks. A beta
+carries a version such as `0.1.0-beta.2`; when the final `0.1.0` comes out,
+beta installs are offered it like stable ones. Turning the switch off never downgrades: an installed beta
 stays in place until a newer stable version is available. A beta that was
 already downloaded before you turned the switch off still installs at the next
 quit. The SQLite cache

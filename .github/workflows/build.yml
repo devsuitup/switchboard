@@ -98,8 +98,26 @@ jobs:
           if-no-files-found: ignore
           retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
 
+  # see docs/releasing.md ("The tag check")
+  release-tag:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check the tag against its version and its last beta
+        run: node scripts/check-release-tag.js "$GITHUB_REF_NAME"
+
   publish:
-    needs: build
+    needs: [build, release-tag]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -133,8 +151,12 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           # The tag that precedes this one on this tag's own history, not the
-          # repository's newest tag.
-          PREV_TAG="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          # repository's newest tag; a final release compares with the previous
+          # final, skipping its own betas.
+          case "$TAG" in
+            *-*) PREV_TAG="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)" ;;
+            *) PREV_TAG="$(git describe --tags --abbrev=0 --exclude '*-*' "${TAG}^" 2>/dev/null || true)" ;;
+          esac
           node scripts/changelog-section.js "$TAG" > release-notes.md
           if [ -n "$PREV_TAG" ]; then
             echo >> release-notes.md

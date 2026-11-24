@@ -866,9 +866,10 @@ applies its channel to `autoUpdater.allowPrerelease` immediately. Startup
 applies it before scheduling update checks and logs `stable` or `beta`.
 Automatic downloads remain controlled separately by `autoUpdate`; manual
 checks use the same channel. No downgrade is enabled because the SQLite cache
-only migrates forward. Release promotion changes GitHub's pre-release flag
-without changing the version or binary, so the installed version alone cannot
-reliably identify a beta for the optional About indicator.
+only migrates forward. Since #1199 a beta is versioned `X.Y.Z-beta.N` and
+its final is rebuilt as `X.Y.Z`, so the installed version identifies a beta;
+releases before 0.1.0 were promoted by flag and do not. Channel mechanics are
+in [releasing.md](../../docs/releasing.md#update-channels).
 
 ### File panel (IDE mode)
 

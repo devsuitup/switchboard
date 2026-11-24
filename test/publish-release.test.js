@@ -21,6 +21,9 @@ const GH_STUB = `#!/bin/sh
 printf '%s\\t' "$@" >> "$GH_STUB_LOG"
 printf '\\n' >> "$GH_STUB_LOG"
 if [ "$1" = api ]; then
+  case "$5" in
+    *prerelease*) printf '%s\\n' "$GH_STUB_STATE"; exit 0 ;;
+  esac
   case "$GH_STUB_MODE" in
     missing) exit 0 ;;
     draft) echo true; exit 0 ;;
@@ -32,6 +35,8 @@ elif [ "$1 $2" = "release create" ]; then
     echo 'release already exists' >&2
     exit 1
   fi
+  exit 0
+elif [ "$1 $2" = "release edit" ]; then
   exit 0
 elif [ "$1 $2" = "release upload" ]; then
   if [ "$GH_STUB_FAIL_ONCE" = 1 ] && [ ! -f "$GH_STUB_RETRY_FILE" ]; then
@@ -71,6 +76,7 @@ function runRelease(t, mode, failOnce = false, draftValue = 'false', envOverride
     RETRY_DELAY: '0',
     GH_STUB_MODE: mode,
     GH_STUB_DRAFT: draftValue,
+    GH_STUB_STATE: 'true false',
     GH_STUB_LOG: shellPath(log),
     GH_STUB_FAIL_ONCE: failOnce ? '1' : '0',
     GH_STUB_RETRY_FILE: shellPath(path.join(temp, 'retried')),
@@ -107,14 +113,46 @@ test('given a missing release, publishing creates a draft and uploads both asset
   const result = runRelease(t, 'missing');
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.calls.map((args) => args.slice(0, 2)), [
-    ['api', '--paginate'], ['release', 'create'], ['release', 'upload'], ['release', 'upload'],
+    ['api', '--paginate'], ['release', 'create'], ['api', '--paginate'], ['release', 'upload'], ['release', 'upload'],
   ]);
   assert.deepEqual(result.calls[0], [
     'api', '--paginate', `repos/${REPOSITORY}/releases?per_page=100`, '--jq',
     `.[] | select(.tag_name == "${TAG}") | .draft`,
   ]);
-  assert.deepEqual(result.calls[1], ['release', 'create', TAG, '--draft', '--title', '0.1.0', '--notes', '', '--repo', REPOSITORY]);
+  assert.deepEqual(result.calls[1], ['release', 'create', TAG, '--draft', '--prerelease=false', '--title', '0.1.0', '--notes', '', '--repo', REPOSITORY]);
+  assert.deepEqual(result.calls[2], [
+    'api', '--paginate', `repos/${REPOSITORY}/releases?per_page=100`, '--jq',
+    `.[] | select(.tag_name == "${TAG}") | "\\(.draft) \\(.prerelease)"`,
+  ]);
   assertUploads(result, ['one.zip', 'two.exe']);
+});
+
+test('given a beta tag, publishing creates the draft as a pre-release and checks it reads back so', (t) => {
+  if (!requireBash(t)) return;
+  const tag = 'v0.1.0-beta.2';
+  const result = runRelease(t, 'missing', false, 'false', { GITHUB_REF_NAME: tag, GH_STUB_STATE: 'true true' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(result.calls[1], ['release', 'create', tag, '--draft', '--prerelease=true', '--title', '0.1.0-beta.2', '--notes', '', '--repo', REPOSITORY]);
+  assert.equal(result.calls.filter((args) => args[1] === 'upload').length, 2);
+});
+
+test('given an existing draft, publishing sets its pre-release flag from the tag', (t) => {
+  if (!requireBash(t)) return;
+  for (const [tag, flag] of [['v0.1.0-beta.1', 'true'], [TAG, 'false']]) {
+    const result = runRelease(t, 'draft', false, 'false', { GITHUB_REF_NAME: tag, GH_STUB_STATE: `true ${flag}` });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.deepEqual(result.calls[1], ['release', 'edit', tag, `--prerelease=${flag}`, '--repo', REPOSITORY]);
+  }
+});
+
+test('given a draft that does not read back as a draft with the expected flag, publishing uploads nothing', (t) => {
+  if (!requireBash(t)) return;
+  for (const [tag, state] of [[TAG, 'true true'], ['v0.1.0-beta.1', 'true false'], [TAG, 'false false'], [TAG, '']]) {
+    const result = runRelease(t, 'missing', false, 'false', { GITHUB_REF_NAME: tag, GH_STUB_STATE: state });
+    assert.equal(result.status, 1, `${tag} read back as '${state}'`);
+    assert.match(result.stdout, /reads back as draft\/prerelease .*refusing to upload/);
+    assert.deepEqual(result.calls.filter((args) => args[1] === 'upload'), []);
+  }
 });
 
 test('given a draft, publishing uploads both assets without creating a second draft', (t) => {
@@ -123,7 +161,7 @@ test('given a draft, publishing uploads both assets without creating a second dr
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /draft .* already exists; proceeding to asset upload/);
   assert.deepEqual(result.calls.map((args) => args.slice(0, 2)), [
-    ['api', '--paginate'], ['release', 'upload'], ['release', 'upload'],
+    ['api', '--paginate'], ['release', 'edit'], ['api', '--paginate'], ['release', 'upload'], ['release', 'upload'],
   ]);
   assertUploads(result, ['one.zip', 'two.exe']);
 });
@@ -180,8 +218,9 @@ test('given another repository, publishing reads and writes that repository', (t
   const repository = 'another-owner/release-target';
   const result = runRelease(t, 'missing', false, 'false', { GITHUB_REPOSITORY: repository });
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.calls[0][2], `repos/${repository}/releases?per_page=100`);
-  for (const call of result.calls.slice(1)) {
-    assert.deepEqual(call.slice(-2), ['--repo', repository]);
+  for (const call of result.calls) {
+    if (call[0] === 'api') assert.equal(call[2], `repos/${repository}/releases?per_page=100`);
+    else assert.deepEqual(call.slice(-2), ['--repo', repository]);
   }
+  assert.equal(result.calls.filter((call) => call[0] === 'api').length, 2);
 });
