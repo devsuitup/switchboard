@@ -24,7 +24,11 @@ let schedulesProject = null;
 let schedulesReloadTimer = null;
 let schedulesReloadMaxTimer = null;
 let schedulesPendingFocus = null;
+let schedulesPendingTopFocus = null;
 const schedulesActions = new Map();
+let schedulesData = null;
+let schedulesLoadError = null;
+let schedulesInFlight = null;
 
 function setSchedulesVisible(visible) {
   schedulesVisible = visible;
@@ -34,7 +38,12 @@ function setSchedulesVisible(visible) {
   schedulesReloadTimer = null;
   clearTimeout(schedulesReloadMaxTimer);
   schedulesReloadMaxTimer = null;
-  if (!visible) { schedulesRequest++; schedulesProject = null; schedulesPendingFocus = null; return; }
+  if (!visible) { schedulesRequest++; schedulesProject = null; schedulesPendingFocus = null; schedulesPendingTopFocus = null; return; }
+  if (!schedulesData && !schedulesLoadError) {
+    const container = document.getElementById('schedules-content');
+    container?.replaceChildren();
+    if (container) scheduleText(container, 'plans-empty', 'Loading schedules…').setAttribute('role', 'status');
+  }
   loadSchedules();
   scheduleSchedulesRefresh();
 }
@@ -63,15 +72,97 @@ async function loadSchedules() {
   clearTimeout(schedulesReloadMaxTimer);
   schedulesReloadMaxTimer = null;
   const request = ++schedulesRequest;
-  try {
-    const data = await window.api.listSchedules();
-    if (request !== schedulesRequest) return;
-    renderSchedules(data);
-    clearAppNotice('listSchedules');
-  } catch (error) {
-    if (request !== schedulesRequest) return;
-    showAppNotice({ id: 'listSchedules', kind: 'error', message: `Schedules could not be loaded: ${error?.message || error}. Reopen the Schedules tab to retry.` });
+  const load = (async () => {
+    try {
+      const data = await window.api.listSchedules();
+      if (request !== schedulesRequest) return;
+      schedulesLoadError = null;
+      renderSchedules(data);
+      clearAppNotice('listSchedules');
+    } catch (error) {
+      if (request !== schedulesRequest) return;
+      schedulesLoadError = String(error?.message || error);
+      renderSchedulesLoadError();
+      showAppNotice({ id: 'listSchedules', kind: 'error', message: `Schedules could not be loaded: ${schedulesLoadError}. Use Retry in the Schedules tab.`,
+        actionLabel: 'Retry', dismissOnAction: false, onAction: () => { document.querySelector('.sidebar-tab[data-tab="schedules"]')?.click(); retrySchedules(); } });
+    } finally {
+      if (schedulesInFlight === load) schedulesInFlight = null;
+    }
+  })();
+  schedulesInFlight = load;
+  return load;
+}
+
+function retrySchedules() {
+  if (schedulesInFlight) return schedulesInFlight;
+  const container = document.getElementById('schedules-content');
+  const focused = document.activeElement;
+  const row = focused?.matches('.schedule-retry-btn') ? focused.closest('.schedule-item') : null;
+  const top = container && !row ? scheduleTopFocus(container) : null;
+  const pending = loadSchedules();
+  for (const button of document.querySelectorAll('.schedule-retry-btn')) button.disabled = true;
+  if (row) focusScheduleControl(row.dataset.filepath, focused.dataset.scheduleControl);
+  else if (top?.control === 'schedule-retry-btn') {
+    schedulesPendingTopFocus = top;
+    container.tabIndex = -1;
+    container.focus({ preventScroll: true });
   }
+  return pending;
+}
+
+function scheduleTopFocus(container) {
+  const focused = document.activeElement;
+  if (focused === container) return schedulesPendingTopFocus;
+  if (!container.contains(focused) || focused.closest('.schedule-item') || !focused.dataset.scheduleControl) return null;
+  return { control: focused.dataset.scheduleControl, projectPath: focused.closest('.schedule-project')?.dataset.projectPath ?? null };
+}
+
+function restoreScheduleTopFocus(container, target) {
+  schedulesPendingTopFocus = null;
+  const match = [...container.querySelectorAll('[data-schedule-control]')].find(el => !el.closest('.schedule-item')
+    && el.dataset.scheduleControl === target.control && (el.closest('.schedule-project')?.dataset.projectPath ?? null) === target.projectPath);
+  const create = container.querySelector('.schedule-create-btn');
+  const next = match && !match.disabled ? match : !match && create && !create.disabled ? create : null;
+  if (next) {
+    next.focus({ preventScroll: true });
+    return;
+  }
+  if (match) schedulesPendingTopFocus = target;
+  container.tabIndex = -1;
+  container.focus({ preventScroll: true });
+}
+
+function scheduleRetryButton(parent) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'schedule-retry-btn settings-action-btn';
+  button.dataset.scheduleControl = 'schedule-retry-btn';
+  button.textContent = 'Retry';
+  button.addEventListener('click', () => retrySchedules());
+  parent.appendChild(button);
+  return button;
+}
+
+function renderSchedulesLoadError() {
+  const container = document.getElementById('schedules-content');
+  if (!container || !schedulesLoadError) return;
+  const top = scheduleTopFocus(container);
+  container.querySelector('.schedule-load-error')?.remove();
+  if (!schedulesData) container.replaceChildren();
+  const box = document.createElement('div');
+  box.className = 'schedule-load-error';
+  box.setAttribute('role', 'alert');
+  scheduleText(box, 'schedule-problems', schedulesData
+    ? `Showing the list last loaded at ${new Date(schedulesData.now).toLocaleTimeString()}; the latest refresh failed: ${schedulesLoadError}.`
+    : `Schedules could not be loaded: ${schedulesLoadError}.`);
+  scheduleRetryButton(box);
+  const create = container.querySelector('.schedule-create-btn');
+  if (create) create.after(box);
+  else container.prepend(box);
+  for (const button of container.querySelectorAll('.schedule-retry-btn')) button.disabled = false;
+  if (top) restoreScheduleTopFocus(container, top);
+  else schedulesPendingTopFocus = null;
+  restorePendingScheduleFocus();
 }
 
 function showSchedules(projectPath) {
@@ -136,26 +227,46 @@ function renderSchedules(data) {
   const focusedRow = focused?.closest('.schedule-item');
   const focusedPath = container.contains(focusedRow) ? focusedRow.dataset.filepath : null;
   const focusedControl = focused?.dataset.scheduleControl || (focusedPath === schedulesPendingFocus?.filePath ? schedulesPendingFocus.control : null);
+  const topFocus = focusedPath ? null : scheduleTopFocus(container);
   const projectFocus = schedulesProject;
   schedulesProject = null;
+  schedulesPendingTopFocus = null;
+  schedulesData = data;
   container.replaceChildren();
   const create = document.createElement('button');
   create.type = 'button';
-  create.className = 'schedule-create-btn';
+  create.className = 'schedule-create-btn settings-action-btn';
+  create.dataset.scheduleControl = 'schedule-create-btn';
   create.textContent = 'Create schedule';
-  create.disabled = !data.projects.some(project => !project.archived);
+  const creatable = data.projects.some(project => !project.archived);
+  create.disabled = !creatable;
   create.addEventListener('click', () => openScheduleCreateForm(data.projects));
   container.appendChild(create);
+  const prerequisite = !data.projects.length ? 'No registered project. Add a local project from Sessions, then return here.'
+    : !creatable ? 'Every registered project is archived. Unarchive a project in Settings → Archived, then return here.' : null;
+  if (prerequisite) {
+    const hint = scheduleText(container, 'schedule-prerequisite', prerequisite);
+    hint.id = 'schedule-create-prerequisite';
+    create.setAttribute('aria-describedby', hint.id);
+    create.title = prerequisite;
+  }
   scheduleText(container, 'schedule-help', 'Runs before v0.0.90 carry no schedule marker and are not listed. Runs before results were kept, runs of another instance and runs alive when Switchboard closes have no result recorded.');
   let count = 0;
   for (const project of data.projects) {
-    if (!project.schedules.length) continue;
+    if (!project.schedules.length && !project.scanError) continue;
     count += project.schedules.length;
     const group = document.createElement('section');
     group.className = 'schedule-project';
     group.dataset.projectPath = project.projectPath;
     scheduleText(group, 'schedule-project-title', project.shortName);
     scheduleText(group, 'schedule-path', project.projectPath);
+    if (project.scanError) {
+      const scan = document.createElement('div');
+      scan.className = 'schedule-scan-error';
+      scheduleText(scan, 'schedule-problems', `Could not read .claude/commands${project.scanError.code ? ` (${project.scanError.code})` : ''}: ${project.scanError.message}. Its schedules are not listed. Check the folder's permissions and path, then Retry.`);
+      scheduleRetryButton(scan);
+      group.appendChild(scan);
+    }
     for (const schedule of project.schedules) {
       const item = buildScheduleItem(project, schedule, data);
       item.querySelector('details').open = openHistory.get(schedule.filePath) || false;
@@ -168,7 +279,7 @@ function renderSchedules(data) {
       group.scrollIntoView?.({ block: 'start' });
     }
   }
-  if (!count) scheduleText(container, 'plans-empty', 'No schedules found.');
+  if (!count && creatable && !data.projects.some(project => project.scanError)) scheduleText(container, 'plans-empty', 'No schedules found. Use Create schedule to add one.');
   if (!projectFocus && focusedPath && focusedControl) {
     const currentRows = [...container.querySelectorAll('.schedule-item')];
     const target = currentRows.find(row => row.dataset.filepath === focusedPath)
@@ -180,6 +291,7 @@ function renderSchedules(data) {
       container.focus({ preventScroll: true });
     }
   } else schedulesPendingFocus = null;
+  if (!projectFocus && topFocus) restoreScheduleTopFocus(container, topFocus);
   const paths = new Set(data.projects.flatMap(project => project.schedules.map(schedule => schedule.filePath)));
   for (const [filePath, state] of schedulesActions) {
     if (!paths.has(filePath) && state.run !== 'running' && !state.toggling && !state.deleting) schedulesActions.delete(filePath);
@@ -314,7 +426,14 @@ function focusScheduleControl(filePath, controlName) {
   const control = [...(row?.querySelectorAll('[data-schedule-control]') || [])].find(el => el.dataset.scheduleControl === controlName);
   schedulesPendingFocus = control?.disabled ? { filePath, control: controlName } : null;
   if (control?.disabled) row.focus({ preventScroll: true });
-  else control?.focus({ preventScroll: true });
+  else if (control) control.focus({ preventScroll: true });
+  else {
+    const container = document.getElementById('schedules-content');
+    const create = container?.querySelector('.schedule-create-btn');
+    const next = row?.querySelector('.schedule-actions button:not(:disabled)') || (create && !create.disabled ? create : container);
+    if (next === container && container) container.tabIndex = -1;
+    next?.focus({ preventScroll: true });
+  }
 }
 
 function restorePendingScheduleFocus() {
@@ -354,15 +473,18 @@ function buildScheduleItem(project, schedule, data) {
   item.dataset.filepath = schedule.filePath;
   scheduleText(item, 'schedule-name', schedule.name);
   scheduleText(item, 'schedule-path', schedule.filePath);
-  scheduleText(item, 'schedule-cron', `${schedule.cronText} · ${schedule.cron}`);
+  const readError = schedule.readError;
+  scheduleText(item, 'schedule-cron', readError ? 'Schedule unknown' : `${schedule.cronText} · ${schedule.cron}`);
   const fatal = schedule.problems.filter(p => !p.startsWith('slug shared with '));
   const state = project.archived ? 'Suspended — project archived'
-    : !schedule.enabled ? 'Disabled'
-      : fatal.length ? `Never runs: ${fatal.join('; ')}`
-        : schedule.nextRunMs === null ? 'No run within a year'
-          : `Next run: ${scheduleTime(schedule.nextRunMs, data.now)}`;
+    : readError ? 'Unknown: the file could not be read'
+      : !schedule.enabled ? 'Disabled'
+        : fatal.length ? `Never runs: ${fatal.join('; ')}`
+          : schedule.nextRunMs === null ? 'No run within a year'
+            : `Next run: ${scheduleTime(schedule.nextRunMs, data.now)}`;
   scheduleText(item, 'schedule-state', state);
   if (schedule.problems.length) scheduleText(item, 'schedule-problems', schedule.problems.join('; '));
+  if (readError) scheduleText(item, 'schedule-problems', `${readError.message}. Check the file's permissions and path, then Retry.`);
   if (schedule.linked) scheduleText(item, 'schedule-problems', 'linked file: edit it at its source');
   if (schedule.catchUp) {
     scheduleText(item, 'schedule-catch-up', !data.catchUpActive ? 'catch-up off in this instance'
@@ -370,13 +492,14 @@ function buildScheduleItem(project, schedule, data) {
   }
   const actions = document.createElement('div');
   actions.className = 'schedule-actions';
-  const unread = schedule.problems.some(p => p.startsWith('front matter not read'));
+  const unread = !!readError || schedule.problems.some(p => p.startsWith('front matter not read'));
+  const unreadReason = readError ? 'the file could not be read' : 'front matter not read';
   const actionState = scheduleActionState(schedule.filePath);
   if (!project.known) scheduleText(item, 'schedule-problems', 'not a known project');
   const action = (cls, label, disabled, reason, handler) => {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = cls;
+    btn.className = `${cls} settings-action-btn`;
     btn.dataset.scheduleControl = cls;
     btn.dataset.unavailable = String(disabled);
     btn.dataset.reason = disabled ? reason : label;
@@ -388,10 +511,10 @@ function buildScheduleItem(project, schedule, data) {
     return btn;
   };
   const play = action('schedule-run-btn', 'Run now', !project.known || unread,
-    !project.known ? 'not a known project' : 'front matter not read', () => runScheduleFromTab(schedule, play));
+    !project.known ? 'not a known project' : unreadReason, () => runScheduleFromTab(schedule, play));
   updateScheduleRunButtons(schedule.filePath, play);
-  const toggle = action('schedule-toggle-btn', schedule.enabled ? 'Turn off' : 'Turn on', schedule.linked || unread,
-    schedule.linked ? 'linked file: edit it at its source' : 'front matter not read', async event => {
+  const toggle = action('schedule-toggle-btn', schedule.enabled === null ? 'Turn on or off' : schedule.enabled ? 'Turn off' : 'Turn on', schedule.linked || unread,
+    schedule.linked ? 'linked file: edit it at its source' : unreadReason, async event => {
       const btn = event.currentTarget;
       if (actionState.toggling) return;
       actionState.toggling = true;
@@ -416,7 +539,7 @@ function buildScheduleItem(project, schedule, data) {
       }
     });
   toggle.disabled ||= !!actionState.toggling;
-  action('schedule-open-btn', 'Open', !project.known, 'not a known project', async () => {
+  action('schedule-open-btn', 'Open', !project.known || !!readError, !project.known ? 'not a known project' : unreadReason, async () => {
     const id = `OpenSchedule:${schedule.filePath}`;
     try {
       const content = await window.api.readMemory(schedule.filePath);
@@ -431,6 +554,7 @@ function buildScheduleItem(project, schedule, data) {
   const remove = action('schedule-delete-btn', 'Delete', schedule.linked,
     'linked file: edit it at its source', () => deleteScheduleFromTab(schedule));
   remove.disabled ||= !!actionState.deleting;
+  if (readError) scheduleRetryButton(actions);
   item.appendChild(actions);
   const history = document.createElement('details');
   const summary = document.createElement('summary');
@@ -441,7 +565,7 @@ function buildScheduleItem(project, schedule, data) {
   for (const run of runs) {
     const row = document.createElement('button');
     row.type = 'button';
-    row.className = 'schedule-history-run';
+    row.className = 'schedule-history-run settings-action-btn';
     row.dataset.scheduleControl = `history:${run.sessionId}`;
     row.textContent = `${new Date(run.created).toLocaleString()} — ${scheduleOutcome(run)}`;
     row.addEventListener('click', () => openScheduleRun(project, schedule, run));
@@ -449,8 +573,10 @@ function buildScheduleItem(project, schedule, data) {
   }
   const sessions = document.createElement('button');
   sessions.type = 'button';
+  sessions.className = 'schedule-history-sessions settings-action-btn';
   sessions.dataset.scheduleControl = 'sessions';
   sessions.textContent = 'Show history in Sessions';
+  sessions.disabled = !!readError;
   sessions.addEventListener('click', () => showScheduleSessions(project.projectPath, schedule.slug, schedule.runs.map(run => run.sessionId)));
   history.appendChild(sessions);
   item.appendChild(history);

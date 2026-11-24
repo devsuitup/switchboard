@@ -29,7 +29,8 @@ async function buildScheduleList(deps) {
   const now = clock();
   const nowMinute = Math.floor(now / MINUTE_MS) * MINUTE_MS;
   const projectPaths = await scheduleProjects().list();
-  const files = listScheduleFiles(projectPaths, deps);
+  const scanErrors = new Map();
+  const files = listScheduleFiles(projectPaths, { ...deps, onScanError: (projectPath, error) => scanErrors.set(projectPath, { code: error.code || null, message: error.message }) });
   let state = new Map();
   if (catchUpActive) {
     try { state = readScheduleStateOnly(stateDir); } catch { state = null; }
@@ -47,7 +48,7 @@ async function buildScheduleList(deps) {
     }
     const schedules = [];
     for (const schedule of files.filter(s => s.projectPath === projectPath)) {
-      const rows = [...cached.values()].filter(({ row }) => row.scheduleSlug === schedule.slug)
+      const rows = [...cached.values()].filter(({ row }) => schedule.slug !== null && row.scheduleSlug === schedule.slug)
         .sort((a, b) => Date.parse(b.row.created) - Date.parse(a.row.created)).slice(0, 20);
       const runs = [];
       for (const { row, folder } of rows) {
@@ -62,11 +63,11 @@ async function buildScheduleList(deps) {
         const handled = !recorded || recorded.handled > nowMinute ? nowMinute - MINUTE_MS : recorded.handled;
         catchUpDueMs = latestCronMatch(schedule.cron, Math.max(handled, nowMinute - 7 * 24 * 60 * MINUTE_MS), nowMinute);
       }
-      schedules.push({ ...schedule, cronText: describeCron(schedule.cron), nextRunMs: runnable && schedule.cron ? nextCronMatch(schedule.cron, now) : null,
+      schedules.push({ ...schedule, cronText: schedule.cron === null ? null : describeCron(schedule.cron), nextRunMs: runnable && schedule.cron ? nextCronMatch(schedule.cron, now) : null,
         catchUpDueMs, runs });
     }
     projects.push({ projectPath, shortName: path.basename(projectPath), archived,
-      sandboxed: resolveScheduleSandbox(projectPath, getSetting, defaultSandbox), known: isKnownProject(projectPath), schedules });
+      sandboxed: resolveScheduleSandbox(projectPath, getSetting, defaultSandbox), known: isKnownProject(projectPath), scanError: scanErrors.get(projectPath) || null, schedules });
   }
   const runs = projects.flatMap(project => project.schedules.flatMap(schedule => schedule.runs));
   let results;

@@ -567,9 +567,27 @@ Cron descriptions use fixed-interval wording only for steps that divide sixty.
 Other steps retain their raw expression (`*/45` fires at :00 and :45).
 Numeric clock fields are formatted by value, so `007 09 * * *` says `daily at 9:07`.
 
+### Unreadable definitions (#1237)
+
+A schedule file whose read fails with anything but `ENOENT` stays listed by
+`file` and `filePath` with `readError: { code, message }`, a
+`could not read the file (<code>)` problem, `name` set to the file name, and `null` for
+the metadata only its bytes could give: `slug`, `enabled`, `cron`,
+`cronText`, `prompt`, `cli`, `catchUp`, `nextRunMs`, `catchUpDueMs`. Its `runs`
+are empty (no slug to match) and it takes no part in the shared-slug check.
+`ENOENT` between enumeration and read is a deletion race and the file is
+omitted. A commands directory read failure other than `ENOENT` reaches
+`buildScheduleList` through the `onScanError(projectPath, error)` option and
+becomes the project's `scanError: { code, message }` (otherwise `null`); an
+absent directory is an ordinary empty project. Listing still writes nothing.
+`setListedScheduleEnabled` refuses a `readError` row; `deleteListedScheduleFile`
+keeps its exact-listed-path and link checks, so an unreadable file can be
+deleted after the usual confirmation.
+
 Tests: `test/schedule-list.test.js` (real disposable schedule, state and transcript
 files, main handler extracted into a VM with filename attribution; counts
-PROJECTS_DIR scans), `test/schedule-next-run.test.js` (descriptions and DST).
+PROJECTS_DIR scans; EACCES/ENOENT read and readdir failures injected on
+`fs`), `test/schedule-next-run.test.js` (descriptions and DST).
 
 
 ## Schedule creation (#792, slice C)
@@ -669,7 +687,25 @@ Run now retains `RunSchedule:<filePath>` and the persistent error contract;
 exit notices still subscribe once from memory-workfiles-view.js. Every scheduled-run
 exit, including success, queues the same visible-tab reload before displaying any
 failure notice. Open checks a
-nonempty read-memory response before opening memoryPanel. History resolves a
+nonempty read-memory response before opening memoryPanel.
+
+Load states (#1237): before the first successful listing the tab shows
+`Loading schedules…`. A failed load keeps the `listSchedules` notice (its
+Retry action opens the tab and retries) and shows a `.schedule-load-error`
+alert with a Retry button in the tab: alone on a first load, or above the
+last successful rows, labelled with their load time, after a refresh failure.
+`retrySchedules` is single-flight: it returns the in-flight load and disables
+every Retry button. The request counter still discards older and hidden-tab
+responses. Success clears the notice and the local error. With no registry
+project the tab says to add a local project from Sessions; with only archived
+projects, to unarchive one in Settings → Archived; either message is the
+disabled Create button's title and description. `No schedules found. Use
+Create schedule to add one.` appears only when a project can take a schedule
+and no project has a `scanError`. A `scanError` project keeps its group with
+the error, a permission/path hint and Retry. A `readError` row shows
+`Schedule unknown`, `Unknown: the file could not be read`, the hint and Retry;
+Run now, Turn on/off, Open and Show history in Sessions are disabled, Delete
+is not. History resolves a
 fresh indexed session and goes through openSession, preserving resume guards.
 
 `set-schedule-enabled` requires a boolean and exact equality with a path from
@@ -803,6 +839,38 @@ pending focus target across renders. Re-enabling restores it while focus stays
 on that row; a newer focus choice takes precedence. The on/off toggle uses this
 same focus hand-off as soon as its focused button becomes disabled. An unmatched project
 focus request is consumed by that render. Guard refusal reasons are visible row text.
+
+Top-level focus (#1238): the controls outside rows carry a `data-schedule-control`
+identity too: Create schedule (`schedule-create-btn`), the load-error Retry and
+each project's scan-error Retry (`schedule-retry-btn`, told apart by the
+enclosing `.schedule-project` path, none for the load error). A render, and a
+failed reload's `renderSchedulesLoadError`, read the focused identity first
+(`scheduleTopFocus`) and refocus its replacement (`restoreScheduleTopFocus`).
+A focused Retry that no longer exists after the render hands focus to Create,
+or to the list container when Create is disabled. Retry disables every Retry
+button while its load is in flight: a focused top-level Retry first moves
+focus to the list container and becomes `schedulesPendingTopFocus`, a focused
+row Retry hands focus to its row through `focusScheduleControl`. The pending
+target applies only while the container still has focus, so focus moved
+elsewhere during the request stays there. A failed reload re-enables the Retry
+buttons it keeps and restores both pending targets, the row one through
+`restorePendingScheduleFocus` (only while focus is still parked on that row).
+When a render keeps the row but not its focused control (a recovered row loses
+its Retry), `focusScheduleControl` falls back to the row's first enabled action,
+then to Create, then to the list container. Hiding the tab clears the pending target. Nothing here
+touches focus outside `#schedules-content`, so the create form keeps its
+fields and focus across background refreshes, and closing it focuses the
+current Create button.
+
+Sizes (#1238): every button of the tab uses the shared `.settings-action-btn`
+class, scoped in `#schedules-content` to a smaller padding, `max-width: 100%`
+and wrapping text. `.schedule-actions` wraps, and `#schedules-content` sets
+`overflow-wrap: anywhere` so long paths, names and refusals break inside the
+sidebar. Keyboard focus keeps the global `button:focus-visible` outline.
+`e2e/schedules.spec.js` checks the supported sidebar widths (200, 340 and
+600 px) in both themes, at 800x500 and 1400x900, at 100% and 150% zoom, with a
+stubbed `list-schedules` fixture, and checks focus across refreshes and the
+create form's reach in the small zoomed window; see `docs/e2e.md`.
 Next-run wording uses minutes below an hour, then today's time, tomorrow's time,
 a weekday within the following week, or a date for later runs.
 

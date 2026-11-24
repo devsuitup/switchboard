@@ -245,6 +245,16 @@ also refreshes the open Agent Files list. No search is offered here. Invalid fil
 unknown projects cannot be run or opened. Archived projects stay suspended even
 if their schedules are enabled.
 
+A schedule file Switchboard cannot read (for example, a permissions error) stays
+in the list with the error; its schedule is shown as unknown, and only
+**Delete** and **Retry** are available until a read succeeds. A project whose
+`.claude/commands` folder cannot be read shows the error and **Retry** instead
+of an empty list. Check the file or folder permissions and path, then press
+**Retry**. If the list itself cannot be loaded, the tab says so with **Retry**;
+after a failed refresh it keeps the last loaded list and labels it with its
+time. With no registered project, add a local project from Sessions first;
+with only archived projects, unarchive one in **Settings → Archived**.
+
 A running task says **Running**. Recorded outcomes show the exit code, signal,
 launch refusal or spawn failure and are kept across restarts. Runs without a
 record say **No result recorded** with a transcript hint, including **replied;
