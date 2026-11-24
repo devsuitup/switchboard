@@ -44,7 +44,9 @@ function checkReleaseTag({ tag, tags, readFile, changedFiles }) {
   if (parsed.beta !== null) return { ok: true, message: `${tag}: beta tag, package.json at ${parsed.version}` };
 
   const beta = lastBetaTag(tags, parsed.base);
-  if (!beta) return fail(`no v${parsed.base}-beta.N tag: a final release is rebuilt from its last beta, so tag a beta first`);
+  if (!beta) {
+    return { ok: true, message: `${tag}: final, package.json at ${parsed.version}; no v${parsed.base}-beta.N tag, so no beta comparison` };
+  }
   const files = changedFiles(beta, tag);
   const others = files.filter((f) => !ALLOWED_FINAL_FILES.includes(f));
   if (others.length > 0) {
@@ -81,6 +83,7 @@ function git(args) {
 }
 
 function readFileAt(ref, file) {
+  git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
   try {
     return git(['show', `${ref}:${file}`]);
   } catch {

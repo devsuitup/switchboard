@@ -90,11 +90,25 @@ test('a final that changes any other file than the three allowed fails, naming t
   assert.doesNotMatch(result.message, /^ {2}CHANGELOG\.md$/m);
 });
 
-test('a final with no beta tag of its version fails', () => {
-  const repo = fakeRepo({ 'v0.0.109': BETA2_FILES, 'v0.1.0': FINAL_FILES });
-  const result = checkReleaseTag({ tag: 'v0.1.0', ...repo });
+test('a final with no beta tag of its version passes without a beta comparison, and says so', () => {
+  const unfolded = { ...FINAL_FILES, 'CHANGELOG.md': changelog('## v0.1.0 — 2026-11-26', '## v0.1.0-beta.2 — 2026-11-25') };
+  for (const files of [FINAL_FILES, unfolded]) {
+    const result = checkReleaseTag({
+      tag: 'v0.1.0',
+      tags: ['v0.0.109', 'v0.1.1-beta.1', 'v0.1.0-rc.1', 'v0.1.0'],
+      readFile: (ref, file) => (ref === 'v0.1.0' ? files[file] ?? null : assert.fail(`read ${ref}:${file}`)),
+      changedFiles: () => assert.fail('no beta tree to compare'),
+    });
+    assert.equal(result.ok, true, result.message);
+    assert.match(result.message, /no v0\.1\.0-beta\.N tag/);
+  }
+});
+
+test('a final with no beta tag of its version still fails on its package.json version', () => {
+  const repo = fakeRepo({ 'v0.0.110': FINAL_FILES });
+  const result = checkReleaseTag({ tag: 'v0.0.110', ...repo });
   assert.equal(result.ok, false);
-  assert.match(result.message, /no v0\.1\.0-beta\.N tag/);
+  assert.match(result.message, /carries version 0\.1\.0, not 0\.0\.110/);
 });
 
 test('a final whose package.json or lock changes more than the version fails', () => {
@@ -181,6 +195,23 @@ test('end to end: a final tag on a bump-only commit passes, and one on a code ch
   assert.equal(fail.status, 1, fail.out);
   assert.match(fail.out, /::error::/);
   assert.match(fail.out, /main\.js/);
+});
+
+test('end to end: a plain final with no beta of its version passes and logs that no beta was compared', (t) => {
+  const repo = makeRepo(t);
+  repo.commit({ 'main.js': 'c\n', 'package.json': pkg('0.0.110'), 'package-lock.json': lock('0.0.110'),
+    'CHANGELOG.md': changelog('## v0.0.110 — 2026-11-26') }, 'chore(release): v0.0.110');
+  repo.git('tag', 'v0.0.110');
+  const result = run(repo, 'v0.0.110');
+  assert.equal(result.status, 0, result.out);
+  assert.match(result.out, /no v0\.0\.110-beta\.N tag/);
+});
+
+test('end to end: a tag that names no commit is a git failure, not a contract failure', (t) => {
+  const repo = makeRepo(t);
+  const result = run(repo, 'v9.9.9');
+  assert.equal(result.status, 2, result.out);
+  assert.match(result.out, /::error::.*v9\.9\.9/);
 });
 
 test('end to end: a missing tag argument is a usage error', (t) => {

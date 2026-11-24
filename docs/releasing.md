@@ -21,6 +21,12 @@ Every version ships twice (maintainer decision, #1199):
 No other tag shape is accepted: `-rc.N` and other identifiers strand beta
 installs ([Update channels](#update-channels)).
 
+The beta rule starts with the first beta of a version: a final with no
+`vX.Y.Z-beta.N` tag of its own version, as every release up to `v0.0.N` was,
+is checked for its tag shape and `package.json` version only. That keeps a
+plain final releasable; the next version, `0.1.0`, ships as `0.1.0-beta.1`
+first (maintainer decision, 2026-11-24).
+
 From the last beta tag until the final tag, `main` takes **only the release
 PR**. Anything else merged in between makes the final differ from the beta in
 code, the tag check fails, and the fix is another beta. The final is then cut
@@ -227,17 +233,25 @@ every tag, on each tag push, and `publish` needs it. It fails (exit 1) when:
 
 - the tag is not `vX.Y.Z` or `vX.Y.Z-beta.N` (N from 1, no leading zero);
 - `package.json` at the tag does not carry the tag's version;
-- for a final `vX.Y.Z`: no `vX.Y.Z-beta.N` tag exists; or
+- for a final `vX.Y.Z` with at least one `vX.Y.Z-beta.N` tag:
   `git diff --name-only --no-renames <last beta> <tag>` lists any file besides
   `CHANGELOG.md`, `package.json` and `package-lock.json`; or `package.json`
   or the lock differ from the beta's by more than their version fields; or
   the tag's `CHANGELOG.md` has no `## vX.Y.Z` section, or still has a
   `## vX.Y.Z-beta.N` one.
 
+A final with no beta tag of its version skips the third point (diff,
+package/lock comparison, changelog section and fold) and passes on the first
+two; the job
+logs `no vX.Y.Z-beta.N tag, so no beta comparison`. Betas of other versions do
+not count.
+
 The last beta is the highest N among the existing tags, compared as a number.
 The diff compares the two trees, whatever the history between them. Exit 2 is
-a usage error or git failure. `test/check-release-tag.test.js` covers each
-case and runs the script on a temporary repository.
+a usage error or a git failure, a tag that names no commit included; a file
+missing at an existing tag is a contract failure (exit 1).
+`test/check-release-tag.test.js` covers each case and runs the script on a
+temporary repository.
 
 ## Update channels
 

@@ -49,7 +49,14 @@ fails with a message instead of silently not starting a run.
 Node 22, full-history checkout without credentials, 10 minutes) running
 `scripts/check-release-tag.js`. It runs beside the matrix rather than before
 it, so a refused tag costs a build but adds no latency to an accepted one;
-`publish` needs `[build, release-tag]`. The script is dependency-free and
+`publish` needs `[build, release-tag]`. The beta comparison (diff, package
+and lock comparison, fold check) applies only when a `vX.Y.Z-beta.N` tag of
+the final's own version exists; without one the final passes on tag shape and
+`package.json` version and the log says no beta was compared. This keeps the
+plain `v0.0.N` path releasable: an unconditional "final needs a beta" rule
+blocked the next plain release (review F1 of #1231). `readFileAt` verifies the
+ref as a commit first, so an unknown tag exits 2 rather than reporting a null
+version. The script is dependency-free and
 reuses `src/main/app/changelog.js` for the fold check. The `package.json` and
 lock comparison strips `version` (and the lock's `packages[""].version`) and
 compares the rest as JSON, so a dependency change hidden in a "bump" fails.
