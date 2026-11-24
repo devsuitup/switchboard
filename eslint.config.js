@@ -207,6 +207,7 @@ const rendererCrossFileGlobals = {
   showSession: 'readonly',
   confirmAndStopSession: 'readonly',
   sendSessionToBackground: 'readonly',
+  harnessBackgroundReason: 'readonly',
   backgroundActionReason: 'readonly',
   activeSubagentsByParent: 'readonly',
   pollActiveSessions: 'readonly',
