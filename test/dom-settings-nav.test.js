@@ -520,6 +520,7 @@ function setup(t) {
     getHarnessModels: async () => [],
     getAppVersion: async () => '0.0.0',
   }, { get: (target, key) => target[key] || (() => Promise.resolve({})) });
+  w.api.mergeGlobalSettings = require('./fixtures/merge-global-settings.cjs')(w.api);
   loadAppFunctions(ctx, { functions: ['saveGlobalSettings'], declarations: ['_persistChain'] });
   loadAppFunctions(ctx, { sourcePath: path.join(root, 'public/sidebar.js'), functions: ['isProjectDeleting', 'projectDeletionKey', 'paintProjectDeletionBusy'], declarations: ['deletingProjectKeys', 'projectDeletionUnavailable'] });
   for (const file of ['setting-defaults.js', 'utils.js', 'app-notices.js', 'shortcuts.js', 'terminal-themes.js', 'remote-enrol-panel.js', 'archived-manager.js', 'settings-panel.js']) {
@@ -598,6 +599,17 @@ test('saving without a registered Codex harness preserves its enabled usage stat
   assert.deepEqual(applied, [], 'missing toggle must not disable renderer usage');
 });
 
+function holdPersistChain(h) {
+  const merge = h.w.api.mergeGlobalSettings;
+  let unblock;
+  h.w.api.mergeGlobalSettings = () => {
+    h.w.api.mergeGlobalSettings = merge;
+    return new Promise(resolve => { unblock = resolve; });
+  };
+  const held = h.w.saveGlobalSettings({});
+  return async () => { await settle(); unblock(); await held; await settle(); };
+}
+
 test('flushing a deferred enable refreshes Codex rows after persistence', async t => {
   const h = setup(t);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-deferred-'));
@@ -627,16 +639,14 @@ test('flushing a deferred enable refreshes Codex rows after persistence', async 
     return { limits: [{ kind: 'codex', windowMinutes: 300, short: '5h', label: 'Codex 5h', percent: 42 }] };
   };
   await h.open();
-  h.w.api.getSetting = async () => {
-    h.w.projectDeletionWritesBlocked = true;
-    return read();
-  };
+  const release = holdPersistChain(h);
   h.q('#sv-show-codex-usage').checked = true;
   h.q('#sv-save-btn').click();
   await settle();
+  h.w.projectDeletionWritesBlocked = true;
+  await release();
   assert.equal(read().showCodexUsage, false);
   assert.equal(h.q('[data-runtime="codex"]'), null);
-  h.w.api.getSetting = async () => read();
   h.w.projectDeletionWritesBlocked = false;
   h.w.flushDeferredProjectDeletionWrites();
   await settle();
@@ -951,12 +961,11 @@ test('a deferred normalized host save survives later edits and Cancel unchanged 
   h.q('.rh-alias').dispatchEvent(new h.w.Event('input', { bubbles: true }));
   h.q('.rh-label').value = ' Saved ';
   h.q('.rh-label').dispatchEvent(new h.w.Event('input', { bubbles: true }));
-  h.w.api.getSetting = async () => {
-    h.w.projectDeletionWritesBlocked = true;
-    return read();
-  };
+  const release = holdPersistChain(h);
   h.q('#sv-save-btn').click();
   await settle();
+  h.w.projectDeletionWritesBlocked = true;
+  await release();
   const patch = h.w.projectDeletionDeferredSettings.patch;
   const submitted = JSON.stringify(patch);
   assert.match(h.q('#sv-save-btn').textContent, /Applied/);
@@ -965,7 +974,6 @@ test('a deferred normalized host save survives later edits and Cancel unchanged 
   h.q('.rh-label').dispatchEvent(new h.w.Event('input', { bubbles: true }));
   h.q('#sv-cancel-btn').click();
   assert.equal(JSON.stringify(patch), submitted, 'Cancel must not mutate the queued save patch');
-  h.w.api.getSetting = read;
   h.w.projectDeletionWritesBlocked = false;
   h.w.flushDeferredProjectDeletionWrites();
   await settle();

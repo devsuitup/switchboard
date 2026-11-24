@@ -403,7 +403,7 @@
         <div class="settings-field">
           <div class="settings-field-info">
             <span class="settings-label">Schedules tab</span>
-            <div class="settings-description">Show the optional Schedules tab instead of schedule files in Agent Files. Off by default. Takes effect when saved, without a restart; scheduled tasks keep running either way.</div>
+            <div class="settings-description">Show the Schedules tab instead of schedule files in Agent Files. On by default; this setting will be removed in a later release. Takes effect when saved, without a restart; scheduled tasks keep running either way.</div>
           </div>
           <div class="settings-field-control">
             <label class="settings-toggle"><input type="checkbox" id="sv-schedules-tab" ${schedulesTabValue ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
@@ -785,11 +785,17 @@
     const controlValue = control => String(control.type === 'checkbox' ? control.checked : control.value);
     let initialHosts;
     let initialShortcuts;
+    const editedControls = new Map();
+    let editGeneration = 0;
     function dirtySnapshot() {
       return { values: trackedControls.map(controlValue), hosts: JSON.stringify(remoteHosts), shortcuts: JSON.stringify(scShortcuts) };
     }
-    function resetDirty(snapshot = dirtySnapshot()) {
+    function resetDirty(snapshot = dirtySnapshot(), submittedEdits = null) {
       trackedControls.forEach((control, index) => { control.dataset.initial = snapshot.values[index]; });
+      if (submittedEdits) {
+        for (const [control, generation] of submittedEdits) if (editedControls.get(control) === generation) editedControls.delete(control);
+      }
+      else editedControls.clear();
       initialHosts = snapshot.hosts;
       initialShortcuts = snapshot.shortcuts;
       updateDirty();
@@ -803,6 +809,16 @@
     resetDirty();
     form.addEventListener('input', updateDirty);
     form.addEventListener('change', updateDirty);
+    form.addEventListener('change', event => editedControls.set(event.target, ++editGeneration));
+    if (!isProject) {
+      window._syncUntouchedGlobalToggle = (id, checked) => {
+        const control = form.isConnected && form.querySelector('#' + id);
+        if (!control || editedControls.has(control) || controlValue(control) !== control.dataset.initial) return;
+        control.checked = checked;
+        control.dataset.initial = controlValue(control);
+        updateDirty();
+      };
+    }
 
     // see .ai/contexts/cli-harnesses.md ("Picker, toggles and settings")
     const harnessToggles = [...settingsViewerBody.querySelectorAll('.sv-harness-toggle')];
@@ -1008,6 +1024,7 @@
       let settings = {};
       let rejectedHosts = false;
       const submitted = dirtySnapshot();
+      const submittedEdits = new Map(editedControls);
 
       if (isProject) {
         // Only save fields where "use global" is unchecked
@@ -1054,7 +1071,8 @@
         settings.restoreOnStartup = settingsViewerBody.querySelector('#sv-restore-startup').value || SETTING_DEFAULTS.restoreOnStartup;
         settings.hideSdkSessions = settingsViewerBody.querySelector('#sv-hide-sdk').checked;
         settings.mcpEmulation = settingsViewerBody.querySelector('#sv-mcp-emulation').checked;
-        settings.schedulesTab = settingsViewerBody.querySelector('#sv-schedules-tab').checked;
+        const schedulesToggle = settingsViewerBody.querySelector('#sv-schedules-tab');
+        if (submittedEdits.has(schedulesToggle)) settings.schedulesTab = schedulesToggle.checked;
         settings.autoUpdate = settingsViewerBody.querySelector('#sv-auto-update').checked;
         settings.receiveBetaVersions = settingsViewerBody.querySelector('#sv-receive-beta-versions').checked;
         settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || SETTING_DEFAULTS.shellProfile;
@@ -1097,8 +1115,17 @@
       if (!isProject) setRemoteHostLabels(settings.remoteHosts);
 
       // Update visibleSessionCount, sessionMaxAgeDays, and theme
+      let storedSchedulesTab;
+      if (!isProject && settings.schedulesTab === undefined) {
+        try {
+          const stored = await window.api.getSetting('global');
+          storedSchedulesTab = stored?.schedulesTab ?? SETTING_DEFAULTS.schedulesTab;
+        } catch {
+          storedSchedulesTab = settingsViewerBody.querySelector('#sv-schedules-tab').checked;
+        }
+      }
       if (!isProject) {
-        window._applySchedulesTab?.(settings.schedulesTab);
+        window._applySchedulesTab?.(settings.schedulesTab ?? storedSchedulesTab);
         if (Array.isArray(settings.disabledHarnesses)) window._applyUsageHarnesses?.(settings.disabledHarnesses);
         if (typeof settings.showCodexUsage === 'boolean' && settings.showCodexUsage !== appliedCodexUsage) {
           window._applyCodexUsage?.(settings.showCodexUsage);
@@ -1168,6 +1195,11 @@
         }
         submitted.values[index] = normalized;
       });
+      const schedulesIndex = trackedControls.findIndex(control => control.id === 'sv-schedules-tab');
+      if (storedSchedulesTab !== undefined && schedulesIndex >= 0 && !editedControls.has(trackedControls[schedulesIndex])) {
+        trackedControls[schedulesIndex].checked = storedSchedulesTab;
+        submitted.values[schedulesIndex] = String(storedSchedulesTab);
+      }
       if (!isProject && !rejectedHosts && JSON.stringify(remoteHosts) === submitted.hosts && JSON.stringify(settings.remoteHosts) !== submitted.hosts) {
         remoteHosts = settings.remoteHosts.map(h => ({ ...h }));
         renderRemoteHosts();
@@ -1177,7 +1209,7 @@
       const saveBtn = settingsViewerBody.querySelector('#sv-save-btn');
       saveBtn.textContent = rejectedHosts ? 'Some changes not saved' : deferred ? '✓ Applied' : '✓ Saved';
       saveBtn.classList.toggle('saved', !rejectedHosts);
-      resetDirty(submitted);
+      resetDirty(submitted, submittedEdits);
       clearTimeout(savedFlashTimer);
       savedFlashTimer = setTimeout(() => {
         saveBtn.classList.remove('saved');

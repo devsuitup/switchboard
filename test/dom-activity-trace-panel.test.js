@@ -46,6 +46,7 @@ function setup({ traceState, files = [], readResult, deleteResult = { ok: true }
       if (prop === 'platform') return 'linux';
       if (prop === 'getSetting') return async (key) => window.__settings[key] || {};
       if (prop === 'setSetting') return async (key, value) => { window.__savedSettings = { key, value }; return { ok: true }; };
+      if (prop === 'mergeGlobalSettings') return require('./fixtures/merge-global-settings.cjs')(window.api);
       if (prop === 'getShellProfiles') return async () => [];
       if (prop === 'getAppVersion') return async () => '0.0.0';
       if (prop === 'onUpdaterEvent') return () => {};

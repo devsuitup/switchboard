@@ -49,6 +49,7 @@ test('main IPC enforces opt-in from saved settings and invalidates a request on 
   });
   vm.runInContext(registration, context, { filename });
   t.after(() => vm.runInContext('codexUsage.settingsChanged()', context));
+  vm.runInContext(require('./app-source').extractFunction(source, 'writeGlobalSettings'), context, { filename });
   vm.runInContext(source.slice(saveStart, saveEnd), context, { filename });
   const usage = handlers.get('get-codex-usage');
   const save = value => handlers.get('set-setting')(null, 'global', value);

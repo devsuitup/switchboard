@@ -96,8 +96,43 @@ function extractDeclaration(src, name) {
 
 // Evaluates the named declarations and functions of public/app.js in `context`
 // (a jsdom VM context) and returns the functions by name.
+// persistWorkingSet and saveGlobalSettings write through the preload's
+// mergeGlobalSettings. A test api that only stubs getSetting/setSetting gets a
+// merge over those two stubs, so its store sees the merged global object.
+const GLOBAL_WRITERS = ['persistWorkingSet', 'saveGlobalSettings'];
+const shimmedApis = new WeakSet();
+const shimAccessors = new WeakSet();
+
+function withStubMerge(api) {
+  if (!api || (typeof api !== 'object' && typeof api !== 'function') || shimmedApis.has(api)) return api;
+  const merge = async (patch, remove = []) => {
+    const next = { ...(await api.getSetting('global')), ...patch };
+    for (const key of remove || []) delete next[key];
+    return api.setSetting('global', next);
+  };
+  const wrapped = new Proxy(api, {
+    get(target, key, receiver) {
+      if (key === 'mergeGlobalSettings' && !Reflect.has(target, key)) return merge;
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  shimmedApis.add(wrapped);
+  return wrapped;
+}
+
+function installStubMerge(context) {
+  const win = vm.runInContext('typeof window === "object" && window ? window : this', context);
+  const current = Object.getOwnPropertyDescriptor(win, 'api');
+  if (current?.get && shimAccessors.has(current.get)) return;
+  let api = withStubMerge(win.api);
+  const get = () => api;
+  shimAccessors.add(get);
+  Object.defineProperty(win, 'api', { configurable: true, enumerable: true, get, set: value => { api = withStubMerge(value); } });
+}
+
 function loadAppFunctions(context, { functions, declarations = [], sourcePath = APP_PATH }) {
   context.isProjectHidden ||= require('../public/worktree-nesting').isProjectHidden;
+  if (sourcePath === APP_PATH && functions.some(name => GLOBAL_WRITERS.includes(name))) installStubMerge(context);
   const src = fs.readFileSync(sourcePath, 'utf8');
   const parts = [
     ...declarations.map((n) => extractDeclaration(src, n)),

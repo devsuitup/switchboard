@@ -64,7 +64,7 @@ views (CodeMirror):
 
 ## Schedules
 
-This section applies when **Schedules tab** is on in Global Settings (off by default).
+This section applies to the [Schedules tab](schedules.md), on by default.
 
 Tab reaches **Create schedule** before the rows. Enter or Space opens its form
 with Project focused. Tab and Shift+Tab cycle through its fields, Cancel and

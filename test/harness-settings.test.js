@@ -33,6 +33,8 @@ test('the writer refuses a global patch that switches every CLI off', () => {
   assert.throws(() => commands.patchGlobal({ disabledHarnesses: ids }), err => err.code === 'HARNESS_GUARD');
   commands.patchGlobal({ disabledHarnesses: ['codex'] });
   assert.deepEqual(store.get('global').disabledHarnesses, ['codex']);
+  assert.throws(() => commands.mergeGlobal({ disabledHarnesses: ids }), err => err.code === 'HARNESS_GUARD');
+  assert.deepEqual(store.get('global').disabledHarnesses, ['codex'], 'a refused Settings merge writes nothing');
   const worker = fs.readFileSync(path.join(__dirname, '../workers/session-index-writer.js'), 'utf8');
   assert.match(worker, /assertHarnessSettings\(args\[1\]\)/, 'a raw global setSetting goes through the same guard');
 });
