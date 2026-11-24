@@ -659,11 +659,22 @@ call; otherwise the first apply of the default would leave the tab hidden. Only
 an effective value change reloads Agent Files if open, cancels schedule
 refreshes and refreshes sidebar notices.
 
-Absent and explicit `false` are told apart only by the key's presence. Every
-global Save since #792 has written the checkbox state, so a profile that saved
-Global Settings while the default was off holds `false` and keeps the tab off;
-no migration rewrites it, because that value cannot be told from a deliberate
-opt-out. The setting and the Agent Files fallback stay for one release; their
+Every global Save since #792 has written the checkbox state, so a stored
+`false` from before #1239 is not an opt-out. On the first launch of 0.1.0,
+`src/main/schedules/schedules-tab-migration.js` runs once in the writer worker
+(`migrateSchedulesTabDefault`, awaited in `main.js` right after
+`INSTALL_PREDATES_LAUNCH` is read and before any window exists, so the first
+render reads the result without a restart). Without the
+`schedulesTabDefaultMigrated` marker it deletes a stored `schedulesTab: false`,
+so the default applies, and writes the marker in the same `global` write; a
+missing `global` gets `{ schedulesTabDefaultMigrated: true }`, so a fresh
+profile that turns the tab off later is not migrated at its next launch. A
+non-object `global` is left alone. With the marker present it does nothing, and
+renderer Saves merge into the stored object, so the marker survives and a
+`false` saved after the update is honoured. A failed write is logged, leaves
+`global` unchanged and does not stop startup; the next launch retries. The
+marker is written by main only, never by Settings Save, so a failed migration
+followed by a Save of the stale off state is still migrated. The setting and the Agent Files fallback stay for one release; their
 removal is deferred (#1239). Startup applies it after restoring sidebar width and shortcuts,
 so a tab failure cannot interrupt their restore. Global Save's separate sidebar
 refresh runs only when visible count, maximum age or remote hosts changed (an SDK

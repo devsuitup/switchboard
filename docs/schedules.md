@@ -15,9 +15,10 @@ restart. With the tab off, project schedule files appear in
 [Agent Files](memory-workfiles.md) instead, with **Run now** and the editor,
 and archive messages point there.
 
-A profile that saved Global Settings with the tab off keeps it off: turn it on
-in Global Settings to use the tab. Scheduled tasks and their run records keep
-running whichever surface is shown.
+Earlier versions saved the tab as off with every Global Settings Save, so the
+first launch of 0.1.0 turns it on once, even if Settings were saved before. If
+you turn it off after that, it stays off. Scheduled tasks and their run
+records keep running whichever surface is shown.
 
 ## What is listed
 

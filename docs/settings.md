@@ -163,7 +163,7 @@ Primary+Shift (Ctrl, or Cmd on macOS) with its key — see
 
 | Setting | Key | Default | Effect |
 |---|---|---|---|
-| Schedules tab | `schedulesTab` | on | Shows the [Schedules tab](schedules.md) and moves project schedule files out of Agent Files; turned off, the files and Run now stay in Agent Files. Kept for this release only — see [Turning the tab off](schedules.md#turning-the-tab-off) |
+| Schedules tab | `schedulesTab` | on | Shows the [Schedules tab](schedules.md) and moves project schedule files out of Agent Files; turned off, the files and Run now stay in Agent Files. The first launch of 0.1.0 turns it on once, even if Settings were saved before; turning it off afterwards is kept. Kept for this release only — see [Turning the tab off](schedules.md#turning-the-tab-off) |
 
 ### Remote hosts
 

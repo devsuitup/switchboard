@@ -89,6 +89,7 @@ function spawnPty(file, args, opts) {
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell, claudeCommand, headlessClaudeLaunch, customArgsForLaunch } = require('./src/main/terminals/shell-profiles');
 const { startScheduler, scheduleLaunchRefusal, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./src/main/schedules/schedule-runner');
 const { buildScheduleList } = require('./src/main/schedules/schedule-list');
+const { migrateSchedulesTabOnStartup } = require('./src/main/schedules/schedules-tab-migration');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS, normalizeBrowserSettings,
@@ -257,6 +258,7 @@ const { setStarred, setArchived, deleteCachedSession, deleteCachedFolder,
 
 // see docs/changelog.md ("What's new in the app")
 const INSTALL_PREDATES_LAUNCH = getSetting('global') !== null || isInitialScanComplete();
+await migrateSchedulesTabOnStartup(writer, log);
 
 async function sweepContinuationChoices() {
   if (!isInitialScanComplete()) return;

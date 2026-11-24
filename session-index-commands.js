@@ -3,6 +3,7 @@
 const archive = require('./archived-projects');
 const { scheduleRegistry } = require('./src/main/schedules/schedule-runner');
 const { whatsNewOnStartup } = require('./src/main/app/changelog');
+const { migrateSchedulesTabDefault } = require('./src/main/schedules/schedules-tab-migration');
 const { isProjectHidden } = require('./public/worktree-nesting');
 const { createHash } = require('node:crypto');
 const path = require('node:path');
@@ -365,6 +366,9 @@ function createWriterCommands(db) {
       const result = whatsNewOnStartup({ ...options, lastSeenVersion, readChangelog: () => changelog });
       if (result.record) patch({ lastSeenVersion: result.record });
       return result;
+    },
+    migrateSchedulesTabDefault() {
+      return migrateSchedulesTabDefault(db);
     },
   };
 }
