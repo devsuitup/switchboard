@@ -67,14 +67,15 @@ The examples cut `0.1.0-beta.1`, then the final `0.1.0`.
 
    The required PR checks for this workflow are `lint`,
    `test (20, ubuntu-latest)`, `test (22, ubuntu-latest)`,
-   `test (22, windows-2022)`, `changelog` and `e2e`. Build is not required.
-   JB must remove the obsolete `test (20, windows-2022)` context from both
-   places that require it: ruleset 17240725 (`main-protection`) and the classic
-   branch protection on `main` (`required_status_checks.contexts`). Both must
-   be updated together whenever the test matrix changes; workflow changes do
-   not change repository settings. The documented ruleset requires
-   no approving review, so `gh pr merge --repo devsuitup/switchboard --auto --squash` can be armed once the
-   required checks run. CI-only PRs use the `no-changelog` label.
+   `test (22, windows-2022)`, `changelog` and `e2e`: ruleset 17240725
+   (`main-protection`) requires all six, and the classic branch protection on
+   `main` requires the same list minus `changelog`. Build is not required.
+   Required checks and review requirements are GitHub repository settings,
+   separate from these workflow definitions: keep the ruleset and the branch
+   protection aligned whenever the test matrix changes. No approving review is
+   required, so `gh pr merge --repo devsuitup/switchboard --auto --squash` can
+   be armed once the required checks run.
+   CI-only PRs use the `no-changelog` label.
 
 2. **Run the app before tagging.** The tag is what publishes, and nothing
    between the merge and the tag looks at the assembled whole; the test suite

@@ -43,7 +43,7 @@ its own process's — a lock left by an earlier instance that crashed and whose
 pid the new process happens to reuse. Locks carrying any other pid are left in
 place.
 
-Remote sessions and scheduled runs never get the bridge.
+Codex sessions, remote sessions and scheduled runs never get the bridge.
 
 ## Diff review
 

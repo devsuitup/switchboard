@@ -10,7 +10,8 @@ change through the same tokens. Sidebar subagent colors, transcript tool bullets
 and toolbar success flashes use CSS variables in their inline styles.
 
 `THEME_CHOICES` in `public/setting-defaults.js` supplies both normalization and
-the Appearance select. Native select controls use a theme-specific color scheme.
+the Appearance select (`#sv-theme`). Native select controls use a theme-specific
+color scheme (`--control-color-scheme`, applied by `.control-select`).
 
 The global `theme` setting defaults to `SETTING_DEFAULTS.theme` (`dark`), with
 `light` and `system` as the other choices. Settings → General → Appearance saves
@@ -26,18 +27,26 @@ The renderer sets `data-theme` before content is parsed. System watches
 `matchMedia('(prefers-color-scheme: dark)')` live; explicit choices ignore changes.
 Settings applies the saved choice through `window.appTheme.apply`.
 
-`src/main/app/window-theme.js` owns the native window colors, uses the same
-normalizer and color resolver, and observes Electron's `nativeTheme.updated`.
+`public/theme.js` is dual-mode: under `require()` it exports `normalize`,
+`resolve` and `colors` (the native background, caption and symbol colors per
+palette); in the renderer it installs `window.appTheme`.
+
+`src/main/app/window-theme.js` (`installWindowTheme`, wired in `main.js`) owns
+the native window colors, uses the same normalizer and color resolver, and observes Electron's `nativeTheme.updated`.
 The initial BrowserWindow options include its background and the themed caption
 overlay before construction. Dark now explicitly sets native `backgroundColor`
 to `#111118` before first paint (accepted startup difference); saved global
-changes refresh existing window colors.
+changes refresh existing window colors (`windowTheme.refresh()` in the
+`set-setting` handler, global key only).
 macOS retains its native traffic lights. The new synchronous IPC carries only the
 normalized theme name and runs without filesystem IO in the handler.
 
 The renderer emits `app-theme-changed` only when the effective palette changes.
-`terminal-themes.js` updates xterm options and container backgrounds for every
-entry in `openSessions`, including hidden terminals and panel shells. The normal
+`terminal-themes.js` (`bindTerminalThemes(() => openSessions)`, which installs
+`window._applyTerminalTheme`) updates xterm options and container backgrounds
+for every entry in `openSessions`, including hidden terminals and panel shells;
+under Light, `getTerminalTheme()` returns `LIGHT_TERMINAL_THEME` whatever the
+selected dark palette. The normal
 terminal creation path reads that same effective palette. CodeMirror's theme
 compartment selects the existing Dracula extension or GitHub Light. A view plugin
 reconfigures each live editor on the event and removes its listener on destroy;

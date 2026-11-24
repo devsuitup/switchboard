@@ -1,7 +1,7 @@
 # Launching Sessions
 
-A Claude session started, resumed or forked from this machine's sidebar is a
-`claude` process in a terminal (a PTY) owned by the app. This page covers how
+A Claude Code or Codex session started, resumed or forked from this machine's sidebar is a
+`claude` or `codex` process in a terminal (a PTY) owned by the app. This page covers how
 one is started, resumed or forked, and with which options.
 
 Not every session Switchboard lists is one of these. A
@@ -14,20 +14,42 @@ terminal ([Sessions live in another process](#sessions-live-in-another-process))
 
 ## The "+" menu
 
-The `+` on a project header offers three entries:
+The `+` on a project header offers entries for each enabled CLI, plus Terminal:
 
 | Entry | What it does |
 |---|---|
 | **Claude** | Starts a new session at once, with the project's effective settings |
 | **Claude (Configure...)** | Opens the New Session dialog, pre-filled with those settings |
+| **Codex** | Starts a Codex session with the configured Codex defaults — see [Codex sessions](#codex-sessions) |
 | **Terminal** | Opens a plain shell in the project directory — see [Plain terminals](#plain-terminals) |
 
 "Effective settings" are the project's own values where it overrides them, the
 global values otherwise, and the built-in defaults where neither was ever saved
 — see [Settings reference](settings.md).
 
-A new session's row appears in the sidebar before `claude` has written its
-transcript.
+A new session's row appears before its CLI has written its transcript.
+Switching a CLI off removes its launch entries; open tabs keep running.
+
+## Codex sessions
+
+Choose **+ → Codex** to start in the project directory. In
+[Settings → Sessions → Codex](settings.md#cli-agents-and-codex), set
+Codex sandbox, approval, model and reasoning effort; **Codex default** leaves
+the corresponding option to Codex's own configuration. These are separate from
+Claude's permission modes and Linux bubblewrap sandbox.
+
+Click a Codex row to run `codex resume <id>`; **Fork session** runs
+`codex fork <id>`. Both use the directory recorded for the session and refuse
+if that directory no longer exists. A missing resume transcript starts a fresh
+Codex session. A new or forked tab adopts its real id after Codex writes its
+rollout. A fork must carry this tab's launch marker: without it, the tab stays
+open but is not linked to a guessed sidebar row.
+
+Codex sessions support search, the message viewer, Changes, the panel shell,
+activity states and statistics. Switchboard does not provide Codex background
+jobs, schedules, SSH sessions, IDE emulation or detection of a Codex process
+already running elsewhere. Codex subagent rollouts are not listed at all. Deleting a Codex transcript
+from Switchboard is refused. The Claude options below apply to Claude launches.
 
 ## New Session dialog
 
@@ -45,7 +67,7 @@ The Browser default uses the `browserMode` setting (`off` or `claude-in-chrome`)
 A saved `chrome` setting is read as the matching choice: `true` selects
 **Claude in Chrome**, and `false` selects **Off**.
 
-**Start** (or Enter outside a text field) launches; **Cancel** or Esc closes the
+**Start** (or Enter outside a text field or a list) launches; **Cancel** or Esc closes the
 dialog. The values apply to this launch only; they are not saved.
 
 ### Permission modes
@@ -74,11 +96,12 @@ That covers a wrapper (`aws-vault exec profile --`), an environment assignment
 
 ## How the command is built
 
-- A new session gets `--session-id <uuid>`, so its row and its transcript share
+- A new Claude session gets `--session-id <uuid>`, so its row and its transcript share
   an id from the start.
 - Opening an existing session runs `claude --resume <id>` in the directory
   recorded in its transcript. For a session started in a worktree, that is the
-  worktree, not the repository.
+  worktree, not the repository. Resume and fork refuse if that directory no
+  longer exists.
 - A session whose row exists but whose transcript was never written (a launch
   that failed at once) is started with `--session-id` and the same id, rather
   than resumed — and, like any start, gets `--worktree` when the effective
@@ -94,19 +117,38 @@ That covers a wrapper (`aws-vault exec profile --`), an environment assignment
 
 ## Resume dialog
 
-**Resume with config** on a session row opens the Resume dialog: Permission
-Mode, Browser (Off / Claude in Chrome), Sandbox (Linux), Pre-launch Command and
-Additional Directories, applied to this resume only. It has no Worktree option: a resumed session keeps
-the directory it was started in.
+**Resume with config** opens the launch form for the session's own CLI. A
+Claude session offers Permission Mode, Browser (Off / Claude in Chrome) and
+Sandbox (Linux). A Codex session offers Sandbox, Approval, Model and Reasoning
+effort. Both offer Pre-launch Command and Additional Directories. The fields
+are shared with New Session, and apply to this launch only.
+
+The dialog displays the recorded working directory, falling back to the
+project directory when unavailable. It has no Worktree option: a resumed
+session keeps its original directory. The form shows the project's effective
+settings for the session's runtime. Codex default leaves a setting to the CLI's
+own configuration.
+The model list comes from Codex's local model cache; a configured model absent
+from that list remains selectable.
+
+Resume runs `claude --resume <id>` or `codex resume <id>` according to the
+session. Codex controls never add Claude permission, browser or bubblewrap
+flags; Claude controls never add Codex sandbox or approval flags. For Codex,
+Additional Directories is passed only with Workspace write or Full access.
 
 ## Fork
 
-**Fork session** on a row starts a new session with
+**Fork session** on a Claude row starts a new session with
 `claude --resume <id> --fork-session`, using the project's effective settings —
 including Worktree, which adds `--worktree [name]`: the fork then runs in a new
 worktree (see [Worktree sessions](worktrees.md)). The CLI copies the conversation into a new session id; the original is left
 as it was. The new row appears at once and takes the new id when the CLI
 writes the forked transcript.
+
+For Codex, see [Codex sessions](#codex-sessions). For a first session on an SSH
+host, use **New session…** on a saved, enabled host in
+[Settings → Remote hosts](remote-hosts.md); no indexed project is required.
+[File triggers](automation.md) can also create named Claude sessions.
 
 ## Plain terminals
 
@@ -136,7 +178,7 @@ When a terminal's shell exits, its view closes and its row leaves the sidebar;
 
 ## Sessions live in another process
 
-Resuming a session that another process is already running — another
+For Claude sessions, resuming a session that another process is already running — another
 Switchboard instance, or `claude` in an outside terminal — would start a second
 CLI on the same session, and both would write its transcript. Switchboard reads
 the CLI's own `~/.claude/sessions/<pid>.json` descriptors to detect this,
@@ -156,6 +198,11 @@ The descriptor file is the CLI's, and undocumented. When it is missing or
 unreadable, the check finds nothing and the resume goes ahead.
 
 ## Shell and environment
+
+When launched from a Claude Code shell, terminals drop its inherited
+`GIT_EDITOR=true`; a value set independently is kept. On Windows, Claude
+launches through PowerShell preserve quoted and multiline arguments; a launch
+that exceeds the supported command length is refused with an error.
 
 Sessions run with `TERM=xterm-256color`, `COLORTERM=truecolor` and
 `TERM_PROGRAM=iTerm.app`; the last one makes Claude Code emit the OSC 9

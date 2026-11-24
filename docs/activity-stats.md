@@ -27,7 +27,9 @@ on it (UTC date); a user entry that only carries a tool result is not counted.
 ## Data source
 
 Everything but the rate limits comes from Switchboard's own SQLite database,
-filled by indexing the transcripts under `~/.claude/projects` — and the mirrored
+filled by indexing Claude transcripts under `~/.claude/projects`, Codex
+rollouts under `~/.codex/sessions` (or `$CODEX_HOME/sessions`), and the mirrored
 transcripts of [remote hosts](remote-hosts.md). Claude Code's
-`~/.claude/stats-cache.json` is not read. The footer says when the figures were
-last computed.
+`~/.claude/stats-cache.json` is not read. The footer gives the date the figures were last computed. If no statistics
+are available, it asks you to run some sessions first. A failed Claude usage
+request replaces the gauges with a notice or a retry countdown.

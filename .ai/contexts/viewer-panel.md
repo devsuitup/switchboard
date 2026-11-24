@@ -141,10 +141,10 @@ under Electron's Node mode. The normal CI test runner discovers these files.
 
 | File | LOC | Role |
 |---|---|---|
-| `public/viewer-panel.js` | ~660 | The `ViewerPanel` class. Owns CodeMirror state, toolbar wiring, file watch lifecycle, save/format/delete logic. |
-| `public/viewer-toolbar.js` | ~710 | Pure factory `createViewerToolbar(opts)` — builds the toolbar DOM + returns API. No state of its own. Also holds the shared preview helpers: `renderMarkdownPreview` (frontmatter, Mermaid) and `setViewerPath`. |
+| `public/viewer-panel.js` | ~650 | The `ViewerPanel` class. Owns CodeMirror state, toolbar wiring, file watch lifecycle, save/format/delete logic. |
+| `public/viewer-toolbar.js` | ~760 | Pure factory `createViewerToolbar(opts)` — builds the toolbar DOM + returns API. No state of its own. Also holds `createViewerFileActions` ("Local file actions") and the shared preview helpers: `renderMarkdownPreview` (frontmatter, Mermaid) and `setViewerPath`. |
 | `viewer-file-watch.js` | ~140 | Main-side `createViewerWatchRegistry` / `watchFileForViewer` behind the `watch-file` IPC — "Watching the file". |
-| `viewer-save-guard.js` | ~115 | Main-side `createMainPanelSaves` (the handlers `main.js` registers for `save-memory` and `save-file-for-panel`, with the path checks from `ipc-path-validator.js`), the `createPanelSaveHandlers` it builds on, and `refuseIfMoved` — "Saving over a file that moved". |
+| `viewer-save-guard.js` | ~115 | Main-side `createMainPanelSaves` (the handlers `main.js` registers for `save-memory` and `save-file-for-panel`, with the path checks from `src/main/shared/ipc-path-validator.js`), the `createPanelSaveHandlers` it builds on, and `refuseIfMoved` — "Saving over a file that moved". |
 
 ## Public surface
 
@@ -175,7 +175,7 @@ Used in `public/app.js` for Memory and in `public/activity-trace-panel.js` for A
 
 | Button | Shown when |
 |---|---|
-| `previewBtn` | `opts.preview` AND filePath ends in `.md`/`.mdx` |
+| `previewBtn` | `opts.preview` (always passed by `ViewerPanel`) AND filePath ends in `.md`/`.mdx` |
 | `wrapBtn` | always (default on for markdown, off otherwise) |
 | `gotoLineBtn` | always |
 | `formatBtn` | `opts.format` AND filePath ends in `.json`/`.jsonl` |
@@ -274,7 +274,7 @@ toggle/refresh paths while verifying the editor retains the complete source.
 
 ### Main
 
-`save-file-for-panel` and `save-memory` are the handlers `createMainPanelSaves` builds in `viewer-save-guard.js`. It takes the path checks (`isSensitivePath`, the memory allowlist) from `ipc-path-validator.js` itself; `main.js` hands it only its own state, `getKnownProjectPaths` and `invalidateFtsSignature`. `test/viewer-save-guard.test.js` builds the same handlers with `createMainPanelSaves`, so what it exercises is what main registers, and no binding in `main.js` can make the save path permissive. Each handler validates the path — `save-memory`: a `.md` file, resolved through the memory allowlist, written at the resolved path; both: the file exists — then `writeIfUnmoved`, which runs `refuseIfMoved`:
+`save-file-for-panel` and `save-memory` are the handlers `createMainPanelSaves` builds in `viewer-save-guard.js`. It takes the path checks (`isSensitivePath`, the memory allowlist) from `src/main/shared/ipc-path-validator.js` itself; `main.js` hands it only its own state, `getKnownProjectPaths` and `invalidateFtsSignature`. `test/viewer-save-guard.test.js` builds the same handlers with `createMainPanelSaves`, so what it exercises is what main registers, and no binding in `main.js` can make the save path permissive. Each handler validates the path — `save-memory`: a `.md` file, resolved through the memory allowlist, written at the resolved path; both: the file exists — then `writeIfUnmoved`, which runs `refuseIfMoved`:
 
 - `expected` not a string → refused, `reason: 'invalid-expected'`. There is no blind write.
 - The file on disk, line endings folded to `\n`, differs from `expected` → refused, `reason: 'stale'`, with **`disk`: the text it compared**, folded the same way.
@@ -311,7 +311,7 @@ Main returns the disk text it compared. The panel shows the "not saved" notice, 
 
 A plain save while the "changed on disk" notice is up is refused the same way, because the dirty re-read did not move the base, and asks the same confirm. **Keep my edits** is the agreement given ahead of time: the next save carries the disk the notice described and goes out without asking, and a further write nobody has read is still refused.
 
-The MCP diff tab follows the same rule. Its base is the diff's `oldContent`, which `mcp-bridge.js` read from disk when the diff opened. It moves to what was written after each save, and to main's returned `disk` on a confirmed `appConfirm` ("This file changed on disk since the diff opened. Overwrite it with your edits?"); a refused retry asks again. Any other refusal, or a rejected IPC, is reported with `appAlert`, the same channel `ViewerPanel`'s Delete uses; a declined confirm is the end of it.
+The MCP diff tab follows the same rule. Its base is the diff's `oldContent`, which `src/main/integrations/mcp/mcp-bridge.js` read from disk when the diff opened. It moves to what was written after each save, and to main's returned `disk` on a confirmed `appConfirm` ("This file changed on disk since the diff opened. Overwrite it with your edits?"); a refused retry asks again. Any other refusal, or a rejected IPC, is reported with `appAlert`, the same channel `ViewerPanel`'s Delete uses; a declined confirm is the end of it.
 
 ### What the rest is for
 
@@ -376,7 +376,7 @@ Each of these reads and clears `pendingTouchedOpen` before `destroyCurrentTab`, 
 
 Nothing ends the window with unsaved file-panel edits without the user saying so. The scope is the Touched editor in the slot (a tab with an `absolutePath`) and every `touchedStashes` entry, in every session of `filePanelState`; the Memory panel, MCP diff tabs and Changes buffers are not covered.
 
-- **Main** (`unsaved-guard.js` and `session-exit.js`) binds each exit to a window, attempt id, version, action and PTY-generation snapshot. App-menu Quit/Exit, Restart and bare window close check unsaved edits first, then name threatened local sessions, plain terminals and panel shells in a separate Stop/Cancel dialog. Save/Discard does not grant Stop consent. Only after both choices does `flushStateForExit` run, bounded to 2000 ms. A failed Save never reaches the session question. With only attach/remote clients, the edits check still runs but the Stop question is omitted. Main supplies identities and types; renderer names are text-only. See [window-frame](window-frame.md), "Closing the window", for inventory and wording.
+- **Main** (`src/main/app/unsaved-guard.js` and `src/main/app/session-exit.js`) binds each exit to a window, attempt id, version, action and PTY-generation snapshot. App-menu Quit/Exit, Restart and bare window close check unsaved edits first, then name threatened local sessions, plain terminals and panel shells in a separate Stop/Cancel dialog. Save/Discard does not grant Stop consent. Only after both choices does the renderer's `flushStateForExit` (`public/app.js`) run, bounded to 2000 ms (`EXIT_FLUSH_BOUND_MS` in `public/file-panel.js`). A failed Save never reaches the session question. With only attach/remote clients, the edits check still runs but the Stop question is omitted. Main supplies identities and types; renderer names are text-only. See [window-frame](window-frame.md), "Closing the window", for inventory and wording.
 
 - **Handshake.** `unsaved-check` carries `(id, reason, detail)`; detail has action, attempt, version, external and snapshot. Stronger user intent upgrades the version and requires a new Stop choice. `unsaved-check-reason` also carries detail and its own completion token. A detail-less reload answer arriving after an exit upgrade is stale: main re-sends `unsaved-check` with the current detail. The renderer handles that check through the normal edits, Stop/Cancel and bounded-flush sequence. A late reason notification alone starts no choice or flush; its completion timer cannot approve the pending check. ACK, result and reason completion accept only the requesting webContents; results must match attempt/version. Repeated gestures join one modal. Revalidation rejects added, replaced or re-keyed generations before commit; departed targets may disappear. Committed attempts gate interactive PTY admission and pending completions.
 
@@ -399,11 +399,11 @@ Nothing ends the window with unsaved file-panel edits without the user saying so
 
 ### Paths
 
-Main resolves the `openFile` path (`path.resolve` in `mcp-bridge.js`), so `/repo/./a.md` reaches the renderer as `/repo/a.md`. The renderer compares paths with `filePathKey`: on `win32`, separators folded to `/` and case folded; elsewhere, exactly. macOS is not folded: APFS can be case-sensitive, where `A.md` and `a.md` are two files, and stashing one under the other's key would show the wrong buffer. A relative path is resolved against main's working directory, not the session's; the CLI sends absolute paths.
+Main resolves the `openFile` path (`path.resolve` in `src/main/integrations/mcp/mcp-bridge.js`), so `/repo/./a.md` reaches the renderer as `/repo/a.md`. The renderer compares paths with `filePathKey`: on `win32`, separators folded to `/` and case folded; elsewhere, exactly. macOS is not folded: APFS can be case-sensitive, where `A.md` and `a.md` are two files, and stashing one under the other's key would show the wrong buffer. A relative path is resolved against main's working directory, not the session's; the CLI sends absolute paths.
 
 ### The `ok` answer
 
-`openFile` without a non-empty string `filePath` is answered with a JSON-RPC error (`-32602`) and opens nothing. Otherwise it answers `ok` as soon as main has sent the path to the renderer, before the renderer acts, whatever the renderer then does with it: the panel's guards may refuse the file, an editor with unsaved edits leaves it listed only, an unanswered diff defers it. `mcp-bridge.js` reads nothing; the only read is the panel's guarded one.
+`openFile` without a non-empty string `filePath` is answered with a JSON-RPC error (`-32602`) and opens nothing. Otherwise it answers `ok` as soon as main has sent the path to the renderer, before the renderer acts, whatever the renderer then does with it: the panel's guards may refuse the file, an editor with unsaved edits leaves it listed only, an unanswered diff defers it. `src/main/integrations/mcp/mcp-bridge.js` reads nothing; the only read is the panel's guarded one.
 
 ## Undo
 
@@ -425,14 +425,14 @@ The renderer records a watch (`_watchedPath`) only once `watch-file` answers `ok
 
 `createViewerWatchRegistry` holds one watch per resolved path and **counts references**: the Memory panel and a Touched editor showing the same file share it, and it is closed only by the last `unwatch-file`. `closeAll()` is what the window's `closed` handler calls (`closeAllFileWatchers`).
 
-The Changes panel's registry (`git-changes-watch.js`) solves the same problem differently, by re-arming on the file after a `rename`. The two are not merged.
+The Changes panel's registry (`src/main/changes/git-changes-watch.js`) solves the same problem differently, by re-arming on the file after a `rename`. The two are not merged.
 
 ## Non-obvious behaviors
 
 - **Markdown preview mode is persisted per-storageKey** in `localStorage`. Memory uses `'markdownPreviewMode'`.
 - **Line-wrap default depends on file type**: markdown wraps, code doesn't. Wrap state is NOT persisted — resets per file.
 - **`format` for `.jsonl` is intentionally non-standard**: each line is pretty-printed and joined with `\n---\n`. This produces human-readable output but is no longer valid JSON. The button is for *viewing*, not for converting files to a different format.
-- **Cmd/Ctrl+S keybinding**: CodeMirror dispatches a `cm-save` custom event which the ViewerPanel listens for. Chromium's "Save Page" default is blocked globally in `viewer-toolbar.js:699` (`keydown` listener with `preventDefault`).
+- **Cmd/Ctrl+S keybinding**: CodeMirror dispatches a `cm-save` custom event which the ViewerPanel listens for. Chromium's "Save Page" default is blocked globally by the document-level `keydown` listener at the end of `viewer-toolbar.js` (`preventDefault` on Cmd/Ctrl+S without Shift/Alt).
 - **The editor's surface is the app's, not the CodeMirror theme's**: `public/style.css` puts `.viewer-panel-editor .cm-editor`, its gutters and its active-line gutter on `--surface-sunken`, with a `--hairline` rule after the gutter. The same rule covers the file panel's editor hosts, so the Memory viewer, the MCP diff and the Changes and Touched editors share one surface. See `.ai/contexts/changes-view.md` ("Look and feel").
 - **The toolbar API exposes button refs directly** (`toolbar.saveBtn`, `toolbar.formatBtn`, …). The ViewerPanel reads `null` checks instead of asking the toolbar — slightly leaky encapsulation, but harmless.
 
@@ -471,7 +471,7 @@ things about that editor are not `ViewerPanel`'s:
   stops it overwriting a file the session has written in the meantime.
 
 `ViewerPanel`'s own protections have Changes-panel equivalents rather than
-reuses, for the same reason: watching goes through `git-changes-watch` instead
+reuses, for the same reason: watching goes through `src/main/changes/git-changes-watch.js` instead
 of `watch-file` (session-keyed, no absolute path), and the in-flight save flag
 lives on the tab instead of the component. An MCP-driven open replaces whatever
 tab is showing, so a dirty Changes buffer is stashed on the session's panel
@@ -636,9 +636,9 @@ Changed source, palette or index invalidates the entry; removed diagrams are
 evicted on the next preview. Both synchronous document replacement and async
 diagram replacement preserve the preview scroll offsets.
 
-The app currently has a fixed dark palette without a global light/dark selector.
-Diagrams derive their palette from `--surface-sunken`, or explicit html/body
-`data-theme=light|dark`. One observer watches root/body theme/class/style changes
+The app theme (Dark, Light, System; global `theme` setting, see
+[theme.md](theme.md)) sets `data-theme` on the root element. Diagrams derive their palette from `--surface-sunken`, or explicit html/body
+`data-theme=light|dark` (`markdownDiagramTheme`). One observer (`watchMarkdownDiagramTheme`) watches root/body theme/class/style changes
 and re-renders connected previews when the effective palette changes. SVG viewBox
 width becomes intrinsic width; wide diagrams scroll inside their wrapper. The
 main.js renderer CSP is unchanged: self scripts, self/data images, self fonts,

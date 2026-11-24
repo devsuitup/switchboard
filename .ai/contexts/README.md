@@ -1,8 +1,8 @@
 # Context engineering — Switchboard
 
-Twenty-two sub-system docs (35 to about 2400 lines as of 2026-10, most have grown
-well past their original size), written for AI agents who need to make a focused
-change without re-reading `main.js`, now ~4100 LOC.
+Thirty sub-system docs, written for AI agents who need to make a focused
+change without re-reading `main.js` (about 4700 lines as of 2026-11) or the
+main-process modules under `src/main/<context>/`.
 
 ## When to read which
 
@@ -15,6 +15,7 @@ change without re-reading `main.js`, now ~4100 LOC.
 | SQLite, indexing, search, heatmap aggregation, fs.watch | [session-cache](session-cache.md) |
 | Cron schedules, schedule `.md` files, `claude --resume -p` spawn | [schedule-runner](schedule-runner.md) |
 | Project operation admission, launch reservations and draining in-flight spawns | [project-operation-gate](project-operation-gate.md) |
+| Project deletion: the preview, the process reads, the removal | [project-delete](project-delete.md) |
 | Subagent sidebar grouping, transcript view, parent→child wiring | [subagent-observability](subagent-observability.md) |
 | Memory and Activity trace viewers, CodeMirror panel, toolbar buttons | [viewer-panel](viewer-panel.md) |
 | New IPC, preload bridge changes, renderer ↔ main protocol | [ipc-bridge](ipc-bridge.md) |
@@ -35,9 +36,12 @@ change without re-reading `main.js`, now ~4100 LOC.
 | What is reported to ActivityWatch: the two buckets, focus, the Settings section | [activitywatch](activitywatch.md) |
 | Screen refresh on return, the Refresh controls, the PTY resize nudge | [terminal-refresh](terminal-refresh.md) |
 | The Linux updater restart, environment, lock retry, manual restart notice | [updater-relaunch](updater-relaunch.md) |
+| The build/release workflow: matrix per event, strict publish, release notes, the PR-title check | [build-release](build-release.md) |
+| The app theme: Dark/Light/System, the color tokens, the light terminal palette | [theme](theme.md) |
 
 ## Reading order for a new contributor (~30 min)
 
+0. **[ADR 0005](../../docs/decisions/0005-main-process-context-layout.md)** — why main-process modules live under `src/main/<context>/`, and how a move is done
 1. **`ipc-bridge`** — gives you the public surface of the whole app in one page
 2. **`session-cache`** — gives you the data model
 3. **`subagent-observability`** — the #1 fork-specific feature, touches everything
@@ -46,11 +50,12 @@ change without re-reading `main.js`, now ~4100 LOC.
 
 ## What's NOT in these contexts (intentionally)
 
-- **Terminal management** — xterm.js + node-pty integration in `public/terminal-manager.js`. Not yet documented because it's largely upstream code with minor extensions. If you're working there, read the file directly.
-- **MCP / IDE emulation** — file diff panel, OSC 8 hyperlinks, etc. Lives in `public/file-panel.js` and `main.js` MCP bridge handlers. Not yet documented; in-flight upstream work.
-- **Settings UI** — per-project + global, lives in `public/settings-panel.js`. Mostly self-contained, low coupling.
+- **Terminal management core** — xterm.js + node-pty integration in `public/terminal-manager.js`. Its edges are documented (terminal-refresh, terminal-path-links, terminal-right-click, plain-terminal, panel-terminal; user doc [docs/terminal.md](../../docs/terminal.md)), the core is not: it is largely upstream code with minor extensions. If you're working there, read the file directly.
+- **MCP / IDE emulation** — file diff panel, OSC 8 hyperlinks, etc. Lives in `public/file-panel.js` and `src/main/integrations/mcp/mcp-bridge.js` (only the `mcp-diff-response` handler stays in `main.js`). No context doc; the user doc is [docs/ide-emulation.md](../../docs/ide-emulation.md).
+- **Remote hosts over SSH** — `src/main/remote/`. No context doc; the user doc is [docs/remote-hosts.md](../../docs/remote-hosts.md).
+- **Settings UI** — per-project + global, lives in `public/settings-panel.js`; the user doc is [docs/settings.md](../../docs/settings.md). Defaults come from `SETTING_DEFAULTS` in `public/setting-defaults.js`.
 - **Sidebar rendering details** — covered piecemeal in subagent-observability + session-cache; the full sidebar is `public/sidebar.js`. If you're doing UI work there, expect to read the file.
-- **Build / electron-builder** — covered in [docs/development.md](../../docs/development.md). Not a code area an agent typically modifies.
+- **Local build / electron-builder** — covered in [docs/development.md](../../docs/development.md); the CI build and release workflow is [build-release](build-release.md).
 
 ## Updating these docs
 

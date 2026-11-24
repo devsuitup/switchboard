@@ -42,6 +42,8 @@ shows that refusal in the region, with no terminal mounted. The message text
 comes from the main process, so there is one wording, not two. What the refusal
 has to do to be *visible* is in "The refusal" below.
 
+### A panel shell is not a session
+
 The spawned session carries `panelFor`, which `isPanelShellSession(session)`
 reads. It *is* listed by `get-active-sessions`, which is what puts it in the
 renderer's `activePtyIds` — see "LRU" below — and it is deliberately excluded
@@ -49,10 +51,10 @@ everywhere a live PTY stands for a session the user can see or act on:
 
 | Place | Why it must skip a panel shell |
 |---|---|
-| `get-active-terminals` (main) | It restores plain-terminal *rows*; a panel shell has none. |
-| `buildProjectsFromCache` (main) | It injects every live plain-terminal PTY into the `get-projects` payload so a terminal sorts among the session rows. That payload *is* the sidebar, and the renderer's `dedup()` copies it into `sessionMap` — so an unfiltered shell becomes a session row of its own, labelled `Terminal` from the hard-coded `summary` here rather than the `Shell` the renderer sets on its own object. It also lands in `cachedAllProjects`, which is what `renderDefaultStatus` sums for "N sessions". |
+| `get-active-terminals` (`main.js`) | It restores plain-terminal *rows*; a panel shell has none. |
+| `buildProjectsFromCache` (`session-cache.js`, main process) | It injects every live plain-terminal PTY into the `get-projects` payload so a terminal sorts among the session rows. That payload *is* the sidebar, and the renderer's `dedup()` copies it into `sessionMap` — so an unfiltered shell becomes a session row of its own, labelled `Terminal` from the hard-coded `summary` here rather than the `Shell` the renderer sets on its own object. It also lands in `cachedAllProjects`, which is what `renderDefaultStatus` sums for "N sessions". |
 | `layoutGridCards` (renderer) | Only *implicitly*, and the row above is what does it. Grid mode has no panel-shell predicate: it walks the sidebar's DOM rows and wraps every id that is also in `openGridSessionIds()`, which **does** contain `panel:<owner>`. Given a row, it would move the shell's container out of `#panel-terminal-region` into a grid card and cost it the WebGL context the mount/unmount pair manages. The absent row is therefore load-bearing for a second subsystem, and `test/panel-terminal.test.js` pins both halves. |
-| the missing-project remap guard (main) | It refuses a remap while sessions append to the transcripts being rewritten, and tells the user to stop them first. A shell appends to nothing and offers nothing to stop. |
+| the missing-project remap guard (`main.js`) | It refuses a remap while sessions append to the transcripts being rewritten, and tells the user to stop them first. A shell appends to nothing and offers nothing to stop. |
 | `scheduleActiveSessionsPoll` (renderer) | A non-empty `activePtyIds` pins the poll at 3 s. One open shell would cancel the 30 s idle back-off of the v0.0.33–41 perf campaign for the whole window. |
 | `renderDefaultStatus` (renderer) | "N open here" would count a session with a shell twice. |
 
@@ -69,7 +71,9 @@ Every other `isPlainTerminal` reader either *skips* plain terminals already
 branches in `main.js`) — which excludes a shell for free — or is per-PTY spawn
 and wiring behaviour in `open-terminal` that a panel shell should get exactly
 like any other shell. The readers that *select* plain terminals as user-facing
-sessions are the two named in the table, and only those two need the predicate.
+sessions, or count live PTYs as sessions, are the three main-process ones named
+in the table (`get-active-terminals`, `buildProjectsFromCache`, the remap
+guard), and only those three call `isPanelShellSession`.
 
 ## The three lifted assumptions in terminal-manager.js
 
@@ -196,15 +200,16 @@ alone would disconnect it from main-process output and stop routing.
 |---|---|
 | Session switch | Kept running. The container is unmounted (`.visible` off, `panelMounted` false), output accumulates, and replays in one write on return. |
 | Panel shell closed (the Shell button) | Stopped. `close-terminal` only *detaches* the renderer, so `stopSession` is called explicitly — otherwise the PTY would outlive its only UI. |
-| Session's terminal destroyed (re-click of an ended session, LRU eviction of a closed entry, Delete, a plain terminal's shell exiting) | Stopped with it, from `destroySession` (for a plain terminal, `onProcessExited` destroys the entry at once). |
-| Claude session's process stopped or exited | Kept running. Stop (`confirmAndStopSession`) and `onProcessExited` leave a Claude session's entry mounted and `closed`, so `destroySession` does not run until one of the events above. |
+| Session's terminal destroyed (re-click of an ended session, LRU eviction of a closed entry, Delete, a plain terminal's shell exiting) | Stopped with it, from `destroySession` (for a plain terminal, `applyProcessExit` destroys the entry at once). |
+| CLI session's process (Claude or Codex) stopped or exited | Kept running. Stop (`confirmAndStopSession`) and `applyProcessExit` leave a CLI session's entry mounted and `closed`, so `destroySession` does not run until one of the events above. |
 | The shell exits on its own | The region keeps it, with a banner naming the exit code and the Shell toggle. Toggling Shell off and on spawns a new one. |
 | App quit | Killed by the main process with every other PTY (`before-quit`, and the window's `closed` handler). |
 
-`app.js`'s `onProcessExited` routes a panel shell to `notePanelTerminalExit`
+`app.js`'s `applyProcessExit` (called by the `onProcessExited` listener) routes a
+panel shell to `notePanelTerminalExit` (`isPanelTerminalSession`)
 **before** its two existing branches: the plain-terminal branch keys on a
 `sessionMap` row, which a panel shell deliberately never has, so it would
-otherwise take the Claude-session path and print "re-click this session in the
+otherwise take the CLI-session path and print "re-click this session in the
 sidebar" at a row that does not exist.
 
 `destroyPanelTerminalFor` therefore accepts **either** id shape. Called with an

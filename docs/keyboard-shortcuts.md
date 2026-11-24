@@ -95,6 +95,12 @@ Quit is `Cmd+Q` on macOS and `Ctrl+Q` on Linux; on Windows the item reads
 Paste, Select All — carry Electron's default keys for their roles. There is no reload shortcut: `Cmd+R` and `Ctrl+Shift+R` are blocked. See
 [Window](window.md).
 
+## Message viewer
+
+In **View messages**, Ctrl+F (Cmd+F on macOS) opens search. Enter moves to
+the next match, Shift+Enter to the previous one, and Escape closes search.
+The search keeps its position while a live transcript updates.
+
 ## Settings navigation
 
 Tab enters the selected Settings page button. Up/Down select the previous or next
@@ -102,7 +108,9 @@ page; Left/Right do the same in both layouts. Home/End select the
 first/last page. Enter or Space activates a page button. Tab then enters the
 page's first enabled control, followed by its remaining controls and the footer.
 Shift+Tab moves back through the controls. The two explanatory disclosure blocks
-open with Enter or Space. Escape does not close Settings; use Cancel or close.
+open with Enter or Space. In **Filter settings…**, Escape clears the filter
+and returns to the selected page. Escape does not close Settings; use Cancel
+or close.
 
 ## Dialogs
 
@@ -115,17 +123,19 @@ outside the menu or clicking outside also closes it.
 
 The **New Session** dialog focuses the selected permission-mode control whenever
 opened, including from the + menu. Choosing another mode keeps focus on that
-mode. Escape, Cancel and clicking outside return focus to the control that opened
+mode. Enter in a text input or select list does not start a session.
+Escape, Cancel and clicking outside return focus to the control that opened
 it (the + button for the menu). If that control has disappeared, focus goes to
 its replacement project or worktree +,
 the visible session terminal, or Add Project. Start and Enter start the session
 with the selected mode and focus its terminal. Enter in a text input does not
 start; Enter on Cancel cancels and returns focus to the opener.
 
-Resume leaves focus on the previously focused control when opened. Add Project
-focuses its folder field. These two dialogs do not yet restore focus to their
-opener when closed. Esc cancels both. Enter outside a text field confirms
-Resume, and Enter confirms Add Project.
+Resume focuses the selected Claude permission mode, or the first Codex list.
+Escape, Cancel and clicking outside return focus to its opener, with the same
+fallbacks as New Session. Enter in an input or list does not resume.
+Add Project focuses its folder field and does not yet restore focus to its
+opener when closed. Esc cancels it, and Enter confirms Add Project.
 
 Tool shortcuts act on the shown terminal or focused grid card and are inactive
 in other views. If a tool chord conflicts with an existing session, grid or

@@ -2,7 +2,7 @@
 
 This is JB's fork (`devsuitup/switchboard`, transferred from `JeanBaptisteRenard/switchboard` on 2026-08-11) of `doctly/switchboard`. The fork carries features not (yet) upstream — read this before editing anything.
 
-Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/Application/Infrastructure layering. Runtimes (npm, node) run directly on the host — nothing here is Dockerised. CI is GitHub Actions (check status via `gh pr checks`); the `gh` CLI is used for PRs, not `glab`. The husky pre-commit hook runs `task check:fast` automatically. Commit style is a loose `feat(scope): ...` / `fix(scope): ...`, with no strict footer rules.
+Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/Application/Infrastructure layering. Runtimes (npm, node) run directly on the host — nothing here is Dockerised. CI is GitHub Actions (check status via `gh pr checks`); the `gh` CLI is used for PRs, not `glab`. The husky pre-commit hook runs `task check:fast` automatically. Commit (squash) subjects follow the PR title format `type(area): subject` (see "When you finish work", step 5; older history also has bare `(area): subject`), with no strict footer rules.
 
 ## Quick orientation
 
@@ -12,6 +12,12 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Change Electron main / IPC | [contexts/ipc-bridge.md](contexts/ipc-bridge.md), then `main.js`, `preload.js` |
 | Change SQLite, indexing, watcher, FTS, heatmap | [contexts/session-cache.md](contexts/session-cache.md) |
 | Change the session index's writer worker (ADR 0004) | [contexts/session-index-writer.md](contexts/session-index-writer.md) |
+| Change the CLI adapter contract, Claude delegation, launch argv, or the Codex adapter | [contexts/cli-harnesses.md](contexts/cli-harnesses.md) |
+| Change project operation admission, launch reservations or the draining of in-flight spawns | [contexts/project-operation-gate.md](contexts/project-operation-gate.md) |
+| Change project deletion (preview, process reads, removal) | [contexts/project-delete.md](contexts/project-delete.md) |
+| Move a module (codemod, VM stub inference, layout checks) | [contexts/module-moves.md](contexts/module-moves.md) |
+| Change the managed browser library (lifecycle, Linux identity/lock, test-pr cleanup) | [contexts/managed-browser.md](contexts/managed-browser.md) |
+| Change the app theme (Dark/Light/System, color tokens, terminal palette) | [contexts/theme.md](contexts/theme.md) |
 | Change trigger files (command injection into open PTYs, results) | [contexts/trigger-watcher.md](contexts/trigger-watcher.md) |
 | Change the renderer's modal stack or its question dialogs (`appConfirm`, `appChoose`) | [contexts/app-dialogs.md](contexts/app-dialogs.md) |
 | Change schedule cron / `.md` files / schedule spawn | [contexts/schedule-runner.md](contexts/schedule-runner.md) |
@@ -42,7 +48,7 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Write a `CHANGELOG.md` entry, or change the changelog CI check or the What's new dialog | [docs/changelog.md](../docs/changelog.md) |
 | Drive a live instance that cannot see the user's sessions | [../docs/live-testing.md](../docs/live-testing.md) |
 
-For a guided tour of the codebase architecture, start at [contexts/README.md](contexts/README.md).
+For a guided tour of the codebase architecture, start at [contexts/README.md](contexts/README.md). Known nits found while writing the contexts are in [contexts/_issues.md](contexts/_issues.md).
 
 ## Critical invariants for AI agents
 
@@ -89,7 +95,7 @@ The new code takes effect on **next launch only** (after the user fully quits an
 
 Two agents in the same git checkout will race on branch checkouts and the working tree. Symptom: file edits from one agent leak into the other's commits. Use `isolation: "worktree"` when spawning subagents that touch overlapping files.
 
-After the agent completes, **remove the worktree manually** — `git worktree remove --force .claude/worktrees/agent-<id>`. The harness does not auto-clean. On this machine agent worktrees live under `.work-files/worktrees`, managed by the harness (`harness worktree ensure/release`), and each has a `node_modules` junction to the primary checkout: remove the junction first (`rmdir` on Windows, never a recursive delete), because `git worktree remove --force` traverses it and empties the primary `node_modules`.
+After the agent completes, **remove the worktree manually** — `git worktree remove --force <worktree path>`. The harness does not auto-clean. On this machine agent worktrees live under `.work-files/worktrees`, managed by the harness (`harness worktree ensure/release`), and each has a `node_modules` junction to the primary checkout: remove the junction first (`rmdir` on Windows, never a recursive delete), because `git worktree remove --force` traverses it and empties the primary `node_modules`.
 
 ### 4. `.work-files/` is gitignored scratch space
 
@@ -97,7 +103,7 @@ Gitignored scratch space. Use it for session notes, proposals, plans, scratch JS
 
 ### 5. No `Co-Authored-By` trailers in commits
 
-Workspace-level rule (`~/workspace/CLAUDE.md`). Applies to commits and MR/PR descriptions.
+Workspace-level rule (the user's global `CLAUDE.md`). Applies to commits and MR/PR descriptions.
 
 ### 6. Overnight / unattended work: don't touch the live app while a session is mid-run
 
@@ -136,6 +142,7 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
 - **No automatic resume of a session live elsewhere** — restore and reload skip it, a click asks; see [contexts/cli-session-state.md](contexts/cli-session-state.md), "Live elsewhere"
 - **Background agents view** — the daemon's `--bg` sessions listed, attached, stopped, dispatched; see [contexts/bg-agents.md](contexts/bg-agents.md)
 - **Codex CLI sessions in the index** — `$CODEX_HOME/sessions` rollouts in the sidebar, search, viewer, heatmap, with a CLI badge (port of upstream's harness work, credit Ali Basiri); see [contexts/cli-harnesses.md](contexts/cli-harnesses.md)
+- **App theme** — Dark, Light or System in Settings → General → Appearance, with a matching light terminal palette (#1176/#1177); see [contexts/theme.md](contexts/theme.md)
 
 (Not exhaustive — `git log --oneline upstream/main..main` is the ground truth.)
 
@@ -149,7 +156,7 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
 | Default value for a setting | `SETTING_DEFAULTS` in `public/setting-defaults.js` — never a literal at the call site |
 | Escape HTML in renderer | `escapeHtml()` (cross-file global) |
 | Open a file in a CodeMirror panel | `new ViewerPanel(container, opts)` |
-| Optional toolbar button | `opts.format`, `opts.onDelete`, `opts.onSave`, `opts.onClose` on ViewerPanel |
+| Optional toolbar button | `opts.format`, `opts.onDelete`, `opts.onSave`, `opts.openExternal`, `opts.revealInFolder`, `opts.onClose` on ViewerPanel |
 | Flash button on success | `window.flashButtonText(btn, text, ms)` |
 
 ## Testing
@@ -157,8 +164,8 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
 - `node:test` runner via `npm test` / `task test`.
 - Renderer tests use jsdom via `test/dom-setup.js` + `vm.runInContext` to evaluate `public/*.js` in isolation.
 - `public/app.js` cannot be evaluated whole. To test one of its functions, load the shipped source with `loadAppFunctions` from `test/app-source.js` into the window `setupSidebarDom()` returns, and stub only its outside edges. Never copy the function into the test.
-- Pitfall: `installSpies: false` is required when the eval defines functions you also spy on — function declarations from eval overwrite property spies.
-- Always test in the **primary checkout** (`C:\Serveur\switchboard` on this machine), not inside `.claude/worktrees/agent-*`. Worktrees may have incomplete `node_modules` and produce false negatives on tests that require native modules (e.g. `morphdom`).
+- Pitfall: function declarations from an eval overwrite property spies installed before it. Test files whose own setup helper installs spies take an `installSpies` option for that (e.g. `setupDom` in `test/dom-subagent-transcript.test.js`); pass `installSpies: false` when the eval defines a function you also spy on.
+- Always test in the **primary checkout** (`C:\Serveur\switchboard` on this machine), not inside an agent worktree (`.work-files/worktrees/*`). Worktrees may have incomplete `node_modules` and produce false negatives on tests that require native modules (`better-sqlite3`, `node-pty`).
 
 ## When you finish work
 
@@ -183,7 +190,7 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
 The fork has features upstream maintainers might want. When adapting a fork-only feature for upstream:
 
 1. Branch off `upstream/main` (NOT fork main), name `upstream/<topic>`.
-2. Cherry-pick the relevant commit(s). Expect manual merges — our `main.js` is ~4100 LOC (measured 2026-10) vs upstream's ~2200; insertion points exist but contexts differ.
+2. Cherry-pick the relevant commit(s). Expect manual merges — our `main.js` is ~4700 LOC (measured 2026-11) vs upstream's ~2200; insertion points exist but contexts differ.
 3. Strip fork-specific dependencies (subagent groups, schedule IPC, etc.) — keep the patch minimally scoped.
 4. PR against `doctly/switchboard:main`. Link the originating fork PR.
 

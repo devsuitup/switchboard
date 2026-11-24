@@ -53,7 +53,8 @@ belonged to R when R existed. If R is missing, Claude remains grouped at W;
 an exact W hide/delete entry continues hiding that group with session evidence.
 Archive compatibility is read-only at
 match time (D2); retirement alone changes state and preserves W schedule offers.
-See the archive compatibility section in `session-cache.md`.
+See "Repository grouping for harness worktrees (#1137)" in
+[session-cache.md](session-cache.md#repository-grouping-for-harness-worktrees-1137).
 
 The plain-Node regression in `test/project-delete-grouped-ownership.test.js`
 composes the production inventory, planner and writer with disposable SQLite
@@ -260,11 +261,32 @@ started during a slow CLI read is included.
 
 ## Renderer boundary (A4d)
 
-Both the sidebar Delete button and Project Settings use
-`confirmAndDeleteProjectFolder`. The preload exposes previewProjectDelete,
-token-shaped deleteProject, projectDeleteState and onProjectDeleteRecovery.
-The former positional bridge is explicitly removeProjectLegacy; neither UI
-entry calls it. R5 is resolved by this simultaneous switch.
+Three user entry points call `confirmAndDeleteProjectFolder` in
+`public/sidebar.js`: the sidebar project row's Delete button, Project Settings
+(`public/settings-panel.js`) and the Archived projects manager
+(`public/archived-manager.js`, `remove`). Deletion notices re-enter it through
+their Review deletion / Review remaining deletion actions. The preload exposes
+previewProjectDelete, token-shaped deleteProject, projectDeleteState and
+onProjectDeleteRecovery over the channels `preview-project-delete`,
+`delete-project`, `project-delete-state` (registered by
+`project-delete-ipc.js`) and the event `project-delete-recovery`. Main also sends
+`project-delete-schedules-changed` from its `notifySchedules` sink (`main.js`,
+`createProjectDeleteMain` call); no preload method or renderer listener
+subscribes to it. The former positional bridge is explicitly
+removeProjectLegacy (`remove-project`); no UI entry calls it.
+
+The archived manager deletes an archived project without restoring it first.
+It passes `reuseInitialPreview: true`: the first preview starts from the
+remembered session/settings choices and its reply becomes the dialog's initial
+plan instead of a second preview. Its `onUnavailable` callback receives a reply
+without a confirmable plan before any dialog opens and writes the reason into
+the row, then disables that row's Delete. A local worktree project whose path
+still groups under a repository (`worktreeGroupingPath`) and whose preview
+fails with `IDENTITY_UNAVAILABLE` gets the non-retryable reason "This worktree
+is grouped under its repository. To remove it from Switchboard, delete its
+repository instead." After the dialog closes, focus returns to the filter on
+success, otherwise to the row's Delete button if still enabled, its summary,
+or the filter.
 
 R4 / #1090 boundary: stopBackgroundJobs is always the strict boolean false.
 No stop-job consent is offered or remembered. Live background plans disable
@@ -326,7 +348,7 @@ Delete on that stale view. Completion is never inferred from a transport error.
 
 Plain-Node renderer fixtures exercise the production scripts and extracted app
 functions. Native layout/focus, real Electron IPC and process death remain CI
-or manual integration checks; the A4d brief prohibits launching them locally.
+or manual integration checks.
 
 ## Current state: internal main composition (A4c4)
 
@@ -578,11 +600,12 @@ member/job aliases deduplicate to one target with the explicit job ID or the
 job-source target ID. Each target's sessionIds union includes only rows naming
 that live target; the conversation list separately retains all members,
 including stopped continuations. Scheduled jobs require schedule/claim correlation.
-No-tab jobs remain controlled by the landed stop adapter. **#1090 remains a
-gate: A4c4 must not enable user-facing background-job deletion until the atomic
-worker-incarnation stop gap is resolved or explicitly accepted by JB.**
+No-tab jobs remain controlled by the landed stop adapter. **#1090 (open) remains
+a gate: user-facing background-job deletion stays disabled until the atomic
+worker-incarnation stop gap is resolved or explicitly accepted by JB.** The
+renderer always sends `stopBackgroundJobs: false` (`confirmAndDeleteProjectFolder`).
 
-For A4c4, `readTarget` must not remove a tab from activeSessions before its PTY
+`readTarget` must not remove a tab from activeSessions before its PTY
 exits. Otherwise the adapter retains proven-dead work but fails safely while
 waiting for exitDrain. The main composition must preserve captured references
 through actual exit housekeeping.
@@ -609,9 +632,9 @@ See [session-state.md](session-state.md), [bg-agents.md](bg-agents.md) and the
 Windows helper section of [ipc-bridge.md](ipc-bridge.md) for contracts/limits.
 
 `project-delete-stop.js` now composes those seams through
-`createProjectDeleteStop(ports).preflight/stop/verify`. It is composed by the
-internal A4c4 main service. A4c3 supplies the token service and callback tests.
-No preload, UI or scheduler stop is enabled.
+`createProjectDeleteStop(ports).preflight/stop/verify`. `project-delete-main.js`
+composes it into the service, which the renderer reaches through `delete-project`.
+No scheduler stop is enabled.
 `cliSessionState.getScheduleRunSnapshot` was already exported by A4c1;
 headless schedules remain named blocking targets without safe tree control.
 
@@ -680,8 +703,8 @@ respawn between the last adapter read and the verb can therefore target the
 replacement. Post-checks can refuse changed identity but cannot undo a signal.
 Adding optional PID/start fields solely to this adapter would not close that
 race; the daemon verb needs an atomic expected-incarnation contract. Until
-then, A4c3/A4c4 must treat this as an unresolved stop-seam limitation, not claim
-that the adapter alone guarantees no replacement worker is signalled. See
+then (#1090) this is an unresolved stop-seam limitation: the adapter alone does
+not guarantee that no replacement worker is signalled. See
 [bg-agents.md](bg-agents.md), dormant guarded stop ports.
 
 Preflight checks every binding, capability, consent, guarded job ownership,
@@ -729,12 +752,12 @@ For the #1081 natural-exit obligation, the adapter re-reads the pinned PTY's
 natural exit only while object/PID/start/generation still match, followed by
 independent conversation proof and exitDrain. A replacement generation refuses
 even when that late natural proof exists. Main's earlier one-shot read is not
-relied upon; main needs no change for this dormant adapter.
+relied upon.
 
 Plain-Node tests use production modules and fake external/process ports, plus
 the unchanged seam suites. They are not native process-death, daemon or SSH
-acceptance. Native Windows evidence and actual callback acceptance remain CI
-and A4c3/A4c4 obligations.
+acceptance. Native Windows evidence and actual callback acceptance are left to CI
+and to the service/composition tests (`test/project-delete-ipc.test.js`).
 
 An unknown transcript folder with an inaccessible cwd only refuses the selected
 project when that cwd is lexically under the project path (including equality).
@@ -747,9 +770,10 @@ scan before later attributable transcripts.
 
 A4b4 already supplies `completeProjectDeletion`, integer writer revision and
 project epoch fences, exact groups/members plus jobs/tabs/schedules inventory,
-terminal/noLateCommit outcomes and committed invalidation targets. Main, IPC
-and the two user entry points still have no new deletion caller. The earlier
-substrate sections below describe their historical landing boundary.
+terminal/noLateCommit outcomes and committed invalidation targets. The service
+calls it once per accepted operation (`project-delete.js`, `bounded(() =>
+writer.completeProjectDeletion(manifest), 60000)`). The substrate sections below
+document those writer-side pieces.
 
 `createProjectDeleteInventory` supplies the six planner ports, with an explicit
 writer, projects directory, data directory, active-session Map, scheduler
@@ -768,8 +792,8 @@ by itself. Neither read route increments revision or enters mutation routing.
 
 Discovery bounds aggregate entries/records (20,000 default, 50,000 hard), bytes
 (32 MiB default, 64 MiB hard), transcript heads (16 KiB), other files
-(8 MiB default, 16 MiB hard), each port
-(3 s default) and the whole observation (10 s default, 15 s hard). The clock and
+(8 MiB default, 16 MiB hard), each port and the whole observation (both
+default to and are capped at `PROJECT_DELETE_PREVIEW_TIMEOUT_MS`, 20 s). The clock and
 timer ports are injectable. Directory iteration and file reads are asynchronous;
 realpaths are memoized within an observation. Attributable unindexed/unmapped
 transcripts, missing parts, linked files/directories, mixed ownership and
@@ -793,7 +817,7 @@ read keeps the pending-history guard conservatively armed. The written result,
 settings ACK and producer fencing survive. Transaction failures still reject.
 Plain-Node real-store tests exercise this worker path, restart sealing and lost
 committed replies. Actual handler, stop/death, native crash and renderer acceptance
-remain A4c2–A4d/CI obligations, not A4c1 claims.
+are not exercised by these tests.
 
 ### Review corrections (A4c1fix)
 
@@ -843,13 +867,12 @@ cap. The store's conservative JSON byte bound still applies (six times raw
 string bytes plus overhead); failed sizing probes fetch no payload. Other errors
 never retry. Raw settings use the same JSON-parse-or-string fallback as getSetting.
 
-## Historical landing: persisted progress substrate (#474 A4b1)
+## Persisted progress substrate (#474 A4b1)
 
-`project-delete-progress.js` is a dormant backend library. Its store schema,
+`project-delete-progress.js` is the persisted progress substrate that
+`completeProjectDeletion` (A4b4, below) drives. Its store schema,
 transaction hooks, budgets and worker routing are documented in
 [session-index-writer.md](session-index-writer.md#dormant-project-deletion-substrate-474-a4b1).
-At the A4b1 landing there was no `completeProjectDeletion` command or production deletion caller.
-The existing planner and its fingerprint semantics are unchanged.
 
 `operationId(project, expectedEpoch, uuid?)` binds a canonical `[alias,path]`
 hash, epoch and UUID. Receipt eviction cannot make that ID valid at a newer
@@ -903,32 +926,27 @@ Readback retains the sealed/epoch proof of no late commit during and after
 purging. A large receipt can temporarily leave more than 128 terminal headers;
 later calls or explicit maintenance finish trimming it.
 
-A4b4 obligation: an unrelated writer commit between chunks currently causes
-`apply` to throw `WRITER_STALE`, leaving the operation `inProgress`. Admission
-of another deletion of the same project also refuses `DELETION_BUSY` until
-fence/recover frees the owner. Completion
-must either tolerate unrelated revision bumps using the membership digest or
-deterministically seal the committed prefix as partial.
-
-Archive workflow exclusion and epoch-aware existing producers remain A4b2;
-actual metadata/settings effects and manifest validation remain A4b3; the
-complete bounded command and queued-producer fencing remain A4b4. Main
-recovery holds, stop evidence and filesystem inspection remain A4c. This
-slice makes no AC2/AC3/AC10 or complete AC9 claim and needs `no-changelog`.
+An unrelated writer commit between chunks makes `apply` throw `WRITER_STALE`.
+`completeProjectDeletion` (`project-delete-writer.js`) then calls
+`progress.failOperation`, which seals the committed prefix as `partial`
+(`project-delete-progress.js`, `failOperation`). Admission of another deletion
+of the same project refuses `DELETION_BUSY` until fence/recover frees the owner.
 
 ## Read-only planner
 
 `src/main/projects/project-delete-plan.js` exports
-`createProjectDeletePlanner(deps)`. It has no production caller yet. A4b owns
-writer completion; A4c owns admission, tokens, IPC, actual process stops and
-composition of the ports below; A4d owns both UI entry points. Existing Delete
-and Archive behavior is unchanged by this library.
+`createProjectDeletePlanner(deps)`. `project-delete-main.js` composes it with
+the inventory ports below and the service; the planner itself performs no
+writes, stops or admission.
 
-`preview({projectPath, folderKey?, options})` returns
+`preview({projectPath, folderKey?, options, worktrees?})` returns
 `{ok:true, plan}` or `{ok:false, code, error}`. The five options are required
 booleans: `sessions`, `settings`, `schedules`, `transcripts`,
-`stopBackgroundJobs`. Unknown request/option fields and true physical choices
-are rejected. There is no worktree consent input in A4.
+`stopBackgroundJobs`. Unknown request/option fields refuse, and `schedules` or
+`transcripts` set to true refuse ("physical deletion is unavailable",
+`validateRequest`). The optional `worktrees` array is the linked-folder
+selection described under "Linked worktree folders (E)": exact absolute paths,
+at most 128, no duplicates.
 
 An ok response means the inventory could be assembled. A plan with any
 `refusals` is **not confirmable**. Consumers must inspect this list, rather
@@ -956,7 +974,8 @@ record sizes and total bytes before allocating replies, and use a worker or
 bounded asynchronous IO for discovery/hashing. They must not recursively scan
 the filesystem synchronously on main. The planner limits total inventory items
 to 20,000 (configurable downwards or up to a hard ceiling of 50,000), and total
-wall time to 10 seconds (configurable up to 15 seconds). A timed-out port cannot
+wall time to `PROJECT_DELETE_PREVIEW_TIMEOUT_MS` (20 seconds, also the ceiling;
+a shorter `timeoutMs` applies). A timed-out port cannot
 advance to later ports. Abort does not make a port with side effects safe.
 
 1. `waitForIndex(budget)` waits for already-running normal indexing. It must
@@ -1014,8 +1033,10 @@ or missing remote mappings refuse.
 
 Groups carry `folderKey`, `runtime:'claude'|'codex'`, `verified:true` and optional
 `parentProjectPath`. Parent membership must be verified independently. The
-existing `.claude/worktrees/<name>` nesting is also recognized; other worktree
-layouts need their explicit parent. Children are returned with effect kept;
+inventory recognizes every layout `worktreeAncestorPaths` enumerates
+(`derive-project-path.js`: `.worktrees`, `.claude-worktrees`,
+`.claude/worktrees`, `.work-files/worktrees`, nested); see "Repository session
+grouping (#1137)" above. Children are returned with effect kept;
 prefix siblings and other hosts are not members. Selected groups have effect
 selected. Duplicate/unverified/host-conflicting groups refuse.
 
@@ -1096,15 +1117,17 @@ identity, canonical row sorting selects the display entry deterministically,
 and every selected spelling participates in the shared-settings check.
 Otherwise sessions means discard versus archive,
 and settings means delete versus keep. Physical files, memory, .work-files,
-worktrees, project directory and branches stay kept. Retained transcripts can
+the project directory and branches stay kept; worktrees stay kept unless
+selected as linked worktree folders (E). Retained transcripts can
 restore transcript titles; retained schedules can reactivate on re-add. All
 server files stay kept remotely.
 
-A4c must revalidate under its project operation gate after acceptance, reject
-any changed/refused plan, independently verify actual process exits and writer
-outcomes, and never enlarge consent. This read-only planner does not lock
-external writers or prevent filesystem/process races. The later service owns
-final process/schedule correlation, snapshots at admission and recovery.
+The service (see "Service contract (A4c3)") revalidates under its project
+operation gate after acceptance, rejects any changed/refused plan, independently
+verifies actual process exits and writer outcomes, and never enlarges consent.
+This read-only planner does not lock external writers or prevent
+filesystem/process races. The service owns final process/schedule correlation,
+snapshots at admission and recovery.
 
 ## Archive workflow exclusion (A4b2)
 
@@ -1126,12 +1149,13 @@ in the computed list. Mutation and deletion identities remain strict.
 The lease covers refresh/effects, worker requests, async injected callbacks,
 catch-up claims, schedule rewrites and completion ACKs.
 
-The library-only `reserveProjectDeletion(projects)` reserves synchronously
-before returning `{ready, release}`. `ready` waits for already admitted
-workflows; new conflicting workflows refuse immediately. A4b4 must retain the
-reservation until deletion ACK or terminal fence/readback after an unknown
+`reserveProjectDeletion(projects)` (writer facade, `session-index-writer.js`)
+reserves synchronously before returning `{ready, release}`. The service calls it
+at execution for the project and its selected linked worktrees
+(`project-delete.js`). `ready` waits for already admitted
+workflows; new conflicting workflows refuse immediately. The reservation is
+retained until deletion ACK or terminal fence/readback after an unknown
 outcome. `release` is idempotent after readiness and refuses early release.
-There is no deletion caller, IPC or UI in A4b2.
 
 Each admitted mutation workflow reads fresh archive epoch proofs on the writer
 before its first mutation. List reads tolerate blocked identities; only entries
@@ -1178,10 +1202,10 @@ another receipt. Durable epoch high-water marks are retained.
 The race suite loads the facade directly and the unwrapped production worker
 in a VM with a real conversation-store fixture and Node 20 skip guard. It
 asserts disposable schedule/claim bytes, sibling sharing, async callbacks,
-epoch ABA refusal and queue cancellation. A4b4 still owes the real completion
-integration witness for AC10; no metadata-deletion completion is claimed here.
+epoch ABA refusal and queue cancellation. The completion integration is
+covered under "Complete command and recovery integration (A4b4)".
 
-## A4b3 dormant metadata engine
+## A4b3 metadata engine
 
 `project-delete-identity.js` supplies the planner's unchanged canonical path,
 stable serialization, identity projection and membership hash. The planner now
@@ -1190,7 +1214,7 @@ sorting and per-preview normalization memoization retain their previous meaning.
 
 `project-delete-writer.js` exports `readDurableScope`,
 `validateDeletionManifest`, `buildDeletionUnits`, `applyDeletionUnit` and
-`buildFinalizationUnits`. No completion command, deletion IPC or UI calls them.
+`buildFinalizationUnits`; `completeProjectDeletion` in the same file drives them.
 The validator binds the operation ID, integer revision, epoch, durable digest,
 five explicit boolean options and identical inventory/member/group copies.
 It recomputes membership, checks persisted row/folder ownership and refuses
@@ -1237,12 +1261,13 @@ transcriptless dormant tabs. The working-set producer persists no host field;
 the admitted restore targets supply the owner rather than saved-tab host hints.
 Restore pruning assumes session IDs are globally unique across local and remote hosts, since the working-set producer writes no remoteAlias.
 The returned invalidation targets do not touch mainTouchedCache or renderer
-maps/pending saves. A4d must also serialize the whole-global working-set producer.
+maps/pending saves. The renderer serializes the whole-global working-set
+producer through `_persistChain` (see "Renderer boundary (A4d)").
 The finalization helper itself supplies neither cancellation nor admission;
 A4b4 owns revision/epoch/ownership revalidation before every chunk and the final
 atomic group. Raw producers starting after deletion are also A4b4's boundary.
 
-Step-0 corrections: project lists omit reserved identities from leases/proofs
+Project lists omit reserved identities from leases/proofs
 and retirement, while unrelated identities continue. Writer retirement drops
 currently blocked entries before guarding the remainder, but supplied stale
 epochs still refuse. A readonly hasFences failure falls back to the writer
@@ -1257,8 +1282,8 @@ stores when the native ABI and node:sqlite fallback are unavailable.
 
 ## Complete command and recovery integration (A4b4)
 
-`writer.completeProjectDeletion(manifest)` is an internal backend command. Main,
-IPC and both user entry points still use their previous contracts. The facade
+`writer.completeProjectDeletion(manifest)` is an internal backend command
+(`session-index-writer.js`); its only caller is the service. The facade
 reserves archive exclusion synchronously, shares it across `withCache` facades,
 awaits existing workflows and forwards once. Backend fencing also waits for an
 existing reservation's readiness. An unresolved operation pins even an externally
@@ -1329,7 +1354,8 @@ blocked through committed deletion until explicit fresh re-add. A sealed partial
 allows newly bound reindexing and a newly validated cleanup operation, while old
 deletion IDs remain sealed. After detailed history is purged, an unowned session
 producer is conservatively refused while a blocked fence or operation remains; proven unrelated owners
-remain usable. Whole-global renderer saves remain A4d's producer boundary.
+remain usable. Whole-global renderer saves are serialized on the renderer side
+(see "Renderer boundary (A4d)").
 
 Stage/apply errors whose code starts with `SQLITE_BUSY` propagate to the worker's
 existing 20/50/100 ms transaction retry loop. They never seal a partial receipt
@@ -1349,8 +1375,8 @@ integration additions stay in the existing Electron-spawning suites and must be
 run in CI. Local witnesses load the full shipped worker with a VM filename and a
 real SQLite shim store; a second readonly connection inspects intermediate commits.
 Node 20 uses the fixture's supported guard. #380 journal tables and their revision
-contract are unchanged. Main sender/admission/stop and renderer recovery acceptance
-remain A4c/d.
+contract are unchanged. Main sender/admission/stop and renderer recovery are
+covered by the A4c/A4d sections above.
 
 ## Evidence boundary
 
@@ -1375,15 +1401,12 @@ queued batch. This measures concurrency and deadline semantics, not host latency
 ### Dormant Windows sessions (#1103B)
 
 The runtime uses `cli-session-state.readStatusEvidence` for transcript-only
-members. Known descriptor absence no longer depends on the Windows global
-process-table cache. Previously even a missing sessions directory first needed
-a successful table refresh: failure was cached for 3000 ms from completion,
-while evidence age was measured from probe start. A failed or slow probe could
-therefore yield unknown on the first preview or after an earlier successful
-preview. A later timely refresh could yield stopped for the same dormant member.
-That change alters the plan fingerprint and adds a refusal, so execute returns
-`PREVIEW_CHANGED` at its first revalidation, before stopping or submitting to the
-writer. The existing canonical path and post-stop ownership checks are retained.
+members. Known descriptor absence (including a missing sessions directory) does
+not depend on the Windows global process-table cache, so a failed or slow table
+probe cannot turn a dormant member from stopped into unknown between preview and
+revalidation. Were that evidence to change, the plan fingerprint changes and
+execute returns `PREVIEW_CHANGED` at its first revalidation, before stopping or
+submitting to the writer. The canonical path and post-stop ownership checks apply.
 
 The main composition tests use the real descriptor reader, inventory, planner,
 service and SQLite worker fixture. They preserve the original TMP spelling,
