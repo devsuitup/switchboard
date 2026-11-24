@@ -13,6 +13,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Footer usage gauges are grouped under Claude and Codex, share Week and 5h window labels, and hide with their CLI setting. (#1208)
 
 ### Fixed
+- Deleting a project refreshes its schedules in the open Schedules or Agent Files list.
 - Resume with config now shows the launch settings of the session's own CLI (Claude or Codex) and its working directory. Enter on a list in New Session or Resume with config no longer launches the session. (#1201)
 - Focusing content below the window no longer shifts the whole interface up under the title bar. (#1204)
 - Re-reading conversation history does less repeated work, especially for sessions with usage history spanning many days or models. (#1192)
