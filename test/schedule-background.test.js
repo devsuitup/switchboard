@@ -52,7 +52,7 @@ function setup(t, options = {}) {
   const activeSessions = new Map(options.joined ? [[ACTUAL, { isAttach: true, attachJobId: JOB, pty: {}, exited: false }]] : []);
   const context = vm.createContext({
     require: name => {
-      if (name.endsWith('/schedule-run-results')) return { scheduleRunsDir: () => home, writeScheduleRunResult: (_dir, record) => records.push(record) };
+      if (name.endsWith('/schedule-run-results')) return { scheduleRunsDir: () => home, writeScheduleRunResult: (_dir, record) => { records.push(record); return options.writeAck ?? true; } };
       if (name.endsWith('/schedule-background')) {
         const mod = localRequire(name);
         return { ...mod,
@@ -171,12 +171,23 @@ test('untrusted workspace records and reports a failure without cleanup of an un
   assert.match(h.reports.at(-1).error, /Workspace not trusted/);
 });
 
-test('a launch without a job id cleans up the job it created and records the failure', async t => {
+test('a launch without a job id stops nothing, even a same-name job in its cwd, and records an unresolved launch', async t => {
   const h = setup(t, { orphan: true }); const result = await h.start(); await h.finished;
   assert.equal(result.ok, false);
-  assert.deepEqual(h.calls.slice(1), [['stop', OTHER_JOB], ['rm', OTHER_JOB]], 'the job found by name, cwd and creation time is cleaned up');
+  assert.deepEqual(h.calls.slice(1), [], 'a job found by name, cwd and creation time is not proof of ownership');
   assert.equal(h.records.at(-1).outcome, 'spawn-error');
-  assert.equal(h.records.at(-1).cleanup, 'stopped and removed');
+  assert.match(h.records.at(-1).cleanup, /^unresolved launch: no job id .*no job was stopped or removed$/);
+  assert.match(h.logs.join('\n'), /unresolved launch/);
+});
+
+test('the main result callback returns the writer acknowledgement, and a refused write keeps the record', async t => {
+  const h = setup(t, { writeAck: false }); await h.start(); h.state('done'); await h.finished;
+  assert.equal(h.records.length, 1, 'the write was attempted');
+  const saved = JSON.parse(fs.readFileSync(path.join(h.recordsDir, JOB + '.json'), 'utf8'));
+  assert.equal(saved.phase, 'result');
+  assert.equal(saved.result.outcome, 'exited');
+  assert.equal(saved.cleanup, 'stopped and removed');
+  assert.equal(h.context.scheduleBackgroundDeps().writeResult({ sessionId: ACTUAL }), true, 'a record without a schedule file has nothing to publish');
 });
 
 test('background timeout is recorded, reported as a timeout and cleans the job', async t => {

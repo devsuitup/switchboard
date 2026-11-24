@@ -183,6 +183,15 @@ stopped or as a lost job. If Switchboard closes during a run, the next launch
 resumes watching it, records its result and cleans it up; a run whose hour
 passed meanwhile is recorded as timed out.
 
+Switchboard only stops or removes a job whose id the launcher printed. If the
+launch prints no job id, the run is recorded as failed to start with
+**unresolved launch**, and no job is stopped or removed: check Agents for a job
+the launch may have left behind. If stopping or removing the job fails,
+Switchboard tries again a few times, and again at the next launch; the run
+appears in the history once cleanup is done, or with **cleanup abandoned** and
+the last error after nine attempts. A job whose state names another
+conversation is never stopped; the history records it as **unresolved**.
+
 ### Catching up a missed run
 
 A minute that passes while Switchboard is closed, or while the machine is

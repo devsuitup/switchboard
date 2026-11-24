@@ -4371,7 +4371,7 @@ if (!app.isPackaged) {
           || cliSessionState.readAllDescriptors().some(d => ((id && d.sessionId === id) || d.jobId === jobId) && d.kind !== 'bg'),
         writeResult: record => {
           const { scheduleRunsDir, writeScheduleRunResult } = require('./src/main/schedules/schedule-run-results');
-          if (record.filePath) writeScheduleRunResult(scheduleRunsDir(path.dirname(DB_PATH)), record, log);
+          return !record.filePath || writeScheduleRunResult(scheduleRunsDir(path.dirname(DB_PATH)), record, log);
         },
         report: payload => scheduleIpc.reportRunExit(mainWindow, payload),
       };

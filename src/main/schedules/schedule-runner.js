@@ -11,6 +11,7 @@ const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 const MINUTE_MS = 60 * 1000;
 const CATCH_UP_WINDOW_MS = 7 * 24 * 60 * MINUTE_MS;
+const DISCOVERY_WAIT_MS = 10 * 1000;
 
 /** Parse YAML-like frontmatter from a markdown file (simple key: value parser). */
 function parseFrontmatter(content) {
@@ -706,13 +707,14 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects, res
   let running = true;
   let lastTickMinute = null;
   const runningTasks = new Set();
+  const reserved = new Map();
   // see .ai/contexts/schedule-runner.md ("Isolated instances")
   const catchUpOn = !process.env.SWITCHBOARD_DATA_DIR;
   if (!catchUpOn) log.info('[schedule] catch-up is off: SWITCHBOARD_DATA_DIR isolates this instance, schedules run on cron only');
 
   function launch(schedule, dueMs) {
     const taskKey = `${schedule.folder}:${schedule.slug}`;
-    if (runningTasks.has(taskKey)) {
+    if (runningTasks.has(taskKey) || reserved.get(taskKey) > 0) {
       log.info(`[schedule] Skipping ${schedule.name} — still running from previous trigger`);
       return;
     }
@@ -813,7 +815,9 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects, res
     }
   }
 
+  let gate = null;
   const runCheck = onTick => {
+    if (gate) return gate.then(() => runCheck(onTick));
     try {
       const result = check(onTick);
       if (result?.catch) return result.catch(err => log.error('[schedule] Cannot load schedule projects:', err));
@@ -825,11 +829,33 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects, res
   if (resumeBackgroundRuns) {
     const claim = run => {
       const key = `${encodeProjectPath(run.cwd)}:${run.slug}`;
-      runningTasks.add(key);
-      return () => runningTasks.delete(key);
+      reserved.set(key, (reserved.get(key) || 0) + 1);
+      let held = true;
+      return () => {
+        if (!held) return;
+        held = false;
+        const left = reserved.get(key) - 1;
+        if (left > 0) reserved.set(key, left); else reserved.delete(key);
+      };
     };
-    try { Promise.resolve(resumeBackgroundRuns(claim)).catch(err => log.error('[schedule] Cannot resume background runs:', err)); }
-    catch (err) { log.error('[schedule] Cannot resume background runs:', err); }
+    try {
+      const resumed = resumeBackgroundRuns(claim);
+      Promise.resolve(resumed).catch(err => log.error('[schedule] Cannot resume background runs:', err));
+      if (resumed && typeof resumed.discovered?.then === 'function') {
+        let timer;
+        const bound = new Promise(resolve => {
+          timer = setTimeout(() => {
+            log.warn(`[schedule] Background run records not read after ${DISCOVERY_WAIT_MS / 1000} s; scheduling without waiting for them`);
+            resolve();
+          }, DISCOVERY_WAIT_MS);
+          timer?.unref?.();
+        });
+        gate = Promise.race([Promise.resolve(resumed.discovered).catch(() => {}), bound]).then(() => {
+          clearTimeout(timer);
+          gate = null;
+        });
+      }
+    } catch (err) { log.error('[schedule] Cannot resume background runs:', err); }
   }
   runCheck(false);
   if (resumeSource) resumeSource.on('resume', onResume);

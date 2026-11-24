@@ -73,19 +73,21 @@ function writeScheduleRunResult(runsDir, input, log, { rename = fs.renameSync } 
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
       log.info(`[schedule] Result already claimed for ${sessionId}; keeping the first`);
-      return;
+      return true;
     }
     if (fs.existsSync(destination)) {
       log.info(`[schedule] Result already recorded for ${sessionId}; keeping the first`);
-      return;
+      return true;
     }
     tmp = path.join(runsDir, `.${filename}.${crypto.randomUUID()}.tmp`);
     fs.writeFileSync(tmp, JSON.stringify(record) + '\n', { flag: 'wx' });
     renameWithRetry(tmp, destination, { rename });
     tmp = null;
     pruneScheduleRunResults(runsDir, key);
+    return true;
   } catch (error) {
     log.warn(`[schedule] Cannot record result for ${input.sessionId}:`, error.message);
+    return false;
   } finally {
     if (tmp) { try { fs.unlinkSync(tmp); } catch {} }
     if (lockFd !== undefined) {

@@ -42,11 +42,13 @@ schedule's history.
 
 Launch: the launcher call has its own 30 s bound (`LAUNCH_TIMEOUT_MS`),
 independent of the run limit, and so does the wait for the job's identity. The
-job id comes from `parseDispatchOutput` and errors from `stripShellNoise`. When
-no id is printed, the jobs directory is scanned (at most 200 entries) for the
-one job named like the schedule, created after launch, whose `cwd` matches when
-state.json records one; it is stopped and removed, and the failure recorded.
-Without exactly one match nothing is cleaned.
+job id comes from `parseDispatchOutput` and errors from `stripShellNoise`.
+Destructive cleanup needs a job id the launcher printed. When none is printed
+the run fails with the cleanup diagnostic `unresolved launch: no job id in the
+output of claude --bg; no job was stopped or removed`, logged as a warning. No
+job is inferred: a name, cwd and creation-time match does not prove ownership,
+since another schedule or the user can start a same-name job in that cwd during
+the call (re-review R1 of #1233), and any scan bound can hide a second match.
 
 The launcher acknowledgement does not complete a run. A synthetic lifetime emits
 exit only after state monitoring and cleanup; trackScheduleRun stores kind bg and
@@ -70,20 +72,63 @@ Every background outcome, launch failures included, goes through
 its job or failed to start rather than an exit code.
 
 Restart: once identity is known, `{ jobId, actualId, cwd, name, filePath, slug,
-manual, dueMs, startedAtMs, deadline }` is written to
+manual, dueMs, startedAtMs, deadline, phase }` is written to
 `<data>/schedule-state/background/<jobId>.json` (the catch-up reader ignores the
-subdirectory) and deleted after the result is written. `startScheduler` calls
-`resumeBackgroundRuns` at start without awaiting it; each valid record (at most
-64) resumes polling and cleanup against its saved deadline, is tracked again
-for the resume guard, and holds its schedule's in-flight key, so a cron tick
-does not start a second run beside it. A run past its deadline times out at
-once. A launch interrupted before identity is not recorded and stays a leak.
-A resumed run reports no ActivityWatch span.
+subdirectory). The record moves through three phases and is deleted only at the
+end of the last:
+
+- `running`: the job is watched. When it ends, its outcome is saved as
+  `result` with the cleanup mode, and the record moves to `cleanup`.
+- `cleanup`: stop/rm against the saved job. Before any stop or rm the job's
+  current state.json must carry the saved `actualId`: a missing state.json
+  means the job is gone (done), another session id is recorded as
+  `unresolved: job … now belongs to session …; nothing was stopped or removed`
+  (done, nothing touched), and an unreadable state defers. A failed or deferred
+  attempt keeps the record with `cleanupAttempts`; a process makes at most 3
+  attempts, `retryMs` (30 s) apart, and the next start continues. After a
+  successful stop the mode becomes `rm`, so a retry does not stop twice. After
+  9 attempts in all the run is recorded with `cleanup abandoned after 9
+  attempts: …`. A joined user takes the job over and ends the phase. The
+  outcome is never recomputed: a resumed `cleanup` record is not watched again.
+- `result`: `writeScheduleRunResult` returns `true` once the result file
+  exists (also when it already did, or another writer holds its lock) and
+  `false` on an error; the main callback returns that acknowledgement. The
+  record is deleted only on `true`, otherwise kept for the next start, which
+  publishes it without cleaning again.
+
+The result is published after cleanup settles, so a run whose cleanup is still
+pending has no history entry yet. A launch-time failure without a confirmed
+session id (identity never appeared) gets its bounded in-process retries but no
+record: a record without the full saved identity could not be confirmed at the
+next start. A launch interrupted before identity is not recorded either.
+
+Resume is two phases. `discoverBackgroundRuns` reads at most 256 record names,
+validates each and calls `claim` for at most 64 valid ones; `resumeBackgroundRuns`
+returns the promise of all lifetimes with a `discovered` promise attached.
+`startScheduler` holds every check (startup catch-up, wake-up and minute ticks)
+behind `discovered`, bounded by `DISCOVERY_WAIT_MS` (10 s), never behind the
+lifetimes (re-review R2 of #1233: the startup catch-up used to beat the record
+reads). A resume source without `discovered` (test stubs claiming
+synchronously) does not gate. Claims are counted per schedule key, so several
+resumed runs of one slug hold it until the last ends.
+
+Validation before any claim: `v: 1`, an 8-hex `jobId` matching the file name,
+a full UUID `actualId` starting with it, non-empty cwd, name, filePath and slug,
+`startedAtMs` after 2024 and at most a day ahead, a deadline after the start
+and at most a day after it, a known phase and cleanup mode, and a saved
+`result` outside `running`. A record that parses but fails, or does not parse,
+is renamed to `<jobId>.json.corrupt-<ms>` so it leaves the batch for good; a
+read error leaves it in place. During a resumed watch, a state.json naming
+another session ends the run as `job-missing` with nothing to clean, so the
+deadline never authorizes a stop of a job whose identity does not match.
+A run past its deadline times out at once. A resumed run reports no
+ActivityWatch span.
 
 Create disables remote/sandbox selection and the backend refuses sandbox opt-in
 creation. Existing saved files still fall back.
 Tests: schedule-background (main extraction with the real module and disposable
-job files), schedule-catch-up, run-schedule-now-result, dom-schedule-create,
+job files), schedule-background-recovery (launch without id, discovery gate,
+cleanup and result phases, record validation), schedule-catch-up, run-schedule-now-result, dom-schedule-create,
 schedule-create-file, schedule-run-results and dom-schedule-run-exit; all use
 injected CLI boundaries.
 
