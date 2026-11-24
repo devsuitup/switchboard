@@ -470,15 +470,20 @@ code and never sees a Codex row.
 `get-harnesses` returns each adapter's `capabilities` as a plain copy beside
 `id` and `label`. `initTerminalBackgroundControl` (`public/app.js`) reads that
 list once at startup into `window._harnesses` (a `Map` keyed by id) and
-repaints the header. `backgroundActionReason` looks up the open tab's
-`session.runtime` there: a harness with `bgJobs: false` makes Send to
-background disabled, in the header, the sidebar menu and the exit dialog,
-with "<label> sessions cannot be sent to the background" (#1234). A session
+repaints the header. `harnessBackgroundReason` looks up the open tab's
+`session.runtime` there, and `backgroundActionReason` returns its answer: a
+harness with `bgJobs: false` makes Send to background disabled, in the header,
+the sidebar menu and the exit dialog, with "<label> sessions cannot be sent to
+the background" (#1234). In the exit dialog that reason comes before the row's
+`reason` from main's inventory, which for a Codex tab is the unreadable-state
+refusal ("wait for its state to appear") because Codex writes no Claude state;
+main's reason stays the fallback for every other row. A session
 with no `runtime`, an unknown runtime, or a listing that failed or has not
 answered yet keeps the action enabled; main's `sendToBackground` stays the
 second line and refuses a session whose state it cannot read. Tests:
-`send-to-background-renderer.test.js` R16 (Codex disabled, Claude unchanged)
-and R17 (a capability, not a runtime name, decides).
+`send-to-background-renderer.test.js` R16 (Codex disabled, Claude unchanged),
+R17 (a capability, not a runtime name, decides) and R18 (the exit dialog,
+over a refused row from the real `inventory` and `backgroundRefusal`).
 
 ### The sidebar badge
 
