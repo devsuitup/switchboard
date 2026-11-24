@@ -14,7 +14,7 @@ const SOURCE = fs.readFileSync(SCRIPT, 'utf8');
 test('each runtime path requires documentation, including non-JS renderer files', () => {
   for (const file of ['main.js', 'preload.js', 'session-cache.js', 'src/main/service.js',
     'public/app.js', 'public/index.html', 'public/style.css', 'workers/search.js',
-    'harnesses/codex.js', 'scripts/claude-sandbox.sh']) {
+    'harnesses/claude.js', 'scripts/claude-sandbox.sh']) {
     const result = checkDocs({ files: [file, 'test/fixture.js'], labels: [] });
     assert.equal(result.ok, false, file);
     assert.ok(result.message.includes(file));
