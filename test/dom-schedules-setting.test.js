@@ -355,3 +355,26 @@ test('a Schedules change made while an untouched Save is in flight is kept and s
   assert.equal(h.tab.hidden, true);
   assert.equal(migrateSchedulesTabDefault(h.db), 'none');
 });
+
+test('a Schedules change made after the submitted one is kept as unsaved and sent by the next Save (#1239)', async t => {
+  const h = await setup(t, { schedulesTab: true, schedulesTabDefaultMigrated: true });
+  await h.w.openSettingsViewer('global');
+  const toggle = h.w.document.querySelector('#sv-schedules-tab');
+  const button = h.w.document.querySelector('#sv-save-btn');
+  const edit = checked => { toggle.checked = checked; toggle.dispatchEvent(new h.w.Event('change', { bubbles: true })); };
+  edit(false);
+  const held = holdNextMerge(h);
+  button.click();
+  await settle();
+  assert.equal(held.args[0].schedulesTab, false, 'the first Save sends the edited off');
+  edit(true);
+  await held.commit();
+  assert.equal(h.saved.schedulesTab, false, 'the first Save committed its submitted value');
+  assert.equal(toggle.checked, true, 'the newer edit stays visible');
+  assert.match(h.w.document.querySelector('#sv-unsaved').textContent, /unsaved/);
+  button.click();
+  await settle();
+  await settle();
+  assert.equal(h.saved.schedulesTab, true, 'the next Save sends the newer edit');
+  assert.equal(h.tab.hidden, false);
+});

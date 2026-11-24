@@ -785,13 +785,16 @@
     const controlValue = control => String(control.type === 'checkbox' ? control.checked : control.value);
     let initialHosts;
     let initialShortcuts;
-    const editedControls = new Set();
+    const editedControls = new Map();
+    let editGeneration = 0;
     function dirtySnapshot() {
       return { values: trackedControls.map(controlValue), hosts: JSON.stringify(remoteHosts), shortcuts: JSON.stringify(scShortcuts) };
     }
     function resetDirty(snapshot = dirtySnapshot(), submittedEdits = null) {
       trackedControls.forEach((control, index) => { control.dataset.initial = snapshot.values[index]; });
-      if (submittedEdits) for (const control of submittedEdits) editedControls.delete(control);
+      if (submittedEdits) {
+        for (const [control, generation] of submittedEdits) if (editedControls.get(control) === generation) editedControls.delete(control);
+      }
       else editedControls.clear();
       initialHosts = snapshot.hosts;
       initialShortcuts = snapshot.shortcuts;
@@ -806,7 +809,7 @@
     resetDirty();
     form.addEventListener('input', updateDirty);
     form.addEventListener('change', updateDirty);
-    form.addEventListener('change', event => editedControls.add(event.target));
+    form.addEventListener('change', event => editedControls.set(event.target, ++editGeneration));
     if (!isProject) {
       window._syncUntouchedGlobalToggle = (id, checked) => {
         const control = form.isConnected && form.querySelector('#' + id);
@@ -1021,7 +1024,7 @@
       let settings = {};
       let rejectedHosts = false;
       const submitted = dirtySnapshot();
-      const submittedEdits = new Set(editedControls);
+      const submittedEdits = new Map(editedControls);
 
       if (isProject) {
         // Only save fields where "use global" is unchecked

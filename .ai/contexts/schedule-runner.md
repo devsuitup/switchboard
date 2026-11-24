@@ -685,7 +685,11 @@ untouched Save submitted before the migration commits cannot write the stale
 off. When the field was not sent, Save re-reads `global` after the write is
 acknowledged and applies the stored effective value to the tab and, unless the
 checkbox was edited while the Save was in flight, to the checkbox and its
-baseline. Invokes resolve in order, so a stale first read always
+baseline. Each `change` event stamps the control with a new edit generation;
+Save records the generations it submitted, and its acknowledgement clears a
+control's edited mark only if no newer change happened meanwhile, so a toggle
+flipped again during the Save stays edited and the next Save sends it. Only the
+Schedules field depends on this mark; every other global field is always sent. Invokes resolve in order, so a stale first read always
 applies before the event's fresh one; an event sent before the page loaded is
 lost, but the page's first read then already sees the committed value. A late
 `marked` or `none` changes nothing visible and sends nothing. Without the
