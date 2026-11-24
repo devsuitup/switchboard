@@ -205,7 +205,12 @@ shutdown unregisters listeners without dropping unresolved service ownership.
 The `project-delete-recovery` notification carries `{operations:[{operationId,host,projectPath}]}`
 and is exposed as `onProjectDeleteRecovery(callback)`;
 `project-delete-schedules-changed` carries `{invalidation, operationId,
-expectedProjectEpoch, committedRevision}` and remains internal. Project changes
+expectedProjectEpoch, committedRevision}` through `onProjectDeleteSchedulesChanged(callback)`.
+`memory-workfiles-view.js` queues `queueSchedulesReload` and reloads Agent Files
+when active; the Schedules queue does nothing while hidden. A deletion settled
+normally already refreshes both lists (`applyProjectDeletion`, `project-deleted`
+cause); the listener is what refreshes Agent Files when the commit is observed
+outside that settle. Project changes
 use the existing throttled project notification. Both sinks
 are behind a fresh committed-receipt/current-epoch check and main-owned per-sink
 operation/epoch/revision deduplication. See project-delete.md for restart and

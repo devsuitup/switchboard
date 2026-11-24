@@ -13,7 +13,8 @@ The tab is on by default. For this release it can still be turned off in
 in a later release. Saving the setting switches surfaces at once, without a
 restart. With the tab off, project schedule files appear in
 [Agent Files](memory-workfiles.md) instead, with **Run now** and the editor,
-and archive messages point there.
+and archive messages point there. A project deletion that was still
+unresolved and completes later also refreshes the open Agent Files list.
 
 Earlier versions saved the tab as off with every Global Settings Save, so the
 first launch of 0.1.0 turns it on once, even if Settings were saved before. If

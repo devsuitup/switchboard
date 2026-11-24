@@ -319,6 +319,7 @@ they do not launch Electron, Claude or a real schedule.
 ### Launch invariants
 
 - **Project Archive suspends launches without editing schedule files (#568).**
+  This is the archive/catch-up contract referenced by `skipMissedRuns`.
   `main.js` filters `scheduleProjects().list()` with `isProjectSettingsArchived`
   on every scheduler check, including startup, cron ticks and wake catch-up.
   The stored registry is preserved. The shared launch function checks again,
