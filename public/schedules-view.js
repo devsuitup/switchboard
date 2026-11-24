@@ -24,6 +24,7 @@ let schedulesProject = null;
 let schedulesReloadTimer = null;
 let schedulesReloadMaxTimer = null;
 let schedulesPendingFocus = null;
+let schedulesPendingTopFocus = null;
 const schedulesActions = new Map();
 let schedulesData = null;
 let schedulesLoadError = null;
@@ -80,7 +81,7 @@ function setSchedulesVisible(visible) {
   schedulesReloadTimer = null;
   clearTimeout(schedulesReloadMaxTimer);
   schedulesReloadMaxTimer = null;
-  if (!visible) { schedulesRequest++; schedulesProject = null; schedulesPendingFocus = null; return; }
+  if (!visible) { schedulesRequest++; schedulesProject = null; schedulesPendingFocus = null; schedulesPendingTopFocus = null; return; }
   if (!schedulesData && !schedulesLoadError) {
     const container = document.getElementById('schedules-content');
     container?.replaceChildren();
@@ -137,15 +138,47 @@ async function loadSchedules() {
 
 function retrySchedules() {
   if (schedulesInFlight) return schedulesInFlight;
+  const container = document.getElementById('schedules-content');
+  const focused = document.activeElement;
+  const row = focused?.matches('.schedule-retry-btn') ? focused.closest('.schedule-item') : null;
+  const top = container && !row ? scheduleTopFocus(container) : null;
   const pending = loadSchedules();
   for (const button of document.querySelectorAll('.schedule-retry-btn')) button.disabled = true;
+  if (row) focusScheduleControl(row.dataset.filepath, focused.dataset.scheduleControl);
+  else if (top?.control === 'schedule-retry-btn') {
+    schedulesPendingTopFocus = top;
+    container.tabIndex = -1;
+    container.focus({ preventScroll: true });
+  }
   return pending;
+}
+
+function scheduleTopFocus(container) {
+  const focused = document.activeElement;
+  if (focused === container) return schedulesPendingTopFocus;
+  if (!container.contains(focused) || focused.closest('.schedule-item') || !focused.dataset.scheduleControl) return null;
+  return { control: focused.dataset.scheduleControl, projectPath: focused.closest('.schedule-project')?.dataset.projectPath ?? null };
+}
+
+function restoreScheduleTopFocus(container, target) {
+  schedulesPendingTopFocus = null;
+  const match = [...container.querySelectorAll('[data-schedule-control]')].find(el => !el.closest('.schedule-item')
+    && el.dataset.scheduleControl === target.control && (el.closest('.schedule-project')?.dataset.projectPath ?? null) === target.projectPath);
+  const create = container.querySelector('.schedule-create-btn');
+  const next = match && !match.disabled ? match : !match && create && !create.disabled ? create : null;
+  if (next) {
+    next.focus({ preventScroll: true });
+    return;
+  }
+  if (match) schedulesPendingTopFocus = target;
+  container.tabIndex = -1;
+  container.focus({ preventScroll: true });
 }
 
 function scheduleRetryButton(parent) {
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = 'schedule-retry-btn';
+  button.className = 'schedule-retry-btn settings-action-btn';
   button.dataset.scheduleControl = 'schedule-retry-btn';
   button.textContent = 'Retry';
   button.addEventListener('click', () => retrySchedules());
@@ -156,7 +189,7 @@ function scheduleRetryButton(parent) {
 function renderSchedulesLoadError() {
   const container = document.getElementById('schedules-content');
   if (!container || !schedulesLoadError) return;
-  const focused = container.querySelector('.schedule-load-error')?.contains(document.activeElement);
+  const top = scheduleTopFocus(container);
   container.querySelector('.schedule-load-error')?.remove();
   if (!schedulesData) container.replaceChildren();
   const box = document.createElement('div');
@@ -165,12 +198,14 @@ function renderSchedulesLoadError() {
   scheduleText(box, 'schedule-problems', schedulesData
     ? `Showing the list last loaded at ${new Date(schedulesData.now).toLocaleTimeString()}; the latest refresh failed: ${schedulesLoadError}.`
     : `Schedules could not be loaded: ${schedulesLoadError}.`);
-  const retry = scheduleRetryButton(box);
+  scheduleRetryButton(box);
   const create = container.querySelector('.schedule-create-btn');
   if (create) create.after(box);
   else container.prepend(box);
   for (const button of container.querySelectorAll('.schedule-retry-btn')) button.disabled = false;
-  if (focused) retry.focus({ preventScroll: true });
+  if (top) restoreScheduleTopFocus(container, top);
+  else schedulesPendingTopFocus = null;
+  restorePendingScheduleFocus();
 }
 
 function showSchedules(projectPath) {
@@ -239,13 +274,16 @@ function renderSchedules(data) {
   const focusedRow = focused?.closest('.schedule-item');
   const focusedPath = container.contains(focusedRow) ? focusedRow.dataset.filepath : null;
   const focusedControl = focused?.dataset.scheduleControl || (focusedPath === schedulesPendingFocus?.filePath ? schedulesPendingFocus.control : null);
+  const topFocus = focusedPath ? null : scheduleTopFocus(container);
   const projectFocus = schedulesProject;
   schedulesProject = null;
+  schedulesPendingTopFocus = null;
   schedulesData = data;
   container.replaceChildren();
   const create = document.createElement('button');
   create.type = 'button';
-  create.className = 'schedule-create-btn';
+  create.className = 'schedule-create-btn settings-action-btn';
+  create.dataset.scheduleControl = 'schedule-create-btn';
   create.textContent = 'Create schedule';
   const creatable = data.projects.some(project => !project.archived);
   create.disabled = !creatable;
@@ -309,6 +347,7 @@ function renderSchedules(data) {
       container.focus({ preventScroll: true });
     }
   } else schedulesPendingFocus = null;
+  if (!projectFocus && topFocus) restoreScheduleTopFocus(container, topFocus);
   const paths = new Set(data.projects.flatMap(project => project.schedules.map(schedule => schedule.filePath)));
   for (const [filePath, state] of schedulesActions) {
     if (!paths.has(filePath) && state.run !== 'running' && !state.toggling && !state.deleting) schedulesActions.delete(filePath);
@@ -454,7 +493,14 @@ function focusScheduleControl(filePath, controlName) {
   const control = [...(row?.querySelectorAll('[data-schedule-control]') || [])].find(el => el.dataset.scheduleControl === controlName);
   schedulesPendingFocus = control?.disabled ? { filePath, control: controlName } : null;
   if (control?.disabled) row.focus({ preventScroll: true });
-  else control?.focus({ preventScroll: true });
+  else if (control) control.focus({ preventScroll: true });
+  else {
+    const container = document.getElementById('schedules-content');
+    const create = container?.querySelector('.schedule-create-btn');
+    const next = row?.querySelector('.schedule-actions button:not(:disabled)') || (create && !create.disabled ? create : container);
+    if (next === container && container) container.tabIndex = -1;
+    next?.focus({ preventScroll: true });
+  }
 }
 
 function restorePendingScheduleFocus() {
@@ -523,7 +569,7 @@ function buildScheduleItem(project, schedule, data) {
   const action = (cls, label, disabled, reason, handler) => {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = cls;
+    btn.className = `${cls} settings-action-btn`;
     btn.dataset.scheduleControl = cls;
     btn.dataset.unavailable = String(disabled);
     btn.dataset.reason = disabled ? reason : label;
@@ -589,7 +635,7 @@ function buildScheduleItem(project, schedule, data) {
   for (const run of runs) {
     const row = document.createElement('button');
     row.type = 'button';
-    row.className = 'schedule-history-run';
+    row.className = 'schedule-history-run settings-action-btn';
     row.dataset.scheduleControl = `history:${run.sessionId}`;
     row.textContent = `${new Date(run.created).toLocaleString()} — ${scheduleOutcome(run)}`;
     row.addEventListener('click', () => openScheduleRun(project, schedule, run));
@@ -597,6 +643,7 @@ function buildScheduleItem(project, schedule, data) {
   }
   const sessions = document.createElement('button');
   sessions.type = 'button';
+  sessions.className = 'schedule-history-sessions settings-action-btn';
   sessions.dataset.scheduleControl = 'sessions';
   sessions.textContent = 'Show history in Sessions';
   sessions.disabled = !!readError;

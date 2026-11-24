@@ -271,8 +271,19 @@ onProjectDeleteRecovery over the channels `preview-project-delete`,
 `delete-project`, `project-delete-state` (registered by
 `project-delete-ipc.js`) and the event `project-delete-recovery`. Main also sends
 `project-delete-schedules-changed` from its `notifySchedules` sink (`main.js`,
-`createProjectDeleteMain` call); no preload method or renderer listener
-subscribes to it. The former positional bridge is explicitly
+`createProjectDeleteMain` call). Preload exposes `onProjectDeleteSchedulesChanged`;
+`memory-workfiles-view.js` queues the existing debounced Schedules reload
+(a no-op while hidden) and reloads Agent Files when its tab is active. Deletion
+can remove the project's schedule registry entry and settings, changing the
+listed schedules even when schedule files are kept. Hidden lists read fresh
+data on opening. A normal committed settle already reloads both lists
+(`applyProjectDeletion` queues Schedules and loads Agent Files; the
+`project-deleted` project notification also queues Schedules). The listener's
+own gain is Agent Files when the commit is observed outside that settle: an
+`EXECUTION_PENDING` follow-up that ended in `STATE_READ_UNAVAILABLE`, an unknown
+result before Check deletion state, or a commit settled as historical
+(`applyProjectDeletion` skipped); `test/dom-project-delete-schedules.test.js`
+covers these. The former positional bridge is explicitly
 removeProjectLegacy (`remove-project`); no UI entry calls it.
 
 The archived manager deletes an archived project without restoring it first.

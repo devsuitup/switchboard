@@ -43,6 +43,11 @@ window.api.onScheduleRunExit?.(payload => {
   showScheduleRunExit(payload);
 });
 
+window.api.onProjectDeleteSchedulesChanged?.(() => {
+  queueSchedulesReload();
+  if (activeTab === 'memory') loadMemories();
+});
+
 function hideAllViewers() {
   statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';

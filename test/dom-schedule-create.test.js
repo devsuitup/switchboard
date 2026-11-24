@@ -122,3 +122,16 @@ test('modal keyboard keeps textarea Enter, traps Tab and cancels on Escape with 
   assert.equal(h.w.document.querySelector('.schedule-create-form'), null);
   assert.equal(h.w.document.activeElement, h.w.document.querySelector('.schedule-create-btn'));
 });
+test('a background refresh keeps the open form, its fields and its focus; Cancel focuses the current Create (#1238)', async t => {
+  const h = setup(t);
+  h.fill();
+  h.field('cron').focus();
+  const before = h.w.document.querySelector('.schedule-create-btn');
+  await h.w.loadSchedules();
+  assert.notEqual(h.w.document.querySelector('.schedule-create-btn'), before, 'the refresh replaced Create');
+  assert.equal(h.w.document.querySelector('.schedule-create-form'), h.form, 'the form stays open');
+  assert.equal(h.w.document.activeElement, h.field('cron'), 'the refresh does not take focus from the form');
+  assert.deepEqual(['name', 'slug', 'cron', 'prompt'].map(name => h.field(name).value), ['Nightly', 'nightly', '0 9 * * *', 'Review']);
+  h.form.querySelector('button[type="button"]').click();
+  assert.equal(h.w.document.activeElement, h.w.document.querySelector('.schedule-create-btn'));
+});
