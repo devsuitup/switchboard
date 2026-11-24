@@ -30,6 +30,54 @@ let schedulesData = null;
 let schedulesLoadError = null;
 let schedulesInFlight = null;
 
+const scheduleHealthNotices = new Map();
+let scheduleHealthApplied = null;
+
+function scheduleRetryText(ms) {
+  return ms >= 60000 ? `${Math.round(ms / 60000)} min` : `${Math.max(1, Math.round(ms / 1000))} s`;
+}
+
+function scheduleSuspensionText(health) {
+  if (!health?.suspended) return null;
+  const retry = health.retryMs ? ` Retrying every ${scheduleRetryText(health.retryMs)}.` : '';
+  if (health.reason === 'slow') return `Automatic schedules are paused: the background-run records have not been read yet.${retry}`;
+  const where = health.path ? ` at ${health.path}` : '';
+  const code = health.code ? ` (${health.code})` : health.message ? ` (${health.message})` : '';
+  return `Automatic schedules are paused: the background-run records${where} could not be read${code}. Fix their permissions.${retry}`;
+}
+
+function scheduleResultFailureText(health) {
+  const failure = health?.resultFailure;
+  if (!failure) return null;
+  const others = failure.count > 1 ? ` (${failure.count - 1} other result${failure.count > 2 ? 's' : ''} also not recorded)` : '';
+  return `A schedule result could not be recorded: ${failure.message}${others}`;
+}
+
+function showScheduleHealthNotice(id, message) {
+  if (scheduleHealthNotices.get(id) === message) return;
+  if (message) scheduleHealthNotices.set(id, message); else scheduleHealthNotices.delete(id);
+  if (message) showAppNotice({ id, kind: 'error', message });
+  else clearAppNotice(id);
+}
+
+function applyScheduleHealth(health) {
+  if (Number.isFinite(health?.revision) && Number.isFinite(scheduleHealthApplied?.revision) && health.revision < scheduleHealthApplied.revision) return;
+  scheduleHealthApplied = health;
+  showScheduleHealthNotice('ScheduleSuspended', scheduleSuspensionText(health));
+  showScheduleHealthNotice('ScheduleResultFailure', scheduleResultFailureText(health));
+}
+
+window.api?.onScheduleHealth?.(health => {
+  applyScheduleHealth(health);
+  queueSchedulesReload();
+});
+(async () => {
+  try {
+    const health = await window.api?.getScheduleHealth?.();
+    if (health) applyScheduleHealth(health);
+  } catch {}
+})();
+
 function setSchedulesVisible(visible) {
   schedulesVisible = visible;
   clearTimeout(schedulesTimer);
@@ -193,13 +241,17 @@ function scheduleOutcome(run) {
   const result = run.result;
   if (result) {
     if (result.unreadable) return 'Unknown: result record unreadable';
+    const extra = [result.cleanup, result.warning].filter(Boolean).map(text => ' — ' + text).join('');
+    if (result.outcome === 'timed-out') return `Timed out${extra}`;
+    if (result.outcome === 'stopped') return `Stopped before it finished${extra}`;
+    if (result.outcome === 'job-missing') return `Background job disappeared${extra}`;
     if (result.outcome === 'refused') return `Refused: ${result.error}`;
     if (result.outcome === 'spawn-error') return `Failed to start: ${result.error}`;
     if (result.outcome === 'signal') return `Stopped: ${result.signal}`;
     if (result.outcome === 'exited' && Number.isInteger(result.exitCode)) {
-      if (result.exitCode === 0) return 'Exit 0';
+      if (result.exitCode === 0) return `Exit 0${extra}`;
       const hint = scheduleRunFailureHint(result.failure);
-      return `Failed: exit ${result.exitCode} — ${hint}`;
+      return `Failed: exit ${result.exitCode} — ${hint}${extra}`;
     }
     return 'Unknown: result record unreadable';
   }
@@ -251,6 +303,16 @@ function renderSchedules(data) {
     create.title = prerequisite;
   }
   scheduleText(container, 'schedule-help', 'Runs before v0.0.90 carry no schedule marker and are not listed. Runs before results were kept, runs of another instance and runs alive when Switchboard closes have no result recorded.');
+  if (data.health) applyScheduleHealth(data.health);
+  const health = data.health ? scheduleHealthApplied : null;
+  for (const text of [scheduleSuspensionText(health), scheduleResultFailureText(health)]) {
+    if (!text) continue;
+    const banner = document.createElement('div');
+    banner.className = 'schedule-scan-error schedule-health';
+    banner.setAttribute('role', 'alert');
+    scheduleText(banner, 'schedule-problems', text);
+    container.appendChild(banner);
+  }
   let count = 0;
   for (const project of data.projects) {
     if (!project.schedules.length && !project.scanError) continue;
@@ -347,6 +409,16 @@ function openScheduleCreateForm(projects) {
   add('cron', 'Cron (5 fields, machine local time)');
   add('enabled', 'Enabled', 'input', 'checkbox').checked = true;
   add('catch-up', 'Catch up once when a run was missed', 'input', 'checkbox');
+  const background = add('run-as-background', 'Run as a background session (can be joined while it runs)', 'input', 'checkbox');
+  const updateBackground = () => {
+    const selected = projects.find(entry => entry.projectPath === project.value);
+    const reason = selected?.remoteAlias ? 'Background schedules are local only.' : selected?.sandboxed ? 'Background sessions cannot run under the sandbox wrapper.' : '';
+    background.disabled = !!reason;
+    if (reason) background.checked = false;
+    errors.get('run-as-background').textContent = reason;
+  };
+  project.addEventListener('change', updateBackground);
+  updateBackground();
   add('prompt', 'Prompt', 'textarea');
   const mode = add('cli.permission-mode', 'Permission mode', 'select');
   for (const entry of PERMISSION_MODES) {
@@ -397,7 +469,7 @@ function openScheduleCreateForm(projects) {
     error.textContent = '';
     const value = name => controls.get(name).value;
     const fields = { name: value('name'), slug: value('slug'), cron: value('cron'), prompt: value('prompt'),
-      enabled: controls.get('enabled').checked, 'catch-up': controls.get('catch-up').checked, cli: {} };
+      enabled: controls.get('enabled').checked, 'catch-up': controls.get('catch-up').checked, 'run-as-background': background.checked, cli: {} };
     for (const key of ['permission-mode', 'allowed-tools', 'model', 'max-budget-usd', 'append-system-prompt']) {
       if (value(`cli.${key}`).trim()) fields.cli[key] = value(`cli.${key}`);
     }
@@ -407,6 +479,7 @@ function openScheduleCreateForm(projects) {
     catch (failure) { result = { ok: false, error: failure?.message || String(failure) }; }
     busy = false;
     for (const control of controls.values()) control.disabled = false;
+    updateBackground();
     submit.disabled = cancel.disabled = false;
     if (result?.ok) {
       close();
@@ -481,8 +554,11 @@ function buildScheduleItem(project, schedule, data) {
       : !schedule.enabled ? 'Disabled'
         : fatal.length ? `Never runs: ${fatal.join('; ')}`
           : schedule.nextRunMs === null ? 'No run within a year'
-            : `Next run: ${scheduleTime(schedule.nextRunMs, data.now)}`;
+            : data.health && scheduleHealthApplied?.suspended ? `Paused: automatic launches are suspended (next run due ${scheduleTime(schedule.nextRunMs, data.now)})`
+              : `Next run: ${scheduleTime(schedule.nextRunMs, data.now)}`;
   scheduleText(item, 'schedule-state', state);
+  if (schedule.runAsBackground) scheduleText(item, 'schedule-state', project.remoteAlias ? 'Background option ignored: local schedules only'
+    : project.sandboxed ? 'Background unavailable under sandbox: runs headless' : 'Background session: can be joined while it runs');
   if (schedule.problems.length) scheduleText(item, 'schedule-problems', schedule.problems.join('; '));
   if (readError) scheduleText(item, 'schedule-problems', `${readError.message}. Check the file's permissions and path, then Retry.`);
   if (schedule.linked) scheduleText(item, 'schedule-problems', 'linked file: edit it at its source');

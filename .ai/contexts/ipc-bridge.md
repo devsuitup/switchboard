@@ -305,7 +305,26 @@ content, invoke return payload, file access or application action.
 | `create-schedule-file` | `projectPath, fields` | `{ ok: true, filePath }` or `{ ok: false, field, error }`; registered, unarchived project; runner validation and sandbox refusals; guarded commands directory and exclusive hard-link publication | `api.createScheduleFile(projectPath, fields)` |
 | `set-schedule-enabled` | `filePath, enabled` (boolean) | `{ ok }` or `{ ok: false, error }`; exact current listing path, linked-file and front-matter guards; re-enable skips missed catch-up before writing | `api.setScheduleEnabled(filePath, enabled)` |
 | `delete-schedule-file` | `filePath` | `{ ok }` or `{ ok: false, error }`; exact current listing path and disk-resolved link guard; removes the file and its catch-up/run-result records, preserving transcripts | `api.deleteScheduleFile(filePath)` |
-| `list-schedules` | none | `{ now, catchUpActive, projects: [{ projectPath, shortName, archived, sandboxed, known, scanError, schedules: [{ filePath, file, name, slug, cron, cronText, enabled, catchUp, cli, prompt, linked, readError, problems, nextRunMs, catchUpDueMs, runs: [{ sessionId, created, messageCount, replied, running, result }] }] }] }` | `api.listSchedules()` |
+| `list-schedules` | none | `{ now, catchUpActive, health, projects: [{ projectPath, shortName, archived, sandboxed, known, scanError, schedules: [{ filePath, file, name, slug, cron, cronText, enabled, catchUp, runAsBackground, cli, prompt, linked, readError, problems, nextRunMs, catchUpDueMs, runs: [{ sessionId, created, messageCount, replied, running, result }] }] }] }` | `api.listSchedules()` |
+| `get-schedule-health` | none | the scheduler health snapshot below | `api.getScheduleHealth()` |
+
+Scheduler health (`scheduleHealth()` in `main.js`) is
+`{ suspended, reason, path, code, message, since, retryMs, resultFailure, revision }`.
+`suspended: false` carries only `resultFailure` and `revision`. When automatic
+launches are held because the background-run records could not be read,
+`reason` is `unreadable` (with the failing `path` and `code`) or `slow`,
+`since` is epoch milliseconds and `retryMs` the current retry wait.
+`resultFailure` is `null` or the most recent unresolved result persistence
+failure `{ path, code, message, at, count }`, `count` being how many remain
+unresolved. `revision` is a main-process counter incremented for every
+snapshot, whether served by `get-schedule-health`, attached to a
+`list-schedules` reply as `health`, or pushed on the `schedule-health` event
+(`api.onScheduleHealth(callback)`). Main pushes when the scheduler's
+suspension changes (set, each failed retry, cleared after a successful
+discovery) and when the unresolved result failures change. The renderer
+fetches once at startup, applies every push and every listing's `health`, and
+drops any snapshot whose revision is older than the newest it applied. See
+[schedule-runner.md](schedule-runner.md), "Opt-in background runs (#611)", the paragraph on visible suspension.
 
 Main registers the handler and calls the Electron-free
 `src/main/schedules/schedule-list.js` export `buildScheduleList(deps)`. The
@@ -974,7 +993,7 @@ An unknown remote target never falls back to local disk IO.
 
 ### Events (main → renderer)
 
-`terminal-data`, `session-detected` (preload listener only: main never emits it, see "Busy-state reconciliation"), `process-exited`, `remote-resize-allowed`, `terminal-notification` (`sessionId, message, kind` — `kind` is the session harness's `classifyNotification` verdict, see cli-harnesses.md), `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`, `terminal-backlog-request`, `trigger-session-action`, `schedule-run-exit`, `project-delete-recovery`, `schedules-tab-migrated`
+`terminal-data`, `session-detected` (preload listener only: main never emits it, see "Busy-state reconciliation"), `process-exited`, `remote-resize-allowed`, `terminal-notification` (`sessionId, message, kind` — `kind` is the session harness's `classifyNotification` verdict, see cli-harnesses.md), `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`, `terminal-backlog-request`, `trigger-session-action`, `schedule-run-exit` (now also carrying `persistenceError` when a result was not recorded, sent even for exit code 0), `schedule-health` (scheduler health snapshot with `revision`, see "Schedules"), `project-delete-recovery`, `schedules-tab-migrated`
 
 `schedules-tab-migrated` carries no payload; preload `onSchedulesTabMigrated(callback)`
 calls `callback()` with no argument. Main sends it at most once per launch, only

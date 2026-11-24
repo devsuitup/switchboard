@@ -34,6 +34,25 @@ function api() {
   return require(filename);
 }
 
+test('background timeout and joined cleanup survive persistence and readback', t => {
+  const h = fixture(t);
+  const input = { ...h.input, outcome: 'timed-out', code: null, error: 'Timed out', jobId: h.input.sessionId.slice(0, 8), cleanup: 'left running, joined' };
+  api().writeScheduleRunResult(h.runsDir, input, h.log);
+  const result = api().readScheduleRunResults(h.runsDir, [input.sessionId]).get(input.sessionId);
+  assert.equal(result.outcome, 'timed-out');
+  assert.equal(result.cleanup, 'left running, joined');
+  assert.equal(result.jobId, input.jobId);
+});
+
+for (const outcome of ['stopped', 'job-missing']) test(`a background ${outcome} outcome survives persistence with its warning`, t => {
+  const h = fixture(t);
+  const input = { ...h.input, outcome, code: null, error: `job ${outcome}`, jobId: h.input.sessionId.slice(0, 8), cleanup: 'removed', warning: 'schedule provenance not recorded: EISDIR' };
+  api().writeScheduleRunResult(h.runsDir, input, h.log);
+  const result = api().readScheduleRunResults(h.runsDir, [input.sessionId]).get(input.sessionId);
+  assert.equal(result.outcome, outcome);
+  assert.equal(result.warning, input.warning);
+});
+
 function launcher(t, options = {}) {
   const f = fixture(t);
   const filename = path.join(__dirname, '../main.js');
@@ -240,19 +259,19 @@ test('reader creates nothing, parses only requested ids, and marks broken record
 
 test('atomic replacement publishes complete JSON, keeps the first write, and removes temporary files on error', t => {
   const f = fixture(t), a = api();
-  let renamed = false;
-  const rename = (from, to) => {
+  let linked = false;
+  const link = (from, to) => {
     assert.equal(path.dirname(from), f.runsDir);
     assert.equal(fs.existsSync(to), false, 'no partial destination is visible');
     assert.equal(JSON.parse(fs.readFileSync(from, 'utf8')).exitCode, 2);
-    fs.renameSync(from, to);
-    renamed = true;
+    fs.linkSync(from, to);
+    linked = true;
   };
-  a.writeScheduleRunResult(f.runsDir, f.input, f.log, { rename });
-  assert.equal(renamed, true);
+  a.writeScheduleRunResult(f.runsDir, f.input, f.log, { link });
+  assert.equal(linked, true);
   a.writeScheduleRunResult(f.runsDir, { ...f.input, code: 99, endedAtMs: 200000 }, f.log);
   assert.equal(f.read()[0].exitCode, 2, 'duplicate completion keeps the first record');
-  a.writeScheduleRunResult(f.runsDir, { ...f.input, sessionId: crypto.randomUUID() }, f.log, { rename: () => { throw new Error('rename failed'); } });
+  a.writeScheduleRunResult(f.runsDir, { ...f.input, sessionId: crypto.randomUUID() }, f.log, { link: () => { throw new Error('link failed'); } });
   assert.equal(f.records().length, 1);
   assert.equal(fs.readdirSync(f.runsDir).length, 1, 'no temporary or lock files survive failure');
   assert.ok(f.warnings.length, 'write failure is logged');
@@ -264,6 +283,223 @@ test('write failure never changes launcher acknowledgement or exit notice', asyn
   assert.equal((await h.run()).ok, true);
   assert.doesNotThrow(() => h.children[0].emit('exit', 2));
   assert.equal(h.messages[0][1].code, 2);
+  assert.ok(h.messages[0][1].persistenceError, 'the exit notice carries the persistence error');
   assert.equal(h.done, 1);
   assert.ok(h.warnings.length, 'failed persistence warns');
+});
+
+test('a successful headless run whose result cannot be written is still reported, with the error', async t => {
+  const h = launcher(t);
+  fs.writeFileSync(h.runsDir, 'not a directory');
+  assert.equal((await h.run()).ok, true);
+  h.children[0].emit('exit', 0, null);
+  assert.equal(h.messages.length, 1, 'a code-zero exit is reported when its result was not recorded');
+  assert.equal(h.messages[0][0], 'schedule-run-exit');
+  assert.equal(h.messages[0][1].code, 0);
+  assert.match(h.messages[0][1].persistenceError, /\S/);
+});
+
+test('a successful headless run whose result is recorded sends no notice', async t => {
+  const h = launcher(t);
+  assert.equal((await h.run()).ok, true);
+  h.children[0].emit('exit', 0, null);
+  assert.deepEqual(h.messages, []);
+  assert.equal(h.records().length, 1);
+});
+
+function pausedPublisher(t, f, during) {
+  const a = api();
+  const destination = path.join(f.runsDir, `${scheduleStateKey({ filePath: f.filePath })}-${f.input.startedAtMs}-${f.input.sessionId}.json`);
+  let paused = false;
+  for (const name of ['renameSync', 'linkSync']) {
+    const native = fs[name];
+    t.mock.method(fs, name, function(from, to, ...args) {
+      if (!paused && path.resolve(String(to)) === destination) { paused = true; during(destination, a); }
+      return native.call(fs, from, to, ...args);
+    });
+  }
+  return { a, destination, paused: () => paused };
+}
+
+test('a publisher that loses the publication race acknowledges the result already published', t => {
+  const f = fixture(t);
+  let acknowledged, published;
+  const p = pausedPublisher(t, f, (destination, a) => {
+    acknowledged = a.writeScheduleRunResult(f.runsDir, { ...f.input, outcome: 'timed-out', code: null, error: 'late' }, f.log);
+    published = fs.readFileSync(destination, 'utf8');
+  });
+  assert.equal(p.a.writeScheduleRunResult(f.runsDir, f.input, f.log), true, 'the paused writer finds a valid result and acknowledges it');
+  assert.equal(p.paused(), true);
+  assert.equal(acknowledged, true);
+  assert.equal(fs.readFileSync(p.destination, 'utf8'), published, 'the first acknowledged result stays');
+  assert.equal(JSON.parse(published).outcome, 'timed-out');
+  assert.deepEqual(fs.readdirSync(f.runsDir), [path.basename(p.destination)], 'no lock or temporary file is left');
+});
+
+function destinationOf(f) {
+  return path.join(f.runsDir, `${scheduleStateKey({ filePath: f.filePath })}-${f.input.startedAtMs}-${f.input.sessionId}.json`);
+}
+
+test('an invalid result file is never moved, replaced or deleted, and the failure names it', t => {
+  const f = fixture(t), a = api();
+  const destination = destinationOf(f);
+  fs.mkdirSync(f.runsDir, { recursive: true });
+  fs.writeFileSync(destination, '{');
+  for (const name of ['renameSync', 'unlinkSync', 'rmSync']) {
+    const native = fs[name];
+    t.mock.method(fs, name, function(target, ...args) {
+      assert.notEqual(path.resolve(String(target)), destination, `${name} must not touch the result file`);
+      return native.call(fs, target, ...args);
+    });
+  }
+  const written = a.publishScheduleRunResult(f.runsDir, f.input, f.log);
+  assert.equal(written.ok, false);
+  assert.equal(written.error.path, destination);
+  assert.match(written.error.message, /unreadable; remove or fix it/);
+  assert.ok(written.error.message.includes(destination));
+  assert.equal(a.writeScheduleRunResult(f.runsDir, { ...f.input, code: 1 }, f.log), false);
+  assert.equal(fs.readFileSync(destination, 'utf8'), '{', 'the invalid file stays as it was');
+  assert.deepEqual(fs.readdirSync(f.runsDir), [path.basename(destination)], 'nothing is set aside');
+  assert.deepEqual(a.latestResultFailure()?.path, destination);
+  assert.equal(f.warnings.length, 1, 'the same failure is logged once');
+  t.mock.restoreAll();
+  fs.unlinkSync(destination);
+  assert.equal(a.writeScheduleRunResult(f.runsDir, f.input, f.log), true, 'a removed file can be published again');
+  assert.notEqual(a.latestResultFailure()?.path, destination, 'a successful publication clears its own failure');
+});
+
+test('a result acknowledged by one writer survives every later writer', t => {
+  const f = fixture(t), a = api();
+  assert.equal(a.writeScheduleRunResult(f.runsDir, { ...f.input, code: 1 }, f.log), true);
+  const first = fs.readFileSync(destinationOf(f), 'utf8');
+  for (const code of [2, 3]) assert.equal(a.writeScheduleRunResult(f.runsDir, { ...f.input, code }, f.log), true);
+  assert.equal(a.writeScheduleRunResult(f.runsDir, f.input, f.log, { link: () => { throw Object.assign(new Error('transient link error'), { code: 'EIO' }); } }), false);
+  assert.equal(fs.readFileSync(destinationOf(f), 'utf8'), first, 'the first acknowledged bytes stay');
+});
+
+test('publication creates no lock file another writer could steal', t => {
+  const f = fixture(t), a = api();
+  const opened = [];
+  const native = fs.openSync;
+  t.mock.method(fs, 'openSync', function(file, ...args) { opened.push(String(file)); return native.call(fs, file, ...args); });
+  assert.equal(a.writeScheduleRunResult(f.runsDir, f.input, f.log), true);
+  assert.deepEqual(opened.filter(file => file.endsWith('.lock')), []);
+  assert.deepEqual(fs.readdirSync(f.runsDir), [path.basename(destinationOf(f))]);
+});
+
+const unresolvedAt = (a, destination) => a.latestResultFailure() && [destination].includes(a.latestResultFailure().path);
+
+for (const code of ['ENOTSUP', 'EISDIR', 'EXDEV', 'EINVAL', 'ENOSYS']) {
+  test(`a store without hard links (${code}) records nothing and says why`, t => {
+    const f = fixture(t), a = api();
+    const link = () => { throw Object.assign(new Error('hard links not supported'), { code }); };
+    const written = a.publishScheduleRunResult(f.runsDir, f.input, f.log, { link });
+    assert.equal(written.ok, false);
+    assert.equal(written.error.code, code);
+    assert.equal(written.error.path, destinationOf(f));
+    assert.match(written.error.message, /does not support hard links; schedule results cannot be recorded safely here\. Move the Switchboard data directory to an NTFS or ext4 drive\./);
+    assert.equal(written.error.detail, 'hard links not supported', 'the original error is kept');
+    assert.deepEqual(fs.readdirSync(f.runsDir), [], 'no destination is ever created without a hard link');
+    assert.equal(unresolvedAt(a, destinationOf(f)), true, 'the failure is surfaced');
+  });
+}
+
+test('a second writer cannot acknowledge a result that the first could not commit', t => {
+  const f = fixture(t), a = api();
+  const link = () => { throw Object.assign(new Error('hard links unsupported'), { code: 'ENOTSUP' }); };
+  const native = fs.fsyncSync;
+  let calls = 0, competitor;
+  t.mock.method(fs, 'fsyncSync', fd => {
+    if (++calls === 1) competitor = a.publishScheduleRunResult(f.runsDir, { ...f.input, code: 7 }, f.log, { link });
+    return native(fd);
+  });
+  const first = a.publishScheduleRunResult(f.runsDir, f.input, f.log, { link });
+  assert.equal(first.ok, false);
+  assert.equal(calls, 2, 'only the two temp files are flushed; no destination is written in place');
+  assert.equal(competitor.ok, false, 'nothing is acknowledged without a committed result');
+  assert.equal(fs.existsSync(destinationOf(f)), false);
+  assert.deepEqual(fs.readdirSync(f.runsDir), []);
+});
+
+test('unresolved failures are kept per destination; only a recovery of that destination clears it', t => {
+  const f = fixture(t), a = api();
+  fs.mkdirSync(f.runsDir, { recursive: true });
+  const other = { ...f.input, sessionId: crypto.randomUUID() };
+  const destinationA = destinationOf(f);
+  const destinationB = path.join(f.runsDir, `${scheduleStateKey({ filePath: f.filePath })}-${f.input.startedAtMs}-${other.sessionId}.json`);
+  fs.writeFileSync(destinationA, '{');
+  fs.writeFileSync(destinationB, '{');
+  const before = a.latestResultFailure()?.count || 0;
+  assert.equal(a.publishScheduleRunResult(f.runsDir, f.input, f.log).error.code, 'EBADRESULT');
+  assert.equal(a.publishScheduleRunResult(f.runsDir, other, f.log).error.code, 'EBADRESULT');
+  assert.equal(a.latestResultFailure().path, destinationB);
+  assert.equal(a.latestResultFailure().count, before + 2);
+  const unrelated = { ...f.input, sessionId: crypto.randomUUID(), filePath: f.filePath + '.other' };
+  assert.equal(a.publishScheduleRunResult(f.runsDir, unrelated, f.log).ok, true);
+  assert.equal(a.latestResultFailure().path, destinationB, 'an unrelated publication does not clear an unresolved failure');
+  assert.equal(a.latestResultFailure().count, before + 2);
+  fs.unlinkSync(destinationB);
+  assert.equal(a.publishScheduleRunResult(f.runsDir, other, f.log).ok, true);
+  assert.equal(a.latestResultFailure().path, destinationA, 'the repaired destination clears only its own failure');
+  assert.equal(a.latestResultFailure().count, before + 1);
+  fs.unlinkSync(destinationA);
+  assert.equal(a.publishScheduleRunResult(f.runsDir, f.input, f.log).ok, true);
+  assert.equal(a.latestResultFailure()?.count || 0, before);
+  assert.notEqual(a.latestResultFailure()?.path, destinationA);
+});
+
+test('the temporary directory supports the no-overwrite publication', t => {
+  const f = fixture(t), a = api();
+  const first = path.join(f.root, 'first'), second = path.join(f.root, 'second'), dest = path.join(f.root, 'dest');
+  fs.writeFileSync(first, 'a'); fs.writeFileSync(second, 'b');
+  fs.linkSync(first, dest);
+  assert.throws(() => fs.linkSync(second, dest), { code: 'EEXIST' });
+  assert.equal(fs.readFileSync(dest, 'utf8'), 'a');
+  assert.equal(a.writeScheduleRunResult(f.runsDir, f.input, f.log), true);
+  assert.equal(a.writeScheduleRunResult(f.runsDir, { ...f.input, code: 7 }, f.log), true);
+  assert.equal(f.read()[0].exitCode, 2, 'the first result is kept');
+  assert.equal(fs.readdirSync(f.runsDir).length, 1);
+});
+
+for (const code of ['EPERM', 'EACCES', 'EBUSY']) {
+  test(`an access denial (${code}) on a drive that supports hard links is reported as access, and a retry recovers`, t => {
+    const f = fixture(t), a = api();
+    assert.equal(a.publishScheduleRunResult(f.runsDir, f.input, f.log).ok, true, 'the drive supports hard links');
+    const other = { ...f.input, sessionId: crypto.randomUUID() };
+    const failure = a.publishScheduleRunResult(f.runsDir, other, f.log, {
+      link() { throw Object.assign(new Error('link access denied by temporary ACL/lock'), { code }); },
+    });
+    assert.equal(failure.ok, false);
+    assert.equal(failure.error.code, code);
+    assert.equal(failure.error.detail, 'link access denied by temporary ACL/lock');
+    assert.doesNotMatch(failure.error.message, /does not support hard links|NTFS/, 'an access denial is not a missing drive capability');
+    assert.equal(failure.error.message, `Access was denied while recording the result (${code}: link access denied by temporary ACL/lock). Check the permissions of ${f.runsDir} or whether another program holds it; Switchboard retries.`);
+    assert.equal(a.publishScheduleRunResult(f.runsDir, other, f.log).ok, true, 'the same drive records the result once access is back');
+  });
+}
+
+test('a run failure with no destination is kept by run identity, not by directory', t => {
+  const f = fixture(t), a = api();
+  const before = a.latestResultFailure()?.count || 0;
+  const malformed = { ...f.input, sessionId: crypto.randomUUID(), startedAtMs: 100000.5 };
+  assert.equal(a.publishScheduleRunResult(f.runsDir, malformed, f.log).error.message, 'Invalid schedule run identity');
+  assert.equal(a.latestResultFailure().count, before + 1);
+  assert.equal(a.publishScheduleRunResult(f.runsDir, f.input, f.log).ok, true);
+  assert.equal(a.latestResultFailure().count, before + 1, 'a success of another run in the same directory does not clear it');
+});
+
+test('a directory capability failure is cleared only by a successful link in that directory', t => {
+  const f = fixture(t), a = api();
+  const before = a.latestResultFailure()?.count || 0;
+  fs.writeFileSync(f.runsDir, 'not a directory');
+  const failed = a.publishScheduleRunResult(f.runsDir, f.input, f.log);
+  assert.equal(failed.ok, false);
+  assert.equal(failed.error.path, null);
+  assert.equal(a.latestResultFailure().count, before + 1);
+  const elsewhere = path.join(f.root, 'elsewhere');
+  assert.equal(a.publishScheduleRunResult(elsewhere, { ...f.input, sessionId: crypto.randomUUID() }, f.log).ok, true);
+  assert.equal(a.latestResultFailure().count, before + 1, 'a success in another directory proves nothing here');
+  fs.unlinkSync(f.runsDir);
+  assert.equal(a.publishScheduleRunResult(f.runsDir, { ...f.input, sessionId: crypto.randomUUID() }, f.log).ok, true);
+  assert.equal(a.latestResultFailure()?.count || 0, before, 'a link in that directory proves the capability and clears its failure');
 });

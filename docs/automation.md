@@ -1,7 +1,8 @@
 # Automation
 
-Schedules run recurring headless Claude tasks. Triggers are JSON requests for
-scripts and harnesses: they can request local session status, open a local
+Schedules run recurring headless Claude tasks, or, if you opt in,
+[background sessions you can join](#join-a-scheduled-run). Triggers are JSON
+requests for scripts and harnesses: they can request local session status, open a local
 session, create a named Claude session with a prompt, stop an idle local
 session, or type into an open terminal. Both require Switchboard to be running;
 a schedule can ask to [catch up](#catching-up-a-missed-run) a missed run.
@@ -91,6 +92,7 @@ The full, self-contained prompt Claude runs each time.
 | `enabled` | Exactly `false` disables the schedule; any other value, or none, leaves it on. [Archiving the folder](session-browser.md#archive-a-folder) can write `enabled: false` | on |
 | `slug` | Groups the runs in the sidebar (they share this slug) | the file name without `schedule-` and `.md` |
 | `catch-up` | `true` runs once, late, a run missed while Switchboard was closed or the machine asleep — see [Catching up a missed run](#catching-up-a-missed-run) | off |
+| `run-as-background` | `true` runs the task as a background session you can join — see [Join a scheduled run](#join-a-scheduled-run) | off |
 | `cli.permission-mode` | `--permission-mode` | `auto` |
 | `cli.allowed-tools` | `--allowedTools` | `Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch` |
 | `cli.model` | `--model` | none |
@@ -156,6 +158,62 @@ runs under its slug; open it to read the result.
 - A schedule in a project archived with **Archive Project** is suspended: the
   scheduler skips the project, and its files are not changed — see
   [Projects](session-browser.md#projects).
+
+### Join a scheduled run
+
+In **Schedules → Create**, enable **Run as a background session (can be joined
+while it runs)**, or add `run-as-background: true` to an existing schedule's
+front matter. This is off by default. Open the running conversation in Sessions
+or Agents to attach to its background job. Its run history links to that same
+conversation. The project must already be trusted by Claude Code; an untrusted
+workspace reports a launch failure.
+
+This option is local only; remote schedules ignore it. The create form disables
+it for remote and sandboxed projects. A saved schedule using a sandbox, a
+project pre-launch command, a WSL shell or a `max-budget-usd` cap runs headless
+instead, with a visible reason and log entry. Ordinary headless schedules
+retain their current command and lifecycle.
+
+Background runs have a fixed one-hour limit. When the job reports completion or
+reaches its limit, Switchboard stops it and removes the daemon job, keeping the
+transcript. If somebody has joined, the job is left running and the history
+records **left running, joined**. Stop and remove it in Agents when finished.
+A job stopped or removed from Agents before it finished ends the run as
+stopped or as a lost job. If Switchboard closes during a run, the next launch
+resumes watching it, records its result and cleans it up; a run whose hour
+passed meanwhile is recorded as timed out. Until Switchboard has read those
+saved runs, no schedule starts on its own (Run now still works), so a schedule
+never starts a second run beside one still in progress. If reading them is
+slow or fails (for example a permission error on the data folder), every
+automatic schedule stays paused and Switchboard says so in a notice, shown
+even when the Schedules tab is off: **Automatic schedules are paused: the
+background-run records at <path> could not be read (<code>)**. The Schedules
+tab shows the same banner and marks each next run as paused. Fix the
+permissions of that folder; Switchboard retries on its own, at most every five
+minutes, and the notice clears once the records are read.
+
+A run's result is written once and never replaced. If a result cannot be
+recorded, the notice **… finished, but its result was not recorded** gives the
+reason, and the run's history says **No result recorded**; a background run
+keeps its saved state and Switchboard tries again at the next launch. A result
+file that cannot be read is left as it is: the notice names it, so you can
+remove or fix it. Results need a drive that supports hard links: on FAT,
+exFAT or some network shares, no result is recorded and the notice says
+**This drive does not support hard links**. Move the Switchboard data
+directory to an NTFS or ext4 drive; background runs keep their result until
+it can be written. If the notice says **Access was denied while recording the
+result** instead, the drive is fine: check the permissions of the folder it
+names, or whether another program (an antivirus or a sync client) holds it.
+Switchboard tries again at the next launch.
+
+Switchboard only stops or removes a job whose id the launcher printed. If the
+launch prints no job id, the run is recorded as failed to start with
+**unresolved launch**, and no job is stopped or removed: check Agents for a job
+the launch may have left behind. If stopping or removing the job fails,
+Switchboard tries again a few times, and again at the next launch; the run
+appears in the history once cleanup is done, or with **cleanup abandoned** and
+the last error after nine attempts. A job whose state names another
+conversation is never stopped; the history records it as **unresolved**.
 
 ### Catching up a missed run
 

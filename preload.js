@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   getCodexUsage: () => ipcRenderer.invoke('get-codex-usage'),
   getMemories: () => ipcRenderer.invoke('get-memories'),
   listSchedules: () => ipcRenderer.invoke('list-schedules'),
+  getScheduleHealth: () => ipcRenderer.invoke('get-schedule-health'),
   setScheduleEnabled: (filePath, enabled) => ipcRenderer.invoke('set-schedule-enabled', filePath, enabled),
   deleteScheduleFile: (filePath) => ipcRenderer.invoke('delete-schedule-file', filePath),
   createScheduleFile: (projectPath, fields) => ipcRenderer.invoke('create-schedule-file', projectPath, fields),
@@ -116,6 +117,7 @@ contextBridge.exposeInMainWorld('api', {
   createScheduleSession: (projectPath) => ipcRenderer.invoke('create-schedule-session', projectPath),
   runScheduleNow: (filePath) => ipcRenderer.invoke('run-schedule-now', filePath),
   onScheduleRunExit: callback => ipcRenderer.on('schedule-run-exit', (_event, result) => callback(result)),
+  onScheduleHealth: callback => ipcRenderer.on('schedule-health', (_event, health) => callback(health)),
   getShellProfiles: () => ipcRenderer.invoke('get-shell-profiles'),
 
   browseFolder: () => ipcRenderer.invoke('browse-folder'),

@@ -74,7 +74,7 @@ async function buildScheduleList(deps) {
   try { results = readScheduleRunResults(deps.runsDir, runs.map(run => run.sessionId)); }
   catch { results = new Map(runs.map(run => [run.sessionId, { unreadable: true }])); }
   for (const run of runs) run.result = results.get(run.sessionId) || null;
-  return { now, catchUpActive, projects };
+  return { now, catchUpActive, projects, health: deps.schedulerHealth ? deps.schedulerHealth() : { suspended: false, resultFailure: null } };
 }
 
 module.exports = { buildScheduleList };

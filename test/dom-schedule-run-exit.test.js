@@ -27,6 +27,24 @@ function setup(t) {
   return { ...h, get reloads() { return reloads; }, exit: payload => ipcRenderer.emit('schedule-run-exit', {}, payload) };
 }
 
+test('background fallback displays the reason without claiming the run failed', t => {
+  const h = setup(t);
+  h.exit({ name: 'Nightly', sessionId: 'fallback', code: 0, backgroundFallback: 'Background sessions cannot run under this sandbox; using headless for this run.' });
+  assert.match(h.document.body.textContent, /Background sessions cannot run under this sandbox; using headless/);
+  assert.doesNotMatch(h.document.body.textContent, /exited with code|failed/);
+});
+
+for (const [outcome, text] of [['timed-out', /timed out/], ['stopped', /stopped before it finished/], ['job-missing', /lost its background job/], ['spawn-error', /failed to start \(Workspace not trusted\)/]]) {
+  test(`a background ${outcome} notice names what happened, not a null exit code`, t => {
+    const h = setup(t);
+    h.exit({ name: 'Nightly', projectPath: '/p', sessionId: 'bg', code: null, signal: null, failure: 'exit', outcome, error: 'Workspace not trusted' });
+    const alert = h.document.querySelector('[role="alert"]');
+    assert.ok(alert, 'a background failure leaves an error notice');
+    assert.match(alert.textContent, text);
+    assert.doesNotMatch(alert.textContent, /code null/);
+  });
+}
+
 for (const code of [0, 42]) {
   test(`schedule exit ${code} queues a schedules reload`, t => {
     const h = setup(t);
@@ -130,4 +148,13 @@ test('manual run wording uses the plain schedule name and the manual flag', t =>
   const alert = h.document.querySelector('[role="alert"]');
   assert.match(alert.textContent, /^Manual run of schedule nightly exited with code 1/);
   assert.doesNotMatch(alert.textContent, /Schedule Manual run/);
+});
+
+test('a successful run whose result was not recorded says so', t => {
+  const h = setup(t);
+  h.exit({ name: 'Nightly', projectPath: '/p', manual: false, sessionId: 'ok', code: 0, persistenceError: 'The result file /r/x.json is unreadable; remove or fix it' });
+  const alert = h.document.querySelector('[role="alert"]');
+  assert.equal(alert.dataset.noticeId, 'ScheduleResult:/p:Nightly');
+  assert.match(alert.textContent, /^Schedule Nightly finished, but its result was not recorded: The result file \/r\/x\.json is unreadable; remove or fix it/);
+  assert.doesNotMatch(h.document.body.textContent, /exited with code/);
 });

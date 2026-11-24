@@ -39,10 +39,21 @@ test('a re-key reaches the reporter, beside the MCP server that follows it the s
   assert.match(MAIN, /rekeyActivity: \(fromId, toId, kind\) => \{ activityReporter\.rekey\(fromId, toId\); taskRecords\.rekey/);
 });
 
-test('a scheduled run is a running session, ended on exit and on a spawn error alike', () => {
+test('a scheduled run is a running session, each start paired with its ends, headless and background alike', () => {
   const run = block(MAIN, 'function runScheduleCommand(', '\n    }\n');
-  assert.match(run, /activityReporter\.sessionStarted\(\{ sessionId: activityId, project: cwd, name: `Scheduled: \$\{runName\}` \}\)/);
-  assert.equal((run.match(/activityReporter\.sessionEnded\(activityId\)/g) || []).length, 2);
+  const spans = run.split(/\n\s*const activityId = /).slice(1);
+  assert.equal(spans.length, 2, 'one span for the background branch, one for the headless spawn');
+  const [background, headless] = spans;
+  for (const span of spans) {
+    assert.match(span, /^`schedule:\$\{runName\}:\$\{Date\.now\(\)\}`;/);
+    assert.equal((span.match(/activityReporter\.sessionStarted\(\{ sessionId: activityId, project: cwd, name: `Scheduled: \$\{runName\}` \}\)/g) || []).length, 1);
+  }
+  assert.match(background, /launchBackgroundSchedule\(/);
+  assert.match(background, /\.finally\(\(\) => \{\s*activityReporter\.sessionEnded\(activityId\);/, 'the background span ends once, after completion or failure');
+  assert.equal((background.match(/activityReporter\.sessionEnded\(activityId\)/g) || []).length, 1);
+  assert.match(headless, /child\.on\('exit'[\s\S]*activityReporter\.sessionEnded\(activityId\)[\s\S]*child\.on\('error'[\s\S]*activityReporter\.sessionEnded\(activityId\)/,
+    'the headless span ends on exit and on a spawn error alike');
+  assert.equal((headless.match(/activityReporter\.sessionEnded\(activityId\)/g) || []).length, 2);
 });
 
 test('focus from the renderer is bounded before it is forwarded', () => {

@@ -1,5 +1,232 @@
 # Context: schedule-runner
 
+## Opt-in background runs (#611)
+
+`run-as-background: true` is opt-in and local only. It is kebab-case like
+`catch-up`, and both read through `frontmatterFlag` in `scheduleFields`
+(quotes and any case accepted), which cron (`scanSchedules`) and Run now
+(`schedule-ipc.js`) share, so the two cannot disagree on a file. The flag is the
+only front matter #611 adds: the issue rules out other format changes, so there
+is no timeout key; background runs use the internal one-hour
+`BACKGROUND_RUN_LIMIT_MS`. Both callers pass `background: { seedPath }`, the
+path `createScheduleSession` returned, so the launcher never re-derives it. The
+headless argv builder is unchanged. `schedule-background.js` creates a new job
+using `claude --bg --name <name> <options> -- <seed message>`: the prompt is the
+seed's full first message, `Scheduled Task:` or catch-up heading included, as
+the headless run sees it. The delimiter protects that last argument from
+variadic add-dir and allowedTools flags. The app's existing `runClaudeCommand`
+supplies sanitized child env and shell quoting.
+
+Refusal falls back to headless with the existing fallback notice: a sandbox or
+a project `preLaunchCmd` (the predicate is bg-agents' `dispatchRefusal`, looked
+up on the resolved cwd like `dispatchSettings`), a WSL shell, and a
+`max-budget-usd` cap, which the CLI documents as `--print`-only. A global
+`preLaunchCmd` does not refuse: headless schedules never apply one either.
+`dispatchArgs` is not reused: it builds dispatch-form fields (agent, newline
+add-dirs) and refuses a leading `-`, while the schedule forwards its own
+validated headless options.
+
+CLI 2.1.302 measurements in #611 establish that flagless resume continues a
+previously created job, while resume with options forks it. They do not establish
+resume of a newly pre-seeded transcript with no job directory. We therefore keep
+the existing provisional seed, obtain the actual UUID from the launched job's
+state (checking its first eight hex characters against stdout), append a
+`schedule-provenance` record with that UUID to the actual transcript (the job's
+`linkScanPath` when it names that UUID, else beside the seed), then remove the
+provisional file. This record carries metadata without a user message,
+parentUuid or uuid, so it cannot introduce a second conversation root. The full
+and display-header readers accept its scheduleSlug alongside legacy user seeds.
+A transfer error does not abandon the live job: it is logged, monitoring
+continues, and the result record carries it as `warning`, shown in the
+schedule's history.
+
+Launch: the launcher call has its own 30 s bound (`LAUNCH_TIMEOUT_MS`),
+independent of the run limit, and so does the wait for the job's identity. The
+job id comes from `parseDispatchOutput` and errors from `stripShellNoise`.
+Destructive cleanup needs a job id the launcher printed. When none is printed
+the run fails with the cleanup diagnostic `unresolved launch: no job id in the
+output of claude --bg; no job was stopped or removed`, logged as a warning. No
+job is inferred: a name, cwd and creation-time match does not prove ownership,
+since another schedule or the user can start a same-name job in that cwd during
+the call (re-review R1 of #1233), and any scan bound can hide a second match.
+
+The launcher acknowledgement does not complete a run. A synthetic lifetime emits
+exit only after state monitoring and cleanup; trackScheduleRun stores kind bg and
+jobId, so the existing resume guard returns attach even before the descriptor is
+published. It has no pid, so the delete guard names none. The in-flight key
+stays held until onDone. Catch-up claims and skipMissedRuns remain unchanged.
+Agents discovers the daemon's regular job files.
+
+Terminal states, read through `parseJobState`: done/failed with lastTerminalAt
+(or updatedAt if absent) strictly after launch end the run as `exited` 0/1;
+stale done and firstTerminalAt alone do not count. `stopped` ends it as
+`stopped` (fresh timestamp, or none at all) and is removed without a second
+stop. state.json missing on two consecutive polls ends it as `job-missing` with
+nothing to clean. The limit ends it as `timed-out`. Polling is 500 ms. stop then
+rm are bounded CLI calls; rm runs from the home directory (bg-agents rule);
+failed stop prevents rm. Own active attach PTYs and other live non-bg
+descriptors prevent cleanup and yield "left running, joined". Cleanup errors
+are retained in history. The attachment check and daemon stop cannot be atomic.
+Every background outcome, launch failures included, goes through
+`reportRunExit` with its `outcome`, so the notice says timed out, stopped, lost
+its job or failed to start rather than an exit code.
+
+Restart: once identity is known, `{ jobId, actualId, cwd, name, filePath, slug,
+manual, dueMs, startedAtMs, deadline, phase }` is written to
+`<data>/schedule-state/background/<jobId>.json` (the catch-up reader ignores the
+subdirectory). The record moves through three phases and is deleted only at the
+end of the last:
+
+- `running`: the job is watched. When it ends, its outcome is saved as
+  `result` with the cleanup mode, and the record moves to `cleanup`.
+- `cleanup`: stop/rm against the saved job. The attachment check and the
+  job's current state.json are read before the stop and read again before the
+  rm, after the stop returned (re-review F4 of #1233: a slot whose short id was
+  taken by another session during the stop used to be removed). The
+  state.json must carry the saved `actualId`: a missing state.json means the
+  job is gone (done), another session id is recorded as `unresolved: job … now
+  belongs to session …; nothing was stopped or removed` (or `it was stopped but
+  nothing was removed` after the stop; done, no rm), and an unreadable state
+  defers. Two local reads narrow the window but are not atomic with the
+  daemon's verbs: only a conditional daemon operation would close it. A failed or deferred
+  attempt keeps the record with `cleanupAttempts`; a process makes at most 3
+  attempts, `retryMs` (30 s) apart, and the next start continues. After a
+  successful stop the mode becomes `rm`, so a retry does not stop twice. After
+  9 attempts in all the run is recorded with `cleanup abandoned after 9
+  attempts: …`. A joined user takes the job over and ends the phase. The
+  outcome is never recomputed: a resumed `cleanup` record is not watched again.
+- `result`: `publishScheduleRunResult` returns `{ ok: true }` only for a
+  durable result: this writer's own completed publication, or a valid result
+  file already present (first result wins). Anything else returns
+  `{ ok: false, error: { path, code, message, at } }`; `writeScheduleRunResult`
+  is the boolean form. Publication writes the full record to a unique
+  same-directory temp file (`wx`, fsync), then `fs.linkSync(tmp, destination)`,
+  which fails with `EEXIST` instead of replacing an existing file (atomic on
+  NTFS and POSIX filesystems), then removes the temp file. A destination
+  published this way is never partial, so there is no lock and no repair
+  (re-review F2 and F4 of #1233: a stealable publication lock and an automatic
+  repair that moved an invalid destination aside could delete or replace a
+  result another writer had already acknowledged). On `EEXIST` a valid
+  destination is acknowledged; an invalid one (external corruption, an older
+  version) is never moved, renamed or
+  deleted: the writer returns the error `The result file <path> is unreadable;
+  remove or fix it` (code `EBADRESULT`). A link that fails with `ENOTSUP`,
+  `EISDIR` (libuv's mapping of `ERROR_INVALID_FUNCTION`, FAT/exFAT on
+  Windows), `EXDEV`, `EINVAL` or `ENOSYS` means the store has no hard links:
+  the writer returns that code with `This drive does not support hard links;
+  schedule results cannot be recorded safely here. Move the Switchboard data
+  directory to an NTFS or ext4 drive.` and creates no destination. `EPERM`,
+  `EACCES` and `EBUSY` are access denials or locks, not a drive limitation
+  (sixth re-review F2 of #1233): the message is `Access was denied while
+  recording the result (<code>: <original message>). Check the permissions of
+  <dir> or whether another program holds it; Switchboard retries.` Both keep
+  the original error text in `error.detail`. There is no
+  fallback (fifth re-review F1 of #1233: an exclusive-create
+  fallback let a second writer acknowledge bytes whose writer then failed its
+  fsync and removed them); a background run keeps its record in `result`, so
+  nothing is lost once the data directory moves. Any other failure returns the
+  error. Failures are kept unresolved by key: the destination once it is
+  named; before that, the run identity (`jobId`, `sessionId`, schedule file and
+  `startedAtMs`, as given) when the identity itself is rejected; and the
+  results directory only when it cannot be created. A successful publication
+  clears its own destination and its own run identity; the directory key is
+  cleared only by a successful link in that directory (sixth re-review F1 of
+  #1233: a failure with no destination used to be keyed by directory, so any
+  other run's success erased it while its record stayed pending).
+  `latestResultFailure()` returns the most recent unresolved failure with
+  `count`, the number still unresolved, or `null`; listeners
+  (`onResultFailureChange`) are called on each change. A failure is logged once
+  per destination and message. Lock files left by older versions are ignored and pruned like
+  stale temp files.
+  The main callback returns that result. The record is deleted only on
+  `ok`, otherwise kept in `result` for the next start, which publishes it
+  without cleaning again; the settled details carry `resultPending` and
+  `persistenceError`, the report sent through `reportRunExit` carries
+  `persistenceError` (sent even for a code-zero exit), and the warning is
+  logged once per job and distinct error. The headless launcher's
+  `recordResult` returns the error message and its exit report carries it the
+  same way.
+
+The result is published after cleanup settles, so a run whose cleanup is still
+pending has no history entry yet. A launch-time failure without a confirmed
+session id (identity never appeared) gets its bounded in-process retries but no
+record: a record without the full saved identity could not be confirmed at the
+next start. A launch interrupted before identity is not recorded either.
+
+Resume is two phases. `discoverBackgroundRuns` reads at most 256 record names,
+validates each and calls `claim` for at most 64 valid ones; `resumeBackgroundRuns`
+returns the promise of all lifetimes with a `discovered` promise attached.
+`startScheduler` returns at once, but holds every automatic check (startup
+catch-up, wake-up and minute ticks, for all schedules) until some discovery's
+`discovered` settles, never behind the lifetimes (re-review R2 of #1233: the
+startup catch-up used to beat the record reads). Checks requested during the
+hold are coalesced into one check when it ends, run as a tick if any was a
+tick. A tick-only schedule whose minute passed during the hold is skipped;
+catch-up schedules catch up. When discovery has not settled after
+`DISCOVERY_WAIT_MS` (10 s), the hold is kept, a warning names the unresolved
+recovery, and discovery is started again, the wait doubling up to
+`DISCOVERY_RETRY_MAX_MS` (5 min) (re-review F1 of #1233: the bound used to
+release scheduling before a slow scan had claimed a still-working run, so a
+second run launched beside it). All attempts share one claim: a job id claimed
+once is refused (`claim` returns `false`) to every later attempt, so a stalled
+scan that finally completes never supervises a run twice. Records are known
+once any attempt resolves, since every record an attempt read is claimed at
+read time. Only a complete scan resolves: a missing records directory
+(`ENOENT`) counts as an empty store, and a record removed between the listing
+and its read is skipped. Any other error on the directory or on a record read
+(`EACCES`, `EIO`, …) rejects `discovered` after the scan has claimed and started
+supervising every record it could read; the hold is kept, the error logged,
+and the retry timer runs again with the same backoff (re-review F1 of #1233: a
+read error used to count as an empty store, release the hold and launch beside
+a still-working run). A store that keeps failing keeps automatic launches held;
+Run now is not held. A rejection is logged once per distinct message, and a
+stall once until it is resolved or turns into a rejection.
+
+Suspension is visible (re-review F1 of #1233: an unreadable store used to stop
+every automatic schedule with only log lines). `stop.getHealth()` returns
+`{ suspended: false }`, or `{ suspended: true, reason, path, code, message,
+since, retryMs }` with `reason` `unreadable` (a rejection; `path` is the
+directory or record that failed, filled in by `discoverBackgroundRuns` when the
+error has none) or `slow` (the wait expired with no answer). `onHealthChange`
+is called on every change and on each rejection; the suspension clears only
+when a discovery resolves. Main composes `scheduleHealth()` = scheduler health
+plus `resultFailure` (`latestResultFailure()`) plus `revision`, a counter
+incremented for every snapshot, passes it to `buildScheduleList` as
+`schedulerHealth` (the listing returns it as `health`), serves it on
+`get-schedule-health`, and pushes it on `schedule-health` when either part
+changes. The renderer applies a snapshot only if its revision is not older
+than the one it last applied, so a startup reply or a list reply computed
+before a push cannot erase it (fifth re-review F3 of #1233); the tab's banner
+and paused rows use the applied health, not the reply's. See
+[ipc-bridge.md](ipc-bridge.md), "Schedules", for the channel contract. The renderer (`public/schedules-view.js`) shows an
+app-level error notice for each part (ids `ScheduleSuspended`,
+`ScheduleResultFailure`), shown whether or not the Schedules tab is enabled
+and replaced only when the text changes; the tab also shows a banner with the
+same text and states each next run as `Paused: automatic launches are
+suspended (next run due …)`. A resume source without `discovered` (test stubs claiming
+synchronously) does not gate. Claims are counted per schedule key, so several
+resumed runs of one slug hold it until the last ends. Manual runs are not held.
+
+Validation before any claim: `v: 1`, an 8-hex `jobId` matching the file name,
+a full UUID `actualId` starting with it, non-empty cwd, name, filePath and slug,
+`startedAtMs` after 2024 and at most a day ahead, a deadline after the start
+and at most a day after it, a known phase and cleanup mode, and a saved
+`result` outside `running`. A record that parses but fails, or does not parse,
+is renamed to `<jobId>.json.corrupt-<ms>` so it leaves the batch for good; a
+read error leaves it in place and keeps the hold (above). During a resumed watch, a state.json naming
+another session ends the run as `job-missing` with nothing to clean, so the
+deadline never authorizes a stop of a job whose identity does not match.
+A run past its deadline times out at once. A resumed run reports no
+ActivityWatch span.
+
+Create disables remote/sandbox selection and the backend refuses sandbox opt-in
+creation. Existing saved files still fall back.
+Tests: schedule-background (main extraction with the real module and disposable
+job files), schedule-background-recovery (launch without id, discovery gate,
+cleanup and result phases, record validation), schedule-catch-up, run-schedule-now-result, dom-schedule-create,
+schedule-create-file, schedule-run-results and dom-schedule-run-exit; all use
+injected CLI boundaries.
+
 Project launch admission is shared with terminal, background and remote launches;
 see [project-operation-gate.md](project-operation-gate.md). Scheduler admission
 precedes catch-up claims and transcript creation. Run now holds its reservation
@@ -855,14 +1082,14 @@ Preparation exceptions retain their original message. Signal outcomes require
 a non-empty signal string, refused/spawn-error require string error text, and
 exited requires an integer exitCode; inconsistent records are unreadable.
 
-Publication uses a same-directory temp file written with wx, then
-renameWithRetry. A per-result wx lock serializes publishers; an existing final
-file is kept. This preserves first-completion semantics without exposing a
-partial JSON destination or allowing rename to replace a previous result on
-Windows. Temp and owned lock files are removed on failure. A process killed
-during publication can leave a temp/lock file; readers ignore it. Per-key pruning
-removes that key's publication temp/lock files whose mtime is older than ten
-minutes, retaining recent artifacts, unrelated names and other keys.
+Publication is the temp file plus no-overwrite hard link described under
+`result` above; a store without hard links records nothing and reports it; an
+existing final file is kept, and an invalid one is reported, never
+replaced. The temp file is removed on success and on failure. A process killed
+during publication can leave a temp file; readers ignore it. Per-key pruning
+removes that key's temp files, and lock files left by older versions, whose
+mtime is older than ten minutes, retaining recent artifacts, unrelated names
+and other keys.
 After a write, pruning keeps the 20 newest starts of that key and ignores
 unlink errors. `pruneScheduleRunResults(dir, key, 0)` also serves schedule
 deletion (see "Delete a schedule"). Other keys and transcripts are untouched; renamed files can

@@ -283,7 +283,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
         if (!lastTimestamp || entry.timestamp > lastTimestamp) lastTimestamp = entry.timestamp;
       }
       if (entry.slug && !slug) slug = entry.slug;
-      if (entry.type === 'user' && typeof entry.scheduleSlug === 'string' && entry.scheduleSlug && !scheduleSlug) scheduleSlug = entry.scheduleSlug;
+      if (['user', 'schedule-provenance'].includes(entry.type) && typeof entry.scheduleSlug === 'string' && entry.scheduleSlug && !scheduleSlug) scheduleSlug = entry.scheduleSlug;
       if (entry.agentId && !agentId) agentId = entry.agentId;
       if (entry.isSidechain) sidechainSeen = true;
       if (entrypoint === undefined && entry.type === 'user') entrypoint = entrypointOf(entry);
@@ -693,7 +693,7 @@ function readSessionDisplayHeader(filePath, opts = {}) {
         continue;
       }
       if (entry.slug && !slug) slug = entry.slug;
-      if (entry.type === 'user' && typeof entry.scheduleSlug === 'string' && entry.scheduleSlug && !scheduleSlug) scheduleSlug = entry.scheduleSlug;
+      if (['user', 'schedule-provenance'].includes(entry.type) && typeof entry.scheduleSlug === 'string' && entry.scheduleSlug && !scheduleSlug) scheduleSlug = entry.scheduleSlug;
       if (entry.agentId && !agentId) agentId = entry.agentId;
       if (entry.isSidechain) sidechainSeen = true;
       if (entry.type === 'assistant' || (entry.type === 'message' && entry.role === 'assistant')) {

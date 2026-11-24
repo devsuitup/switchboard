@@ -3,11 +3,11 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { renameWithRetry } = require('../shared/atomic-write');
 const { scheduleStateKey } = require('./schedule-runner');
 
 const RESULT_NAME = /^([0-9a-f]{16})-(\d+)-([0-9a-f-]{36})\.json$/;
 const PUBLICATION_NAME = /^(?:([0-9a-f]{16})-\d+-[0-9a-f-]{36}\.json\.lock|\.([0-9a-f]{16})-\d+-[0-9a-f-]{36}\.json\.[0-9a-f-]{36}\.tmp)$/;
+const STALE_PUBLICATION_MS = 10 * 60 * 1000;
 
 function scheduleRunsDir(dataDir) {
   return path.join(dataDir, 'schedule-runs');
@@ -34,7 +34,7 @@ function classifyRunExit({ code, sandbox, stderr }) {
 function pruneScheduleRunResults(runsDir, key, keep = 20) {
   let files;
   try { files = fs.readdirSync(runsDir); } catch { return; }
-  const staleBefore = Date.now() - 10 * 60 * 1000;
+  const staleBefore = Date.now() - STALE_PUBLICATION_MS;
   for (const file of files) {
     const match = PUBLICATION_NAME.exec(file);
     if (!match || (match[1] || match[2]) !== key) continue;
@@ -51,8 +51,73 @@ function pruneScheduleRunResults(runsDir, key, keep = 20) {
   }
 }
 
-function writeScheduleRunResult(runsDir, input, log, { rename = fs.renameSync } = {}) {
-  let tmp, lock, lockFd;
+const LINK_UNSUPPORTED = new Set(['ENOTSUP', 'EISDIR', 'EXDEV', 'EINVAL', 'ENOSYS']);
+const LINK_DENIED = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const NO_HARD_LINKS = 'This drive does not support hard links; schedule results cannot be recorded safely here. Move the Switchboard data directory to an NTFS or ext4 drive.';
+const unresolvedFailures = new Map();
+const failureListeners = new Set();
+
+function announceFailures() {
+  const latest = latestResultFailure();
+  for (const listener of failureListeners) { try { listener(latest); } catch {} }
+}
+
+function resolveFailures(keys) {
+  let changed = false;
+  for (const key of keys) changed = unresolvedFailures.delete(key) || changed;
+  if (changed) announceFailures();
+}
+
+function onResultFailureChange(listener) {
+  failureListeners.add(listener);
+  return () => failureListeners.delete(listener);
+}
+
+function createExclusive(file, text) {
+  const fd = fs.openSync(file, 'wx');
+  try {
+    fs.writeFileSync(fd, text);
+    fs.fsyncSync(fd);
+  } catch (error) {
+    try { fs.closeSync(fd); } catch {}
+    try { fs.unlinkSync(file); } catch {}
+    throw error;
+  }
+  fs.closeSync(fd);
+}
+
+function publishNew(tmp, destination, link) {
+  try { link(tmp, destination); return true; }
+  catch (error) {
+    if (error.code === 'EEXIST') return false;
+    if (LINK_UNSUPPORTED.has(error.code)) throw Object.assign(new Error(NO_HARD_LINKS), { code: error.code, detail: error.message });
+    if (LINK_DENIED.has(error.code)) {
+      throw Object.assign(new Error(`Access was denied while recording the result (${error.code}: ${error.message}). Check the permissions of ${path.dirname(destination)} or whether another program holds it; Switchboard retries.`),
+        { code: error.code, detail: error.message });
+    }
+    throw error;
+  }
+}
+
+function runIdentity(input) {
+  return `run:${input.jobId || ''}:${input.sessionId}:${input.filePath}:${input.startedAtMs}`;
+}
+
+function resultFailure(key, destination, error, log, sessionId) {
+  const failure = { path: destination || null, code: error.code || null, message: error.message, at: Date.now(),
+    ...(typeof error.detail === 'string' ? { detail: error.detail } : {}) };
+  const previous = unresolvedFailures.get(key);
+  unresolvedFailures.delete(key);
+  unresolvedFailures.set(key, failure);
+  if (previous?.message !== failure.message) log.warn(`[schedule] Cannot record result for ${sessionId}:`, failure.message);
+  announceFailures();
+  return { ok: false, error: failure };
+}
+
+function publishScheduleRunResult(runsDir, input, log, { link = fs.linkSync } = {}) {
+  let tmp, destination;
+  const identity = runIdentity(input);
+  let failureKey = identity;
   try {
     const { sessionId, filePath, name, slug, manual = false, dueMs = null, startedAtMs,
       endedAtMs = Date.now(), outcome, code = null, signal = null, error = null } = input;
@@ -63,33 +128,43 @@ function writeScheduleRunResult(runsDir, input, log, { rename = fs.renameSync } 
       startedAt: new Date(startedAtMs).toISOString(), endedAt: new Date(endedAtMs).toISOString(), outcome,
       exitCode: Number.isInteger(code) ? code : null, signal: signal || null,
       failure: outcome === 'exited' || outcome === 'signal' ? classifyRunExit(input) : null, error };
+    if (typeof input.jobId === 'string') record.jobId = input.jobId;
+    if (typeof input.cleanup === 'string') record.cleanup = input.cleanup;
+    if (typeof input.warning === 'string') record.warning = input.warning;
+    const text = JSON.stringify(record) + '\n';
+    failureKey = `dir:${runsDir}`;
     fs.mkdirSync(runsDir, { recursive: true });
-    const destination = path.join(runsDir, filename);
-    lock = destination + '.lock';
-    try { lockFd = fs.openSync(lock, 'wx'); }
-    catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      log.info(`[schedule] Result already claimed for ${sessionId}; keeping the first`);
-      return;
-    }
-    if (fs.existsSync(destination)) {
-      log.info(`[schedule] Result already recorded for ${sessionId}; keeping the first`);
-      return;
-    }
+    destination = path.join(runsDir, filename);
+    failureKey = destination;
     tmp = path.join(runsDir, `.${filename}.${crypto.randomUUID()}.tmp`);
-    fs.writeFileSync(tmp, JSON.stringify(record) + '\n', { flag: 'wx' });
-    renameWithRetry(tmp, destination, { rename });
-    tmp = null;
-    pruneScheduleRunResults(runsDir, key);
+    createExclusive(tmp, text);
+    const linked = publishNew(tmp, destination, link);
+    if (linked) pruneScheduleRunResults(runsDir, key);
+    else {
+      let valid = false;
+      try { valid = validRecord(JSON.parse(fs.readFileSync(destination, 'utf8')), RESULT_NAME.exec(filename)); } catch {}
+      if (!valid) {
+        return resultFailure(destination, destination, Object.assign(new Error(`The result file ${destination} is unreadable; remove or fix it`),
+          { code: 'EBADRESULT' }), log, sessionId);
+      }
+      log.info(`[schedule] Result already recorded for ${sessionId}; keeping the first`);
+    }
+    resolveFailures([destination, identity, ...(linked ? [`dir:${runsDir}`] : [])]);
+    return { ok: true };
   } catch (error) {
-    log.warn(`[schedule] Cannot record result for ${input.sessionId}:`, error.message);
+    return resultFailure(failureKey, destination, error, log, input.sessionId);
   } finally {
     if (tmp) { try { fs.unlinkSync(tmp); } catch {} }
-    if (lockFd !== undefined) {
-      try { fs.closeSync(lockFd); } catch {}
-      try { fs.unlinkSync(lock); } catch {}
-    }
   }
+}
+
+function writeScheduleRunResult(runsDir, input, log, options) {
+  return publishScheduleRunResult(runsDir, input, log, options).ok;
+}
+
+function latestResultFailure() {
+  const failures = [...unresolvedFailures.values()];
+  return failures.length ? { ...failures[failures.length - 1], count: failures.length } : null;
 }
 
 function validRecord(record, match) {
@@ -99,7 +174,7 @@ function validRecord(record, match) {
     && (record.dueMs === null || Number.isFinite(record.dueMs))
     && typeof record.startedAt === 'string' && Date.parse(record.startedAt) === Number(match[2])
     && typeof record.endedAt === 'string' && Number.isFinite(Date.parse(record.endedAt))
-    && ['exited', 'signal', 'spawn-error', 'refused'].includes(record.outcome)
+    && ['exited', 'signal', 'spawn-error', 'refused', 'timed-out', 'stopped', 'job-missing'].includes(record.outcome)
     && (record.outcome !== 'signal' || typeof record.signal === 'string' && record.signal.length > 0)
     && (!['refused', 'spawn-error'].includes(record.outcome) || typeof record.error === 'string')
     && (record.outcome !== 'exited' || Number.isInteger(record.exitCode))
@@ -130,4 +205,5 @@ function readScheduleRunResults(runsDir, sessionIds) {
   return results;
 }
 
-module.exports = { scheduleRunsDir, classifyRunExit, writeScheduleRunResult, pruneScheduleRunResults, readScheduleRunResults };
+module.exports = { scheduleRunsDir, classifyRunExit, writeScheduleRunResult, publishScheduleRunResult, latestResultFailure, onResultFailureChange,
+  pruneScheduleRunResults, readScheduleRunResults };

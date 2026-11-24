@@ -276,7 +276,7 @@ function startupFixture(projectDeleteHolds, overrides = {}) {
     projectDeleteHolds, appQuitting: false, shutdownPromise: undefined,
     scheduleIpc: { init: () => order.push('ipc') }, runScheduleCommand() {}, isAllowedMemoryPath() {}, isProjectSettingsArchived() {},
     log: { error: (...args) => errors.push(args) }, scheduleProjects: () => ({ list: async () => { order.push('seed'); return []; } }),
-    startScheduler: () => order.push('scheduler'), powerMonitor: {}, path, DB_PATH: '/data/db', activeSessions: new Map(),
+    startScheduler: () => order.push('scheduler'), notifyScheduleHealth() {}, powerMonitor: {}, path, DB_PATH: '/data/db', activeSessions: new Map(),
     cliSessionState: {}, PROJECTS_DIR: '/projects', triggerLifecycleDeps: () => ({}), writer: {},
     createTriggerContext: value => value, require: () => ({ start: () => order.push('trigger') }), ...overrides,
   });

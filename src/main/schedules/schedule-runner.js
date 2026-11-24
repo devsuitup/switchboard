@@ -11,6 +11,8 @@ const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 const MINUTE_MS = 60 * 1000;
 const CATCH_UP_WINDOW_MS = 7 * 24 * 60 * MINUTE_MS;
+const DISCOVERY_WAIT_MS = 10 * 1000;
+const DISCOVERY_RETRY_MAX_MS = 5 * 60 * 1000;
 
 /** Parse YAML-like frontmatter from a markdown file (simple key: value parser). */
 function parseFrontmatter(content) {
@@ -401,7 +403,7 @@ async function createScheduleFile(projectPath, fields, deps) {
     if (slug.length > 64 || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) return fail('slug', 'Use at most 64 lowercase letters, digits and single hyphens');
     const cron = scalar('cron', fields.cron, true);
     if (!cronCanMatch(cron)) return fail('cron', 'cron can never match');
-    for (const key of ['enabled', 'catch-up']) {
+    for (const key of ['enabled', 'catch-up', 'run-as-background']) {
       if (fields[key] !== undefined && typeof fields[key] !== 'boolean') return fail(key, 'Choose on or off');
     }
     const cli = {};
@@ -422,14 +424,17 @@ async function createScheduleFile(projectPath, fields, deps) {
     field = 'prompt';
     if (typeof fields.prompt !== 'string' || !fields.prompt.trim()) return fail(field, 'Enter a prompt');
     const prompt = fields.prompt.replace(/\r\n?/g, '\n').trim();
+    if (fields['run-as-background'] && resolveScheduleSandbox(projectPath, getSetting, defaultSandbox)) return fail('run-as-background', 'Background sessions cannot run under the sandbox wrapper.');
     const refusal = scheduleLaunchRefusal({ sandbox: resolveScheduleSandbox(projectPath, getSetting, defaultSandbox), platform, addDirs, projectPaths, home, cwd: projectPath });
     if (refusal) return fail(refusal.problem === 'sandbox needs Linux' ? 'projectPath' : 'cli.add-dirs', refusal.error);
     if (listScheduleFiles([projectPath]).some(schedule => schedule.slug === slug)) return fail('slug', 'A schedule with this slug already exists');
     const lines = ['---', `name: ${name}`, `cron: ${cron}`, `slug: ${slug}`, `enabled: ${fields.enabled !== false}`, `catch-up: ${fields['catch-up'] === true}`];
+    if (fields['run-as-background']) lines.push('run-as-background: true');
     if (Object.keys(cli).length) lines.push('cli:', ...Object.entries(cli).map(([key, value]) => `  ${key}: ${value}`));
     const content = lines.join('\n') + '\n---\n\n' + prompt + '\n';
     const parsed = parseFrontmatter(content);
-    for (const [key, value] of Object.entries({ name, cron, slug, enabled: String(fields.enabled !== false), 'catch-up': String(fields['catch-up'] === true) })) {
+    for (const [key, value] of Object.entries({ name, cron, slug, enabled: String(fields.enabled !== false), 'catch-up': String(fields['catch-up'] === true),
+      ...(fields['run-as-background'] ? { 'run-as-background': 'true' } : {}) })) {
       if (parsed.meta[key] !== value) return fail(key, 'This value cannot round trip through the schedule parser');
     }
     if (parsed.body !== prompt) return fail('prompt', 'This prompt cannot round trip through the schedule parser');
@@ -467,11 +472,16 @@ async function createScheduleFile(projectPath, fields, deps) {
   }
 }
 
+function frontmatterFlag(value) {
+  return typeof value === 'string' && /^(["']?)true\1$/i.test(value);
+}
+
 function scheduleFields(file, meta) {
   return {
     name: meta.name || file,
     slug: meta.slug || file.replace(/^schedule-/, '').replace(/\.md$/, ''),
-    catchUp: /^(["']?)true\1$/i.test(meta['catch-up'] || ''),
+    catchUp: frontmatterFlag(meta['catch-up']),
+    runAsBackground: frontmatterFlag(meta['run-as-background']),
   };
 }
 
@@ -700,17 +710,18 @@ async function setListedScheduleEnabled(filePath, enabled, { scheduleProjects, s
  * @param {string} [opts.stateDir] - This instance's catch-up record directory; without it, catch-up schedules run on cron only
  * @returns {function} stop - Call to stop the scheduler
  */
-function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = {}) {
+function startScheduler(log, runCommand, { resumeSource, stateDir, projects, resumeBackgroundRuns, onHealthChange } = {}) {
   let running = true;
   let lastTickMinute = null;
   const runningTasks = new Set();
+  const reserved = new Map();
   // see .ai/contexts/schedule-runner.md ("Isolated instances")
   const catchUpOn = !process.env.SWITCHBOARD_DATA_DIR;
   if (!catchUpOn) log.info('[schedule] catch-up is off: SWITCHBOARD_DATA_DIR isolates this instance, schedules run on cron only');
 
   function launch(schedule, dueMs) {
     const taskKey = `${schedule.folder}:${schedule.slug}`;
-    if (runningTasks.has(taskKey)) {
+    if (runningTasks.has(taskKey) || reserved.get(taskKey) > 0) {
       log.info(`[schedule] Skipping ${schedule.name} — still running from previous trigger`);
       return;
     }
@@ -721,13 +732,13 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
       log.info(`[schedule] Catching up: ${schedule.name} (${schedule.cron}), due ${new Date(dueMs).toISOString()}`);
     }
     try {
-      const { sessionId } = createScheduleSession(schedule, dueMs);
+      const { sessionId, jsonlPath } = createScheduleSession(schedule, dueMs);
       const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
 
       runningTasks.add(taskKey);
       const launched = runCommand(claudeArgs, schedule.projectPath, schedule.name, () => {
         runningTasks.delete(taskKey);
-      }, { filePath: schedule.filePath, slug: schedule.slug, dueMs });
+      }, { filePath: schedule.filePath, slug: schedule.slug, dueMs, ...(schedule.runAsBackground ? { background: { seedPath: jsonlPath } } : {}) });
       if (launched?.catch) launched.catch(err => {
         runningTasks.delete(taskKey);
         log.error(`[schedule] Failed to run ${schedule.name}:`, err);
@@ -811,7 +822,18 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
     }
   }
 
+  let hold = null;
+  let discoveryTimer = null;
+  let suspension = null;
+  const setSuspension = value => {
+    suspension = value;
+    try { onHealthChange?.(); } catch (err) { log.warn('[schedule] Cannot report the scheduler state:', err?.message || err); }
+  };
   const runCheck = onTick => {
+    if (hold) {
+      hold.onTick = hold.onTick || !!onTick;
+      return hold.drained;
+    }
     try {
       const result = check(onTick);
       if (result?.catch) return result.catch(err => log.error('[schedule] Cannot load schedule projects:', err));
@@ -820,6 +842,74 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
   const tick = () => runCheck(true);
   const onResume = () => runCheck(false);
 
+  if (resumeBackgroundRuns) {
+    const seen = new Set();
+    const claim = run => {
+      if (run.jobId) {
+        if (seen.has(run.jobId)) return false;
+        seen.add(run.jobId);
+      }
+      const key = `${encodeProjectPath(run.cwd)}:${run.slug}`;
+      reserved.set(key, (reserved.get(key) || 0) + 1);
+      let held = true;
+      return () => {
+        if (!held) return;
+        held = false;
+        const left = reserved.get(key) - 1;
+        if (left > 0) reserved.set(key, left); else reserved.delete(key);
+      };
+    };
+    let release;
+    const current = { onTick: false };
+    current.drained = new Promise(resolve => { release = resolve; }).then(() => {
+      hold = null;
+      return runCheck(current.onTick);
+    });
+    let known = false, attempts = 0;
+    const settleHold = () => {
+      if (known) return;
+      known = true;
+      clearTimeout(discoveryTimer);
+      if (attempts > 1) log.info(`[schedule] Background run records read after ${attempts} attempts; scheduling resumes`);
+      if (suspension) setSuspension(null);
+      release();
+    };
+    const discover = () => {
+      if (known || !running) return;
+      attempts++;
+      let resumed;
+      try {
+        resumed = resumeBackgroundRuns(claim);
+        Promise.resolve(resumed).catch(err => log.error('[schedule] Cannot resume background runs:', err));
+      } catch (err) { log.error('[schedule] Cannot resume background runs:', err); }
+      if (!resumed || typeof resumed.discovered?.then !== 'function') {
+        if (hold) settleHold(); else known = true;
+        return;
+      }
+      hold = current;
+      const attempt = attempts;
+      const waitMs = Math.min(DISCOVERY_WAIT_MS * 2 ** (attempts - 1), DISCOVERY_RETRY_MAX_MS);
+      Promise.resolve(resumed.discovered).then(settleHold, err => {
+        if (known || !running) return;
+        const message = String(err?.message || err);
+        if (suspension?.message !== message) {
+          log.warn(`[schedule] Cannot read the background run records (attempt ${attempt}); automatic launches stay suspended, retrying:`, message);
+        }
+        setSuspension({ reason: 'unreadable', path: err?.path || null, code: err?.code || null, message,
+          since: suspension?.since ?? Date.now(), retryMs: waitMs });
+      });
+      discoveryTimer = setTimeout(() => {
+        if (known || !running) return;
+        if (!suspension) {
+          log.warn(`[schedule] Background run records not read after ${waitMs / 1000} s (attempt ${attempts}); automatic launches stay suspended until they are, retrying`);
+          setSuspension({ reason: 'slow', path: null, code: null, message: `not read after ${waitMs / 1000} s`, since: Date.now(), retryMs: waitMs });
+        }
+        discover();
+      }, waitMs);
+      discoveryTimer?.unref?.();
+    };
+    discover();
+  }
   runCheck(false);
   if (resumeSource) resumeSource.on('resume', onResume);
 
@@ -834,9 +924,11 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
   function stop() {
     running = false;
     clearTimeout(initialTimer);
+    clearTimeout(discoveryTimer);
     if (initialTimer._interval) clearInterval(initialTimer._interval);
   }
   stop.getLastTickMinute = () => lastTickMinute;
+  stop.getHealth = () => (suspension ? { suspended: true, ...suspension } : { suspended: false });
   return stop;
 }
 
