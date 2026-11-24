@@ -1,5 +1,7 @@
 'use strict';
 
+const { customArgsForLaunch } = require('../src/main/terminals/shell-profiles');
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -47,7 +49,7 @@ function launcher(t, options = {}) {
   const ctx = vm.createContext({ require: createRequire(filename), fs: { ...fs, mkdirSync: (...args) => { fail('mkdir'); return fs.mkdirSync(...args); } }, path, os, process: { platform: options.platform || 'linux' },
     DB_PATH: path.join(f.root, 'db'), getSetting: () => ({}), isProjectSettingsArchived: () => !!options.archived,
     SETTING_DEFAULTS: {}, resolveShell: () => { fail('shell'); return { path: 'fake-shell' }; }, quoteArgvForShell: (_shell, argv) => argv.join(' '),
-    shellArgs: (_shell, cmd) => [cmd], headlessClaudeLaunch: (shell, args) => ({ program: shell, args: ['claude ' + args.join(' ')] }),
+    shellArgs: (_shell, cmd) => [cmd], customArgsForLaunch, headlessClaudeLaunch: (shell, args) => ({ program: shell, args: ['claude ' + args.join(' ')] }),
     cleanPtyEnv: {}, resolveScheduleSandbox: () => !!options.sandbox,
     scheduleLaunchRefusal: require('../src/main/schedules/schedule-runner').scheduleLaunchRefusal,
     scheduleProjects: () => ({ list: async () => { fail('projects'); return []; } }), sandboxScriptPath: () => 'sandbox', sandboxBindEnv: () => '',

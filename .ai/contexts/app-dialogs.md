@@ -20,8 +20,13 @@ The dialog does not scan transcripts to reconstruct launch options.
 `CODEX_CHOICES` in `public/setting-defaults.js` supplies sandbox, approval and
 effort choices to both the launch form and `public/settings-panel.js`.
 
-Submission collects only visible runtime controls plus the two shared text
-fields. Resume includes its runtime and passes custom options through
+Submission collects visible runtime controls plus the two shared text
+fields. Both New and Resume also forward the runtime's effective custom
+arguments from Settings: `customArgs` for Claude, `codexCustomArgs` for Codex.
+They preserve the text verbatim, including an explicit empty override, and
+never forward the other runtime's custom arguments. These remain Settings
+fields rather than additional per-launch controls.
+Resume includes its runtime and passes custom options through
 `openSession` to `open-terminal`; the existing harness constructs resume argv.
 Codex never inherits Claude's Dangerous Skip, browser or bubblewrap settings.
 New and Resume use the same modal stack, cancellation/focus restoration and

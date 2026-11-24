@@ -73,7 +73,17 @@ test('the script is an exact string: directory check, tmux and claude checks, de
     `command -v tmux >/dev/null 2>&1 || exit ${NO_TMUX_EXIT_CODE}; ` +
     `command -v claude >/dev/null 2>&1 || exit ${NO_CLAUDE_EXIT_CODE}; ` +
     `exec tmux new-session -d -P -F '#{session_name}:#{window_id}.#{pane_id} #{pane_pid}' ` +
-    `-s switchboard-3f2a9c10 -c "$cwd" 'claude --session-id ${UUID}'`);
+    `-s switchboard-3f2a9c10 -c "$cwd" ${shellSingleQuote(`claude --session-id ${UUID}`)}`);
+});
+
+test('custom remote text follows the unchanged validated base command', () => {
+  const script = buildLaunchScript({ sessionId: UUID, cwd: '/srv/app', options: { permissionMode: 'plan', customArgs: '--model "custom model"' } });
+  assert.equal(script,
+    `cwd='/srv/app'; [ -d "$cwd" ] || exit ${NO_DIR_EXIT_CODE}; ` +
+    `command -v tmux >/dev/null 2>&1 || exit ${NO_TMUX_EXIT_CODE}; ` +
+    `command -v claude >/dev/null 2>&1 || exit ${NO_CLAUDE_EXIT_CODE}; ` +
+    `exec tmux new-session -d -P -F '#{session_name}:#{window_id}.#{pane_id} #{pane_pid}' ` +
+    `-s switchboard-3f2a9c10 -c "$cwd" 'claude --session-id ${UUID} --permission-mode plan --model "custom model"'`);
 });
 
 test('the command wraps the script in sh -c so a non-POSIX login shell never parses it', () => {
@@ -91,7 +101,7 @@ test('permission options map to CLI flags and nothing else reaches the command',
   assert.equal(bad.ok, false);
   assert.match(bad.error, /permission mode/);
   const script = buildLaunchScript({ sessionId: UUID, cwd: '/srv/app', options: { permissionMode: 'acceptEdits' } });
-  assert.match(script, /'claude --session-id [0-9a-f-]+ --permission-mode acceptEdits'$/);
+  assert.ok(script.endsWith(shellSingleQuote(`claude --session-id ${UUID} --permission-mode acceptEdits`)));
 });
 
 test('a hostile working directory is refused, naming the rule', () => {
