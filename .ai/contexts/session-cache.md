@@ -1008,19 +1008,28 @@ project path is missing, the project matched a search with no session, or the
 group is stale: its first row (after the running/starred sort) is older than
 `sessionMaxAgeDays`. A group holding a running row is never stale
 (`groupIsStale` checks `rowIsRunning`, which covers live PTYs, pending spawns,
-running schedules and live background jobs). This matters on a cold start: a
-background job shown from its descriptor alone carries `modified =
-descriptor.startedAt`, which is days old for a long-running job.
+running schedules and live background jobs). A project is also not stale while
+one of its rendered nested worktrees holds a running row, because the worktree
+groups live inside the project's `.project-sessions` and a collapsed parent
+hides them. This matters on a cold start: a background job shown from its
+descriptor alone carries `modified = descriptor.startedAt`, which is days old
+for a long-running job. A group holding a schedule re-enable offer is never
+auto-collapsed.
 
-Automatic and user collapses are told apart by `data-auto-collapsed="1"`, set
-only by `autoCollapseHeader`. A header click removes the marker before
-toggling. The morphdom hook (`carryGroupCollapse`) keeps the previous state of
-an expanded header and of a header the user collapsed, and drops the marker on
-the new element; for a header still marked automatic it keeps the freshly
-computed state, so an automatic collapse is re-evaluated on every render and
-lifts once its reason is gone (the row starts running, the cache gives it a
-current date, a search or the Starred/Running filter is on). Nothing is
-persisted: a restart recomputes every header.
+Automatic state is carried by `data-auto-collapsed` on the header:
+`"1"` for an automatic collapse (`autoCollapseHeader`), `"filter"` for a header
+the age rule left open only because a search or the Starred/Running filter is
+on (`applyAgeCollapse`). A header click removes the marker before toggling, so
+the state becomes the user's. The morphdom hook (`carryGroupCollapse`) takes
+the freshly computed state when the previous header still carries the marker
+matching its state (`"1"` and collapsed, `"filter"` and expanded); otherwise it
+keeps the previous state and drops the marker. So an automatic collapse lifts
+once its reason is gone, a filter opens an automatically collapsed group and
+clearing the filter collapses it again, and a header that was open without a
+marker, or that the user toggled, keeps its state. A programmatic reveal
+(`revealDormantSessions`, jump to a session) removes `collapsed` and leaves
+`"1"`, which no longer matches, so the reveal is kept. Nothing is persisted: a
+restart recomputes every header.
 
 ## Bridge history divergence
 

@@ -157,9 +157,14 @@ function autoCollapseHeader(header) {
   header.dataset.autoCollapsed = '1';
 }
 
+function applyAgeCollapse(header, stale) {
+  if (searchMatchIds !== null || showStarredOnly || showRunningOnly) header.dataset.autoCollapsed = 'filter';
+  else if (stale()) autoCollapseHeader(header);
+}
+
 function carryGroupCollapse(fromEl, toEl) {
   const collapsed = fromEl.classList.contains('collapsed');
-  if (collapsed && fromEl.dataset.autoCollapsed === '1') return;
+  if (fromEl.dataset.autoCollapsed === (collapsed ? '1' : 'filter')) return;
   toEl.classList.toggle('collapsed', collapsed);
   delete toEl.dataset.autoCollapsed;
 }
@@ -1731,13 +1736,9 @@ function renderProjects(projects, resort, { keepFocus = false } = {}) {
     if (offerNotice) sessionsList.prepend(offerNotice);
 
     // see .ai/contexts/session-cache.md ("Sidebar group auto-collapse")
-    if (project.missing || project._projectMatchedOnly) {
-      autoCollapseHeader(header);
-    } else if (project.reenableOffer) {
-      // see .ai/contexts/session-cache.md ("Archived projects", re-enable offers)
-    } else if (searchMatchIds === null && !showStarredOnly && !showRunningOnly && groupIsStale(filtered)) {
-      autoCollapseHeader(header);
-    }
+    if (project.missing || project._projectMatchedOnly) autoCollapseHeader(header);
+    const ageRuleApplies = !project.missing && !project._projectMatchedOnly && !project.reenableOffer;
+    const childRows = [];
 
     group.appendChild(header);
     group.appendChild(sessionsList);
@@ -1794,14 +1795,14 @@ function renderProjects(projects, resort, { keepFocus = false } = {}) {
       const wtOfferNotice = buildReenableNotice(wt, wtFId);
       if (wtOfferNotice) wtSessionsList.prepend(wtOfferNotice);
 
-      if (!wt.reenableOffer && searchMatchIds === null && !showStarredOnly && !showRunningOnly && groupIsStale(wtResult.filtered)) {
-        autoCollapseHeader(wtHeader);
-      }
+      childRows.push(...wtResult.filtered);
+      if (!wt.reenableOffer) applyAgeCollapse(wtHeader, () => groupIsStale(wtResult.filtered));
 
       wtGroup.appendChild(wtHeader);
       wtGroup.appendChild(wtSessionsList);
       sessionsList.appendChild(wtGroup);
     }
+    if (ageRuleApplies) applyAgeCollapse(header, () => groupIsStale(filtered) && !childRows.some(row => rowIsRunning(row)));
 
     newSidebar.appendChild(group);
   }

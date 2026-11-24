@@ -123,3 +123,75 @@ test('a stale idle worktree is auto-collapsed and reopens once its row is curren
   render(h, projects);
   assert.equal(wtHeader().classList.contains('collapsed'), false);
 });
+
+const oldRow = (sessionId, extra = {}) => ({ sessionId, summary: sessionId, modified: new Date(OLD).toISOString(), ...extra });
+
+test('an old idle parent is not auto-collapsed over a nested worktree holding a running session', async t => {
+  const h = await setup(t, { live: false });
+  const projects = [projectWith('/repo', [oldRow('idle-parent')]),
+    projectWith('/repo/.claude/worktrees/worker', [oldRow('live-worker')])];
+  h.window.activePtyIds.add('live-worker');
+  render(h, projects);
+  assert.ok(h.document.querySelector('.worktree-header'), 'worktree is nested under its parent');
+  assert.equal(header(h).classList.contains('collapsed'), false, 'parent stays open over the running worktree');
+  assert.equal(h.document.querySelector('.worktree-header').classList.contains('collapsed'), false);
+});
+
+test('a stale parent collapsed automatically reopens when its nested worktree starts running', async t => {
+  const h = await setup(t, { live: false });
+  const projects = [projectWith('/repo', [oldRow('idle-parent')]),
+    projectWith('/repo/.claude/worktrees/worker', [oldRow('live-worker')])];
+  render(h, projects);
+  assert.equal(header(h).classList.contains('collapsed'), true, 'nothing runs: the stale parent is auto-collapsed');
+  h.window.activePtyIds.add('live-worker');
+  render(h, projects);
+  assert.equal(header(h).classList.contains('collapsed'), false);
+});
+
+for (const filter of ['search', 'starred', 'running']) {
+  test(`a stale group opened by the ${filter} filter collapses again once the filter is cleared`, async t => {
+    const h = await setup(t, { live: false });
+    const projects = [projectWith('/repo', [oldRow('idle', { starred: true })])];
+    render(h, projects);
+    assert.equal(header(h).classList.contains('collapsed'), true, 'stale idle group is auto-collapsed');
+    const on = { search: () => { h.window.searchMatchIds = new Set(['idle']); },
+      starred: () => { h.window.showStarredOnly = true; },
+      running: () => { h.window.showRunningOnly = true; h.window.activePtyIds.add('idle'); } }[filter];
+    const off = { search: () => { h.window.searchMatchIds = null; },
+      starred: () => { h.window.showStarredOnly = false; },
+      running: () => { h.window.showRunningOnly = false; h.window.activePtyIds.delete('idle'); } }[filter];
+    on();
+    render(h, projects);
+    assert.equal(header(h).classList.contains('collapsed'), false, 'the filter opens the group');
+    render(h, projects);
+    off();
+    render(h, projects);
+    assert.equal(header(h).classList.contains('collapsed'), true, 'clearing the filter restores the automatic collapse');
+  });
+}
+
+test('a group the user expands during a search stays expanded after it', async t => {
+  const h = await setup(t, { live: false });
+  const projects = [projectWith('/repo', [oldRow('idle')])];
+  render(h, projects);
+  h.window.searchMatchIds = new Set(['idle']);
+  render(h, projects);
+  header(h).click();
+  header(h).click();
+  h.window.searchMatchIds = null;
+  render(h, projects);
+  assert.equal(header(h).classList.contains('collapsed'), false, 'a click turns the state into the user\'s');
+});
+
+test('a user collapse survives a search cycle', async t => {
+  const h = await setup(t, { live: false });
+  const projects = [projectWith('/repo', [oldRow('idle', { modified: new Date().toISOString() })])];
+  render(h, projects);
+  header(h).click();
+  h.window.searchMatchIds = new Set(['idle']);
+  render(h, projects);
+  assert.equal(header(h).classList.contains('collapsed'), true);
+  h.window.searchMatchIds = null;
+  render(h, projects);
+  assert.equal(header(h).classList.contains('collapsed'), true);
+});
