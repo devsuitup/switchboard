@@ -4,9 +4,6 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
-### New
-- The Schedules tab now lists the runs your schedules made before v0.0.90: the first time it opens, it imports them in the background, project by project, marked **Result unknown (imported)**. Only sessions that still start with the exact record Switchboard wrote for a run are imported, never a session you started yourself; the note about older runs appears only when the history has gaps. (#1252)
-
 ## v0.1.0-beta.1 — 2026-11-24
 
 ### New
@@ -15,6 +12,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Sessions can append custom command-line arguments, with separate Claude and Codex settings and project overrides for Claude. (#1202)
 - Notices and question dialogs now leave a bounded history in the application log, including dismissals and answers, with common credentials masked; session titles and prompts are not recorded, and project paths remain intact. (#1196)
 - Settings → Advanced → Diagnostics shows the size of Switchboard's logs and activity traces and lets you delete files older than a chosen number of days, keeping current files. (#1197)
+- The Schedules tab now lists the runs your schedules made before v0.0.90: the first time it opens, it imports them in the background, project by project, marked **Result unknown (imported)**. Only sessions that still start with the exact record Switchboard wrote for a run are imported, never a session you started yourself; the note about older runs appears only when the history has gaps. (#1252)
 
 ### Changed
 - The Schedules tab is now on by default, so schedule files leave Agent Files for it on first launch, without a restart. For this release it can still be turned off in Global Settings → Automation → Schedules, which keeps schedule files and Run now in Agent Files. The first launch of this version turns the tab on once even if you saved Global Settings before, since earlier versions saved it as off with every Save; if you turn it off afterwards, it stays off. Scheduled tasks run as before. (#1239)
