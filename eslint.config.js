@@ -207,6 +207,7 @@ const rendererCrossFileGlobals = {
   showSession: 'readonly',
   confirmAndStopSession: 'readonly',
   sendSessionToBackground: 'readonly',
+  harnessBackgroundReason: 'readonly',
   backgroundActionReason: 'readonly',
   activeSubagentsByParent: 'readonly',
   pollActiveSessions: 'readonly',
@@ -448,6 +449,7 @@ const rendererCrossFileGlobals = {
   CODEX_CHOICES: 'readonly',
   BROWSER_MODES: 'readonly',
   normalizeBrowserSettings: 'readonly',
+  validateCustomArgs: 'readonly',
 
   // Terminal right-click context menu (public/terminal-context-menu.js)
   terminalRightClickMode: 'writable',
@@ -674,6 +676,7 @@ module.exports = [
         CODEX_CHOICES: 'off',
         BROWSER_MODES: 'off',
         normalizeBrowserSettings: 'off',
+        validateCustomArgs: 'off',
       },
     },
     rules: {

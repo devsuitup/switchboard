@@ -1,5 +1,7 @@
 'use strict';
 
+const { customArgsForLaunch } = require('../src/main/terminals/shell-profiles');
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -125,10 +127,11 @@ test('schedule launch passes the UTF-8 default to the intercepted child spawn', 
   for (const platform of ['darwin', 'linux', 'win32']) {
     let spawned;
     const context = vm.createContext({ cleanPtyEnv: cleaner(platform)({}),
+      require: createRequire(statement.filename),
       getSetting: () => ({}), isProjectSettingsArchived: () => false,
       SETTING_DEFAULTS: {}, resolveShell: () => ({ path: '/test-shell' }),
       claudeCommand: (_shell, args, o = {}) => (o.prefix ? o.prefix + ' ' : '') + 'claude ' + args.join(' '), quoteArgvForShell: (_shell, args) => args.join(' '), shellArgs: (_shell, cmd) => [cmd],
-      headlessClaudeLaunch: (shell, args) => ({ program: shell, args: ['claude ' + args.join(' ')] }),
+      customArgsForLaunch, headlessClaudeLaunch: (shell, args) => ({ program: shell, args: ['claude ' + args.join(' ')] }),
       resolveScheduleSandbox: () => false, process: { platform }, Date,
       log: { info() {}, error() {} }, cliSessionState: { trackScheduleRun() {} },
       activityReporter: { sessionStarted() {}, sessionEnded() {} },

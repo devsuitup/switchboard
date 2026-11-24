@@ -1,5 +1,7 @@
 'use strict';
 
+const { customArgsForLaunch } = require('../src/main/terminals/shell-profiles');
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -70,7 +72,7 @@ for (const mode of ['new', 'resume', 'fork', 'schedule']) {
       sessionTransitions: { snapshotContinuationsBeforeSpawn: async () => null },
       sessionTranscriptExists: () => true, parseAddDirs: () => [], sandboxBindEnv: () => '',
       claudeCommand: (_shell, args, o = {}) => (o.prefix ? o.prefix + ' ' : '') + 'claude ' + args.join(' '), quoteArgvForShell: (_shell, args) => args.join(' '), shellArgs: (_shell, command) => ['-c', command],
-      headlessClaudeLaunch: (shell, args) => ({ program: shell, args: ['-c', 'claude ' + args.join(' ')] }),
+      customArgsForLaunch, headlessClaudeLaunch: (shell, args) => ({ program: shell, args: ['-c', 'claude ' + args.join(' ')] }),
       sandboxScriptPath: () => '/sandbox.sh', cleanPtyEnv: {},
       scheduleProjects: () => ({ add: async () => {}, list: async () => [] }),
       resolveScheduleSandbox: () => true,

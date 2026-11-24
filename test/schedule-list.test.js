@@ -1,5 +1,7 @@
 'use strict';
 
+const { customArgsForLaunch } = require('../src/main/terminals/shell-profiles');
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -249,7 +251,7 @@ test('main registers list-schedules with the real backend and instance dependenc
     require: createRequire(filename), path, DB_PATH: path.join(f.root, 'db'),
     getSetting: () => ({}), isProjectSettingsArchived: () => false, SETTING_DEFAULTS: {},
     resolveShell: () => ({ path: 'fixture-shell' }), quoteArgvForShell: (_shell, argv) => argv.join(' '),
-    shellArgs: (_shell, cmd) => [cmd], headlessClaudeLaunch: (shell, args) => ({ program: shell, args: ['claude ' + args.join(' ')] }),
+    shellArgs: (_shell, cmd) => [cmd], customArgsForLaunch, headlessClaudeLaunch: (shell, args) => ({ program: shell, args: ['claude ' + args.join(' ')] }),
     cleanPtyEnv: {}, resolveScheduleSandbox: () => false,
     log: { info() {}, error() {}, warn() {} }, cliSessionState: { trackScheduleRun() {} },
     activityReporter: { sessionStarted() {}, sessionEnded() {} },

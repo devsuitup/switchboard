@@ -13,6 +13,41 @@ const root = path.join(__dirname, '..');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const globalPages = ['general', 'sessions', 'keyboard', 'automation', 'remote', 'integrations', 'archived', 'advanced'];
 
+test('custom arguments persist independently, reject control characters and allow a project override', async t => {
+  const h = setup(t);
+  await h.open();
+  const claude = h.q('#sv-custom-args');
+  const codex = h.q('#sv-codex-custom-args');
+  assert.ok(claude, 'Claude custom arguments field exists');
+  assert.ok(codex, 'Codex custom arguments field exists');
+  for (const input of [claude, codex]) {
+    for (const control of ['\n', '\t', '\u0000', '\u007f', '\u0085', '\u2028']) {
+      input.value = '--bad' + control + '--next';
+      input.dispatchEvent(new h.w.Event('input', { bubbles: true }));
+      h.q('#sv-save-btn').click();
+      await settle();
+      assert.equal(h.saved.global, undefined, 'invalid input is not saved');
+      assert.equal(input.checkValidity(), false, 'invalid input is explained by the field');
+    }
+    input.value = input === claude ? '--claude' : '--codex';
+    input.dispatchEvent(new h.w.Event('input', { bubbles: true }));
+  }
+  h.q('#sv-save-btn').click(); await settle(); await settle();
+  assert.equal(h.saved.global.customArgs, '--claude');
+  assert.equal(h.saved.global.codexCustomArgs, '--codex');
+  await h.open('project');
+  assert.equal(h.q('#sv-custom-args').value, '--claude');
+  const inherit = h.q('[data-field="customArgs"]');
+  assert.ok(inherit.checked);
+  inherit.checked = false;
+  inherit.dispatchEvent(new h.w.Event('change', { bubbles: true }));
+  h.q('#sv-custom-args').value = '';
+  h.q('#sv-custom-args').dispatchEvent(new h.w.Event('input', { bubbles: true }));
+  h.q('#sv-save-btn').click(); await settle(); await settle();
+  assert.equal(h.saved['project:/project'].customArgs, '', 'empty override disables the global arguments');
+  assert.equal(h.q('#sv-codex-custom-args'), null, 'Codex settings remain global');
+});
+
 test('a saved host with zero transcripts opens the same remote launch flow as project plus', async t => {
   const h = setup(t);
   h.saved.global = { remoteHosts: [{ alias: 'box', label: 'Sandbox', enabled: true }] };
