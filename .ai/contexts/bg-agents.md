@@ -326,6 +326,14 @@ Renderer rules, all in `resume-guard.js` / `app.js`:
 - `reopenActiveSessionAfterReload` only reattaches an active part whose row has
   a refused head or a saved bg entry, unless it is a `chosenPart`.
 
+Manual Respawn (`bg-agent-verb` 'respawn': the Agents view, the restore notice and
+this chooser) admits every project it can tie to the job through
+`projectOperationGate.tryAdmitAll` and holds that admission until the respawn
+returns: the saved entry's project, the `cwd` of the job's `state.json`
+(`jobCwd`) and the Agents roster `cwd`, each also mapped through
+`resolveWorktreePath`. With none of them known it refuses (fail closed), so a
+project deletion can never be raced by a Respawn of a job that was never saved.
+
 Known limit: `refreshFolder`'s header refresh sets `modified` to the file mtime
 (measured: a metadata-only append to A flips a rolled row's head to A). It was
 not the cause above. The held-entry question does not depend on the head, so it

@@ -104,6 +104,7 @@ function fakeBgAgents() {
     dispatch: async (fields) => { calls.push(['dispatch', fields]); return { ok: true, id: 'aaaaaaaa' }; },
     liveJobCheck: (sessionId) => { calls.push(['liveJobCheck', sessionId]); return { known: true, job: null }; },
     continuationJobCheck: async () => ({ known: true, job: null }),
+    jobCwd: () => '/fake-project',
     onChange: (l) => { listener = l; return () => { listener = null; }; },
     fire: (snap) => listener && listener(snap),
   };
@@ -722,4 +723,46 @@ test('1020fix4 compatible subset joins the same respawn result', async () => {
   assert.deepEqual(await Promise.all([first, second]), [{ ok: true, attached: true }, { ok: true, attached: true }]);
   assert.equal(checks, 1);
   assert.deepEqual(bg.calls.filter(call => call[0] === 'verb'), [['verb']]);
+});
+
+for (const [name, setup] of [
+  ['the job record', bg => { bg.jobCwd = id => id === 'aaaaaaaa' ? '/restore-project' : null; }],
+  ['the Agents roster', bg => { bg.jobCwd = () => null; bg.getSnapshot = () => ({ roster: [{ id: 'aaaaaaaa', cwd: '/restore-project' }] }); }],
+]) {
+  test(`#1276 manual respawn of a job never saved is admitted through its project from ${name}`, async t => {
+    const { projectOperationGate } = require('../src/main/shared/project-operation-gate');
+    const h = restoreFixture(t, { saved: [], state: 'blocked' });
+    setup(h.bg);
+    const held = projectOperationGate.holdTree('/restore-project');
+    t.after(() => held.release());
+    const refused = await h.manual();
+    assert.equal(refused.ok, false);
+    assert.match(refused.error, /project.*operation/i);
+    assert.equal(h.seen.some(call => call[0] === 'respawn'), false);
+    held.release();
+    let acknowledge, started;
+    const launching = new Promise(resolve => { started = resolve; });
+    h.bg.runVerb = (...args) => { h.seen.push(args); started(); return new Promise(resolve => { acknowledge = resolve; }); };
+    const pending = h.manual();
+    await launching;
+    const deletion = projectOperationGate.hold('/restore-project');
+    let drained = false;
+    deletion.ready.then(() => { drained = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(drained, false, 'the respawn holds its admission until it ends');
+    acknowledge({ ok: true });
+    assert.equal((await pending).ok, true);
+    await deletion.ready;
+    deletion.release();
+    h.publish([{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1', pid: 4242 }]);
+  });
+}
+
+test('#1276 manual respawn of a job whose project is unknown is refused', async t => {
+  const h = restoreFixture(t, { saved: [], state: 'blocked' });
+  h.bg.jobCwd = () => null;
+  const result = await h.manual();
+  assert.equal(result.ok, false);
+  assert.match(result.error, /project/i);
+  assert.equal(h.seen.some(call => call[0] === 'respawn'), false);
 });

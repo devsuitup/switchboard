@@ -20,7 +20,7 @@ function fixture(t, state, descriptors) {
   const sessions = path.join(dir, 'sessions');
   fs.mkdirSync(path.join(jobs, JOB), { recursive: true });
   fs.mkdirSync(sessions);
-  fs.writeFileSync(path.join(jobs, JOB, 'state.json'), JSON.stringify({ state, sessionId: SID }));
+  fs.writeFileSync(path.join(jobs, JOB, 'state.json'), JSON.stringify({ state, sessionId: SID, cwd: dir }));
   for (const [index, descriptor] of descriptors.entries()) {
     const pid = PID + index;
     fs.writeFileSync(path.join(sessions, pid + '.json'), JSON.stringify({
