@@ -279,6 +279,56 @@ after renderer reload outside a run remains an outside open that cancels plannin
 Lazy/manual held-entry opens share
 `prepareBackgroundRestore`.
 
+### Refused part of a merged row (#1276)
+
+Measured 2026-11-25 (v0.1.0-beta.1 main.log, index rows): P had two
+`continued-in` records (X and A), and A had one, to B. `continuationRollup`
+cannot root a chain at A (P points to it) nor at P (two successors), so it
+merges nothing. `conversationGroups` does merge A and B through B's job
+(`backgroundPath`; P's index is null there because it has two ids).
+`mergeLocalBackgroundSessions` then set a head only for a live descriptor or a
+selected attach, so B `blocked` with no worker left A as head regardless of
+recency. A linear A-B pair rolls up and already chose B. While B's worker was
+live, the log shows the pair merged for one projection, then A
+`proof-invalid` until the next index of the folder.
+
+The head of such a row is now the newest member by cached `modified`; live
+members (non-bg descriptor, accepted bg descriptor, open local PTY) are
+considered first, so a live conversation keeps the head over an older or newer
+dead copy its record points to. Descriptor/attach hosting is unchanged. The
+identity fields describe the head's job when it has one, and
+`refusedJobState` (`blocked`/`stopped`, no accepted descriptor or attach) marks
+it. No `continued-in` chain is followed beyond the existing proof.
+
+Renderer rules, all in `resume-guard.js` / `app.js`:
+
+- `runRestore` defers an interactive entry whose row (or resolved continuation)
+  holds a saved bg entry to the end of the run, waits for that entry's task and
+  holds the interactive one if the bg one is still held. Both entries persist
+  under their own ids; the bg mark and job id are not overwritten.
+- `resolveResumeSession` keeps a row member as a candidate when it is the row's
+  refused head and has no live process. Automatic callers hold; a manual open
+  of a non-head part gets the existing chooser. Candidates that are not the
+  refused head are still dropped.
+- A user open of any part of a row with a held bg entry calls
+  `prepareBackgroundRestore` for that entry with `onRefused`; a refusal goes to
+  `chooseRefusedBackground` (`appChoose`) instead of the notice. Rows with one
+  part keep the notice. Retired and missing jobs keep their own paths.
+- Choosing another part sets `chosenPart` (the background id it was chosen over)
+  on its terminal entry and saved item;
+  the bg entry is released only after the terminal opened. Such items ignore
+  that id as a continuation and skip the head mapping; a further continuation is
+  still followed.
+- `reopenActiveSessionAfterReload` only reattaches an active part whose row has
+  a refused head or a saved bg entry, unless it is a `chosenPart`.
+
+Known limit: `refreshFolder`'s header refresh sets `modified` to the file mtime
+(measured: a metadata-only append to A flips a rolled row's head to A). It was
+not the cause above. The held-entry question does not depend on the head, so it
+covers this for saved bg entries only.
+
+Tests: `test/row-head-1276.test.js`, `test/restore-row-head-1276.test.js`.
+
 ### Active tab first, the rest behind it (#546, #785)
 
 Decided by Jean-Baptiste on 2026-11-19: on a restart every saved session comes

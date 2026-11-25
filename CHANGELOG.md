@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- A conversation whose newest part is a background session that could not be restarted no longer opens an older part by itself, at launch or on click. Its row stays on the newest part, launch starts neither, and opening the row asks whether to respawn the background session, open another part, or do nothing; the answer is kept at the next launch. (#1276)
+
 ## v0.1.0-beta.2 — 2026-11-25
 
 ### Changed

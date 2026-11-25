@@ -10,6 +10,7 @@ const { isHostedJob, JOB_ID_RE, JOB_STATES } = require('./src/main/bg-agents/bg-
 const { conversationMeta } = require('./conversation-meta');
 const { projectHiddenMatcher } = require('./public/worktree-nesting');
 
+const REFUSED_JOB_STATES = new Set(['blocked', 'stopped']);
 const key = id => String(id).toLowerCase();
 
 function rowScope(row) {
@@ -201,6 +202,20 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, options
     const descriptor = target.descriptors.length === 1 ? target.descriptors[0] : target.descriptors.find(d => d.jobId === selected);
     return { target, selected, descriptor, sessionId: target.sessionId };
   });
+  const liveIds = new Set(validDescriptors.map(descriptor => key(descriptor.sessionId)));
+  for (const [id, open] of options.activeSessions || []) {
+    if (!open.exited && !open.host && !open.isPlainTerminal) liveIds.add(key(open.realSessionId || id));
+  }
+  const hostedRows = new Set();
+  const newestMember = (root, reachable) => {
+    const current = root.headSessionId || root.sessionId;
+    const pathIds = reachable.map(id => localRows.get(id)?.sessionId).filter(id => id && id !== root.sessionId);
+    const ids = [...new Set([root.sessionId, ...root.mergedMemberIds.filter(id => !pathIds.includes(id)), current, ...pathIds])];
+    const live = ids.filter(id => liveIds.has(key(id)));
+    const modified = id => localRows.get(key(id))?.modified || '';
+    return (live.length ? live : ids).reduce((head, id) => modified(id) > modified(head)
+      || modified(id) === modified(head) && (id === current || pathIds.includes(id)) ? id : head);
+  };
   const suppressedNames = new Set();
   for (const candidate of backgrounds) {
     const { target, selected, descriptor } = candidate;
@@ -231,7 +246,8 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, options
         root.sessionId = target.sessionId;
         root.headSessionId = target.sessionId;
         root.mergedMemberIds = [...new Set([originalId, ...root.mergedMemberIds])].filter(id => key(id) !== head);
-      }
+        hostedRows.add(root);
+      } else if (!hostedRows.has(root)) root.headSessionId = newestMember(root, reachable);
       const conversation = conversations.get(head);
       const partIds = conversation ? [...conversation.partIds] : [root.sessionId, ...root.mergedMemberIds];
       const metadata = conversationMeta(partIds, metaMap, conversation?.rootId || originalId);
@@ -266,7 +282,10 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, options
       project.sessions.push(visible);
       visibleRows.set(head, visible);
     }
-    if (selected) {
+    if (selected && (!visible.identityJobId || head === key(visible.headSessionId || visible.sessionId))) {
+      const state = jobs.get(selected)?.state;
+      if (!descriptor && !target.attaches.length && REFUSED_JOB_STATES.has(state)) visible.refusedJobState = state;
+      else delete visible.refusedJobState;
       visible.identityJobId = selected;
       visible.identitySessionId = target.sessionId;
     }

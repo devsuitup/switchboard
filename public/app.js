@@ -243,6 +243,7 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
         projectPath: (typeof sessionMap !== 'undefined' && sessionMap.get(sessionId)?.projectPath) || entry.session.projectPath,
         active: sessionId === activeSessionId,
         ...(entry.attach ? { bg: true, ...(typeof entry.attachJobId === 'string' && entry.attachJobId ? { attachJobId: entry.attachJobId } : {}) } : {}),
+        ...(entry.chosenPart && !entry.attach ? { chosenPart: entry.chosenPart } : {}),
         ...(fresh ? { fresh: true, ...(entry.session.runtime ? { runtime: entry.session.runtime } : {}) } : {}),
       });
     }
@@ -263,7 +264,7 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
     for (const { item, index, keepAttached } of held) {
       const active = heldActive ? heldActive.item === item : !!keepAttached && item.sessionId === activeSessionId;
       const attachJobId = openSessions.get(item.sessionId)?.attachJobId || item.attachJobId;
-      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true, ...(item.runtime ? { runtime: item.runtime } : {}) } : {}), ...(item.bg || (keepAttached && liveAttach(item.sessionId)) ? { bg: true, ...(typeof attachJobId === 'string' && attachJobId ? { attachJobId } : {}) } : {}) });
+      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.chosenPart && !item.bg ? { chosenPart: item.chosenPart } : {}), ...(item.fresh ? { fresh: true, ...(item.runtime ? { runtime: item.runtime } : {}) } : {}), ...(item.bg || (keepAttached && liveAttach(item.sessionId)) ? { bg: true, ...(typeof attachJobId === 'string' && attachJobId ? { attachJobId } : {}) } : {}) });
     }
     if (!set.some(e => e.active)) {
       const opening = set.find(e => pendingSessions.get(e.sessionId)?.openingActive);
@@ -445,6 +446,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
     };
     try {
       const liveById = await liveElsewhereMany(pending.filter(item => !startsFresh(item)).map(item => item.sessionId), { api: window.api });
+      const deferredItems = new Set(), backgroundTaskById = new Map();
       const ordered = activeItem ? [activeItem, ...list.filter(item => item !== activeItem)] : [...list];
       for (const item of ordered) {
         const position = list.indexOf(item);
@@ -494,6 +496,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           })();
           task.catch(err => showSessionActionFailure('Restore', session, err.message || String(err), 'Open it from the sidebar to retry restoring.'));
           backgroundTasks.push(task);
+          backgroundTaskById.set(originalId, task);
           if (item === activeItem) {
             let timer;
             activeGatePending = true;
@@ -509,7 +512,8 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         }
         let holdReason = { waitingForIndex: false };
         let continuationNotice;
-        s = await resolveResumeSession({ ...s, projectPath: s.projectPath || item.projectPath }, { automatic: true, api: window.api,
+        s = { ...s, projectPath: s.projectPath || item.projectPath };
+        s = await resolveResumeSession(s, { automatic: true, api: window.api, chosenOver: item.chosenPart,
           choices: (window._continuationChoices ||= new Map()), rowKey: indexedRowOf(s.sessionId)?.sessionId || s.sessionId,
           memoryNotify: notice => showAppNotice(notice),
           resolveRow: candidate => {
@@ -526,7 +530,29 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           restoreInFlight.delete(originalId);
           continue;
         }
-        if (s.sessionId === originalId && s.headSessionId && s.headSessionId !== originalId) s = rowHeadSession(s);
+        if (!item.chosenPart || s.sessionId !== originalId) {
+          const partIds = [originalSession, s].flatMap(part => [part.sessionId, part.headSessionId, ...(part.mergedMemberIds || [])]);
+          const background = [...list, ...[...skippedWorkingSetEntries.values()].map(entry => entry.item)]
+            .find(other => other.bg === true && other.sessionId !== originalId && partIds.includes(other.sessionId));
+          if (background && !deferredItems.has(item)) {
+            deferredItems.add(item);
+            ordered.push(item);
+            continue;
+          }
+          if (background) {
+            await backgroundTaskById.get(background.sessionId)?.catch(() => {});
+            const open = openSessions.get(background.sessionId);
+            if (skippedWorkingSetEntries.get(background.sessionId)?.item.bg === true && (!open || open.closed)) {
+              skippedWorkingSetEntries.set(originalId, { item, index: restoreSavedIndex.get(originalId) ?? position });
+              skippedNow.push({ session: originalSession, continuation: true, reason: 'It continued in a background session that was not restored',
+                recovery: 'Open it from the sidebar to choose what to open.' });
+              restoreInFlight.delete(originalId);
+              continue;
+            }
+          }
+          if (s.sessionId === originalId && s.headSessionId && s.headSessionId !== originalId
+            && !(refusedBackgroundPart(s) && !(await window.api.getSessionLiveElsewhere(s.headSessionId).catch(() => null)))) s = rowHeadSession(s);
+        }
         if (s.sessionId !== originalId) {
           restoreSavedIndex.set(s.sessionId, restoreSavedIndex.get(originalId) ?? position);
           skippedWorkingSetEntries.delete(originalId);
@@ -541,7 +567,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         let blockedBy;
         try {
           opened = await openSession(s, undefined, {
-            automatic: true, fromRestore: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId || item.bg === true, ...showWhenOpened(item),
+            automatic: true, fromRestore: true, live, continuationResolved: true, chosenPart: s.sessionId === originalId ? item.chosenPart : undefined, allowBgAttach: s.sessionId !== originalId || item.bg === true, ...showWhenOpened(item),
             onBlocked: part => { blockedBy = { session: part.sessionId === s.sessionId ? s : { sessionId: part.sessionId, projectPath: part.live?.cwd }, live: part.live }; },
           });
         } finally {
@@ -589,7 +615,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
 }
 
 
-async function prepareBackgroundRestore(session, item, { attachOnly = false, interactive = false } = {}) {
+async function prepareBackgroundRestore(session, item, { attachOnly = false, interactive = false, onRefused } = {}) {
   const RESTORE_BACKGROUND_VERB_RECONCILE_DESCRIPTOR_CHECK_TIMEOUT_MS = 120000;
   let result;
   let attempts = 0;
@@ -649,14 +675,17 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
     schedulePersistWorkingSet();
     return interactive ? { retired: true } : null;
   }
-  const retry = async respawn => {
+  const recover = async respawn => {
     if (respawn) {
       try {
         const verb = await window.api.bgAgentVerb('respawn', result.jobId);
-        if (!verb?.ok) { report(verb?.error || 'Respawn returned no result', 'Respawn', () => retry(true)); return; }
-      } catch (err) { report(err.message || String(err), 'Respawn', () => retry(true)); return; }
+        if (!verb?.ok) { report(verb?.error || 'Respawn returned no result', 'Respawn', () => retry(true)); return null; }
+      } catch (err) { report(err.message || String(err), 'Respawn', () => retry(true)); return null; }
     }
-    const background = await prepareBackgroundRestore(session, item, { attachOnly: true });
+    return prepareBackgroundRestore(session, item, { attachOnly: true });
+  };
+  const retry = async respawn => {
+    const background = await recover(respawn);
     if (background) await openSession(session, undefined, { automatic: true, fromRestore: true, allowBgAttach: true, continuationResolved: true, ...background });
   };
   if (result?.action === 'attach' && result.sessionId === item.sessionId && typeof result.jobId === 'string' && result.jobId
@@ -665,6 +694,12 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
       onOpenError: error => { clearAppNotice(id); report(error); logFailure('attach-failed'); } };
   }
   logFailure(result?.action === 'respawned-not-attached' ? 'respawned-not-attached' : 'refuse');
+  if (onRefused && result?.action === 'refuse' && result.missing !== true) {
+    const respawnable = result.recovery === 'respawn' || recovery === 'respawn';
+    onRefused({ jobId: result.jobId || item.attachJobId, reason: result.reason, recovery: respawnable ? 'respawn' : undefined,
+      recover: () => respawnable ? recover(true) : prepareBackgroundRestore(session, item, { interactive }) });
+    return null;
+  }
   if (result?.action === 'respawned-not-attached') report('Respawned, not attached: no live background descriptor within 15 seconds', 'Attach', () => retry(false));
   else if (result?.missing === true) {
     skippedWorkingSetEntries.delete(item.sessionId);
@@ -712,7 +747,12 @@ async function reopenActiveSessionAfterReload() {
       return;
     }
   }
-  if (((g && g.restoreOnStartup) || SETTING_DEFAULTS.restoreOnStartup) === 'lazy') {
+  const saved = g?.openWorkingSet?.find(item => item.sessionId === activeSessionId);
+  const row = indexedRowOf(activeSessionId) || session;
+  const partIds = [row.sessionId, row.headSessionId, ...(row.mergedMemberIds || [])];
+  const backgroundPart = !saved?.chosenPart && (refusedBackgroundPart(row) && row.headSessionId !== activeSessionId
+    || g?.openWorkingSet?.some(item => item.bg === true && partIds.includes(item.sessionId)));
+  if (backgroundPart || ((g && g.restoreOnStartup) || SETTING_DEFAULTS.restoreOnStartup) === 'lazy') {
     const live = await window.api.getActiveSessions().catch(() => []);
     if (!live.some(e => e.sessionId === session.sessionId)) return;
     await openSession(session, undefined, { automatic: true, reattachOnly: true, continuationResolved: true });
@@ -720,7 +760,7 @@ async function reopenActiveSessionAfterReload() {
   }
   let skipped;
   const opened = await openSession(session, undefined, {
-    automatic: true,
+    automatic: true, ...(saved?.chosenPart ? { chosenPart: saved.chosenPart } : {}),
     onBlocked: part => { skipped = { session: indexedSessionById(part.sessionId) || { sessionId: part.sessionId, projectPath: part.live?.cwd }, live: part.live }; },
     onHold: reason => { skipped = { session, continuation: true, ...reason, retryAfterIndexing: skippedWorkingSetEntries.get(session.sessionId)?.retryContinuation }; },
   });
@@ -2342,7 +2382,7 @@ const sessionMap = new Map();
 
 function dedup(projects) {
   dedup.projectionKeys ||= new WeakMap();
-  const known = ['bgJobId', 'bgSessionId', 'bgJobName', 'identityJobId', 'identitySessionId', 'descriptorOnly', 'headSessionId', 'mergedMemberIds', 'conversationParts', 'mergedMemberStatuses', 'status', 'statusUpdatedAt', 'waitingFor', 'remoteAlias', 'placeholder', 'remoteAttachable', 'remoteActiveAt'];
+  const known = ['bgJobId', 'bgSessionId', 'bgJobName', 'identityJobId', 'identitySessionId', 'refusedJobState', 'descriptorOnly', 'headSessionId', 'mergedMemberIds', 'conversationParts', 'mergedMemberStatuses', 'status', 'statusUpdatedAt', 'waitingFor', 'remoteAlias', 'placeholder', 'remoteAttachable', 'remoteActiveAt'];
   for (const p of projects) {
     for (let i = 0; i < p.sessions.length; i++) {
       const s = p.sessions[i];
@@ -2795,7 +2835,7 @@ function settleContinuedInFlight(item) {
   schedulePersistWorkingSet();
 }
 
-async function openSessionNow(session, customOptions, { automatic = false, fromRestore = false, live, continuationResolved = false, chooseAgain = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onHold, onOpenError, reattachOnly = false, backgroundRestoreJobId, triggerAction } = {}, open = null) {
+async function openSessionNow(session, customOptions, { automatic = false, fromRestore = false, live, continuationResolved = false, chosenPart, chooseAgain = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onHold, onOpenError, reattachOnly = false, backgroundRestoreJobId, triggerAction } = {}, open = null) {
   const restoreNoticeSessions = [session];
   let freshLive = false;
   if (!fromRestore && !restoreRunDepth) sessionOpenedOutsideRestore = true;
@@ -2839,14 +2879,50 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
       customOptions = { type: 'attach', jobId: current.jobId, cwd: current.cwd || session.projectPath };
     } else if (live === undefined) live = current;
   }
-  const backgroundHeld = !backgroundRestoreJobId && !reattachOnly && customOptions?.type !== 'attach'
-    && (dormantWorkingSet.get(session.sessionId) || skippedWorkingSetEntries.get(session.sessionId));
+  const heldEntry = id => dormantWorkingSet.get(id) || skippedWorkingSetEntries.get(id);
+  const mayBeHeld = !backgroundRestoreJobId && !reattachOnly && customOptions?.type !== 'attach';
+  let backgroundHeld = mayBeHeld && heldEntry(session.sessionId);
+  let heldSession = session;
+  let chosenOver = null;
+  const partIds = [...new Set([session.sessionId, session.headSessionId, ...(session.mergedMemberIds || [])])].filter(Boolean);
+  if (mayBeHeld && !automatic && !triggerAction && backgroundHeld?.item?.bg !== true) {
+    const heldId = partIds.find(id => heldEntry(id)?.item?.bg === true);
+    if (heldId) {
+      backgroundHeld = heldEntry(heldId);
+      heldSession = rowHeadSession(session, heldId);
+    }
+  }
   if (backgroundHeld?.item?.bg === true) {
     if (triggerAction) throw Object.assign(new Error('background session is not supported'), { reason: 'background session is not supported' });
-    skippedWorkingSetEntries.set(session.sessionId, backgroundHeld);
-    const background = await prepareBackgroundRestore(session, backgroundHeld.item, { interactive: !automatic });
-    if (!background) return false;
-    if (!background.retired) {
+    const heldId = heldSession.sessionId;
+    skippedWorkingSetEntries.set(heldId, backgroundHeld);
+    let refused, choice;
+    let background = await prepareBackgroundRestore(heldSession, backgroundHeld.item, { interactive: !automatic,
+      ...(!automatic && partIds.length > 1 ? { onRefused: value => { refused = value; } } : {}) });
+    if (!background && refused) {
+      choice = await chooseRefusedBackground(session, heldId, refused, { choose: question => appChoose(question),
+        describe: id => {
+          const row = indexedRowOf(id);
+          const part = row?.conversationParts?.find(part => part.sessionId === id) || row;
+          return { name: cleanDisplayName(part?.name || part?.aiTitle || part?.summary) };
+        } });
+      if (choice?.background) background = await refused.recover();
+      else if (choice) chosenOver = heldSession;
+    }
+    if (!background && !chosenOver) return false;
+    const target = chosenOver ? choice.sessionId : background.retired ? session.sessionId : heldId;
+    if (target !== session.sessionId) {
+      session = rowHeadSession(session, target);
+      const other = openingSessions.get(target);
+      if (open && other && other !== open) await other.promise.catch(() => {});
+      if (open) openingSessions.set(target, open);
+    }
+    if (chosenOver) {
+      continuationResolved = true;
+      chosenPart = heldId;
+      restoreNoticeSessions.push(session, chosenOver);
+    } else if (!background.retired) {
+      restoreNoticeSessions.push(session);
       live = background.live;
       backgroundRestoreJobId = background.backgroundRestoreJobId;
       onOpenError = background.onOpenError;
@@ -2860,7 +2936,7 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
     const originalId = session.sessionId;
     let continuationLive;
     let holdReason = { waitingForIndex: false };
-    session = await resolveResumeSession(session, { automatic, api: window.api, confirm: question => appConfirm(question),
+    session = await resolveResumeSession(session, { automatic, api: window.api, chosenOver: chosenPart || heldEntry(session.sessionId)?.item?.chosenPart, confirm: question => appConfirm(question),
       choices: (window._continuationChoices ||= new Map()), rowKey: indexedRowOf(session.sessionId)?.sessionId || session.sessionId, chooseAgain,
       memoryNotify: notice => showAppNotice(notice),
       choose: question => appChoose(question), notify: notice => { continuationNotice = notice; }, resolutions: window._startupResumeResolutions,
@@ -2883,6 +2959,7 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
     if (continuationLive !== undefined) live = continuationLive;
     if (session.sessionId !== originalId) {
       live = continuationLive;
+      chosenPart = undefined;
       allowBgAttach = true;
       const held = skippedWorkingSetEntries.get(originalId);
       if (held || restoreSavedIndex.has(originalId)) {
@@ -2943,6 +3020,8 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
 
   // Create new terminal entry (hidden until showSession)
   const entry = createTerminalEntry(session);
+  const chosenOverId = chosenPart || heldEntry(sessionId)?.item?.chosenPart;
+  if (chosenOverId) entry.chosenPart = chosenOverId;
   if (triggerAction) entry.triggerRequestId = triggerAction.requestId;
 
   // Open terminal in main process — see .ai/contexts/session-state.md ("Reopening a plain terminal")
@@ -3017,6 +3096,11 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
   if (continuationNotice) showAppNotice(continuationNotice);
   if (result.reattached) entry.attach = !!result.attach;
   skippedWorkingSetEntries.delete(sessionId);
+  if (chosenOver) {
+    const index = skippedWorkingSetEntries.get(chosenOver.sessionId)?.index;
+    if (Number.isFinite(index)) restoreSavedIndex.set(sessionId, index);
+    for (const map of [skippedWorkingSetEntries, dormantWorkingSet, restoreInFlight]) map.delete(chosenOver.sessionId);
+  }
   if (allowBgAttach && entry.attach && !backgroundRestoreJobId) {
     skippedWorkingSetEntries.set(sessionId, {
       item: { sessionId, projectPath },

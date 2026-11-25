@@ -477,6 +477,8 @@ const rendererCrossFileGlobals = {
   createRestorePlanner: 'readonly',
   // Resume guard for sessions live in another process (public/resume-guard.js)
   guardResume: 'readonly',
+  refusedBackgroundPart: 'readonly',
+  chooseRefusedBackground: 'readonly',
   resolveResumeSession: 'readonly',
   liveElsewhereMany: 'readonly',
   // Agents view (public/agents-view.js) — see .ai/contexts/bg-agents.md
