@@ -4258,6 +4258,7 @@ function startHarnessWatchers() {
   for (const harness of prefixedHarnesses(getSetting('global')?.disabledHarnesses)) {
     const root = harness.sessionsRoot();
     if (!fs.existsSync(root)) continue;
+    if (harnessWatchers.some(watcher => watcher.harnessId === harness.id && watcher.harnessRoot === root)) continue;
     const pendingFolders = new Set();
     const coldScanFolders = new Set();
     let debounceTimer = null, coldScanWait = null, active = null;
@@ -4315,6 +4316,8 @@ function startHarnessWatchers() {
         coldScanFolders.clear();
         return close();
       };
+      watcher.harnessId = harness.id;
+      watcher.harnessRoot = root;
       harnessWatchers.push(watcher);
       active = watcher;
       log.info(`[harness-watch] watching ${harness.id} at ${root}`);
@@ -4343,7 +4346,11 @@ function stopHarnessWatchers() {
 
 function restartHarnessWatchers() {
   if (!projectsWatcher) startProjectsWatcher();
-  for (const watcher of harnessWatchers.splice(0)) watcher.close();
+  const enabled = new Map(prefixedHarnesses(getSetting('global')?.disabledHarnesses).map(harness => [harness.id, harness.sessionsRoot()]));
+  for (const watcher of harnessWatchers.splice(0)) {
+    if (enabled.get(watcher.harnessId) === watcher.harnessRoot) harnessWatchers.push(watcher);
+    else watcher.close();
+  }
   startHarnessWatchers();
 }
 

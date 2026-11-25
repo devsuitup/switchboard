@@ -132,3 +132,16 @@ test('a harness watcher closed after the cold scan settled never runs its set-as
   await w.runTimers();
   assert.deepEqual(w.refreshes, [], 'the CLI was switched off before the replay ran: nothing of it is read');
 });
+
+test('toggling an unrelated CLI keeps the other harness watcher and its pending refresh', async t => {
+  const w = loadWatchers(t, { coldScan: { current: null } });
+  w.context.startProjectsWatcher();
+  w.context.startHarnessWatchers();
+  const harness = w.watches.find(watch => watch.root.endsWith('codex'));
+  harness.callback('change', path.join('2026', FILE));
+  w.context.restartHarnessWatchers();
+  assert.equal(harness.closed, false, 'Codex is still enabled: its watcher stays open');
+  assert.equal(w.watches.filter(watch => watch.root.endsWith('codex')).length, 1, 'and is not replaced');
+  await w.runTimers();
+  assert.deepEqual(w.refreshes.map(([folder]) => folder), ['codex::2026'], 'the change seen before the toggle is still indexed');
+});
