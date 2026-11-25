@@ -1946,7 +1946,7 @@ Renderer side, `paintLastKnownProjects` (app.js) runs from
 `loadStartupProjects` without being awaited. It gives up when the reply is not
 two arrays, when a real load has already committed, or when either cache is
 already filled; otherwise it fills `cachedProjects`/`cachedAllProjects`, runs
-`dedup`, sets the `Refreshing…` status only while the latest load is pending,
+`dedup`, hides the `Loading…` status while the latest load is pending (no `Refreshing…` text exists),
 and calls `refreshSidebar`. A late snapshot preserves the load failure status
 between retries and after the retry budget is exhausted; starting a retry
 sets the progress status through `loadProjects`. The
