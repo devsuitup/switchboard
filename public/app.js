@@ -1922,8 +1922,7 @@ function markExitBackground(enrollment, sessionId, background) {
 function exitBackgroundFailure(name, result) {
   const reason = result?.code === 'busy-timeout' ? 'still working after 10 minutes. Quit again once it is idle, or stop it.'
     : result?.code === 'needs-answer' ? 'needs an answer in its terminal. Answer it, then quit again, or stop it.'
-      : result?.code === 'shell' ? 'a shell command is running in its terminal. Quit again once it is done, or stop it.'
-        : result?.error || (result?.code === 'cancelled' ? 'Moving was cancelled.' : result?.code === 'pending' ? 'The handoff is not confirmed.' : 'The handoff backend is unavailable or returned no confirmed result.');
+      : result?.error || (result?.code === 'cancelled' ? 'Moving was cancelled.' : result?.code === 'pending' ? 'The handoff is not confirmed.' : 'The handoff backend is unavailable or returned no confirmed result.');
   return name + ': ' + reason;
 }
 
