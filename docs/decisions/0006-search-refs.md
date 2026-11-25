@@ -16,7 +16,7 @@ query; it stays a follow-up of #1255.
 
 While reading a transcript, extract compact identifiers from every record that
 the read keeps (user and assistant text, `tool_use` inputs, `tool_result`
-text; message text and tool calls for Codex): `#N` and `!N` of 2 to 6 digits,
+text; message text, tool calls and tool outputs for Codex): `#N` and `!N` of 2 to 6 digits,
 GitHub and GitLab pull request, merge request and issue URLs normalised to
 `#N` or `!N` plus `owner/repo#N` or `owner/repo!N`, and full UUIDs other than
 the session's own. Keep them deduplicated, newest first, at most 4096

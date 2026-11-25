@@ -401,7 +401,8 @@ Issue #1255.
 - **Id fast path.** `idLookupTerm` accepts one token: a full UUID, a hex prefix
   of 6 to 36 characters holding at least one digit (so `facade` or `decade`
   never take it), an `agent-` id, or a `sub:` id. It runs two range lookups,
-  `sessionId` on its primary key and `agentId` on `idx_session_cache_agent`,
+  `sessionId` on its primary key and `agentId` on `idx_session_cache_agent` (created after the column repairs, so
+  a pre-subagent database migrates first),
   and its rows come first; FTS hits follow without duplicates. Id rows carry
   `idMatch: true` and no snippet.
 - **Snippets.** The query keeps `snippet(search_fts, 1, …)`, the body column
@@ -415,7 +416,12 @@ Issue #1255.
   rebuilding. Between full reads, the watcher's header refresh brings the refs
   of appended lines into the index (below), not their text.
 - **Where hits are.** A subagent group holding a hit opens for the search
-  (`holdsSearchHit`), without touching the stored expanded set. Hits whose ids
+  (`holdsSearchHit`), without touching the stored expanded set: its caret and
+  container carry `data-search-open`, and the morphdom callback in
+  `renderProjects` does not carry the previous collapsed state onto a node
+  that has (or had) the flag, so an already-rendered collapsed group opens and
+  its saved state returns when the search ends. Clicking the caret drops the
+  flag. Hits whose ids
   are in no listed row (SDK sessions hidden by `hideSdkSessions`, hidden
   projects, a disabled CLI) are counted in `#search-status` as "N matches in
   hidden sessions". **Show them** sends those ids to `search-reveal-hidden`;
@@ -433,7 +439,9 @@ Issue #1255.
   digits), GitHub and GitLab PR/MR/issue URLs (normalised to `#N` or `!N` plus
   `owner/repo#N`), and full UUIDs other than the session's own, from user and
   assistant text, `tool_use` inputs and `tool_result` text; Codex rollouts
-  contribute message text and tool calls. The list is newest first,
+  contribute message text, tool calls and tool outputs (`function_call_output`,
+  `custom_tool_call_output`). The working set keeps at most `REFS_MAX_ENTRIES`
+  (2048) refs during a read, dropping the oldest. The list is newest first,
   deduplicated, at most `REFS_MAX_CHARS` (4096), appended after the text as
   `\n[refs] a b c`, and the text is cut first so the body stays within
   `SEARCH_BODY_MAX_CHARS` (32768). A full read rebuilds it. The header-only

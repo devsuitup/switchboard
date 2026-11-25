@@ -223,6 +223,10 @@ function readSessionFile(filePath, folder, opts) {
         collectRefs(JSON.stringify(payload), refs, sessionId);
         return;
       }
+      if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
+        collectRefs(typeof payload.output === 'string' ? payload.output : JSON.stringify(payload.output ?? ''), refs, sessionId);
+        return;
+      }
       if (payload.type !== 'message') return;
       const role = payload.role;
       if (role !== 'user' && role !== 'assistant') return;

@@ -96,3 +96,25 @@ test('worker and fallback share one search implementation over the same database
     assert.deepEqual(workerSearch('session', query, 50, false), store.searchByType('session', query), query);
   }
 });
+
+test('a pre-subagent database without agentId opens and gains the column and its index', { skip }, t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'search-1255-legacy-'));
+  const previous = process.env.SWITCHBOARD_DATA_DIR;
+  process.env.SWITCHBOARD_DATA_DIR = dir;
+  let store;
+  t.after(() => {
+    store?.closeDb();
+    if (previous === undefined) delete process.env.SWITCHBOARD_DATA_DIR;
+    else process.env.SWITCHBOARD_DATA_DIR = previous;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const legacy = openStore();
+  legacy.connection.exec('DROP INDEX IF EXISTS idx_session_cache_agent');
+  legacy.connection.exec('ALTER TABLE session_cache DROP COLUMN agentId');
+  legacy.connection.exec("UPDATE settings SET value = '3' WHERE key = 'db_version'");
+  legacy.closeDb();
+  store = openStore();
+  const columns = store.connection.prepare('PRAGMA table_info(session_cache)').all().map(c => c.name);
+  assert.ok(columns.includes('agentId'));
+  assert.ok(store.connection.prepare("SELECT 1 FROM sqlite_master WHERE name = 'idx_session_cache_agent'").get());
+});

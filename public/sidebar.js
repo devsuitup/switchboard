@@ -768,7 +768,8 @@ function buildSubagentGroup(parentSessionId, children, title) {
 
   const expandedSet = getExpandedSubagents();
   const caretId = caretIdFor(parentSessionId);
-  const isExpanded = expandedSet.has(parentSessionId) || holdsSearchHit(children);
+  const searchOpen = !expandedSet.has(parentSessionId) && holdsSearchHit(children);
+  const isExpanded = expandedSet.has(parentSessionId) || searchOpen;
 
   const caret = document.createElement('div');
   caret.className = 'sidebar-children-caret js-stateful';
@@ -781,12 +782,15 @@ function buildSubagentGroup(parentSessionId, children, title) {
   childrenContainer.className = 'sidebar-subagents-container js-stateful';
   childrenContainer.id = 'subc-' + domKey;
   childrenContainer.style.display = isExpanded ? '' : 'none';
+  if (searchOpen) caret.dataset.searchOpen = childrenContainer.dataset.searchOpen = '1';
 
   const restKey = 'p:' + parentSessionId;
   appendSubagentRows(childrenContainer, children, domKey, restKey, !!title);
 
   caret.addEventListener('click', (e) => {
     e.stopPropagation();
+    delete caret.dataset.searchOpen;
+    delete childrenContainer.dataset.searchOpen;
     const open = childrenContainer.style.display !== 'none';
     childrenContainer.style.display = open ? 'none' : '';
     caret.classList.toggle('expanded', !open);
@@ -1872,14 +1876,15 @@ function renderProjects(projects, resort, { keepFocus = false } = {}) {
           toEl.classList.remove('collapsed');
         }
       }
-      if (fromEl.classList.contains('sidebar-children-caret')) {
+      const searchOpen = fromEl.dataset?.searchOpen || toEl.dataset?.searchOpen;
+      if (fromEl.classList.contains('sidebar-children-caret') && !searchOpen) {
         if (fromEl.classList.contains('expanded')) {
           toEl.classList.add('expanded');
         } else {
           toEl.classList.remove('expanded');
         }
       }
-      if (fromEl.classList.contains('sidebar-subagents-container')) {
+      if (fromEl.classList.contains('sidebar-subagents-container') && !searchOpen) {
         if (fromEl.style.display !== 'none') {
           toEl.style.display = '';
         } else {

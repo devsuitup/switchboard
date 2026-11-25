@@ -116,3 +116,25 @@ test('an appended reference reaches the index through the incremental refresh', 
   assert.deepEqual(store.searchByType('session', '1233').map(r => r.id), [SESSION], 'earlier refs are kept');
   assert.deepEqual(store.searchByType('session', 'appended words').map(r => r.id), [], 'the header-only refresh merged refs, not text');
 });
+
+test('a PR number that only a Codex tool returned is searchable', { skip }, t => {
+  require('./fixtures/isolated-codex-home.cjs')(t);
+  const { store } = withCache(t);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'refs-codex-1255-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const id = '00000000-0000-4000-8000-000000004242';
+  const file = path.join(dir, `rollout-2026-11-20T10-00-00-${id}.jsonl`);
+  const lines = [
+    { type: 'session_meta', timestamp: '2026-11-20T10:00:00.000Z', payload: { id, cwd: dir } },
+    { type: 'response_item', timestamp: '2026-11-20T10:00:01.000Z', payload: { type: 'message', role: 'user', content: 'Find the open pull request' } },
+    { type: 'response_item', timestamp: '2026-11-20T10:00:02.000Z', payload: { type: 'function_call', name: 'shell', arguments: '{"command":["gh","pr","list"]}', call_id: 'c1' } },
+    { type: 'response_item', timestamp: '2026-11-20T10:00:03.000Z', payload: { type: 'function_call_output', call_id: 'c1',
+      output: '{"output":"https://github.com/o/r/pull/4242\topen"}' } },
+    { type: 'response_item', timestamp: '2026-11-20T10:00:04.000Z', payload: { type: 'custom_tool_call_output', call_id: 'c2', output: 'merged !777' } },
+  ];
+  fs.writeFileSync(file, lines.map(line => JSON.stringify(line)).join('\n') + '\n');
+  const row = require('../harnesses/codex').readSessionFile(file, 'codex/2026/11/20');
+  assert.ok(row, 'the rollout parses');
+  store.upsertSearchEntries([{ id: row.sessionId, type: 'session', folder: row.folder, title: row.summary, body: searchBody(row.textContent, row.refs) }]);
+  for (const query of ['4242', 'o/r#4242', '!777']) assert.deepEqual(store.searchByType('session', query).map(r => r.id), [row.sessionId], query);
+});

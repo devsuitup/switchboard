@@ -3,6 +3,7 @@
 // see docs/decisions/0006-search-refs.md
 
 const REFS_MAX_CHARS = 4096;
+const REFS_MAX_ENTRIES = 2048;
 const SEARCH_BODY_MAX_CHARS = 32768;
 const REFS_MARKER = '\n[refs] ';
 
@@ -11,6 +12,7 @@ const REF_RE = /https?:\/\/(?:www\.)?(github\.com|gitlab\.[a-z0-9.-]+)\/([\w.-]+
 function addRef(refs, ref) {
   refs.delete(ref);
   refs.add(ref);
+  if (refs.size > REFS_MAX_ENTRIES) refs.delete(refs.values().next().value);
 }
 
 function collectRefs(text, refs, exclude) {
@@ -92,4 +94,4 @@ function mergeSearchBodyRefs(body, newer) {
   return searchBody(text, mergeRefLists(newer, refs));
 }
 
-module.exports = { REFS_MAX_CHARS, SEARCH_BODY_MAX_CHARS, REFS_MARKER, collectRefs, collectEntryRefs, newestFirst, splitSearchBody, searchBody, mergeRefLists, mergeSearchBodyRefs };
+module.exports = { REFS_MAX_CHARS, REFS_MAX_ENTRIES, SEARCH_BODY_MAX_CHARS, REFS_MARKER, collectRefs, collectEntryRefs, newestFirst, splitSearchBody, searchBody, mergeRefLists, mergeSearchBodyRefs };

@@ -213,7 +213,6 @@ db.exec(`
 
 db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_folder ON session_cache(folder)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_slug ON session_cache(slug)');
-db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_agent ON session_cache(agentId)');
 
 const migrations = [
   
@@ -362,6 +361,7 @@ if (migrations.length > currentDbVersion) {
     })();
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_parent ON session_cache(parentSessionId)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_agent ON session_cache(agentId)');
 
   db.exec(`CREATE TABLE IF NOT EXISTS session_metrics (
     sessionId TEXT NOT NULL,

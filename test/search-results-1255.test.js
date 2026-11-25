@@ -119,3 +119,31 @@ test('a subagent hit opens its group and shows the matched snippet', () => {
     ctx.destroy();
   }
 });
+
+test('a subagent group already rendered collapsed opens for a hit through reconciliation, and closes when the search ends', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const project = () => makeSampleProject({ sessions: [
+      { sessionId: PARENT, summary: 'top level', modified: '2026-11-01T10:00:00.000Z', messageCount: 4 },
+      { sessionId: SUB, parentSessionId: PARENT, agentId: 'agent-1', subagentType: 'explore', description: 'explore',
+        modified: '2026-11-01T09:00:00.000Z', messageCount: 2 },
+    ] });
+    const container = () => ctx.document.getElementById('subc-' + PARENT.replace(/[^a-zA-Z0-9_-]/g, '_'));
+    ctx.sidebar.renderProjects([project()], true);
+    assert.equal(container().style.display, 'none', 'starts collapsed');
+    const before = container();
+    ctx.window.searchMatchIds = new Set([SUB]);
+    ctx.window.searchSnippets = new Map();
+    ctx.sidebar.renderProjects([project()], true);
+    assert.equal(container(), before, 'the same node is reconciled, not replaced');
+    assert.notEqual(container().style.display, 'none', 'the search opens the existing group');
+    ctx.sidebar.renderProjects([project()], true);
+    assert.notEqual(container().style.display, 'none', 'it stays open across a re-render during the search');
+    ctx.window.searchMatchIds = null;
+    ctx.window.searchSnippets = null;
+    ctx.sidebar.renderProjects([project()], true);
+    assert.equal(container().style.display, 'none', 'the saved collapsed state returns when the search ends');
+  } finally {
+    ctx.destroy();
+  }
+});
