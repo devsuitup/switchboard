@@ -618,6 +618,35 @@ Every notifier caller supplies a cause; see `docs/activity-trace.md` for
 `projects.changed` and the renderer frame probe. The `activity` cause selects
 the deferred path; the other labels identify structural notification producers.
 
+## Watchers during the cold scan
+
+`refreshFolder` runs on the main thread, inside the writer's compute step, and
+reads a transcript that has no cache row in full (the "NEW file" branch). On an
+empty index every transcript is uncached, so before this rule each event of a
+live session (its transcript is appended to every few seconds) made main read
+that whole transcript synchronously: a probe under `ELECTRON_RUN_AS_NODE`
+measured 3.1 s of blocked event loop for one 136 MB file, and with several live
+sessions of hundreds of MB the first launch kept main blocked for 25 to 95 s.
+A blocked main answers no IPC, so the sandboxed preload and its synchronous
+`get-initial-theme` call never return and the window stays blank; every timer
+fires late, which is why the project-delete recovery log reported
+`elapsed=30650ms` and the Windows job helper and process-table probes timed
+out at the same instant. The recovery itself only waits for one writer read.
+
+`coldScanInFlight()` (session-cache) returns the population promise while the
+first population of an index runs (`!isInitialScanComplete()` when it
+started), and `null` otherwise, including for a later forced rescan. While it
+is set, the projects watcher and the harness watchers still run
+`detectSessionTransitions` and `resolvePendingLaunches` at once, but put the
+folder and its reported files aside instead of calling `writer.refreshFolder`.
+When the population settles, success or failure, the set-aside changes are
+merged back into the pending queue (a full-folder scope still dominates a
+targeted one) and flushed; by then the scan has cached those transcripts, so
+the refresh takes the header-only branch. The flush before exit sets changes
+aside too: an interrupted first scan leaves `initial_scan_complete` unset, and
+the next launch scans again. A harness watcher closed meanwhile (CLI switched
+off) drops its set-aside folders.
+
 ## Incremental message counts
 
 `src/main/session-index/message-count.js` shares the full reader's counting predicate: user and
