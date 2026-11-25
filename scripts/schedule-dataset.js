@@ -120,7 +120,7 @@ function checkDestinations({ home, dataDir }, { homedir = os.homedir(), tmpdir =
   for (const [label, dir] of [['the fake home', home], ['--data-dir', dataDir]]) {
     const target = realTarget(dir);
     if (appDirs.some(app => within(target, app, platform) || within(app, target, platform))) throw new Error(`${label} ${dir} is or holds a Switchboard data directory; give a new directory under ${tmpdir}`);
-    if (within(realHome, target, platform) || (within(target, realHome, platform) && !within(target, realTmp, platform))) throw new Error(`${label} ${dir} is, holds or is inside your home directory; give a new directory under ${tmpdir}`);
+    if (within(target, realHome, platform) && !within(target, realTmp, platform)) throw new Error(`${label} ${dir} is or is inside your home directory; give a new directory under ${tmpdir}`);
     if (fs.existsSync(target) && fs.readdirSync(target).length) throw new Error(`${label} ${dir} is not empty; give a new directory`);
   }
 }

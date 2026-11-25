@@ -122,9 +122,9 @@ test('a new directory under the temporary directory or outside home is accepted'
 });
 
 for (const [name, setup, pattern] of [
-  ['home itself', d => [d.homedir, path.join(d.outside, 'data')], /holds a Switchboard data directory|is, holds or is inside your home directory/],
+  ['home itself', d => [d.homedir, path.join(d.outside, 'data')], /is or holds a Switchboard data directory/],
   ['a directory inside home', d => [path.join(d.homedir, 'scratch', 'fake'), path.join(d.outside, 'data')], /inside your home directory/],
-  ['a parent of home', d => [d.root, path.join(d.outside, 'data')], /holds a Switchboard data directory|holds or is inside your home directory/],
+  ['a parent of home', d => [d.root, path.join(d.outside, 'data')], /is or holds a Switchboard data directory/],
   ['home reached through ..', d => [path.join(d.outside, '..', 'user', 'fake'), path.join(d.outside, 'data')], /inside your home directory/],
   ['home reached through a symbolic link', d => {
     if (process.platform === 'win32') return null;
@@ -153,6 +153,7 @@ test('the SWITCHBOARD_DATA_DIR in use is refused as a destination', t => {
   const live = path.join(d.outside, 'live-data');
   assert.throws(d.attempt(path.join(d.tmpdir, 'home'), path.join(live, 'sub'), { switchboardDataDir: live }), /Switchboard data directory/);
   assert.throws(d.attempt(live, path.join(d.tmpdir, 'data'), { switchboardDataDir: live }), /Switchboard data directory/);
+  assert.throws(d.attempt(d.outside, path.join(d.tmpdir, 'data'), { switchboardDataDir: live }), /is or holds a Switchboard data directory/);
 });
 
 test('on Windows the comparison ignores case', t => {
