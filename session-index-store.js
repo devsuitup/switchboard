@@ -403,6 +403,7 @@ db.pragma('busy_timeout = 100');
 const FTS_BODY_MAX_CHARS = 32768; 
 
 const { createSessionSearch } = require('./fts-match');
+const { mergeSearchBodyRefs } = require('./src/main/session-index/session-refs');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS search_content (
@@ -536,6 +537,7 @@ const stmts = {
   searchDeleteByRowid: db.prepare('DELETE FROM search_fts WHERE rowid = ?'),
   searchMapDeleteByRowid: db.prepare('DELETE FROM search_map WHERE rowid = ?'),
   searchContentGet: db.prepare('SELECT title, body FROM search_content WHERE rowid = ?'),
+  searchUpdateBody: db.prepare('UPDATE search_content SET body = ? WHERE rowid = ?'),
 
   searchFtsDeleteRow: db.prepare("INSERT INTO search_fts(search_fts, rowid, title, body) SELECT 'delete', rowid, title, body FROM search_content WHERE rowid = ?"),
   searchFtsInsertRow: db.prepare('INSERT INTO search_fts(rowid, title, body) SELECT rowid, title, body FROM search_content WHERE rowid = ?'),
@@ -807,6 +809,10 @@ function certifyNameDerivation(sessionId, expectedStamp, witness, collision) {
 
 const upsertSearchEntriesBatch = db.transaction((entries) => {
   for (const e of entries) {
+    if (e.refsMerge) {
+      mergeSearchRefs(e);
+      continue;
+    }
 
     const existing = stmts.searchMapLookup.get(e.id, e.type);
     if (existing) {
@@ -824,6 +830,18 @@ const upsertSearchEntriesBatch = db.transaction((entries) => {
     stmts.searchInsertFts.run(rid);
   }
 });
+
+// see docs/decisions/0006-search-refs.md
+function mergeSearchRefs(entry) {
+  const existing = stmts.searchMapLookup.get(entry.id, entry.type);
+  const current = existing && stmts.searchContentGet.get(existing.rowid);
+  if (!current) return;
+  const body = mergeSearchBodyRefs(current.body, entry.refs || []);
+  if (body === current.body) return;
+  stmts.searchFtsDeleteRow.run(existing.rowid);
+  stmts.searchUpdateBody.run(body, existing.rowid);
+  stmts.searchFtsInsertRow.run(existing.rowid);
+}
 
 function beginSearchEntry(token, entry) {
   db.prepare("INSERT INTO search_staging(token, id, type, folder, title, body) VALUES (?, ?, ?, ?, ?, '')")

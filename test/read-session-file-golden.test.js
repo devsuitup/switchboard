@@ -25,8 +25,9 @@ const FIXTURE_PATH = path.join(__dirname, 'fixtures', 'golden-session.jsonl');
 
 test('published content digest entries are append-only', () => {
   const { CONTENT_GOLDEN_DIGESTS } = require('../src/main/session-index/full-read-state');
-  assert.deepEqual(Object.fromEntries(Object.entries(CONTENT_GOLDEN_DIGESTS).filter(([version]) => Number(version) <= 1)),
-    { 1: '068456510a189d17ee5b332c541ba439d26fbf4c1f2d30fbd90d3348b00e0fe3' });
+  assert.deepEqual(Object.fromEntries(Object.entries(CONTENT_GOLDEN_DIGESTS).filter(([version]) => Number(version) <= 2)),
+    { 1: '068456510a189d17ee5b332c541ba439d26fbf4c1f2d30fbd90d3348b00e0fe3',
+      2: '4fc37c544e9b4349385c76087fc03db15cdd54240bc0dc233538e20aceb60af2' });
 });
 
 test('parser output requires a content version bump for Claude, bridge and Codex derivation', t => {
@@ -40,7 +41,7 @@ test('parser output requires a content version bump for Claude, bridge and Codex
     fs.writeFileSync(file, entries.map(entry => JSON.stringify(entry)).join('\n') + '\n');
     return file;
   };
-  write('parent.jsonl', [user('shared', '01', 'shared text'), user('parent', '03', 'parent text'), bridge]);
+  write('parent.jsonl', [user('shared', '01', 'shared text'), user('parent', '03', 'parent text for PR #1243, see https://github.com/o/r/pull/7'), bridge]);
   write('mirror.jsonl', [user('shared', '01', 'shared text'), user('own', '04', 'mirror text'), bridge]);
   const reread = (id, dedupeSinceTimestamp, excludedMessageUuids, excludedMessageSignatures) => readSessionFile(path.join(root, id + '.jsonl'), 'folder', '/fixture',
     { dedupeSinceTimestamp, excludedMessageUuids, excludedMessageSignatures });
@@ -65,7 +66,7 @@ test('parser output requires a content version bump for Claude, bridge and Codex
     }));
   };
   const output = normalize(rows.map(row => ({ row, metrics: row.dailyMetrics,
-    search: { title: ((row.customTitle || row.aiTitle || '') + ' ' + row.summary).trimStart(), body: row.textContent } })));
+    search: { title: ((row.customTitle || row.aiTitle || '') + ' ' + row.summary).trimStart(), body: require('../src/main/session-index/session-refs').searchBody(row.textContent, row.refs) } })));
   const digest = require('node:crypto').createHash('sha256').update(JSON.stringify(output)).digest('hex');
   const state = require('../src/main/session-index/full-read-state');
   assert.equal(digest, state.CONTENT_GOLDEN_DIGESTS?.[state.SESSION_CONTENT_INDEX_VERSION], 'digest matches immutable content-version ledger');

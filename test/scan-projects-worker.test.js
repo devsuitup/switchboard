@@ -14,6 +14,7 @@
 // spinning the REAL worker is safe under plain node:test — same pattern as
 // test/search-worker-db-failure.test.js.
 
+const { SESSION_CONTENT_INDEX_VERSION: CONTENT_VERSION } = require('../src/main/session-index/full-read-state');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -168,7 +169,7 @@ function startupScan(t, mutate, fault, derive) {
   require('node:vm').runInNewContext(fs.readFileSync(filename, 'utf8'), { Buffer, console, process,
     require: name => name === 'worker_threads' ? { parentPort: { postMessage: msg => messages.push(msg) },
       workerData: { projectsDir: root, folders: [], startup: { config, inventory: [{ folder, rows: [row],
-        meta: { projectPath: root, fullIndexVersion: 1, fullIndexConfig: config, fullIndexPending: null } }] } } }
+        meta: { projectPath: root, fullIndexVersion: CONTENT_VERSION, fullIndexConfig: config, fullIndexPending: null } }] } } }
       : name === 'fs' || name === 'node:fs' ? wrappedFs
       : name === '../derive-project-path' && derive ? { ...native(name), deriveProjectPath: derive } : (() => {
         assert.ok(!/sqlite|session-index-store|database/.test(name), 'the scan worker cannot import a SQLite backend');

@@ -7,6 +7,7 @@ const path = require('node:path');
 const { scanLines, readHead } = require('../jsonl-scan');
 const { observation, fullReadStamp } = require('../src/main/session-index/full-read-state');
 const { bodyRead, readAuxiliaryFile } = require('../src/main/session-index/read-counters');
+const { collectRefs, newestFirst } = require('../src/main/session-index/session-refs');
 
 const id = 'codex';
 const label = 'Codex';
@@ -185,6 +186,7 @@ function readSessionFile(filePath, folder, opts) {
     let projectPath = null, summary = '', messageCount = 0, firstTimestamp = null, lastTimestamp = null, subagent = false, model = '';
     let entrypoint = '';
     const textParts = [];
+    const refs = new Set();
     const buckets = new Map();
     const dateOf = ts => (typeof ts === 'string' && ts.length >= 10 ? ts.slice(0, 10) : null) || (firstTimestamp || stat.birthtime.toISOString()).slice(0, 10);
 
@@ -216,7 +218,11 @@ function readSessionFile(filePath, folder, opts) {
         return;
       }
       if (entry.type !== 'response_item') return;
-      if (isToolCall(payload)) { metricsBucket(buckets, dateOf(ts), model).toolCallCount += 1; return; }
+      if (isToolCall(payload)) {
+        metricsBucket(buckets, dateOf(ts), model).toolCallCount += 1;
+        collectRefs(JSON.stringify(payload), refs, sessionId);
+        return;
+      }
       if (payload.type !== 'message') return;
       const role = payload.role;
       if (role !== 'user' && role !== 'assistant') return;
@@ -227,6 +233,7 @@ function readSessionFile(filePath, folder, opts) {
       metricsBucket(buckets, dateOf(ts), model).messageCount += 1;
       if (!summary && role === 'user' && text) summary = text.slice(0, 120);
       if (text) textParts.push(text);
+      collectRefs(text, refs, sessionId);
     };
     const scan = bodyRead(filePath, () => scanLines(filePath, 0, onLine, stat.size));
     if (scan.tail && !scan.stopped) onLine(scan.tail);
@@ -254,7 +261,7 @@ function readSessionFile(filePath, folder, opts) {
       summary, firstPrompt: summary, created,
       modified: lastTimestamp || created,
       fileMtime: stat.mtime.toISOString(), fileSize: stat.size,
-      messageCount, textContent: textParts.join('\n'),
+      messageCount, textContent: textParts.join('\n'), refs: newestFirst(refs),
       dailyMetrics: [...buckets.values()].filter(b => b.messageCount || b.toolCallCount || b.inputTokens || b.outputTokens),
       slug: null, customTitle: '', entrypoint,
       aiTitle,

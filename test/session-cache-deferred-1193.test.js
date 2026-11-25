@@ -1,4 +1,5 @@
 'use strict';
+const { SESSION_CONTENT_INDEX_VERSION: CONTENT_VERSION } = require('../src/main/session-index/full-read-state');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -18,7 +19,7 @@ for (const runtime of ['claude', 'subagent', 'codex']) {
     assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
     assert.equal(f.db.getCachedSession(id).fullReadStamp, null);
     assert.equal(f.db.getFolderMeta(folder).fullIndexPending, null, 'acknowledged partial state is sealed');
-    assert.equal(f.db.getFolderMeta(folder).fullIndexVersion, 1);
+    assert.equal(f.db.getFolderMeta(folder).fullIndexVersion, CONTENT_VERSION);
     assert.equal((await clock.fire()).ok, true);
     assert.ok(f.db.getCachedSession(id).fullReadStamp, 'retry certifies the recovered source');
     assert.equal(f.scans().at(-1).filesRead, 1, 'retry does not read certified neighbors');

@@ -412,8 +412,8 @@ Issue #1255.
   the current index. Only the refresh button calls `rebuildCache()` (a forced
   re-read of every transcript, several minutes on a large
   `~/.claude/projects`) before searching again. Nothing else relied on Enter
-  rebuilding. Between full reads, the text of an active session's appended
-  lines stays out of the index, as before.
+  rebuilding. Between full reads, the watcher's header refresh brings the refs
+  of appended lines into the index (below), not their text.
 - **Where hits are.** A subagent group holding a hit opens for the search
   (`holdsSearchHit`), without touching the stored expanded set. Hits whose ids
   are in no listed row (SDK sessions hidden by `hideSdkSessions`, hidden
@@ -426,6 +426,24 @@ Issue #1255.
   setting is never written. Only SDK-hidden sessions can be revealed: hits in a
   hidden project stay counted, without a second button. No hit at all shows
   "No sessions match".
+- **Refs.** Every session's search body ends with a bounded list of
+  identifiers taken from the whole transcript — see
+  [ADR 0006](../../docs/decisions/0006-search-refs.md).
+  `src/main/session-index/session-refs.js` extracts `#N` and `!N` (2 to 6
+  digits), GitHub and GitLab PR/MR/issue URLs (normalised to `#N` or `!N` plus
+  `owner/repo#N`), and full UUIDs other than the session's own, from user and
+  assistant text, `tool_use` inputs and `tool_result` text; Codex rollouts
+  contribute message text and tool calls. The list is newest first,
+  deduplicated, at most `REFS_MAX_CHARS` (4096), appended after the text as
+  `\n[refs] a b c`, and the text is cut first so the body stays within
+  `SEARCH_BODY_MAX_CHARS` (32768). A full read rebuilds it. The header-only
+  refresh of an existing file passes an `onEntry` callback to
+  `readMessageCount`, which already scans the appended lines; the refs found
+  there go out as an `upsertSearchEntries` entry with `refsMerge: true`, which
+  the store merges into the existing body (`mergeSearchRefs`) and the writer
+  worker applies as one unit. A session with no search row yet is skipped
+  until its full read. The body text itself stays as stale as before between
+  full reads.
 
 ## Key files
 

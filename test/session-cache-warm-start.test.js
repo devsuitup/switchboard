@@ -1,4 +1,5 @@
 'use strict';
+const { SESSION_CONTENT_INDEX_VERSION: CONTENT_VERSION } = require('../src/main/session-index/full-read-state');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -264,7 +265,7 @@ for (const gate of ['pending', 'version', 'config', 'repair', 'force', 'incomple
       f.codexWrite(1);
       assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
       assert.ok(f.db.getCachedSession(f.ids[0]).fullReadStamp);
-      assert.equal(f.db.getFolderMeta(f.codexFolder).fullIndexVersion, 1);
+      assert.equal(f.db.getFolderMeta(f.codexFolder).fullIndexVersion, CONTENT_VERSION);
       assert.equal((await f.restart()).ok, true);
       assert.equal(f.codexScans()[0].bytesRead, 0, 'existing sealed A1 baseline is reusable');
       if (gate === 'pending') f.db.connection.prepare('UPDATE cache_meta SET fullIndexPending=? WHERE folder=?').run('lost', f.codexFolder);
@@ -740,7 +741,7 @@ test('A2 race in a later sibling retains read content without certifying the rac
   require('node:vm').runInNewContext(fs.readFileSync(filename, 'utf8'), { Buffer, process, console,
     require: name => name === 'worker_threads' ? { parentPort: { postMessage: message => messages.push(message) }, workerData: {
       projectsDir: root, folders: [], startup: { config, inventory: [{ folder, rows, deferred: ['source.jsonl', 'other.jsonl'],
-        meta: { projectPath: root, fullIndexVersion: 1, fullIndexConfig: config, fullIndexPending: null } }] },
+        meta: { projectPath: root, fullIndexVersion: CONTENT_VERSION, fullIndexConfig: config, fullIndexPending: null } }] },
     } } : name === '../read-session-file' ? { ...native(name), readSessionFile: (file, ...args) => {
       const row = readSessionFile(file, ...args);
       if (file === other && !changed) { changed = true; fs.appendFileSync(source, line('raced after source read')); }
