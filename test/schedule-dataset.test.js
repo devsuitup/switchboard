@@ -156,6 +156,14 @@ test('the SWITCHBOARD_DATA_DIR in use is refused as a destination', t => {
   assert.throws(d.attempt(d.outside, path.join(d.tmpdir, 'data'), { switchboardDataDir: live }), /is or holds a Switchboard data directory/);
 });
 
+test('a ~/.switchboard that is a symbolic link protects its target', { skip: process.platform === 'win32' }, t => {
+  const d = destinations(t);
+  const data = path.join(d.outside, 'real-data');
+  fs.mkdirSync(data);
+  fs.symlinkSync(data, path.join(d.homedir, '.switchboard'));
+  assert.throws(d.attempt(path.join(d.tmpdir, 'home'), path.join(data, 'sub')), /--data-dir .* Switchboard data directory/);
+});
+
 test('on Windows the comparison ignores case', t => {
   const d = destinations(t);
   const upper = d.homedir.toUpperCase();

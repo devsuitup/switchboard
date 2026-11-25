@@ -116,7 +116,7 @@ function within(child, parent, platform) {
 function checkDestinations({ home, dataDir }, { homedir = os.homedir(), tmpdir = os.tmpdir(), switchboardDataDir = process.env.SWITCHBOARD_DATA_DIR, platform = process.platform } = {}) {
   const realHome = realTarget(homedir);
   const realTmp = realTarget(tmpdir);
-  const appDirs = [path.join(realHome, '.switchboard'), switchboardDataDir && realTarget(switchboardDataDir)].filter(Boolean);
+  const appDirs = [realTarget(path.join(realHome, '.switchboard')), switchboardDataDir && realTarget(switchboardDataDir)].filter(Boolean);
   for (const [label, dir] of [['the fake home', home], ['--data-dir', dataDir]]) {
     const target = realTarget(dir);
     if (appDirs.some(app => within(target, app, platform) || within(app, target, platform))) throw new Error(`${label} ${dir} is or holds a Switchboard data directory; give a new directory under ${tmpdir}`);
