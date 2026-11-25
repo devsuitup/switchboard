@@ -177,8 +177,8 @@ node scripts/schedule-dataset.js "$(mktemp -d)" [--data-dir <dir>] [--now 2026-1
 Before writing anything it refuses, for both the fake home and `--data-dir`:
 a directory that is not empty; your home directory or one inside it, unless
 it is under the system's temporary directory;
-and `~/.switchboard` or the `SWITCHBOARD_DATA_DIR` in use, or a directory
-inside or holding one. Paths are compared after resolving `..`, symbolic
+and `~/.switchboard`, the `SWITCHBOARD_DATA_DIR` in use or `~/.claude`, or a
+directory inside or holding one. Paths are compared after resolving `..`, symbolic
 links and, on Windows, case and short names. It also refuses a `--now`
 before 2000. On Windows,
 where creating a symbolic link needs a privilege, the linked schedule is

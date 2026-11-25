@@ -133,6 +133,7 @@ for (const [name, setup, pattern] of [
   }, /inside your home directory/],
   ['a --data-dir inside home', d => [path.join(d.outside, 'home'), path.join(d.homedir, '.switchboard-dev')], /--data-dir .* inside your home directory/],
   ['the home .switchboard data directory', d => [path.join(d.tmpdir, 'home'), path.join(d.homedir, '.switchboard', 'x')], /--data-dir .* Switchboard data directory/],
+  ['a directory inside home whose name starts with ..', d => [path.join(d.homedir, '..fixture'), path.join(d.outside, 'data')], /the fake home .* inside your home directory/],
   ['a non-empty --data-dir', d => {
     fs.writeFileSync(path.join(d.outside, 'keep'), '');
     return [path.join(d.tmpdir, 'home'), d.outside];
@@ -154,6 +155,23 @@ test('the SWITCHBOARD_DATA_DIR in use is refused as a destination', t => {
   assert.throws(d.attempt(path.join(d.tmpdir, 'home'), path.join(live, 'sub'), { switchboardDataDir: live }), /Switchboard data directory/);
   assert.throws(d.attempt(live, path.join(d.tmpdir, 'data'), { switchboardDataDir: live }), /Switchboard data directory/);
   assert.throws(d.attempt(d.outside, path.join(d.tmpdir, 'data'), { switchboardDataDir: live }), /is or holds a Switchboard data directory/);
+});
+
+test('a directory inside the SWITCHBOARD_DATA_DIR whose name starts with .. is refused', t => {
+  const d = destinations(t);
+  const live = path.join(d.outside, 'live-data');
+  assert.throws(d.attempt(path.join(d.tmpdir, 'home'), path.join(live, '..fixture'), { switchboardDataDir: live }), /--data-dir .* Switchboard data directory/);
+});
+
+test('a ~/.claude that is a symbolic link protects its target', { skip: process.platform === 'win32' }, t => {
+  const d = destinations(t);
+  const claude = path.join(d.outside, 'real-claude');
+  fs.mkdirSync(claude);
+  fs.symlinkSync(claude, path.join(d.homedir, '.claude'));
+  const before = JSON.stringify(fs.readdirSync(d.root, { recursive: true }).sort());
+  assert.throws(d.attempt(path.join(d.tmpdir, 'home'), claude), /--data-dir .* the Claude Code directory ~\/\.claude/);
+  assert.throws(d.attempt(path.join(claude, 'fake'), path.join(d.tmpdir, 'data')), /the fake home .* the Claude Code directory/);
+  assert.equal(JSON.stringify(fs.readdirSync(d.root, { recursive: true }).sort()), before, 'nothing was written');
 });
 
 test('a ~/.switchboard that is a symbolic link protects its target', { skip: process.platform === 'win32' }, t => {

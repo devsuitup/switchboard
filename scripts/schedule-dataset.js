@@ -110,16 +110,21 @@ function realTarget(dir) {
 function within(child, parent, platform) {
   const key = value => platform === 'win32' ? value.toLowerCase() : value;
   const relative = path.relative(key(parent), key(child));
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  return relative === '' || (relative.split(/[\\/]/)[0] !== '..' && !path.isAbsolute(relative));
 }
 
 function checkDestinations({ home, dataDir }, { homedir = os.homedir(), tmpdir = os.tmpdir(), switchboardDataDir = process.env.SWITCHBOARD_DATA_DIR, platform = process.platform } = {}) {
   const realHome = realTarget(homedir);
   const realTmp = realTarget(tmpdir);
-  const appDirs = [realTarget(path.join(realHome, '.switchboard')), switchboardDataDir && realTarget(switchboardDataDir)].filter(Boolean);
+  const protectedDirs = [
+    [realTarget(path.join(realHome, '.switchboard')), 'a Switchboard data directory'],
+    [switchboardDataDir && realTarget(switchboardDataDir), 'a Switchboard data directory'],
+    [realTarget(path.join(realHome, '.claude')), 'the Claude Code directory ~/.claude'],
+  ].filter(([dir]) => dir);
   for (const [label, dir] of [['the fake home', home], ['--data-dir', dataDir]]) {
     const target = realTarget(dir);
-    if (appDirs.some(app => within(target, app, platform) || within(app, target, platform))) throw new Error(`${label} ${dir} is or holds a Switchboard data directory; give a new directory under ${tmpdir}`);
+    const hit = protectedDirs.find(([app]) => within(target, app, platform) || within(app, target, platform));
+    if (hit) throw new Error(`${label} ${dir} is or holds ${hit[1]}; give a new directory under ${tmpdir}`);
     if (within(target, realHome, platform) && !within(target, realTmp, platform)) throw new Error(`${label} ${dir} is or is inside your home directory; give a new directory under ${tmpdir}`);
     if (fs.existsSync(target) && fs.readdirSync(target).length) throw new Error(`${label} ${dir} is not empty; give a new directory`);
   }
