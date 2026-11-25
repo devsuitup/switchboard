@@ -316,6 +316,14 @@ async function reconcile() {
   return getSnapshot();
 }
 
+function jobCwd(id) {
+  if (typeof id !== 'string' || !JOB_ID_RE.test(id)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8'));
+    return typeof raw?.cwd === 'string' && raw.cwd ? raw.cwd : null;
+  } catch { return null; }
+}
+
 function cwdFor(id) {
   const entry = roster.find(e => e.id === id);
   if (entry && entry.cwd && fs.existsSync(entry.cwd)) return entry.cwd;
@@ -624,6 +632,6 @@ function liveJobCheck(sessionId, { workerLiveness = new Map(), excludeJobId } = 
 module.exports = {
   getDaemonRosterPath: () => daemonRosterPath,
   invalidateTranscripts,
-  init, start, stop, onChange, onJobsChanged, getSnapshot, getCachedJobs, reconcile, runVerb, dispatch, liveJobCheck, conversationCheck, continuationJobCheck, findRestoreJob,
+  init, start, stop, onChange, onJobsChanged, getSnapshot, getCachedJobs, reconcile, runVerb, dispatch, liveJobCheck, conversationCheck, continuationJobCheck, findRestoreJob, jobCwd,
   DEFAULT_JOBS_DIR, FLUSH_MS, MAX_JOBS, ROOT_CACHE_MAX, LIST_TIMEOUT_MS, VERB_TIMEOUT_MS,
 };

@@ -161,6 +161,7 @@ test('the reload path resumes the remembered session as an automatic resume', as
     localStorage: { getItem: () => null },
     activeSessionId: SESSION.sessionId,
     openSessions: new Map(),
+    localMergedMemberRows: new Map(), refusedBackgroundPart: require('../public/resume-guard').refusedBackgroundPart,
     sessionMap: new Map([[SESSION.sessionId, SESSION]]),
     openSession: async (session, options, flags) => {
       calls.push({ session, options, automatic: flags.automatic });

@@ -86,9 +86,43 @@ function continuationChoiceRecord(value) {
     && (value.chosen === null || value.candidates.includes(value.chosen)) ? value : null;
 }
 
+function refusedBackgroundPart(session) {
+  return session?.refusedJobState && session.identitySessionId === (session.headSessionId || session.sessionId) ? session.identitySessionId : null;
+}
+
+async function chooseRefusedBackground(session, heldId, refused, { choose, describe = () => ({}), formatDate = t => new Date(t).toLocaleString() }) {
+  const part = id => {
+    const own = session.conversationParts?.find(value => value.sessionId === id) || { sessionId: id };
+    const name = describe(id).name || own.name || own.aiTitle || own.summary || session.name || session.aiTitle || session.summary;
+    return { ...own, label: (name || '').trim() || 'Untitled conversation' };
+  };
+  const ids = [...new Set([session.sessionId, session.headSessionId, ...(session.mergedMemberIds || [])])].filter(id => id && id !== heldId);
+  const time = value => value.modified ? Date.parse(value.modified) : NaN;
+  const held = part(heldId);
+  const parts = ids.map(part).sort((a, b) => (time(b) || 0) - (time(a) || 0));
+  const active = value => Number.isFinite(time(value)) ? 'last active ' + formatDate(time(value)) : 'last active unknown';
+  const detail = value => [active(value),
+    Number.isFinite(value.messageCount) && value.messageCount >= 0 ? value.messageCount + (value.messageCount === 1 ? ' message' : ' messages') : null,
+    time(value) < time(held) && 'older than the background session'].filter(Boolean).join(' · ');
+  const reason = 'The background session was not restored. ' + String(refused.reason || 'No reason was given').replace(/\.$/, '') + '.';
+  const note = (refused.recovery === 'respawn' ? 'Respawn restarts that job and attaches to it. ' : '')
+    + 'Opening another part resumes that copy: it does not hold the background session\'s work, and new work there stays separate.';
+  const options = [
+    { id: 'background', label: refused.recovery === 'respawn' ? 'Respawn the background session' : 'Try the background session again',
+      detail: [refused.jobId && 'job ' + refused.jobId, active(held)].filter(Boolean).join(' · ') },
+    ...parts.map(value => ({ id: 'part:' + value.sessionId, label: 'Open "' + value.label + '" instead', session: value, detail: detail(value) })),
+  ];
+  const answer = await choose({ title: 'Background session not restored',
+    message: ['"' + held.label + '" continued in a background session.', reason, note],
+    messageParts: [['"', { session: held, label: held.label }, '" continued in a background session.'], reason, note],
+    options, selectedId: 'background', confirmLabel: 'Continue', sessions: [held, ...parts] });
+  const selected = options.find(option => option.id === answer?.choice);
+  return !selected ? null : selected.id === 'background' ? { background: true } : { sessionId: selected.session.sessionId };
+}
+
 async function resolveResumeSession(session, { automatic = false, api, confirm, choose, describe = () => ({}),
   formatDate = t => new Date(t).toLocaleString(), resolutions, onHold, onLive, notify,
-  choices, rowKey = session?.sessionId, chooseAgain = false, memoryNotify = notify,
+  choices, rowKey = session?.sessionId, chooseAgain = false, chosenOver, memoryNotify = notify,
   resolveRow = candidate => ({ ...session, sessionId: candidate.sessionId, headSessionId: candidate.sessionId, mergedMemberIds: [] }) } = {}) {
   if (!session || session.type === 'terminal' || session.remoteAlias) return session;
   const key = 'continuationChoice:' + rowKey;
@@ -127,7 +161,13 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
     return openAsWas(['Switchboard could not check whether "' + conversationName() + '" continued in another part.', 'Open it as it was?'], [['Switchboard could not check whether "', { session, label: conversationName() }, '" continued in another part.'], 'Open it as it was?']);
   }
   const rowIds = new Set([session.sessionId, ...(session.mergedMemberIds || [])]);
-  const candidates = (result?.candidates || []).filter(candidate => !rowIds.has(candidate.sessionId));
+  const isRefused = async id => {
+    try { return !(await api.getSessionLiveElsewhere(id)); } catch { return true; }
+  };
+  let refusedId = refusedBackgroundPart(session);
+  if (refusedId === session.sessionId || refusedId === chosenOver || !result?.candidates?.some(candidate => candidate.sessionId === refusedId) || !(await isRefused(refusedId))) refusedId = null;
+  const candidates = (result?.candidates || []).filter(candidate => candidate.sessionId !== chosenOver
+    && (!rowIds.has(candidate.sessionId) || candidate.sessionId === refusedId));
   const record = result && !result.unresolved ? continuationChoiceRecord(choices?.get(key)) : null;
   const candidateIds = [...new Set(candidates.map(candidate => candidate.sessionId))].sort();
   const missing = result?.missing || (result?.missingAt?.length && result.missingAt.every(id => rowIds.has(id)));
@@ -161,7 +201,9 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
   }
   if (automatic) {
     if (!result || result.unresolved) { onHold?.({ waitingForIndex: !!result?.waitingForIndex }); return null; }
-    return candidates.length === 1 ? resolveRow(candidates[0]) : candidates.length ? null : session;
+    if (!candidates.length) return session;
+    const target = candidates.length === 1 ? resolveRow(candidates[0]) : null;
+    return target && refusedBackgroundPart(target) === target.sessionId && await isRefused(target.sessionId) ? null : target;
   }
   const seenRows = new Set([session.sessionId]);
   const candidateParts = candidates.map(candidate => {
@@ -223,5 +265,5 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { guardResume, liveElsewhereMany, liveElsewhereQuestion, resolveResumeSession };
+  module.exports = { guardResume, liveElsewhereMany, liveElsewhereQuestion, resolveResumeSession, refusedBackgroundPart, chooseRefusedBackground };
 }

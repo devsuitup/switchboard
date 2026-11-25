@@ -70,6 +70,33 @@ tasks first attempts recovery; after a successful respawn whose worker is
 confirmed dead, its saved tab is released. Timeouts and daemon errors retain
 the entry for the next launch.
 
+#### A background session that was not restored
+
+When a saved background session is refused (a blocked or stopped job whose
+worker is gone, or one that cannot be checked), its sidebar row keeps showing
+it as the newest part. If another part of the same conversation is saved too,
+launch starts neither: both stay saved, and the notices name them. A part that
+continued in a blocked or stopped job is also held when only that part was
+saved, and when the background session disappeared or ended before it could
+be restored: only your choice opens the other part. Nothing is asked at launch.
+
+Opening the row asks **Background session not restored**, once, with:
+
+- **Respawn the background session**: restarts that job and attaches to it.
+  When it cannot be respawned, the choice reads **Try the background session
+  again**.
+- **Open "name" instead**, for each other part, with its last activity and
+  whether it is older than the background session. The part is resumed as it
+  is, without the background session's work. The background tab leaves the
+  saved set; its job and transcript are untouched and stay in the Agents view.
+- **Cancel**, which opens nothing.
+
+The opened part is remembered (`chosenPart` in its saved entry, the id it was chosen over) and restored
+directly at later launches. The same question appears when the background session was not in the saved
+set. A part chosen this way still follows its own later continuations. A row with a single part keeps the notice and its
+**Respawn** button. A reload reattaches a part that is still running here, and
+otherwise leaves these rows to the saved set.
+
 ### A session with no transcript yet
 
 A session started with **+**, or one just cleared with `/clear`, has no
