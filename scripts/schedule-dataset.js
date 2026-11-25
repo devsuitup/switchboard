@@ -9,6 +9,7 @@ const path = require('node:path');
 const { encodeProjectPath } = require('../encode-project-path');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const EARLIEST_NOW = Date.parse('2000-01-01T00:00:00Z');
 
 const SCHEDULES = {
   alpha: [
@@ -48,7 +49,7 @@ function parseArgs(argv) {
     else throw new Error(`Unknown argument: ${arg}\n${usage()}`);
   }
   if (!args.home) return null;
-  if (!Number.isFinite(args.now)) throw new Error('--now must be a date Date.parse reads');
+  if (!Number.isFinite(args.now) || args.now < EARLIEST_NOW) throw new Error('--now must be a date Date.parse reads, from 2000-01-01 on');
   args.home = path.resolve(args.home);
   args.dataDir = path.resolve(args.dataDir || path.join(args.home, '.switchboard-dev'));
   return args;
@@ -91,22 +92,43 @@ function writeResult(runsDir, filePath, schedule, slug, sessionId, startedMs, ru
   fs.writeFileSync(path.join(runsDir, `${key}-${startedMs}-${sessionId}.json`), JSON.stringify(record) + '\n');
 }
 
-function createDataset({ home, dataDir, now }) {
+function gitEnv(env) {
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !/^GIT_/i.test(key)));
+}
+
+function canSymlink(dir) {
+  const probe = path.join(dir, '.symlink-probe');
+  try {
+    fs.symlinkSync(path.join(dir, 'missing'), probe);
+    fs.unlinkSync(probe);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function createDataset({ home, dataDir, now }, { symlinks = canSymlink } = {}) {
   if (fs.existsSync(home) && fs.readdirSync(home).length) throw new Error(`${home} is not empty; give a new directory`);
   const runsDir = path.join(dataDir, 'schedule-runs');
   const shared = path.join(home, 'shared');
   fs.mkdirSync(runsDir, { recursive: true });
   fs.mkdirSync(shared, { recursive: true });
+  const linkable = symlinks(shared);
   const projects = [];
+  const skipped = [];
   for (const [name, schedules] of Object.entries(SCHEDULES)) {
     const projectPath = path.join(home, 'work', name);
     const commands = path.join(projectPath, '.claude', 'commands');
     const folder = path.join(home, '.claude', 'projects', encodeProjectPath(projectPath));
     fs.mkdirSync(commands, { recursive: true });
     fs.mkdirSync(folder, { recursive: true });
-    if (spawnSync('git', ['init', '-q', projectPath]).status !== 0) fs.mkdirSync(path.join(projectPath, '.git'));
+    if (spawnSync('git', ['init', '-q', projectPath], { env: gitEnv(process.env) }).status !== 0) fs.mkdirSync(path.join(projectPath, '.git'));
     writeTranscript(folder, projectPath, null, 'New project', now - 30 * DAY_MS, null);
     for (const schedule of schedules) {
+      if (schedule.linked && !linkable) {
+        skipped.push(schedule.name);
+        continue;
+      }
       const slug = slugOf(schedule.file);
       const filePath = path.join(commands, schedule.file);
       if (schedule.linked) {
@@ -125,7 +147,7 @@ function createDataset({ home, dataDir, now }) {
     }
     projects.push(projectPath);
   }
-  return { projects, runsDir };
+  return { projects, runsDir, skipped };
 }
 
 if (require.main === module) {
@@ -135,7 +157,8 @@ if (require.main === module) {
       console.log(usage());
       process.exit(2);
     }
-    const { projects } = createDataset(args);
+    const { projects, skipped } = createDataset(args);
+    if (skipped.length) console.log(`Skipped (this account cannot create symbolic links): ${skipped.join(', ')}`);
     console.log(`Fake HOME: ${args.home}\nData dir: ${args.dataDir}\nProjects (git checkouts with schedules are registered at first launch):\n${projects.map(p => `  ${p}`).join('\n')}`);
   } catch (error) {
     console.error(error.message);
@@ -143,4 +166,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { SCHEDULES, createDataset, parseArgs };
+module.exports = { SCHEDULES, createDataset, gitEnv, parseArgs };

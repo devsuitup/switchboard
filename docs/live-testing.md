@@ -174,7 +174,11 @@ checked without your own schedules:
 node scripts/schedule-dataset.js /path/to/new-home [--data-dir <dir>] [--now 2026-11-25T08:00:00Z]
 ```
 
-It refuses a directory that is not empty. The data directory defaults to
+It refuses a directory that is not empty, and a `--now` before 2000. When the
+account cannot create symbolic links (Windows without Developer Mode), the
+linked schedule is skipped and named in the output. Git runs without inherited
+`GIT_*` variables, so `git init` lands in each fixture project. The data
+directory defaults to
 `<home>/.switchboard-dev`; launch the instance with `HOME`, the `XDG_*`
 directories and `SWITCHBOARD_DATA_DIR` pointing there, as in
 [What the environment needs](#what-the-environment-needs).

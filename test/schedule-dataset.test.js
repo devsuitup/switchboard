@@ -9,17 +9,17 @@ const { spawnSync } = require('node:child_process');
 const runner = require('../src/main/schedules/schedule-runner');
 const { readScheduleRunResults } = require('../src/main/schedules/schedule-run-results');
 const { encodeProjectPath } = require('../encode-project-path');
-const { SCHEDULES, createDataset, parseArgs } = require('../scripts/schedule-dataset');
+const { SCHEDULES, createDataset, gitEnv, parseArgs } = require('../scripts/schedule-dataset');
 
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'schedule-dataset.js');
 const NOW = Date.parse('2026-11-25T08:00:00Z');
 
-function dataset(t) {
+function dataset(t, options) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-schedule-dataset-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home');
   const args = parseArgs([home, '--now', new Date(NOW).toISOString()]);
-  return { home, args, ...createDataset(args) };
+  return { home, args, ...createDataset(args, options) };
 }
 
 function transcripts(home, projectPath) {
@@ -28,7 +28,8 @@ function transcripts(home, projectPath) {
 }
 
 test('every fixture schedule is listed by the scheduler with its name, state and link', t => {
-  const { projects } = dataset(t);
+  const { projects, skipped } = dataset(t, { symlinks: () => true });
+  assert.deepEqual(skipped, []);
   const listed = runner.listScheduleFiles(projects, { getSetting: () => ({}), defaultSandbox: false, home: os.homedir(), platform: 'linux' });
   const expected = Object.values(SCHEDULES).flat();
   assert.deepEqual(listed.map(s => s.name).sort(), expected.map(s => s.name).sort());
@@ -38,6 +39,8 @@ test('every fixture schedule is listed by the scheduler with its name, state and
     assert.equal(row.cron, schedule.cron, schedule.name);
     assert.equal(row.enabled, schedule.enabled !== false, schedule.name);
     assert.equal(row.linked, !!schedule.linked, schedule.name);
+    assert.equal(row.catchUp, !!schedule.catchUp, schedule.name);
+    assert.equal(row.runAsBackground, !!schedule.runAsBackground, schedule.name);
     assert.equal(row.readError ?? null, null, schedule.name);
   }
   assert.deepEqual(byName.get('Malformed expression').problems, ['cron can never match']);
@@ -45,9 +48,9 @@ test('every fixture schedule is listed by the scheduler with its name, state and
 });
 
 test('every recorded run has a schedule transcript and, unless withheld, a result the listing reads as valid', t => {
-  const { home, projects, runsDir } = dataset(t);
+  const { home, projects, runsDir, skipped } = dataset(t);
   for (const projectPath of projects) {
-    const schedules = SCHEDULES[path.basename(projectPath)];
+    const schedules = SCHEDULES[path.basename(projectPath)].filter(s => !skipped.includes(s.name));
     const rows = transcripts(home, projectPath);
     assert.equal(rows.filter(row => !row.scheduleSlug).length, 1, 'one Add project seed per project');
     const runs = rows.filter(row => row.scheduleSlug);
@@ -82,4 +85,19 @@ test('the command refuses a directory that is not empty and prints usage without
   const usage = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8' });
   assert.equal(usage.status, 2);
   assert.match(usage.stdout, /^Usage: node scripts\/schedule-dataset\.js <fake-home>/);
+});
+
+test('without symbolic links the linked schedule is skipped and named, and the rest is written', t => {
+  const { projects, skipped, home } = dataset(t, { symlinks: () => false });
+  const linked = Object.values(SCHEDULES).flat().filter(s => s.linked);
+  assert.deepEqual(skipped, linked.map(s => s.name));
+  const listed = runner.listScheduleFiles(projects, { getSetting: () => ({}), defaultSandbox: false, home: os.homedir(), platform: 'linux' });
+  assert.equal(listed.length, Object.values(SCHEDULES).flat().length - linked.length);
+  assert.deepEqual(fs.readdirSync(path.join(home, 'shared')), []);
+});
+
+test('git runs without repository-routing variables, and dates before 2000 are refused', () => {
+  assert.deepEqual(gitEnv({ PATH: '/bin', GIT_DIR: '/elsewhere', git_work_tree: '/w', HOME: '/h' }), { PATH: '/bin', HOME: '/h' });
+  assert.throws(() => parseArgs(['/h', '--now', '1970-01-01T00:00:00Z']), /from 2000-01-01 on/);
+  assert.throws(() => parseArgs(['/h', '--now', 'yesterday']), /--now must be a date/);
 });
