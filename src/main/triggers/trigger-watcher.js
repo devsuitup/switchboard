@@ -494,7 +494,7 @@ function waitForPendingConfirmation(sessionId, ctx, enterAtMs, command, deadline
     if (!ctx.getPtyForSession(sessionId)) {
       return resolve({ confirmed: false, sessionExited: true, timedOut: false, waited_ms });
     }
-    const reaction = cliReactionTiedToEnter(ctx, sessionId, enterAtMs, command, seen);
+    const reaction = cliReactionTiedToEnter(ctx, sessionId, enterAtMs, command);
     if (reaction) {
       return resolve({ confirmed: true, source: reaction, sessionExited: false, timedOut: false, waited_ms });
     }
@@ -650,11 +650,14 @@ function cliReactedSince(ctx, sessionId, sinceMs) {
 }
 
 // see .ai/contexts/trigger-watcher.md, "Proof of submission by edge"
-function cliReactionTiedToEnter(ctx, sessionId, sinceMs, command, seen) {
+function cliReactionTiedToEnter(ctx, sessionId, sinceMs, command) {
   const s = readCliStatus(ctx, sessionId);
   if (!s || !CLI_REACTION_STATUSES.includes(s.status) || s.statusUpdatedAt < sinceMs) return null;
   if (s.status !== 'idle') return 'descriptor';
-  return transcriptOwnEntryAt(ctx, sessionId, sinceMs, command, seen) !== null ? 'transcript' : null;
+  const turn = readTranscriptTurn(ctx, sessionId);
+  const own = !!turn && Array.isArray(turn.prompts) && turn.prompts.some((p) =>
+    Number.isFinite(p.at) && p.at >= sinceMs && promptMatches(p.text, command, { strict: true }));
+  return own ? 'transcript' : null;
 }
 
 function cliForbidsRecoveryEnter(ctx, sessionId) {
@@ -808,7 +811,7 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
   let confirmSource = null;
   const probe = edgeMode
     ? () => {
-      const reaction = cliReactionTiedToEnter(ctx, sessionId, enterAt, command, ownEntry);
+      const reaction = cliReactionTiedToEnter(ctx, sessionId, enterAt, command);
       if (reaction) { confirmSource = reaction; return true; }
       if (transcriptReaction && transcriptReactedSince(ctx, sessionId, enterAt, command, ownEntry)) { confirmSource = 'transcript'; return true; }
       return false;

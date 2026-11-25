@@ -2052,8 +2052,11 @@ session, which has no local descriptor). No new watcher: it reuses the cache
   moment of our Enter (`cliReactionTiedToEnter`, `confirm_source`
   `descriptor`): a turn started, or our Enter opened a dialog. An `idle`
   write at or after the Enter counts only when the transcript holds the
-  command's own entry (`transcriptOwnEntryAt`, the same matching as below)
-  stamped at or after the Enter (`confirm_source` `transcript`): that is how a
+  command's own entry stamped at or after the Enter, matched as below but
+  strictly (`promptMatches(…, { strict: true })`: a structured slash entry
+  must also carry the command's arguments in `<command-args>`, so a later
+  `/rename other` does not prove `/rename intended`; read without the
+  own-entry latch, which keeps the looser match) (`confirm_source` `transcript`): that is how a
   turn too fast for a poll to see `busy` still confirms. An `idle` write alone
   proves nothing (#1261): a CLI still starting rewrites its descriptor as part
   of its own startup, and in the 2026-11-25 field case such a write, about a
@@ -2539,9 +2542,11 @@ alternate screen comes earlier than the input attach (07:42:28.086 against an
 Enter still lost at 28.797) and is absent outside fullscreen mode.
 
 **The rule.** `main.js` (`wireSessionPty`) feeds every PTY output chunk to
-`noteInputAttach` (`src/main/terminals/input-attach.js`): the last
-`CSI ?2004h` / `CSI ?2004l` of the chunk sets or clears `attachedAt` (the
-first attach is kept while it lasts; a 7-byte carry covers a sequence split
+`noteInputAttach` (`src/main/terminals/input-attach.js`): every
+`CSI ?2004h` / `CSI ?2004l` of the chunk is applied in order, an `l` clearing
+`attachedAt` and an `h` after a clear stamping a new attach interval now (a
+reassert while attached keeps the first stamp, so a detach and re-attach in
+one chunk still restarts the settle; a 7-byte carry covers a sequence split
 across chunks). The state is created fresh for each PTY. The trigger context
 exposes it as `getInputAttachedAt(sessionId)`: `undefined` when the PTY is not
 tracked (fixtures, a ctx without the function), `null` while not attached.

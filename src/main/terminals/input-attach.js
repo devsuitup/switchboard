@@ -1,9 +1,7 @@
 'use strict';
 
 // see .ai/contexts/trigger-watcher.md, "Readiness of a freshly started CLI"
-const ATTACH = '\x1b[?2004h';
-const DETACH = '\x1b[?2004l';
-const CARRY = ATTACH.length - 1;
+const CARRY = '\x1b[?2004h'.length - 1;
 
 function createInputAttach() {
   return { carry: '', attachedAt: null };
@@ -17,11 +15,12 @@ function noteInputAttach(state, data, now = Date.now()) {
   }
   const text = state.carry + data;
   state.carry = text.slice(-CARRY);
-  const on = text.lastIndexOf(ATTACH);
-  const off = text.lastIndexOf(DETACH);
-  if (on === -1 && off === -1) return;
-  if (on < off) state.attachedAt = null;
-  else if (state.attachedAt === null) state.attachedAt = now;
+  const marker = /\x1b\[\?2004([hl])/g;
+  let match;
+  while ((match = marker.exec(text)) !== null) {
+    if (match[1] === 'l') state.attachedAt = null;
+    else if (state.attachedAt === null) state.attachedAt = now;
+  }
 }
 
 module.exports = { createInputAttach, noteInputAttach };

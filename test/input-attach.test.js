@@ -20,6 +20,15 @@ test('bracketed paste on marks the input attached, off clears it', () => {
   assert.equal(s.attachedAt, 50, 'the last edge of a chunk wins');
 });
 
+test('a detach then attach inside one chunk starts a new attach interval', () => {
+  const s = createInputAttach();
+  noteInputAttach(s, '\x1b[?2004h', 20);
+  noteInputAttach(s, 'x\x1b[?2004ly\x1b[?2004hz', 60);
+  assert.equal(s.attachedAt, 60);
+  noteInputAttach(s, '\x1b[?2004h\x1b[?2004l', 70);
+  assert.equal(s.attachedAt, null);
+});
+
 test('a marker split across two chunks is still seen', () => {
   const s = createInputAttach();
   noteInputAttach(s, 'abc\x1b[?20', 10);

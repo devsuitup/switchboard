@@ -112,6 +112,23 @@ test('edge: an idle rewritten after our Enter, with no busy and no own transcrip
   assert.equal(v.submit_retries, 1);
 });
 
+for (const [args, confirmed] of [['other-name', false], ['intended-name', true]]) {
+  test(`edge: an idle with a slash entry whose arguments are ${args} ${confirmed ? 'confirms' : 'proves nothing'}`, async (t) => {
+    enableClock(t);
+    const prompts = [];
+    const s = fakeSession({ onEnter: (n, desc) => {
+      if (n === 1) setTimeout(() => {
+        prompts.push({ at: Date.now(), text: `<command-name>/rename</command-name>\n<command-message>rename</command-message>\n<command-args>${args}</command-args>` });
+        desc.status = 'idle'; desc.statusUpdatedAt = Date.now();
+      }, 120);
+    } });
+    s.ctx.getTranscriptTurn = () => ({ prompts: [...prompts] });
+    const v = await settle(t, submitWithVerify(s.handle, 'sid', '/rename intended-name', s.ctx));
+    assert.equal(v.confirmed, confirmed);
+    assert.equal(v.submit_retries, confirmed ? 0 : 1);
+  });
+}
+
 test('edge: a fast turn (busy then idle between two polls) confirms through its own transcript entry', async (t) => {
   enableClock(t);
   const prompts = [];
