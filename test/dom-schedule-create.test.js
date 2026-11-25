@@ -66,6 +66,22 @@ test('creation offers registry projects and all runner fields, defaults to auto,
   assert.equal(h.w.document.querySelector('.schedule-create-form'), null);
   assert.equal(h.w.document.activeElement, h.w.document.querySelector('.schedule-create-btn'));
 });
+test('the + of a project opens the form on that project and gets focus back', async t => {
+  const h = setup(t);
+  h.form.querySelector('button[type="button"]').click();
+  const schedule = { file: 'schedule-x.md', filePath: '/q/schedule-x.md', name: 'X', slug: 'x', cron: null, cronText: null, enabled: false, problems: [], nextRunMs: null, runs: [] };
+  h.data.now = Date.now();
+  h.data.projects.push({ projectPath: '/q', shortName: 'q', known: true, archived: false, schedules: [schedule] });
+  h.w.renderSchedules(h.data);
+  const add = () => h.w.document.querySelector('.schedule-project[data-project-path="/q"] .project-new-btn');
+  assert.equal(add().getAttribute('aria-label'), 'New schedule in q');
+  add().click();
+  assert.equal(h.w.document.querySelector('[name="projectPath"]').value, '/q');
+  await h.w.loadSchedules();
+  h.w.document.dispatchEvent(new h.w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  assert.equal(h.w.document.querySelector('.schedule-create-form'), null);
+  assert.equal(h.w.document.activeElement, add());
+});
 test('field errors stay in the form and focus the rejected field', async t => {
   const h = setup(t);
   h.w.api.createScheduleFile = async () => ({ ok: false, field: 'cron', error: 'cron can never match' });

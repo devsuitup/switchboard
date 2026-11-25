@@ -820,7 +820,7 @@ PROJECTS_DIR scans; EACCES/ENOENT read and readdir failures injected on
 
 ## Schedule creation (#792, slice C)
 
-The optional tab offers Create schedule even when the registry projects have
+The optional tab offers New schedule (and a + per project card, which preselects its project) even when the registry projects have
 no schedules. The modal uses `registerModal`, labelled native controls and
 `PERMISSION_MODES`; Default is labelled Default (auto) and omits the CLI key.
 Project receives focus; Tab is trapped, Escape cancels, textarea Enter stays
@@ -828,7 +828,7 @@ native, and only the focused Create button submits from the keyboard. Pending
 submission disables controls and blocks cancellation; errors from main are
 shown at their named field with `aria-invalid` and focus. Other failures stay
 in the form and focus Create for retry. Success closes, refreshes the list
-and focuses Create schedule.
+and focuses the button that opened the form, or New schedule.
 
 `create-schedule-file` calls the Electron-free `createScheduleFile` export in
 `schedule-runner.js`. It awaits the registry, canonicalizes spelling with
@@ -983,7 +983,7 @@ responses. Success clears the notice and the local error. With no registry
 project the tab says to add a local project from Sessions; with only archived
 projects, to unarchive one in Settings → Archived; either message is the
 disabled Create button's title and description. `No schedules found. Use
-Create schedule to add one.` appears only when a project can take a schedule
+New schedule to add one.` appears only when a project can take a schedule
 and no project has a `scanError`. A `scanError` project keeps its group with
 the error, a permission/path hint and Retry. A `readError` row shows
 `Schedule unknown`, `Unknown: the file could not be read`, the hint and Retry;
@@ -1114,7 +1114,7 @@ memory-workfiles-view.js, loaded before schedules-view.js in index.html. Both
 exit notices and persistent history use it for the same recovery wording.
 
 Action state is keyed by filePath across renders: a pending launch stays disabled,
-success shows the check mark and Launched! for two seconds, and a refusal restores
+success shows the check icon and Launched! for two seconds, and a refusal restores
 Run now with the persistent notice. A new launch invalidates the previous success
 timer. Pending toggles likewise stay disabled. A render restores each row's open
 history and focused control by filePath and control identity. If the control is
@@ -1125,7 +1125,7 @@ same focus hand-off as soon as its focused button becomes disabled. An unmatched
 focus request is consumed by that render. Guard refusal reasons are visible row text.
 
 Top-level focus (#1238): the controls outside rows carry a `data-schedule-control`
-identity too: Create schedule (`schedule-create-btn`), the load-error Retry and
+identity too: New schedule (`schedule-create-btn`), each card's fold and + (`schedule-collapse-btn`, `schedule-new-btn`), the load-error Retry and
 each project's scan-error Retry (`schedule-retry-btn`, told apart by the
 enclosing `.schedule-project` path, none for the load error). A render, and a
 failed reload's `renderSchedulesLoadError`, read the focused identity first
@@ -1146,9 +1146,14 @@ touches focus outside `#schedules-content`, so the create form keeps its
 fields and focus across background refreshes, and closing it focuses the
 current Create button.
 
-Sizes (#1238): every button of the tab uses the shared `.settings-action-btn`
-class, scoped in `#schedules-content` to a smaller padding, `max-width: 100%`
-and wrapping text. `.schedule-actions` wraps, and `#schedules-content` sets
+Row layout (#1274): projects reuse `.project-group`/`.project-header`; a row is a
+`.schedule-row` grid (dot, name, icon actions; meta and problem lines below). The short
+text is `.schedule-next`, the full state its title; `.schedule-last` (`aria-expanded`) replaces
+`details` and shows the newest finished run; a live run spins Run now without disabling it.
+Project folds live in the in-memory `schedulesCollapsed`. The spinners pause with
+`busy-spinners-paused` (`docs/decisions/0002`).
+
+Sizes (#1238): only Retry keeps `.settings-action-btn`. `#schedules-content` sets
 `overflow-wrap: anywhere` so long paths, names and refusals break inside the
 sidebar. Keyboard focus keeps the global `button:focus-visible` outline.
 `e2e/schedules.spec.js` checks the supported sidebar widths (200, 340 and

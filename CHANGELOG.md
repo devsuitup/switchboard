@@ -8,6 +8,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Changed
 - The sidebar no longer flashes "Refreshing…" each time it reloads in the background; only the first load, while the sidebar is still empty, shows "Loading…".
+- The Schedules tab has a new layout. Projects are collapsible cards like those of Sessions, with a **+** to add a schedule, and each schedule takes two lines: a status dot, the name, an on/off switch, Run now, Open and Delete, then the next run, the cadence and the last result, which opens the run history. The exact times, cron expression and full result are in the tooltips. (#1274)
 
 ### Fixed
 - The first launch with an empty index no longer leaves the window blank for half a minute or more while your open sessions keep writing: the window and the indexing banner appear at once, and changes those sessions make during that first indexing show once it finishes. (#1266)

@@ -26,8 +26,13 @@ records keep running whichever surface is shown.
 The tab lists, by project, every `schedule-*.md` file in a registered
 project's `.claude/commands/` folder, including disabled schedules and
 archived projects. The name match is case-sensitive: `Schedule-X.md` is not a
-schedule. Each schedule shows its timing in plain words, its local next-run
-time, whether it is on, and up to 20 recent runs.
+schedule. Each project is a card that folds, with its number of schedules and
+a **+** that opens the creation form on that project. Each schedule shows a
+status dot (on, running, off, suspended, or **!** when it never runs or cannot
+be read), its name, its next run, its timing in plain words when it has some,
+and its last result. Hold the pointer over any of them for the exact time, the
+cron expression, the file or the full result. The last result opens the
+history: up to 20 recent runs and the file's path.
 
 The list is refreshed when the tab opens, after each action, when projects
 change and on every minute boundary while the tab is visible. The tab offers no
@@ -39,12 +44,12 @@ search.
   check mark acknowledges that the shell started, not that the task succeeded;
   a later failure leaves its own notice — see
   [Automation](automation.md#run-now).
-- **Turn on** and **Turn off** edit the file's front matter. Turning a
-  schedule back on skips the runs missed while it was off.
+- The switch turns the schedule on or off by editing the file's front matter.
+  Turning a schedule back on skips the runs missed while it was off.
 - **Open** edits the schedule file in the editor.
 - **Delete** asks for confirmation, then removes the file and its catch-up and
   run-result records. Past runs stay in Sessions.
-- **Show history in Sessions** shows older runs.
+- **Show in Sessions**, at the end of the history, shows older runs.
 
 A linked file can be opened and run, but must be turned on or off and deleted
 at its source.
@@ -81,7 +86,7 @@ recognised and the file is skipped — see
 
 ## Creating a schedule
 
-**Create schedule** at the top of the tab opens a form: registered project,
+**New schedule** at the top of the tab opens a form: registered project,
 name, slug, five-field cron expression and prompt. Enabled defaults to on and
 catch-up to off. Optional fields cover permission mode, allowed tools, model,
 budget, a one-line appended system prompt and additional directories (one per

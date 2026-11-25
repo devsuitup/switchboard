@@ -91,7 +91,7 @@ function overflowReport() {
   const outer = content.getBoundingClientRect();
   const failures = [];
   if (content.scrollWidth > content.clientWidth + 1) failures.push(`the tab scrolls sideways: ${content.scrollWidth} > ${content.clientWidth}`);
-  for (const el of content.querySelectorAll('button, summary')) {
+  for (const el of content.querySelectorAll('button')) {
     const label = `${el.className || el.tagName} "${el.textContent.slice(0, 40)}"`;
     const rect = el.getBoundingClientRect();
     if (!rect.width || !rect.height) { failures.push(`${label} has no box`); continue; }
@@ -108,7 +108,7 @@ test('schedule rows keep every action inside the tab at 200, 340 and 600 px, in 
   makePlainDir(home);
   const { app, page } = await launch();
   await openSchedules(app, page, scheduleFixture());
-  await page.evaluate(() => { for (const details of document.querySelectorAll('#schedules-content details')) details.open = true; });
+  await page.evaluate(() => { for (const last of document.querySelectorAll('#schedules-content .schedule-last')) last.click(); });
   await expect(page.locator('#schedules-content .schedule-history-run')).toHaveCount(20);
   for (const [width, height] of [[1400, 900], [800, 500]]) {
     for (const zoom of [1, 1.5]) {
@@ -140,23 +140,26 @@ test('keyboard focus survives refreshes and the create form stays reachable in a
   await refresh(app, page);
   expect(await focused('#schedules-content .schedule-create-btn'), 'Create keeps focus across a refresh').toBe(true);
 
-  await page.keyboard.press('Tab');
-  expect(await focused('#schedules-content .schedule-run-btn'), 'Tab from Create reaches the first row action').toBe(true);
+  for (const selector of ['.schedule-collapse-btn', '.project-new-btn', '.schedule-toggle-btn', '.schedule-run-btn']) {
+    await page.keyboard.press('Tab');
+    expect(await focused(`#schedules-content ${selector}`), `Tab from Create reaches ${selector} in order`).toBe(true);
+  }
   const actions = page.locator('#schedules-content .schedule-actions').first();
   await expect(actions).toHaveCSS('opacity', '1');
   expect(await page.evaluate(() => getComputedStyle(document.activeElement).outlineStyle)).not.toBe('none');
   await refresh(app, page);
   expect(await focused('#schedules-content .schedule-run-btn'), 'the row action keeps focus across a refresh').toBe(true);
-  await page.keyboard.press('Shift+Tab');
+  for (let i = 0; i < 4; i++) await page.keyboard.press('Shift+Tab');
   expect(await focused('#schedules-content .schedule-create-btn'), 'Shift+Tab returns to Create').toBe(true);
 
-  const summary = page.locator('#schedules-content .schedule-item summary').first();
-  await summary.focus();
+  const history = page.locator('#schedules-content .schedule-last').first();
+  await history.focus();
   await page.keyboard.press('Enter');
-  await expect(page.locator('#schedules-content .schedule-item details').first()).toHaveJSProperty('open', true);
+  await expect(history).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('#schedules-content .schedule-history').first()).toBeVisible();
   await refresh(app, page);
-  await expect(page.locator('#schedules-content .schedule-item details').first()).toHaveJSProperty('open', true);
-  expect(await focused('#schedules-content .schedule-item summary'), 'the history toggle keeps focus across a refresh').toBe(true);
+  await expect(history).toHaveAttribute('aria-expanded', 'true');
+  expect(await focused('#schedules-content .schedule-last'), 'the history toggle keeps focus across a refresh').toBe(true);
 
   const projectRetry = page.locator('#schedules-content .schedule-scan-error .schedule-retry-btn');
   await projectRetry.focus();

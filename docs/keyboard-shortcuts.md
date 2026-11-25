@@ -66,26 +66,27 @@ views (CodeMirror):
 
 This section applies to the [Schedules tab](schedules.md), on by default.
 
-Tab reaches **Create schedule** before the rows. Enter or Space opens its form
+Tab reaches **New schedule** before the project cards. Each card then offers its
+fold arrow and its **+**, which opens the same form on that project. Enter or Space opens its form
 with Project focused. Tab and Shift+Tab cycle through its fields, Cancel and
-Create; Escape cancels and restores focus to Create schedule. Enter in a
+Create; Escape cancels and restores focus to the button that opened the form. Enter in a
 text field does not submit; Enter in either multiline field inserts a newline.
 Focus Create and press Enter or Space to submit. During submission the controls
 are disabled and Escape waits for the result. Rejected fields receive focus
 and an inline error; their values stay available for correction.
 
-Tab reaches **Run now**, **Turn on/Turn off**, **Open** and **Delete** in each
-schedule row. Enter or Space activates the focused button and keyboard focus
-reveals the row's actions. Delete opens a confirmation naming the file and
+Tab reaches the on/off switch, **Run now**, **Open**, **Delete** and the last
+result, which opens the history, in each schedule row. Enter or Space activates
+the focused control. Delete opens a confirmation naming the file and
 explaining that past runs stay in Sessions. Cancel receives initial focus;
 Escape cancels and Tab stays inside the confirmation while it is open.
 
 The list refreshes every minute and after schedule changes. A refresh keeps
-keyboard focus on the same control: Create schedule, a row's button, its
+keyboard focus on the same control: New schedule, a card's or a row's button, its
 history toggle, or Retry. While a Retry is loading, focus waits on the list or
-the row and returns to the new Retry, or to Create schedule when the list
+the row and returns to the new Retry, or to New schedule when the list
 loaded; if you move focus elsewhere meanwhile, it stays where you put it. An
-open Create schedule form keeps its fields and focus during a refresh.
+open creation form keeps its fields and focus during a refresh.
 
 ## Window
 
