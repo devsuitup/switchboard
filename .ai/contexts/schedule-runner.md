@@ -1146,7 +1146,7 @@ touches focus outside `#schedules-content`, so the create form keeps its
 fields and focus across background refreshes, and closing it focuses the
 current Create button.
 
-Row layout (#1274): projects reuse `.project-group`/`.project-header`; a row is a
+Row layout (#1275): projects reuse `.project-group`/`.project-header`; a row is a
 `.schedule-row` grid (dot, name, icon actions; meta and problem lines below). The short
 text is `.schedule-next`, the full state its title; `.schedule-last` (`aria-expanded`) replaces
 `details` and shows the newest finished run; a live run spins Run now without disabling it.
