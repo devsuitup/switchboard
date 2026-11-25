@@ -68,7 +68,9 @@ without touching the file-list rule.
 existing draft, then re-reads the release list and uploads nothing unless the
 tag's release reads `true <flag>` (draft, pre-release). The read-back uses the
 same `gh api` listing as the first read, because the tag endpoint does not
-return drafts. Publishing the draft stays manual.
+return drafts. The read-back is retried up to five times, 3 s apart
+(`READ_BACK_DELAY`), when it fails or finds nothing: the new draft can take a
+moment to be listed. Publishing the draft stays manual.
 
 The release-notes step compares a final with the previous final
 (`git describe --exclude '*-*'`) and a beta with the previous tag of any kind.
