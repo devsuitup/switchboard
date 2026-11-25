@@ -557,8 +557,9 @@ function updateScheduleRunButtons(filePath, original) {
 
 function schedulePathSegments(value, windows) {
   const segments = [];
+  const floor = windows && /^[\\/]{2}/.test(String(value)) ? 3 : 1;
   (windows ? String(value).replace(/\\/g, '/') : String(value)).split('/').forEach((segment, index) => {
-    if (segment === '..') { if (segments.length > 1) segments.pop(); }
+    if (segment === '..') { if (segments.length > floor) segments.pop(); }
     else if (segment !== '.' && (segment !== '' || index === 0)) segments.push(segment);
   });
   return segments;

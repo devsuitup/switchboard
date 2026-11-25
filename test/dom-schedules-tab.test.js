@@ -170,7 +170,9 @@ test('a schedule row shows its path relative to its project, with the full path 
     ['/work/app', '/work/app/../app2/schedule-x.md', '/work/app/../app2/schedule-x.md'],
     ['/work/./app/', '/work/app/.claude/./commands/schedule-x.md', '.claude/commands/schedule-x.md'],
     ['/p', '/p/dir/a\\b.md', 'dir/a\\b.md'],
-    ['\\\\server\\share\\app', '\\\\Server\\share\\app\\schedule-x.md', 'schedule-x.md']]) {
+    ['\\\\server\\share\\app', '\\\\Server\\share\\app\\schedule-x.md', 'schedule-x.md'],
+    ['\\\\server\\share\\..', '\\\\server\\share\\.claude\\commands\\schedule-x.md', '.claude\\commands\\schedule-x.md'],
+    ['C:\\..\\fixture', 'C:\\fixture\\schedule-x.md', 'schedule-x.md']]) {
     h.project.projectPath = projectPath;
     h.schedule.filePath = filePath;
     h.w.renderSchedules(h.data);
