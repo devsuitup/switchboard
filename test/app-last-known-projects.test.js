@@ -104,7 +104,8 @@ test('startup paints the last known projects as inert provisional rows and the f
     assert.equal(s.w.cachedAllProjects[0]?.projectPath, '/last-known');
     assert.equal(s.w.sidebarContent.classList.contains('projects-provisional'), true);
     assert.equal(s.calls.refreshes, 1, 'one paint');
-    assert.equal(s.w.loadingStatus.textContent, 'Refreshing…');
+    assert.equal(s.w.loadingStatus.textContent, '', 'the provisional rows show no status text while the load runs');
+    assert.equal(s.w.loadingStatus.style.display, 'none');
     s.item.click();
     assert.equal(s.calls.opened, 0, 'a provisional row is inert');
     s.releaseLoad();
@@ -115,6 +116,21 @@ test('startup paints the last known projects as inert provisional rows and the f
     s.item.click();
     assert.equal(s.calls.opened, 1, 'rows act again once real data is in');
     assert.equal(s.calls.loads, 1);
+  } finally { s.h.destroy(); }
+});
+
+test('an empty last known snapshot keeps the Loading status until the first load lands', async () => {
+  const s = setup({ last: { defaultProjects: [], allProjects: [] } });
+  try {
+    const startup = s.w.loadStartupProjects();
+    s.releaseLast();
+    await flush();
+    assert.equal(s.w.cachedProjects.length, 0);
+    assert.equal(s.w.loadingStatus.textContent, 'Loading…');
+    assert.equal(s.w.loadingStatus.style.display, '');
+    s.releaseLoad();
+    await startup;
+    assert.equal(s.w.loadingStatus.textContent, '');
   } finally { s.h.destroy(); }
 });
 

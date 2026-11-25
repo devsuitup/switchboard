@@ -2397,8 +2397,8 @@ async function loadProjects({ resort = false } = {}) {
   };
   const operation = async () => {
     const wasEmpty = cachedProjects.length === 0;
-    {
-      loadingStatus.textContent = wasEmpty ? 'Loading\u2026' : 'Refreshing\u2026';
+    if (wasEmpty) {
+      loadingStatus.textContent = 'Loading\u2026';
       loadingStatus.className = 'active';
       loadingStatus.style.display = '';
     }
@@ -2422,10 +2422,9 @@ async function loadProjects({ resort = false } = {}) {
     cachedAllProjects = allProjects;
     window.refreshArchivedManager?.(cachedAllProjects, globalSettings)?.catch(error => console.warn('[switchboard] archived refresh failed', error));
     window.clearReappearedProjectDeletionTargets?.(job.generation);
-    const newerPending = state.latest !== job && state.latest.pending;
-    loadingStatus.style.display = newerPending ? '' : 'none';
-    loadingStatus.className = newerPending ? 'active' : '';
-    if (newerPending) loadingStatus.textContent = 'Refreshing\u2026';
+    loadingStatus.style.display = 'none';
+    loadingStatus.className = '';
+    loadingStatus.textContent = '';
     dedup([...cachedAllProjects, ...cachedProjects]);
     reportActivityFocus(); // see .ai/contexts/activitywatch.md ("Attention")
     reportActivityTitles();
@@ -3376,10 +3375,10 @@ async function paintLastKnownProjects() {
   cachedProjects = last.defaultProjects;
   cachedAllProjects = last.allProjects;
   dedup([...cachedAllProjects, ...cachedProjects]);
-  if (loadProjects.state?.latest?.pending) {
-    loadingStatus.textContent = 'Refreshing…';
-    loadingStatus.className = 'active';
-    loadingStatus.style.display = '';
+  if (cachedProjects.length > 0 && loadProjects.state?.latest?.pending) {
+    loadingStatus.style.display = 'none';
+    loadingStatus.className = '';
+    loadingStatus.textContent = '';
   }
   refreshSidebar({ resort: true });
   return true;
