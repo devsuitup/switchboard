@@ -185,6 +185,7 @@ Main-process modules `trigger-watcher.js` and `trigger-context.js` live in
 | `src/main/triggers/session-status.js` | `createSessionStatus`: the `session-status` answer, fed by main's `statusSources`. |
 | `transcript-turn.js` | Whether a session transcript's main turn is closed, read from its tail; backs `ctx.getTranscriptTurn` (see "Transcript fallback while the descriptor stays busy"). |
 | `src/main/terminals/terminal-input.js` | `handleTerminalInput(activeSessions, sessionId, data, now)` — the body of the `terminal-input` IPC handler; feeds `session.composerState`. |
+| `src/main/terminals/input-attach.js` | `createInputAttach`/`noteInputAttach`: whether the CLI in a PTY has attached its input, read from bracketed paste in its output; backs `ctx.getInputAttachedAt` (see "Readiness of a freshly started CLI"). |
 | `src/main/terminals/tab-input-lock.js` | The per-tab mutex (`acquireTabInput`), shared with the Send to background action (`tryAcquireTabInput`; see "Re-keyed sessions"). |
 | `main.js` (wiring) | `require('./src/main/triggers/trigger-watcher').start(createTriggerContext({ … }))` in the `app.whenReady` block, right after `startScheduler`, plus the one-line `terminal-input` registration. |
 
@@ -283,7 +284,8 @@ ID's trimmed name through the writer before delivery. No prompt enters CLI argv.
 The trimmed name does: see "Naming a new session" below.
 `deliverSingle` is shared by legacy commands and v1 prompts. v1 supplies the
 absolute action deadline to verification and every write. A new launch requires
-fresh status at or after `launchStartedAt`, continuous settled idle and a free,
+fresh status at or after `launchStartedAt`, the CLI's input attached (see
+"Readiness of a freshly started CLI"), continuous settled idle and a free,
 quiet composer; no-prompt opens need only the verified terminal ACK.
 The FIFO starts before resolution and the tab mutex covers ensure-open,
 delivery and result publication. A timed-out FIFO waiter releases its eventual
@@ -2046,14 +2048,23 @@ session, which has no local descriptor). No new watcher: it reuses the cache
   in the step's and the chain's `waited_ms`.
 - **Proof of submission by edge.** When a descriptor with an integer
   `statusUpdatedAt` is available, a submission counts when the descriptor
-  shows ANY status write (`busy`, `idle` or `waiting`) with a
-  `statusUpdatedAt` at or after the moment of our Enter (`cliReactedSince`):
-  the CLI reacted. `idle` alone covers a turn too fast for a poll to see
-  `busy`; `waiting` is a permission dialog our Enter opened. A spinner on the
-  level probe, or a status that began earlier, proves nothing. Otherwise the
-  existing recovery applies (one bare `\r`, only into a free composer, same
-  window), and the reaction is looked for again. Still nothing:
-  `confirmed: false`.
+  shows a `busy` or `waiting` write with a `statusUpdatedAt` at or after the
+  moment of our Enter (`cliReactionTiedToEnter`, `confirm_source`
+  `descriptor`): a turn started, or our Enter opened a dialog. An `idle`
+  write at or after the Enter counts only when the transcript holds the
+  command's own entry (`transcriptOwnEntryAt`, the same matching as below)
+  stamped at or after the Enter (`confirm_source` `transcript`): that is how a
+  turn too fast for a poll to see `busy` still confirms. An `idle` write alone
+  proves nothing (#1261): a CLI still starting rewrites its descriptor as part
+  of its own startup, and in the 2026-11-25 field case such a write, about a
+  second after an Enter the CLI never acted on, was read as the reaction and
+  the result said `submit_confirmed: true`, `turn_observed: true`. A spinner
+  on the level probe, or a status that began earlier, proves nothing either.
+  Otherwise the existing recovery applies (one bare `\r`, only into a free
+  composer, same window), and the reaction is looked for again. Still
+  nothing: `confirmed: false`, and `turn_observed: false`. The same rule
+  applies to a chain step pending while the CLI stays busy
+  (`waitForPendingConfirmation`).
 - **The recovery Enter is never written while the descriptor reads `waiting`
   or `busy`** (`cliForbidsRecoveryEnter`, in edge and fallback modes, whenever
   the descriptor has a status, even without a usable timestamp): a bare Enter
@@ -2073,9 +2084,10 @@ session, which has no local descriptor). No new watcher: it reuses the cache
   `submit_confirmed` and the chain result lists `unconfirmed_steps` (indexes)
   when there are any. Both fields are absent without a descriptor.
 - **What it does not cover.** A command that never makes the CLI busy (a
-  local slash command that answers at once) cannot show a busy edge: it takes
-  the recovery `\r` (a no-op on an empty composer) and is reported
-  unconfirmed. The descriptor is written by the CLI process; the edge is as
+  local slash command that answers at once) and leaves no own entry in the
+  transcript cannot show a busy edge: it takes the recovery `\r` (a no-op on
+  an empty composer) and is reported unconfirmed. No transcript (a remote
+  session, `projectsDir` absent) means an `idle` never confirms. The descriptor is written by the CLI process; the edge is as
   fresh as `cli-session-state.js`'s watch of that file.
 
 Unverified against a real CLI: whether waiting for the descriptor's idle
@@ -2303,7 +2315,8 @@ For ordinary commands, an unconfirmed chain step whose recovery Enter was withhe
 when the descriptor reads `busy` or `shell` and the session's transcript is
 readable: it is pending (`waitForPendingConfirmation`), up to the step's own
 deadline, and no Enter is written meanwhile. The step is confirmed when the
-descriptor reacts after the Enter (`confirm_source` `descriptor`), or when
+descriptor reacts after the Enter under the edge rule above (`busy` or
+`waiting`, or `idle` with the step's own entry), or when
 the step's own entry, stamped at or after the Enter, appears and the turn is
 closed after that entry under the rules above, quiet window included
 (`confirm_source` `transcript`). A turn closed before the step's own entry,
@@ -2489,6 +2502,82 @@ watcher, which is held above. `handleTerminalInput` has no descriptor access
 either (the descriptor is read through the trigger context).
 
 Tests: `test/trigger-single-readiness.test.js`.
+
+### Readiness of a freshly started CLI (issue #1261)
+
+Field case (2026-11-25, CLI 2.1.332): an `open` trigger resumed a session and
+wrote its prompt 1.4 s after the CLI process started. The text appeared in
+the composer, the Enter did nothing, and the result said `submitted:
+"confirmed"`. The descriptor's first `idle`, written at boot, had held for the
+settle window while the CLI was still starting.
+
+**What the CLI does with keys typed during its startup** (read from the
+bundle of CLI 2.1.302, `claude.exe`; the 2.1.332 of the incident was not
+read). Before the REPL takes stdin, the CLI runs an early-input capture
+(`startCapturingEarlyInput`): it puts stdin in raw mode and buffers what is
+typed, and it turns a carriage return into a newline in that buffer
+(`if(o===13){n.buffer+="\n"…}`). The REPL's prompt seeds its value from that
+buffer, trimmed (`consumeEarlyInput`). An Enter typed during the capture is
+therefore never a submission: the text lands in the composer, unsubmitted,
+exactly as observed. The capture ends when Ink enables raw mode for the first
+time: `setRawMode(true)` with `rawModeEnabledCount === 0` calls
+`stopCapturingEarlyInput`, attaches Ink's own `readable` listener and, in the
+same step, writes `CSI ?2004h` (bracketed paste), `CSI ?2031h` (theme
+reports) and `CSI ?1004h` (focus events) to the terminal. The last raw-mode
+release writes the matching `l` sequences.
+
+**Why not the descriptor or the other candidates.** The descriptor's status
+is written from an effect of the REPL component (`vWe({status, waitingFor})`,
+re-run whenever its dependencies change), so its first `idle` is a fact about
+the REPL having rendered, not about stdin. In the field case it read `idle`,
+fresh and settled, while keys still went to the capture; that a later rewrite
+of the same `idle` confirmed the lost Enter is inferred from the timeline.
+No startup phase is guaranteed to write a non-idle status first. The
+transcript gets nothing from a startup (a new session has no file yet). The
+MCP `initialized` notification only exists when IDE emulation is on. The
+alternate screen comes earlier than the input attach (07:42:28.086 against an
+Enter still lost at 28.797) and is absent outside fullscreen mode.
+
+**The rule.** `main.js` (`wireSessionPty`) feeds every PTY output chunk to
+`noteInputAttach` (`src/main/terminals/input-attach.js`): the last
+`CSI ?2004h` / `CSI ?2004l` of the chunk sets or clears `attachedAt` (the
+first attach is kept while it lasts; a 7-byte carry covers a sequence split
+across chunks). The state is created fresh for each PTY. The trigger context
+exposes it as `getInputAttachedAt(sessionId)`: `undefined` when the PTY is not
+tracked (fixtures, a ctx without the function), `null` while not attached.
+On the startup path only (`waitForCliIdleAfter(…, { startup: true })`, used by
+`open` and `create` with a prompt), readiness then needs, besides the fresh
+settled `idle`, an `attachedAt` at or after `launchStartedAt`; the settle is
+measured from the later of the idle and the attach, so the CLI has had the
+settle window with its input live before the text is written. The shell that
+launches the CLI (`bash -l -i -c`, PowerShell `-NoLogo -Command`, `cmd /c`)
+reads no command line of its own, so a `?2004h` from it is not expected (not
+measured); a later raw-mode release
+clears the state anyway.
+
+**Bound and fallback.** The attach is awaited for
+`SWITCHBOARD_STARTUP_INPUT_WAIT_MS` (default 15000 ms,
+`DEFAULT_STARTUP_INPUT_WAIT_MS`) from the start of the readiness wait, never
+past the trigger deadline. Not seen by then: the previous rule decides (fresh
+settled idle), the readiness result carries `input: "unobserved"` and the
+watcher logs a warning; the edge proof above and the recovery Enter then
+cover a lost Enter. The trigger deadline reached first, with the descriptor
+idle and the input not attached: not written, `reason` "the CLI had not
+finished starting (its input was not attached yet) at the deadline; nothing
+was written". An untracked PTY keeps the previous rule without waiting.
+
+**Not covered.** The attach proves the early capture ended, not that the
+prompt component is mounted: a key Ink receives before the prompt listens is
+lost (text included), which the edge proof reports as unconfirmed. A remote
+session's PTY is tmux's output, which was not measured to carry the CLI's
+`?2004h`; it falls back after the bound. A CLI version that stops writing
+bracketed paste on input attach falls back the same way. Not measured on a
+real CLI: how long after the descriptor's first idle the attach comes.
+
+Tests: `test/trigger-startup-v1.test.js` (readiness, fallback, deadline,
+edge proof on the startup path), `test/trigger-lifecycle-v1.test.js` (`open`
+resume and new through the real watcher, actions and context),
+`test/input-attach.test.js` (the output scan and the context accessor).
 
 ### Why `composerEmptyAfterWrite` cannot be made to prove submission, even by feeding it our own writes
 
@@ -3129,6 +3218,7 @@ observation layer.
 
 - If you rename `_cliBusy` on `session` in `main.js`, update `isSessionBusy` in `trigger-context.js`.
 - If you rename `session.composerState` or stop feeding it from `src/main/terminals/terminal-input.js`, `getComposerState` returns `null` and **every trigger renounces with `not sent`** — the safe direction, but the channel goes silent.  Tests for the model live in `test/composer-state.test.js`; the handler and the ctx are exercised in `test/terminal-input-handler.test.js` and `test/trigger-context.test.js`, and `test/main-wiring-source-check.test.js` reads `main.js` as text to check the remaining glue is still written down (source only — it proves nothing at runtime).
+- If you rename `session.inputAttach` or stop feeding it from `wireSessionPty` in `main.js`, `getInputAttachedAt` returns `undefined` and the startup path silently drops back to the descriptor-only readiness that #1261 showed is not enough.
 - If you rename `activeSessions` or change the structure (`session.pty` → `session.ptyProcess`), update `getPtyForSession` and `isSessionBusy` in `trigger-context.js`, and `handleTerminalInput` in `src/main/terminals/terminal-input.js`.
 - If you rename `session.cwd` in `main.js`, update `getPtyForSession` in `trigger-context.js` — the target guard silently falls back to "indeterminate" (refuses every guarded trigger) rather than throwing, so this one fails quiet, not loud.
 - If you rename `session.projectFolder` or `session.realSessionId` in `main.js`, update `transcriptPath` and the scoped `getTranscriptTurn` (built on `createTranscriptTurnReader`) in `trigger-context.js` — it returns `null` and the transcript fallback silently never fires (chains wait for the descriptor as before).

@@ -1161,7 +1161,8 @@ test('chain: a pending step confirmed by the descriptor reacting later reports t
   s = transcriptSession(uuid, {
     onEnter: ({ desc, n, command, append }) => {
       if (n === 1) {
-        setTimeout(() => { desc.status = 'idle'; desc.statusUpdatedAt = Date.now(); }, 800);
+        setTimeout(() => { desc.status = 'busy'; desc.statusUpdatedAt = Date.now(); }, 800);
+        setTimeout(() => { desc.status = 'idle'; desc.statusUpdatedAt = Date.now(); }, 1000);
       } else {
         append([ownPrompt(Date.now(), command)]);
       }

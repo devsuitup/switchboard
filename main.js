@@ -106,6 +106,7 @@ const { stopProcessTree } = require('./src/main/terminals/stop-process-tree');
 const { JOB_ID_RE, isHostedJob } = require('./src/main/bg-agents/bg-agents-roster');
 const { createTerminalResizeHandler } = require('./src/main/terminals/terminal-resize');
 const { createComposerState } = require('./src/main/terminals/composer-state');
+const { createInputAttach, noteInputAttach } = require('./src/main/terminals/input-attach');
 const { handleTerminalInput } = require('./src/main/terminals/terminal-input');
 const { createTriggerContext } = require('./src/main/triggers/trigger-context');
 const { createTmuxAttachAdapter } = require('./src/main/remote/remote-attach');
@@ -2890,8 +2891,10 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     }
   };
   session._statusOsc = { generation: statusGeneration };
+  session.inputAttach = createInputAttach();
   ptyProcess.onData(data => {
     if (session.generation !== statusGeneration || session.pty && session.pty !== ptyProcess) return;
+    noteInputAttach(session.inputAttach, data);
     const currentId = session.realSessionId || sessionId;
     if (session.backgroundCommandSource) {
       session.backgroundCommandOutput = ((session.backgroundCommandOutput || '') + data).slice(-1024);

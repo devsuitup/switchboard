@@ -14,6 +14,10 @@ const { createSessionStatus } = require('./session-status');
 const WRITER_CHANGED = 'session target changed';
 
 // Local session handle — see .ai/contexts/trigger-watcher.md, "Session handle".
+function inputAttachedAt(session) {
+  return session.inputAttach ? session.inputAttach.attachedAt : undefined;
+}
+
 function createLocalSessionHandle(ptyProcess) {
   return {
     write(data) { ptyProcess.write(data); },
@@ -90,6 +94,10 @@ function createTriggerContext(deps) {
       if (!session || session.exited || !session.composerState) return null;
       const { pending, lastInputAt } = session.composerState;
       return { pending, lastInputAt };
+    },
+    getInputAttachedAt(sessionId) {
+      const session = lookup(sessionId)?.session;
+      return session && !session.exited ? inputAttachedAt(session) : undefined;
     },
   };
   if (deps.lifecycle) ctx.lifecycle = deps.lifecycle;
@@ -421,6 +429,7 @@ function createTriggerContext(deps) {
     const scoped = { ...ctx, delivery: binding, getPtyForSession: () => valid() ? { ...entry, handle } : null,
       isSessionBusy: () => ctx.isSessionBusy(requestedId, binding),
       getComposerState: () => valid() && session.composerState ? { pending: session.composerState.pending, lastInputAt: session.composerState.lastInputAt } : null,
+      getInputAttachedAt: () => valid() ? inputAttachedAt(session) : undefined,
       getCliStatus: () => {
         const observed = inspect();
         if (sandboxV1) return observed.outcome === 'mine' && !binding.observation?.uncertain ? binding.observation?.writer : undefined;

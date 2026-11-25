@@ -99,14 +99,33 @@ test('edge: first Enter absorbed, the recovery Enter starts the turn -> confirme
   assert.equal(v.submit_retries, 1);
 });
 
-test('edge: a fast turn seen only as idle with a newer timestamp still proves the CLI reacted', async (t) => {
+test('edge: an idle rewritten after our Enter, with no busy and no own transcript entry, proves nothing', async (t) => {
   enableClock(t);
-  const s = fakeSession({ onEnter: (_n, desc) => {
-    setTimeout(() => { desc.status = 'idle'; desc.statusUpdatedAt = Date.now(); }, 120);
+  const s = fakeSession({ onEnter: (n, desc) => {
+    if (n === 1) setTimeout(() => { desc.status = 'idle'; desc.statusUpdatedAt = Date.now(); }, 120);
   } });
+  s.ctx.getTranscriptTurn = () => ({ prompts: [] });
+  const v = await settle(t, submitWithVerify(s.handle, 'sid', 'hello', s.ctx));
+  assert.deepEqual(s.writes, ['hello', '\r', '\r'], 'the recovery Enter must be written');
+  assert.equal(v.confirmed, false);
+  assert.equal(v.sawBusy, false);
+  assert.equal(v.submit_retries, 1);
+});
+
+test('edge: a fast turn (busy then idle between two polls) confirms through its own transcript entry', async (t) => {
+  enableClock(t);
+  const prompts = [];
+  const s = fakeSession({ onEnter: (_n, desc) => {
+    setTimeout(() => {
+      prompts.push({ at: Date.now(), text: 'hello' });
+      desc.status = 'idle'; desc.statusUpdatedAt = Date.now();
+    }, 120);
+  } });
+  s.ctx.getTranscriptTurn = () => ({ prompts: [...prompts] });
   const v = await settle(t, submitWithVerify(s.handle, 'sid', 'hello', s.ctx));
   assert.deepEqual(s.writes, ['hello', '\r']);
   assert.equal(v.confirmed, true);
+  assert.equal(v.confirmSource, 'transcript');
   assert.equal(v.submit_retries, 0);
 });
 
