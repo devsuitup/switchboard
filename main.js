@@ -4265,12 +4265,15 @@ function startHarnessWatchers() {
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => flush().catch(err => log.error(`[harness-watch] ${harness.id} refresh failed:`, err.message)), delay);
     };
+    const live = () => harnessWatchers.includes(active);
     const flush = async () => {
       debounceTimer = null;
+      if (!live()) return;
       const folders = [...pendingFolders];
       pendingFolders.clear();
       let changed = false;
       for (const folder of folders) {
+        if (!live()) return;
         // see .ai/contexts/cli-harnesses.md ("Launching: a session that learns its id afterwards")
         if (sessionTransitions.hasPendingLaunches()) {
           const dir = harness.folderPath(folder);
@@ -4283,7 +4286,7 @@ function startHarnessWatchers() {
           coldScanFolders.add(folder);
           coldScanWait ||= Promise.resolve(coldScan).catch(() => {}).then(() => {
             coldScanWait = null;
-            if (!harnessWatchers.includes(active)) return;
+            if (!live()) return;
             for (const deferred of coldScanFolders) pendingFolders.add(deferred);
             coldScanFolders.clear();
             if (pendingFolders.size) schedule(0);
@@ -4304,6 +4307,14 @@ function startHarnessWatchers() {
         schedule(500);
       });
       watcher.on('error', err => log.error(`[harness-watch] ${harness.id}:`, err.message));
+      const close = watcher.close.bind(watcher);
+      watcher.close = () => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = null;
+        pendingFolders.clear();
+        coldScanFolders.clear();
+        return close();
+      };
       harnessWatchers.push(watcher);
       active = watcher;
       log.info(`[harness-watch] watching ${harness.id} at ${root}`);

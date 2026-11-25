@@ -116,3 +116,19 @@ test('coldScanInFlight names the first population only, never a later rescan', {
   assert.equal(f.cache.coldScanInFlight(), null, 'a rescan of an index that finished its first scan is not a cold scan');
   assert.equal((await warm).ok, true);
 });
+
+test('a harness watcher closed after the cold scan settled never runs its set-aside refresh', async t => {
+  const scan = deferred();
+  const coldScan = { current: scan.promise };
+  const w = loadWatchers(t, { coldScan });
+  w.context.startHarnessWatchers();
+  w.watches.find(watch => watch.root.endsWith('codex')).callback('change', path.join('2026', FILE));
+  await w.runTimers();
+  coldScan.current = null;
+  scan.resolve({ ok: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(w.timers.size > 0, 'the settlement queued the replay');
+  w.context.stopHarnessWatchers();
+  await w.runTimers();
+  assert.deepEqual(w.refreshes, [], 'the CLI was switched off before the replay ran: nothing of it is read');
+});
