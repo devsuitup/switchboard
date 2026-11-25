@@ -92,8 +92,9 @@ function* targetUnits(name, args) {
     yield () => { assertHarnessSettings(args[1]); return db.setSetting(...args); };
   } else if (name === 'upsertSearchEntries') {
     for (const entry of args[0]) {
-      const token = require('node:crypto').randomUUID();
       const tag = fn => Object.assign(fn, { producerCommand: name, producerArgs: [[entry]] });
+      if (entry.refsMerge) { yield tag(() => db.upsertSearchEntries([entry])); continue; }
+      const token = require('node:crypto').randomUUID();
       yield tag(() => db.beginSearchEntry(token, entry));
       const body = (entry.body || '').slice(0, 32768);
       for (let offset = 0; offset < body.length; offset += 8192) yield tag(() => db.appendSearchBody(token, body.slice(offset, offset + 8192)));

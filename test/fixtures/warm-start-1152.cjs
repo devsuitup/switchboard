@@ -1,4 +1,5 @@
 'use strict';
+const { SESSION_CONTENT_INDEX_VERSION: CONTENT_VERSION } = require('../../src/main/session-index/full-read-state');
 const fs = require('node:fs');
 const path = require('node:path');
 const base = require('./warm-start-1144.cjs');
@@ -60,7 +61,7 @@ function scanFixture(t) {
   fs.writeFileSync(titleFile, JSON.stringify({ id: ids[0], thread_name: 'original title' }) + '\n');
   const row = adapter.readSessionFile(file, folder);
   const config = require('../../src/main/session-index/full-read-state').fullIndexConfig({ disabledHarnesses: ['claude'] }, root);
-  const entry = { folder, rows: [row], meta: { projectPath: null, fullIndexVersion: 1, fullIndexConfig: config, fullIndexPending: null } };
+  const entry = { folder, rows: [row], meta: { projectPath: null, fullIndexVersion: CONTENT_VERSION, fullIndexConfig: config, fullIndexPending: null } };
   return { root, folder, dir, file, titleFile, row, entry, adapter, scan: opts => scan({ projectsDir: root, inventory: [entry], ...opts }) };
 }
 module.exports.scanFixture = scanFixture;

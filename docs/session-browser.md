@@ -221,11 +221,33 @@ A compacted or continued conversation matches when any of its parts matches, inc
 latest part. A matching subagent stays nested under that conversation even
 when it belongs to a later part.
 
-Search starts at 3 characters, 350 ms after the last keystroke. Only the first
-48 characters of a query are used. **Tt** restricts the search to titles. The
-reindex button rereads every session for the index; pressing Enter in the field
-does the same. The search runs in a worker thread, so a long query does not
+Search starts at 3 characters, 350 ms after the last keystroke; Enter searches
+at once. Only the first 48 characters of a query are used. Each word of 3
+characters or more must match, anywhere in the session; shorter words are
+ignored, and a leading `#` or `!` is dropped, so `PR 1243`, `#1243` and
+`!1243` all find a session that mentions "PR #1243". **Tt** restricts the
+search to titles. The reindex button rereads every session for the index
+before searching again, which takes a while on a large history; Enter does not
+reread anything. The search runs in a worker thread, so a long query does not
 freeze the window.
+
+- **A session id** finds its session directly: a full id, or the first 6
+  characters or more of it (as shown on the row), an agent id or a `sub:` id.
+- **Issue, pull request and merge request numbers** are found anywhere in a
+  session, not only in its opening: every `#123` or `!123`, every GitHub or
+  GitLab pull request, merge request or issue link (also searchable as
+  `owner/repo#123`), and every full session id mentioned in a session's
+  messages, tool calls or tool output are kept with the session, the most
+  recent first. The first launch of this version rereads every session once in
+  the background to collect them; the sidebar stays usable meanwhile.
+- **Each hit shows the matched text** under its row, and a subagent group that
+  holds a hit opens.
+- **Hits in hidden sessions** (sessions a program started, while **Hide SDK-launched Sessions** is on, or sessions of a hidden project)
+  are counted under the search field as "N matches in hidden sessions".
+  **Show them** lists the program-started ones for this search only; the
+  setting is unchanged, and they hide again when the search changes or is
+  cleared. Hits in a hidden project stay hidden. When nothing matches,
+  the field says so.
 
 When indexing a project folder fails, the status bar reads
 `Scan failed for <folder> (+N): <error>`, naming the first failed folder and

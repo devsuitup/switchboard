@@ -1,4 +1,5 @@
 'use strict';
+const { SESSION_CONTENT_INDEX_VERSION: CONTENT_VERSION } = require('../src/main/session-index/full-read-state');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -34,7 +35,7 @@ for (const phase of ['cold', 'warm']) {
     assert.equal(f.db.isInitialScanComplete(), true, 'raced folder counts towards initial population');
     const meta = f.db.getFolderMeta(f.folder);
     assert.equal(meta.fullIndexPending, null, 'raced folder seals stable neighbors');
-    assert.equal(meta.fullIndexVersion, 1);
+    assert.equal(meta.fullIndexVersion, CONTENT_VERSION);
     assert.equal(f.db.getCachedSession('live').fullReadStamp, null);
     assert.ok(f.db.getCachedSession('live'), 'raced transcript remains visible');
     assert.equal(f.db.getCachedByFolder(f.folder).length, timing === 50 ? 121 : 31, 'stable neighbors are published');

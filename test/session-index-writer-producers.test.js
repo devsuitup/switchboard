@@ -1,5 +1,6 @@
 'use strict';
 
+const { SESSION_CONTENT_INDEX_VERSION: CONTENT_VERSION } = require('../src/main/session-index/full-read-state');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -81,7 +82,7 @@ for (const mode of ['full', 'partial', 'deletion']) for (const lost of ['beginFu
     const reader = openStore({ readonly: true });
     try {
       if (lost !== 'sealFullIndex') assert.ok(reader.getFolderMeta(f.codexFolder).fullIndexPending, 'pending state survives a new connection');
-      else assert.equal(reader.getFolderMeta(f.codexFolder).fullIndexVersion, 1, 'committed seal followed only acknowledged effects');
+      else assert.equal(reader.getFolderMeta(f.codexFolder).fullIndexVersion, CONTENT_VERSION, 'committed seal followed only acknowledged effects');
     } finally { reader.closeDb(); }
     f.worker.client.request = request;
     await f.reopen();
@@ -105,7 +106,7 @@ test('full folder publication uses one certificate request for all rows', { skip
   await writer.writeScannedFolder({ folder: 'folder', projectPath: f.root, sessions, indexMtimeMs: 1 });
   assert.equal(calls.filter(name => name.startsWith('certifyFullRead')).length, 1, 'one certificate request per folder, independent of row count');
   assert.equal(f.store.getAllCached().filter(row => row.fullReadStamp).length, sessions.length);
-  assert.equal(f.store.getFolderMeta('folder').fullIndexVersion, 1);
+  assert.equal(f.store.getFolderMeta('folder').fullIndexVersion, CONTENT_VERSION);
 });
 
 test('no-summary header refresh discards the previous full-read certificate', { skip: sqliteSkip }, async t => {
@@ -256,7 +257,7 @@ for (const fault of ['interleaved-header', 'certificate-timeout', 'unrelated-wri
     });
     await assert.doesNotReject(f.writer.writeScannedFolder(f.result()), 'committed body resolves despite certificate failure');
     assert.equal(f.db.getCachedSession('source').summary, f.row.summary);
-    if (fault === 'unrelated-write') assert.equal(f.db.getFolderMeta(f.folder).fullIndexVersion, 1);
+    if (fault === 'unrelated-write') assert.equal(f.db.getFolderMeta(f.folder).fullIndexVersion, CONTENT_VERSION);
     else {
       assert.equal(f.db.getFolderMeta(f.folder).fullIndexVersion, null, 'failed or superseded certificate leaves folder unsealed');
       assert.equal(f.calls.some(call => call.name === 'sealFullIndex'), false);
@@ -396,7 +397,7 @@ test('missing FTS durably invalidates folder seals across a second restart', { s
   const columns = db.connection.prepare('PRAGMA table_info(cache_meta)').all().map(row => row.name);
   assert.ok(columns.includes('fullIndexVersion'), 'folder seals have durable columns');
   db.setFolderMeta('folder', '/project', 1);
-  db.connection.exec("UPDATE cache_meta SET fullIndexVersion = 1, fullIndexConfig = 'config'; DROP TABLE search_fts");
+  db.connection.exec(`UPDATE cache_meta SET fullIndexVersion = ${CONTENT_VERSION}, fullIndexConfig = 'config'; DROP TABLE search_fts`);
   const reopened = f.reopen();
   assert.equal(reopened.getFolderMeta('folder').fullIndexVersion, null, 'FTS absence invalidates a prior seal');
   assert.equal(f.reopen().getFolderMeta('folder').fullIndexVersion, null, 'invalidation survives loss of the bootstrap flag');
@@ -432,7 +433,7 @@ test('full-read certificates survive only complete publication and the scan own 
     assert.ok(db.getFolderMeta('folder')?.fullIndexPending, 'the folder drop preserves pending ownership');
   } finally { release(); await operation; }
   assert.equal(db.getCachedSession('source').fullReadStamp, row.fullReadStamp);
-  assert.equal(db.getFolderMeta('folder').fullIndexVersion, 1);
+  assert.equal(db.getFolderMeta('folder').fullIndexVersion, CONTENT_VERSION);
   assert.equal(db.getFolderMeta('folder').fullIndexPending, null);
   assert.equal(calls[0], 'beginFullIndex');
   assert.equal(calls.at(-1), 'sealFullIndex');
@@ -443,7 +444,7 @@ test('publication boundary preserves safe durable states for failures and unknow
     await t.test(fault, async t => {
       const f = durableFixture(t), db = f.store, commands = createWriterCommands(db), calls = [], warnings = [];
       db.setFolderMeta('folder', f.root, 1);
-      db.connection.exec("UPDATE cache_meta SET fullIndexVersion = 1, fullIndexConfig = 'prior'");
+      db.connection.exec(`UPDATE cache_meta SET fullIndexVersion = ${CONTENT_VERSION}, fullIndexConfig = 'prior'`);
       const timeout = () => { throw Object.assign(new Error('outcome unknown'), { code: 'WRITER_TIMEOUT' }); };
       const apply = async (name, args) => {
         calls.push(name);
@@ -475,7 +476,7 @@ test('publication boundary preserves safe durable states for failures and unknow
       else await writer.writeScannedFolder(result);
       const reopened = f.reopen(), meta = reopened.getFolderMeta('folder'), cached = reopened.getCachedSession('source');
       if (fault === 'seal-after') {
-        assert.equal(meta.fullIndexVersion, 1);
+        assert.equal(meta.fullIndexVersion, CONTENT_VERSION);
         assert.equal(meta.fullIndexPending, null);
         assert.equal(cached.fullReadStamp, row.fullReadStamp);
         assert.equal(cached.summary, row.summary);
@@ -683,7 +684,7 @@ test('full scan counts actual body bytes including filtered bridge rereads and a
 test('failed repair invalidates its full seal and retains the repair marker for coordinated retry', { skip: sqliteSkip }, async t => {
   const f = durableFixture(t), db = f.store;
   db.setFolderMeta('folder', f.root, 1);
-  db.connection.exec("UPDATE cache_meta SET fullIndexVersion = 1, fullIndexConfig = 'old'");
+  db.connection.exec(`UPDATE cache_meta SET fullIndexVersion = ${CONTENT_VERSION}, fullIndexConfig = 'old'`);
   db.setSetting('bridge_uuid_reindex_folders', ['folder']);
   const scan = fixture({
     async invalidateFullIndex(folder) { db.invalidateFullIndex(folder); },

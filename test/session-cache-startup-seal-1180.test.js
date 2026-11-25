@@ -1,4 +1,5 @@
 'use strict';
+const { SESSION_CONTENT_INDEX_VERSION: CONTENT_VERSION } = require('../src/main/session-index/full-read-state');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -59,7 +60,7 @@ for (const kind of ['P full baseline', 'S sealed baseline']) {
     assert.equal((await f.restart()).ok, true, 'one parse failure must not fail the folder');
     assert.equal(f.scans()[0].filesFailed, 1);
     assert.equal(f.db.getFolderMeta(f.folder).fullIndexPending, null);
-    assert.equal(f.db.getFolderMeta(f.folder).fullIndexVersion, 1);
+    assert.equal(f.db.getFolderMeta(f.folder).fullIndexVersion, CONTENT_VERSION);
     const failures = f.logs.filter(line => line.startsWith('[index] read failed '));
     assert.equal(failures.length, 1, 'failed path and error logged once');
     assert.equal(failures[0], `[index] read failed folder=${f.folder} file=${path.basename(bad)} size=${fs.statSync(bad).size} error=TypeError`);
@@ -111,7 +112,7 @@ for (const runtime of ['claude', 'codex']) {
     assert.ok(result.deferred.includes(path.basename(live)));
     await f.writer.writeScannedFolderPartial(result);
     assert.equal(f.db.getFolderMeta(folder).fullIndexPending, null, 'a live source must not leave the folder pending');
-    assert.equal(f.db.getFolderMeta(folder).fullIndexVersion, 1, 'partial startup publication restores the content version');
+    assert.equal(f.db.getFolderMeta(folder).fullIndexVersion, CONTENT_VERSION, 'partial startup publication restores the content version');
     assert.equal(f.db.getCachedSession(rowId).fullReadStamp, null, 'only the live source remains uncertified');
     await f.reopen();
     assert.equal((await f.restart()).ok, true);

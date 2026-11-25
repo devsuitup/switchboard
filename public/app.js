@@ -1012,6 +1012,8 @@ window._maybeRetryRestoreWorkingSet = () => maybeRetryRestoreWorkingSet();
 
 let searchMatchIds = null; // null = no search active; Set<string> = matched session IDs
 let searchMatchProjectPaths = null; // Set<string> of project paths matched by name
+let searchSnippets = null;
+let searchReveal = null;
 
 // --- Activity tracking ---
 //
@@ -1423,8 +1425,7 @@ function clearSearch() {
   searchBar.classList.remove('has-query');
   if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
   if (activeTab === 'sessions') {
-    searchMatchIds = null;
-    searchMatchProjectPaths = null;
+    endSessionSearch();
     // Defer the heavy full-tree rebuild to the next animation frame so the
     // input-cleared state paints first, eliminating the input-to-feedback stall
     // the user perceives as lag. The resort:true is required because sortedOrder
@@ -1444,8 +1445,7 @@ function clearSearch() {
 function resetSearchFilter() {
   searchGeneration++;
   if (activeTab === 'sessions') {
-    searchMatchIds = null;
-    searchMatchProjectPaths = null;
+    endSessionSearch();
     // Defer the heavy full-tree rebuild to the next animation frame so the
     // partially-typed input keeps its current visual state while the sidebar
     // resets. resort:true is required — same reason as clearSearch.
@@ -1462,6 +1462,61 @@ searchClear.addEventListener('click', () => {
   clearSearch();
   searchInput.focus();
 });
+
+// see .ai/contexts/session-cache.md ("Search")
+function endSessionSearch() {
+  searchMatchIds = null;
+  searchMatchProjectPaths = null;
+  searchSnippets = null;
+  paintSearchStatus(null);
+  dropSearchReveal();
+}
+
+function dropSearchReveal(query) {
+  if (!searchReveal || searchReveal.query === query) return;
+  searchReveal = null;
+  Promise.resolve(window.api.searchRevealHidden?.([])).then(() => loadProjects()).catch(error => console.warn('[switchboard] search reveal reset failed', error));
+}
+
+function hiddenSearchHits(results) {
+  const visible = new Set();
+  for (const project of cachedAllProjects) {
+    for (const session of project.sessions) for (const id of [...rowSessionIds(session), rowHeadId(session)]) visible.add(id);
+  }
+  return results.map(result => result.id).filter(id => !visible.has(id));
+}
+
+function paintSearchStatus(status) {
+  const el = document.getElementById('search-status');
+  if (!el) return;
+  el.replaceChildren();
+  el.hidden = !status;
+  if (!status) return;
+  const text = document.createElement('span');
+  text.textContent = status.hidden.length
+    ? `${status.hidden.length} match${status.hidden.length === 1 ? '' : 'es'} in hidden sessions`
+    : `No sessions match “${status.query}”`;
+  el.appendChild(text);
+  if (!status.hidden.length || status.revealed) return;
+  const show = document.createElement('button');
+  show.type = 'button';
+  show.className = 'search-status-show';
+  show.textContent = 'Show them';
+  show.title = 'Show the hidden sessions that match, for this search only';
+  show.addEventListener('click', () => revealHiddenSearchHits(status.query, status.hidden));
+  el.appendChild(show);
+}
+
+async function revealHiddenSearchHits(query, ids) {
+  searchReveal = { query, ids };
+  try {
+    await window.api.searchRevealHidden(ids);
+    await loadProjects();
+  } catch (error) {
+    console.warn('[switchboard] search reveal failed', error);
+  }
+  if (searchReveal?.query === query) await runSearchQuery();
+}
 
 // Extracted so the rebuild-cache button and Enter handler can call it too.
 async function runSearchQuery() {
@@ -1482,9 +1537,11 @@ async function runSearchQuery() {
   const generation = ++searchGeneration;
   try {
     if (activeTab === 'sessions') {
+      dropSearchReveal(query);
       const results = await window.api.search('session', query, searchTitlesOnly);
       if (generation !== searchGeneration) return;
       searchMatchIds = new Set(results.map(r => r.id));
+      searchSnippets = new Map(results.filter(r => r.snippet).map(r => [r.id, r.snippet]));
       searchMatchProjectPaths = null;
       if (searchTitlesOnly) {
         const lowerQ = query.toLowerCase();
@@ -1497,6 +1554,9 @@ async function runSearchQuery() {
         }
       }
       refreshSidebar({ resort: true });
+      const hidden = hiddenSearchHits(results);
+      const nothing = results.length === 0 && !searchMatchProjectPaths;
+      paintSearchStatus(hidden.length || nothing ? { query, hidden, revealed: searchReveal?.query === query } : null);
     } else if (activeTab === 'memory') {
       const results = await window.api.search('memory', query, searchTitlesOnly);
       if (generation !== searchGeneration) return;
@@ -1506,8 +1566,7 @@ async function runSearchQuery() {
   } catch {
     if (generation !== searchGeneration) return;
     if (activeTab === 'sessions') {
-      searchMatchIds = null;
-      searchMatchProjectPaths = null;
+      endSessionSearch();
       refreshSidebar({ resort: true });
     }
   }
@@ -1515,8 +1574,7 @@ async function runSearchQuery() {
 
 // Debounced search-as-you-type. Bumped from 200ms to 350ms — gentler under
 // heavy workloads (many active subagents) and gives the user time to finish
-// a word before searching. Explicit triggers (Enter, refresh button) bypass
-// the debounce.
+// a word before searching. Enter and the refresh button bypass the debounce.
 searchInput.addEventListener('input', () => {
   searchGeneration++;
   searchBar.classList.toggle('has-query', searchInput.value.length > 0);
@@ -1527,17 +1585,15 @@ searchInput.addEventListener('input', () => {
   }, 350);
 });
 
-// Enter in the search field = "I want fresh results": trigger a full worker
-// reindex (which rewrites search_fts with the live content of active session
-// JSONLs), then re-run the query. Pending debounce gets cancelled.
-searchInput.addEventListener('keydown', async (e) => {
+// see .ai/contexts/session-cache.md ("Search")
+function onSearchKeydown(e) {
   if (e.key !== 'Enter') return;
   e.preventDefault();
   if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
-  await triggerRebuildAndSearch();
-});
+  return runSearchQuery();
+}
+searchInput.addEventListener('keydown', onSearchKeydown);
 
-// Refresh button in the search bar — same behavior as pressing Enter.
 const searchRefreshBtn = document.getElementById('search-refresh-btn');
 if (searchRefreshBtn) {
   searchRefreshBtn.addEventListener('click', () => triggerRebuildAndSearch());
@@ -3074,8 +3130,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
     // Clear search on tab switch
     searchInput.value = '';
     searchBar.classList.remove('has-query');
-    searchMatchIds = null;
-    searchMatchProjectPaths = null;
+    endSessionSearch();
 
     // Hide all sidebar content areas
     sidebarContent.style.display = 'none';

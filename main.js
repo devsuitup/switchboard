@@ -644,9 +644,12 @@ const { resolveRowDeletionTargets } = require('./delete-session-target');
 
 // Session cache → session-cache.js
 const sessionCache = require('./session-cache');
+// see .ai/contexts/session-cache.md ("Search")
+let searchRevealedIds = [];
 writer.initializeCache({
   PROJECTS_DIR,
   activeSessions,
+  getSearchRevealedIds: () => searchRevealedIds,
   getLocalDescriptors: () => cliSessionState.getSidebarDescriptors(),
   getLocalJobs: () => bgAgents.getCachedJobs(),
   getMainWindow: () => mainWindow,
@@ -666,6 +669,7 @@ function projectsSnapshot() {
       isAttach: !!s.isAttach, attachJobId: s.attachJobId, realSessionId: s.realSessionId, cwd: s.cwd, host: s.host,
     }]),
     remoteRoots: [...sessionCache.getRemoteRoots()],
+    searchRevealedIds: typeof searchRevealedIds === 'undefined' ? [] : searchRevealedIds,
     localDescriptors: cliSessionState.getSidebarDescriptors().map(d => ({
       sessionId: d.sessionId, kind: d.kind, jobId: d.jobId, cwd: d.cwd,
       name: d.name, nameSource: d.nameSource, startedAt: d.startedAt,
@@ -1910,6 +1914,12 @@ ipcMain.handle('save-memory', (_event, filePath, content, expected) => panelSave
 // The renderer already awaits window.api.search(...) — this change is transparent.
 ipcMain.handle('search', (_event, type, query, titleOnly) => {
   return searchViaWorker(type, query, titleOnly);
+});
+
+ipcMain.handle('search-reveal-hidden', (_event, ids) => {
+  const list = Array.isArray(ids) ? ids.filter(id => typeof id === 'string' && id).slice(0, 200) : [];
+  searchRevealedIds = [...new Set(list.map(id => id.startsWith('sub:') ? id.split(':')[1] : id).filter(Boolean))];
+  return { ok: true, count: searchRevealedIds.length };
 });
 
 // --- IPC: settings ---

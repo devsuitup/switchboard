@@ -80,8 +80,8 @@ function setup(t, activeTab = 'sessions') {
   }
   section('const MIN_SEARCH_CHARS =', 'function clearSearch()');
   const fns = loadAppFunctions(ctx.context, {
-    declarations: ['rebuildInFlight'],
-    functions: ['clearSearch', 'resetSearchFilter', 'runSearchQuery', 'refreshSidebar', 'triggerRebuildAndSearch'],
+    declarations: ['rebuildInFlight', 'searchReveal', 'searchSnippets'],
+    functions: ['clearSearch', 'resetSearchFilter', 'runSearchQuery', 'refreshSidebar', 'triggerRebuildAndSearch', 'endSessionSearch', 'paintSearchStatus', 'dropSearchReveal', 'hiddenSearchHits'],
   });
   section("searchClear.addEventListener('click'", '// Extracted so');
   section("searchInput.addEventListener('input'", 'let rebuildInFlight =');

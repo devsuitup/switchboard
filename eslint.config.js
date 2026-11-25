@@ -152,6 +152,7 @@ const rendererCrossFileGlobals = {
   sortedOrder: 'writable',
   searchMatchIds: 'writable',
   searchMatchProjectPaths: 'writable',
+  searchSnippets: 'writable',
   showArchived: 'writable',
   showStarredOnly: 'writable',
   showRunningOnly: 'writable',

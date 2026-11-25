@@ -361,6 +361,7 @@ if (migrations.length > currentDbVersion) {
     })();
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_parent ON session_cache(parentSessionId)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_agent ON session_cache(agentId)');
 
   db.exec(`CREATE TABLE IF NOT EXISTS session_metrics (
     sessionId TEXT NOT NULL,
@@ -401,7 +402,8 @@ db.exec('CREATE TEMP TABLE search_staging (token TEXT PRIMARY KEY, id TEXT, type
 db.pragma('busy_timeout = 100');
 const FTS_BODY_MAX_CHARS = 32768; 
 
-const { buildFtsMatch } = require('./fts-match');
+const { createSessionSearch } = require('./fts-match');
+const { mergeSearchBodyRefs } = require('./src/main/session-index/session-refs');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS search_content (
@@ -535,6 +537,7 @@ const stmts = {
   searchDeleteByRowid: db.prepare('DELETE FROM search_fts WHERE rowid = ?'),
   searchMapDeleteByRowid: db.prepare('DELETE FROM search_map WHERE rowid = ?'),
   searchContentGet: db.prepare('SELECT title, body FROM search_content WHERE rowid = ?'),
+  searchUpdateBody: db.prepare('UPDATE search_content SET body = ? WHERE rowid = ?'),
 
   searchFtsDeleteRow: db.prepare("INSERT INTO search_fts(search_fts, rowid, title, body) SELECT 'delete', rowid, title, body FROM search_content WHERE rowid = ?"),
   searchFtsInsertRow: db.prepare('INSERT INTO search_fts(rowid, title, body) SELECT rowid, title, body FROM search_content WHERE rowid = ?'),
@@ -546,14 +549,6 @@ const stmts = {
   `),
   settingsDelete: db.prepare('DELETE FROM settings WHERE key = ?'),
   settingsKeysWithPrefix: db.prepare('SELECT key FROM settings WHERE substr(key, 1, ?) = ?'),
-  searchQuery: db.prepare(`
-    SELECT search_map.id, snippet(search_fts, 1, '<mark>', '</mark>', '...', 40) as snippet
-    FROM search_fts
-    JOIN search_map ON search_fts.rowid = search_map.rowid
-    WHERE search_map.type = ? AND search_fts MATCH ?
-    ORDER BY rank
-    LIMIT ?
-  `),
 };
 
 const metaFieldGet = db.prepare('SELECT revision, source, transcriptTitle, updatedAt FROM session_meta_fields WHERE sessionId = ? AND field = ?');
@@ -814,6 +809,10 @@ function certifyNameDerivation(sessionId, expectedStamp, witness, collision) {
 
 const upsertSearchEntriesBatch = db.transaction((entries) => {
   for (const e of entries) {
+    if (e.refsMerge) {
+      mergeSearchRefs(e);
+      continue;
+    }
 
     const existing = stmts.searchMapLookup.get(e.id, e.type);
     if (existing) {
@@ -831,6 +830,18 @@ const upsertSearchEntriesBatch = db.transaction((entries) => {
     stmts.searchInsertFts.run(rid);
   }
 });
+
+// see docs/decisions/0006-search-refs.md
+function mergeSearchRefs(entry) {
+  const existing = stmts.searchMapLookup.get(entry.id, entry.type);
+  const current = existing && stmts.searchContentGet.get(existing.rowid);
+  if (!current) return;
+  const body = mergeSearchBodyRefs(current.body, entry.refs || []);
+  if (body === current.body) return;
+  stmts.searchFtsDeleteRow.run(existing.rowid);
+  stmts.searchUpdateBody.run(body, existing.rowid);
+  stmts.searchFtsInsertRow.run(existing.rowid);
+}
 
 function beginSearchEntry(token, entry) {
   db.prepare("INSERT INTO search_staging(token, id, type, folder, title, body) VALUES (?, ?, ?, ?, ?, '')")
@@ -912,11 +923,11 @@ function updateSearchTitle(id, type, title) {
   } catch {}
 }
 
+let sessionSearch;
 function searchByType(type, query, limit = 50, titleOnly = false) {
   try {
-
-    const match = buildFtsMatch(query, titleOnly);
-    return stmts.searchQuery.all(type, match, limit);
+    sessionSearch ||= createSessionSearch(db);
+    return sessionSearch(type, query, limit, titleOnly);
   } catch {
     return [];
   }

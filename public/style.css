@@ -1028,6 +1028,25 @@ body { display: flex; flex-direction: column; }
 #search-refresh-btn:hover { color: var(--text-detail); }
 #search-refresh-btn.spinning svg { animation: spin-dot 0.8s linear infinite; }
 
+#search-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -8px 16px 10px;
+  font-size: 11px;
+  color: var(--text-detail);
+}
+#search-status[hidden] { display: none; }
+.search-status-show {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 
 /* ---- Scrollable content ---- */
 #sidebar-content {
@@ -1760,6 +1779,20 @@ body { display: flex; flex-direction: column; }
   font-size: 10px;
   color: var(--text-timestamp);
   margin-top: 3px;
+}
+
+.session-search-snippet {
+  font-size: 10px;
+  color: var(--text-timestamp);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-search-snippet mark {
+  background: var(--accent-secondary-alpha-025);
+  color: inherit;
+  border-radius: 2px;
 }
 
 .session-subagent-count {

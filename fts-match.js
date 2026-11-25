@@ -1,31 +1,83 @@
 'use strict';
 
-// Shared by db.js (synchronous main-thread searchByType, also the worker's
-// fallback path) and workers/search-query.js (the dedicated search worker) so
-// the query cap and the MATCH-expression construction cannot drift apart.
+// see .ai/contexts/session-cache.md ("Search")
 
-// FTS_QUERY_MAX_CHARS caps the length of the query string passed to FTS5.
-// A trigram-tokenized FTS5 table with tokenize='trigram' builds one trigram per
-// 3-char sliding window. When the query is wrapped in double-quotes (phrase query),
-// FTS5 intersects ALL trigram doclists in order — a 60-char URL produces ~58
-// overlapping trigrams. Common trigrams like "://" or "git" can appear in tens of
-// thousands of rows; intersecting all doclists as a contiguous phrase forces FTS5
-// to scan enormous intermediate sets and blocks the querying thread for ~60 s.
-// Capping the query at 48 chars limits the phrase to ≤46 trigrams (safe upper bound
-// for a synchronous main-thread query on a 4000+ session index) while covering any
-// plausible hand-typed search string. Longer inputs (pasted URLs, long stack traces)
-// are silently truncated — the first 48 chars remain actionable search terms.
 const FTS_QUERY_MAX_CHARS = 48;
+const FTS_MIN_TERM_CHARS = 3;
 
-// Build the FTS5 MATCH expression. Truncation happens BEFORE quote-escaping so
-// escaping cannot extend the phrase past the cap. The double-quote wrap gives
-// exact substring matching with the trigram tokenizer (prevents FTS5 from
-// splitting on punctuation, e.g. "spec.md" → "spec" + "md"). The "title:"
-// column filter restricts the match to the title column.
-function buildFtsMatch(query, titleOnly) {
-  const bounded = String(query || '').slice(0, FTS_QUERY_MAX_CHARS);
-  const escaped = '"' + bounded.replace(/"/g, '""') + '"';
-  return titleOnly ? 'title:' + escaped : escaped;
+function searchTerms(query) {
+  return String(query || '').slice(0, FTS_QUERY_MAX_CHARS).split(/\s+/)
+    .map(term => term.replace(/^[#!]+/, ''))
+    .filter(term => [...term].length >= FTS_MIN_TERM_CHARS);
 }
 
-module.exports = { FTS_QUERY_MAX_CHARS, buildFtsMatch };
+function buildFtsMatch(query, titleOnly) {
+  const terms = searchTerms(query).map(term => '"' + term.replace(/"/g, '""') + '"');
+  if (!terms.length) return null;
+  const expression = terms.join(' AND ');
+  if (!titleOnly) return expression;
+  return terms.length === 1 ? 'title:' + expression : 'title:(' + expression + ')';
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const ID_PREFIX_RE = /^[0-9a-f][0-9a-f-]{5,35}$/;
+
+function idLookupTerm(query) {
+  const raw = String(query || '').trim().toLowerCase();
+  if (!raw || /\s/.test(raw) || raw.length > 128) return null;
+  if (raw.startsWith('sub:') && raw.length > 4) return { sessionPrefix: raw, agentPrefix: null };
+  const id = raw.replace(/^agent-/, '');
+  if (UUID_RE.test(id)) return { sessionPrefix: id, agentPrefix: id };
+  if (!ID_PREFIX_RE.test(id) || id.replace(/-/g, '').length < 6 || !/\d/.test(id)) return null;
+  return { sessionPrefix: id, agentPrefix: id };
+}
+
+function createSessionSearch(db) {
+  const ftsQuery = db.prepare(`
+    SELECT search_map.id, snippet(search_fts, 1, '<mark>', '</mark>', '...', 40) as snippet
+    FROM search_fts
+    JOIN search_map ON search_fts.rowid = search_map.rowid
+    WHERE search_map.type = ? AND search_fts MATCH ?
+    ORDER BY rank
+    LIMIT ?
+  `);
+  let idQuery;
+  const lookupIds = (term, limit) => {
+    if (idQuery === undefined) {
+      try {
+        idQuery = db.prepare(`
+          SELECT sessionId AS id FROM session_cache WHERE sessionId >= @session AND sessionId < @session || '~'
+          UNION
+          SELECT sessionId AS id FROM session_cache WHERE @agent IS NOT NULL AND agentId >= @agent AND agentId < @agent || '~'
+          LIMIT @limit
+        `);
+      } catch { idQuery = null; }
+    }
+    if (!idQuery) return [];
+    return idQuery.all({ session: term.sessionPrefix, agent: term.agentPrefix, limit });
+  };
+  return function search(type, query, limit = 50, titleOnly = false) {
+    const results = [];
+    const seen = new Set();
+    const term = type === 'session' ? idLookupTerm(query) : null;
+    if (term) {
+      for (const row of lookupIds(term, limit)) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        results.push({ id: row.id, snippet: null, idMatch: true });
+      }
+    }
+    const match = buildFtsMatch(query, titleOnly);
+    if (match && results.length < limit) {
+      for (const row of ftsQuery.all(type, match, limit)) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        results.push({ id: row.id, snippet: row.snippet });
+        if (results.length >= limit) break;
+      }
+    }
+    return results;
+  };
+}
+
+module.exports = { FTS_QUERY_MAX_CHARS, FTS_MIN_TERM_CHARS, searchTerms, buildFtsMatch, idLookupTerm, createSessionSearch };

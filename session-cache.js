@@ -45,6 +45,7 @@ const { mergeLocalBackgroundSessions, conversationGroups, conversationMemberIds:
 const { projectionScope } = require('./public/session-projection-diagnostics');
 const { conversationMeta } = require('./conversation-meta');
 const { cleanDisplayName } = require('./public/utils');
+const { searchBody, collectEntryRefs, newestFirst } = require('./src/main/session-index/session-refs');
 const { isHostedJob } = require('./src/main/bg-agents/bg-agents-roster');
 const { state: TRACE, trace } = require('./src/main/shared/activity-trace');
 const { fullIndexConfig, SESSION_CONTENT_INDEX_VERSION, matchesFullRead, observation, nameDerivationWitness, sourceRelativePath, startupSourcePath, startupInventoryMatches, deferStartupSources, readFailures } = require('./src/main/session-index/full-read-state');
@@ -64,6 +65,7 @@ let getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession, setCache
 let entrypointBackfill = null;
 let getLocalDescriptors = () => [];
 let getLocalJobs = () => new Map();
+let getSearchRevealedIds = () => [];
 let setCachedCustomTitles, getCachedMissingCustomTitle;
 let customTitleBackfill = null;
 const continuationFiles = new Map();
@@ -224,6 +226,7 @@ function init(ctx) {
   activeSessions = ctx.activeSessions;
   getLocalDescriptors = ctx.getLocalDescriptors || (() => []);
   getLocalJobs = ctx.getLocalJobs || (() => new Map());
+  getSearchRevealedIds = ctx.getSearchRevealedIds || (() => []);
   setCachedCustomTitles = ctx.db.setCachedCustomTitles;
   getCachedMissingCustomTitle = ctx.db.getCachedMissingCustomTitle;
   customTitleBackfill = null;
@@ -445,7 +448,7 @@ function refreshHarnessFolder(harness, folder) {
     sessionsToUpsert.push(session);
     const name = getMeta(session.sessionId)?.name || session.customTitle || session.aiTitle || '';
     searchEntriesToUpsert.push({ id: session.sessionId, type: 'session', folder,
-      title: (name ? name + ' ' : '') + session.summary, body: session.textContent });
+      title: (name ? name + ' ' : '') + session.summary, body: searchBody(session.textContent, session.refs) });
   }
   let changed = false;
   if (sessionsToUpsert.length) {
@@ -590,6 +593,7 @@ function refreshFolder(folder, opts = {}) {
   // row and mistakes it for a safe-to-reread fresh read (it isn't: the whole
   // point of header-only refresh is to avoid a full re-read of a live file).
   const newFileReads = [];
+  const refMerges = [];
 
   // Refresh strategy:
   //   - NEW file (no cache row): full readSessionFile -- small at first turn,
@@ -670,8 +674,10 @@ function refreshFolder(folder, opts = {}) {
         && continuationIndex === cachedEntry.continuationIndex) { collector.accounted.add(relativeFile); continue; }
       // EXISTING -- header-only refresh.
       const h = readSessionDisplayHeader(filePath, { parentSessionId, workflowRunId });
+      const appendedRefs = new Set();
       let count = readMessageCount(filePath, cachedEntry.messageCountIndex, stat,
-        !!(cachedEntry.mergedIntoSessionId || (cachedEntry.bridgeSessionId && !cachedEntry.messageCountIndex)), parseFolderKey(folder).alias !== null);
+        !!(cachedEntry.mergedIntoSessionId || (cachedEntry.bridgeSessionId && !cachedEntry.messageCountIndex)), parseFolderKey(folder).alias !== null,
+        entry => collectEntryRefs(entry, appendedRefs, cachedDbId));
       collector.accounted.add(relativeFile);
       if (linked) linkedVersions.set(cachedDbId, { stat, filePath, relativeFile });
       if (count?.needsFullRead) {
@@ -727,6 +733,8 @@ function refreshFolder(folder, opts = {}) {
           sessionsToUpsert.push({ ...cachedEntry, ...count, fullReadStamp: null, continuationIndex, modified: fileMtime, fileMtime, fileSize });
         } else sessionsToTouch.push({ sessionId: cachedDbId, fileMtime });
       }
+      // see docs/decisions/0006-search-refs.md
+      if (appendedRefs.size) refMerges.push({ id: cachedDbId, type: 'session', folder, refsMerge: true, refs: newestFirst(appendedRefs) });
       continue;
     }
 
@@ -806,7 +814,7 @@ function refreshFolder(folder, opts = {}) {
     const name = getMeta(s.sessionId)?.name || s.customTitle || s.aiTitle || '';
     searchEntriesToUpsert.push({
       id: s.sessionId, type: 'session', folder: s.folder,
-      title: (name ? name + ' ' : '') + s.summary, body: s.textContent,
+      title: (name ? name + ' ' : '') + s.summary, body: searchBody(s.textContent, s.refs),
     });
     if (s.customTitle) namesToSet.push({ id: s.sessionId, name: s.customTitle });
   }
@@ -857,6 +865,9 @@ function refreshFolder(folder, opts = {}) {
   if (searchEntriesToUpsert.length > 0) {
     upsertSearchEntries(searchEntriesToUpsert);
   }
+  const rewritten = new Set(searchEntriesToUpsert.map(entry => entry.id));
+  const refEntries = refMerges.filter(entry => !racedRows.has(entry.id) && !rewritten.has(entry.id) && !sessionsToDelete.includes(entry.id));
+  if (refEntries.length) upsertSearchEntries(refEntries);
   for (const { id, name } of namesToSet) {
     setTranscriptName(id, name);
   }
@@ -1035,7 +1046,7 @@ function revealIfSdkSession(sessionId) {
 // see .ai/contexts/session-cache.md ("SDK-launched sessions")
 function hiddenSdkSessionIds(cachedRows, global, mergedChildrenByParent, rollup) {
   if (!(global.hideSdkSessions ?? SETTING_DEFAULTS.hideSdkSessions)) return new Set();
-  const kept = new Set((global.openWorkingSet || []).map(item => item && item.sessionId));
+  const kept = new Set([...(global.openWorkingSet || []).map(item => item && item.sessionId), ...getSearchRevealedIds()]);
   for (const [sessionId, session] of activeSessions || []) {
     if (!session.exited) kept.add(sessionId);
   }
@@ -1539,7 +1550,7 @@ function writeScannedFolder(r, unverifiedLocalFolder = null) {
       return {
         id: s.sessionId, type: 'session', folder: s.folder,
         title: (name ? name + ' ' : '') + s.summary,
-        body: s.textContent,
+        body: searchBody(s.textContent, s.refs),
       };
     }));
   }
@@ -1569,7 +1580,7 @@ function writeScannedFolderPartial(r) {
       return {
         id: s.sessionId, type: 'session', folder: s.folder,
         title: (name ? name + ' ' : '') + s.summary,
-        body: s.textContent,
+        body: searchBody(s.textContent, s.refs),
       };
     }));
   }

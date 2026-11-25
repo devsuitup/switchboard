@@ -6,6 +6,7 @@ const { StringDecoder } = require('string_decoder');
 const { continuationId, continuationStamp, matchesContinuationStamp, continuationMtime } = require('./session-continuations');
 const { classifyTranscriptPath, isWorkflowRunId } = require('./subagent-attribution');
 const { isCountedMessage, messageCountIndex } = require('./src/main/session-index/message-count');
+const { collectEntryRefs, newestFirst } = require('./src/main/session-index/session-refs');
 
 /** Subagent transcripts land under <folder>/<parentSessionId>/subagents/agent-<agentId>.jsonl.
  *  We surface them as first-class rows with a synthetic sessionId so they're addressable
@@ -237,6 +238,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     const messageUuids = [];
     let messageUuidsComplete = true;
     let textContent = '';
+    const refs = new Set();
     let slug = null;
     let scheduleSlug = null;
     const continuationIds = new Set();
@@ -330,6 +332,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
         if (cand.kind === 'prompt') summary = cand.text;
         else if (cand.kind === 'command' && !commandSummary) commandSummary = cand.text;
       }
+      collectEntryRefs(entry, refs, fileBase);
       if (text && textContent.length < 8000) {
         textContent += text.slice(0, 500) + '\n';
       }
@@ -378,7 +381,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
         modified: stat.mtime.toISOString(),
         fileMtime: continuationMtime(big),
         fileSize: stat.size,
-        messageCount, messageCountIndex: countIndex, textContent, slug, customTitle: customTitle || '', aiTitle,
+        messageCount, messageCountIndex: countIndex, textContent, refs: newestFirst(refs), slug, customTitle: customTitle || '', aiTitle,
         parentSessionId: opts.parentSessionId,
         workflowRunId: opts.workflowRunId || null,
         agentId,
@@ -401,7 +404,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       modified: lastTimestamp || stat.mtime.toISOString(),
       fileMtime,
       fileSize: stat.size,
-      messageCount, messageCountIndex: countIndex, textContent, slug, scheduleSlug, customTitle: customTitle || '', aiTitle,
+      messageCount, messageCountIndex: countIndex, textContent, refs: newestFirst(refs), slug, scheduleSlug, customTitle: customTitle || '', aiTitle,
       continuationIndex: stable
         ? JSON.stringify({ format: 3, version: 3, ids: [...continuationIds], stamp,
         sealedIds: sealedContinuationIds ?? [...continuationIds], bytes: scan.read,

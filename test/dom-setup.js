@@ -109,6 +109,7 @@ function setupSidebarDom({ loadTaskRegistry = true, indexOrder = false } = {}) {
     sortedOrder: [],
     searchMatchIds: null,
     searchMatchProjectPaths: null,
+    searchSnippets: null,
     showStarredOnly: false,
     showRunningOnly: false,
     showTodayOnly: false,

@@ -18,7 +18,7 @@ function messageCountIndex(buffer, stat, count, tailCount, filtered = false) {
 }
 
 // see .ai/contexts/session-cache.md ("Incremental message counts")
-function readMessageCount(file, previous, stat, filtered = false, allowReplacement = false) {
+function readMessageCount(file, previous, stat, filtered = false, allowReplacement = false, onEntry = null) {
   let fd;
   try {
     let index;
@@ -44,8 +44,10 @@ function readMessageCount(file, previous, stat, filtered = false, allowReplaceme
     const position = reusable ? index.bytes : 0;
     let sealedCount = reusable ? index.sealedCount : 0;
     const countLine = line => {
-      try { return isCountedMessage(JSON.parse(line)) ? 1 : 0; }
-      catch { return 0; }
+      let entry;
+      try { entry = JSON.parse(line); } catch { return 0; }
+      if (onEntry) onEntry(entry);
+      return isCountedMessage(entry) ? 1 : 0;
     };
     const scan = require('../../../jsonl-scan').scanLines(fd, position, line => { sealedCount += countLine(line); }, size);
     const bytes = scan.consumed;

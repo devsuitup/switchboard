@@ -144,7 +144,7 @@ function row(sessionId, folder, projectPath, entrypoint) {
   };
 }
 
-function visibleIds(global) {
+function visibleIds(global, revealed = null) {
   const projectsDir = mkTmp();
   try {
     const projectPath = '/srv/runner';
@@ -163,6 +163,7 @@ function visibleIds(global) {
       getMainWindow: () => null,
       log: { info: () => {}, debug: () => {}, warn: () => {}, error: () => {} },
       db: makeFakeDb({ cachedRows, global }),
+      ...(revealed ? { getSearchRevealedIds: () => revealed } : {}),
     });
     sessionCache.setRemoteRoots(new Map());
     return sessionCache.buildProjectsFromCache(true)
@@ -175,6 +176,11 @@ function visibleIds(global) {
 
 test('SDK-launched sessions and their subagents are hidden by default', () => {
   assert.deepEqual(visibleIds({}), ['interactive', 'scheduled']);
+});
+
+test('a search reveal lists the named SDK sessions and their subagents without changing the setting', () => {
+  assert.deepEqual(visibleIds({}, ['sdk-py-run']), ['interactive', 'scheduled', 'sdk-py-run', 'sub:sdk-py-run:a1']);
+  assert.deepEqual(visibleIds({}), ['interactive', 'scheduled'], 'without a reveal they stay hidden');
 });
 
 test('turning hideSdkSessions off shows them again', () => {

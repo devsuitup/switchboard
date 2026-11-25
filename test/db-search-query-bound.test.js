@@ -42,7 +42,7 @@ test('fts-match.js exports FTS_QUERY_MAX_CHARS ≤ 48 (keeps phrase query safe o
 // 2. Both query paths use the shared builder (no drift possible)
 // ---------------------------------------------------------------------------
 
-test('db.js searchByType uses the shared buildFtsMatch from fts-match.js', () => {
+test('db.js searchByType uses the shared search from fts-match.js', () => {
   assert.match(dbSrc, /require\(['"]\.\/fts-match['"]\)/, 'db.js must require ./fts-match');
   const fnStart = dbSrc.indexOf('function searchByType(');
   assert.ok(fnStart !== -1, 'searchByType function not found in db.js');
@@ -53,12 +53,12 @@ test('db.js searchByType uses the shared buildFtsMatch from fts-match.js', () =>
   }
   assert.ok(fnEnd !== -1, 'searchByType closing brace not found');
   const fnSrc = dbSrc.slice(fnStart, fnEnd + 1);
-  assert.match(fnSrc, /buildFtsMatch\s*\(/, 'searchByType must call buildFtsMatch');
+  assert.match(fnSrc, /createSessionSearch\s*\(/, 'searchByType must use createSessionSearch');
 });
 
-test('workers/search-query.js uses the shared buildFtsMatch from fts-match.js', () => {
+test('workers/search-query.js uses the shared search from fts-match.js', () => {
   assert.match(workerSrc, /require\(['"]\.\.\/fts-match['"]\)/, 'worker must require ../fts-match');
-  assert.match(workerSrc, /buildFtsMatch\s*\(/, 'worker must call buildFtsMatch');
+  assert.match(workerSrc, /createSessionSearch\s*\(/, 'worker must use createSessionSearch');
 });
 
 // ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ test('replica: normal short query produces quoted-phrase expression unchanged', 
 
 test('replica: query containing a double-quote is escaped', () => {
   const expr = buildMatchExpression('say "hello"');
-  assert.equal(expr, '"say ""hello"""', 'Double-quotes inside query must be doubled');
+  assert.equal(expr, '"say" AND """hello"""', 'Double-quotes inside each term must be doubled');
 });
 
 test('replica: 60-char URL is truncated to ≤ FTS_QUERY_MAX_CHARS before quoting', () => {
