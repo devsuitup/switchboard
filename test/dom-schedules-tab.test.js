@@ -164,7 +164,11 @@ test('a schedule row shows its path relative to its project, with the full path 
     ['/p/', '/p/schedule-nightly.md', 'schedule-nightly.md'],
     ['C:/fixture', 'C:\\fixture\\.claude\\commands\\schedule-x.md', '.claude\\commands\\schedule-x.md'],
     ['C:\\fixture\\', 'C:\\fixture\\schedule-x.md', 'schedule-x.md'],
-    ['', '/p/schedule-nightly.md', '/p/schedule-nightly.md']]) {
+    ['', '/p/schedule-nightly.md', '/p/schedule-nightly.md'],
+    ['c:\\Fixture', 'C:\\fixture\\schedule-x.md', 'schedule-x.md'],
+    ['/P', '/p/schedule-x.md', '/p/schedule-x.md'],
+    ['/work/app', '/work/app/../app2/schedule-x.md', '/work/app/../app2/schedule-x.md'],
+    ['/work/./app/', '/work/app/.claude/./commands/schedule-x.md', '.claude/commands/schedule-x.md']]) {
     h.project.projectPath = projectPath;
     h.schedule.filePath = filePath;
     h.w.renderSchedules(h.data);
@@ -190,6 +194,11 @@ test('the cron line shows the expression once when it has no wording of its own'
   h.schedule.cronText = null;
   h.w.renderSchedules(h.data);
   assert.equal(cron(), 'Schedule unknown');
+  const { describeCron } = require('../src/main/schedules/schedule-runner');
+  h.schedule.cron = '';
+  h.schedule.cronText = describeCron('');
+  h.w.renderSchedules(h.data);
+  assert.equal(cron(), 'Schedule unknown', 'the listing sends an empty expression for a file without cron');
 });
 
 test('a fatal problem named by the Never runs state is not repeated below it', t => {

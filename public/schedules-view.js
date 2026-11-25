@@ -555,10 +555,23 @@ function updateScheduleRunButtons(filePath, original) {
   restorePendingScheduleFocus();
 }
 
+function schedulePathSegments(value) {
+  const segments = [];
+  String(value).replace(/\\/g, '/').split('/').forEach((segment, index) => {
+    if (segment === '..') { if (segments.length > 1) segments.pop(); }
+    else if (segment !== '.' && (segment !== '' || index === 0)) segments.push(segment);
+  });
+  return segments;
+}
+
 function schedulePathLabel(projectPath, filePath) {
-  const root = String(projectPath || '').replace(/\\/g, '/').replace(/\/+$/, '');
-  if (!projectPath || !String(filePath).replace(/\\/g, '/').startsWith(`${root}/`)) return filePath;
-  return filePath.slice(root.length + 1);
+  if (!projectPath) return filePath;
+  const windows = /^[A-Za-z]:|\\/.test(projectPath) || /^[A-Za-z]:|\\/.test(filePath);
+  const same = (a, b) => windows ? a.toLowerCase() === b.toLowerCase() : a === b;
+  const root = schedulePathSegments(projectPath);
+  const file = schedulePathSegments(filePath);
+  if (file.length <= root.length || !root.every((segment, index) => same(segment, file[index]))) return filePath;
+  return file.slice(root.length).join(String(filePath).includes('\\') ? '\\' : '/');
 }
 
 function buildScheduleItem(project, schedule, data) {
@@ -569,7 +582,7 @@ function buildScheduleItem(project, schedule, data) {
   scheduleText(item, 'schedule-name', schedule.name);
   scheduleText(item, 'schedule-path', schedulePathLabel(project.projectPath, schedule.filePath)).title = schedule.filePath;
   const readError = schedule.readError;
-  scheduleText(item, 'schedule-cron', readError || schedule.cron == null ? 'Schedule unknown'
+  scheduleText(item, 'schedule-cron', readError || !schedule.cron ? 'Schedule unknown'
     : schedule.cronText && schedule.cronText !== schedule.cron ? `${schedule.cronText} · ${schedule.cron}` : String(schedule.cron));
   const fatal = schedule.problems.filter(p => !p.startsWith('slug shared with '));
   const state = project.archived ? 'Suspended — project archived'
