@@ -155,6 +155,77 @@ test('Delete refuses linked files but remains available for disabled, malformed 
   assert.equal(h.w.document.activeElement, button, 'Delete participates in keyboard focus');
 });
 
+test('a schedule row shows its path relative to its project, with the full path as its title', t => {
+  const h = setup(t);
+  const inside = h.w.document.querySelector('.schedule-item .schedule-path');
+  assert.equal(inside.textContent, 'schedule-nightly.md');
+  assert.equal(inside.title, '/p/schedule-nightly.md');
+  for (const [projectPath, filePath, label] of [['/', '/.claude/commands/schedule-x.md', '.claude/commands/schedule-x.md'],
+    ['/p/', '/p/schedule-nightly.md', 'schedule-nightly.md'],
+    ['C:/fixture', 'C:\\fixture\\.claude\\commands\\schedule-x.md', '.claude\\commands\\schedule-x.md'],
+    ['C:\\fixture\\', 'C:\\fixture\\schedule-x.md', 'schedule-x.md'],
+    ['', '/p/schedule-nightly.md', '/p/schedule-nightly.md'],
+    ['c:\\Fixture', 'C:\\fixture\\schedule-x.md', 'schedule-x.md'],
+    ['/P', '/p/schedule-x.md', '/p/schedule-x.md'],
+    ['/work/app', '/work/app/../app2/schedule-x.md', '/work/app/../app2/schedule-x.md'],
+    ['/work/./app/', '/work/app/.claude/./commands/schedule-x.md', '.claude/commands/schedule-x.md'],
+    ['/p', '/p/dir/a\\b.md', 'dir/a\\b.md'],
+    ['\\\\server\\share\\app', '\\\\Server\\share\\app\\schedule-x.md', 'schedule-x.md'],
+    ['\\\\server\\share\\..', '\\\\server\\share\\.claude\\commands\\schedule-x.md', '.claude\\commands\\schedule-x.md'],
+    ['C:\\..\\fixture', 'C:\\fixture\\schedule-x.md', 'schedule-x.md']]) {
+    h.project.projectPath = projectPath;
+    h.schedule.filePath = filePath;
+    h.w.renderSchedules(h.data);
+    assert.equal(h.w.document.querySelector('.schedule-item .schedule-path').textContent, label, JSON.stringify(projectPath));
+  }
+  h.project.projectPath = '/p';
+  for (const filePath of ['/elsewhere/schedule-nightly.md', '/pother/schedule-nightly.md']) {
+    h.schedule.filePath = filePath;
+    h.w.renderSchedules(h.data);
+    assert.equal(h.w.document.querySelector('.schedule-item .schedule-path').textContent, filePath);
+  }
+});
+
+test('the cron line shows the expression once when it has no wording of its own', t => {
+  const h = setup(t);
+  const cron = () => h.w.document.querySelector('.schedule-cron').textContent;
+  assert.equal(cron(), 'every min · * * * * *');
+  h.schedule.cron = '17 12 * * 1';
+  h.schedule.cronText = '17 12 * * 1';
+  h.w.renderSchedules(h.data);
+  assert.equal(cron(), '17 12 * * 1');
+  h.schedule.cron = null;
+  h.schedule.cronText = null;
+  h.w.renderSchedules(h.data);
+  assert.equal(cron(), 'Schedule unknown');
+  const { describeCron } = require('../src/main/schedules/schedule-runner');
+  h.schedule.cron = '';
+  h.schedule.cronText = describeCron('');
+  h.w.renderSchedules(h.data);
+  assert.equal(cron(), 'Schedule unknown', 'the listing sends an empty expression for a file without cron');
+});
+
+test('a fatal problem named by the Never runs state is not repeated below it', t => {
+  const h = setup(t);
+  h.schedule.problems = ['cron can never match', 'slug shared with schedule-other.md'];
+  h.w.renderSchedules(h.data);
+  const item = h.w.document.querySelector('.schedule-item');
+  assert.equal(item.querySelector('.schedule-state').textContent, 'Never runs: cron can never match');
+  assert.equal(item.querySelector('.schedule-problems').textContent, 'slug shared with schedule-other.md');
+  h.schedule.enabled = false;
+  h.w.renderSchedules(h.data);
+  assert.equal(h.w.document.querySelector('.schedule-item .schedule-problems').textContent, 'cron can never match; slug shared with schedule-other.md');
+});
+
+test('a linked schedule is noted, not reported as a problem', t => {
+  const h = setup(t);
+  h.schedule.linked = true;
+  h.w.renderSchedules(h.data);
+  const item = h.w.document.querySelector('.schedule-item');
+  assert.equal(item.querySelector('.schedule-note')?.textContent, 'linked file: edit it at its source');
+  assert.equal(item.querySelector('.schedule-problems'), null);
+});
+
 for (const [result, expected] of [
   [{ outcome: 'exited', exitCode: 0, failure: null }, /^Exit 0$/],
   [{ outcome: 'exited', exitCode: 1, failure: 'claude-path' }, /Failed: exit 1.*claude not found on the shell PATH.*Check/i],

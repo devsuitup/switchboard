@@ -28,7 +28,6 @@ const containers = [
   ['.session-item', '.session-actions'],
   ['.grid-card', '.grid-card-stop-btn'],
   ['.grid-card', '.grid-card-detach-btn'],
-  ['.schedule-item', '.schedule-actions'],
   ['.memory-item', '.schedule-play-btn'],
   ['.project-header', '.remote-host-refresh-btn'],
   ['#file-panel-actions', '#file-panel-actions'],

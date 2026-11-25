@@ -555,15 +555,36 @@ function updateScheduleRunButtons(filePath, original) {
   restorePendingScheduleFocus();
 }
 
+function schedulePathSegments(value, windows) {
+  const segments = [];
+  const floor = windows && /^[\\/]{2}/.test(String(value)) ? 3 : 1;
+  (windows ? String(value).replace(/\\/g, '/') : String(value)).split('/').forEach((segment, index) => {
+    if (segment === '..') { if (segments.length > floor) segments.pop(); }
+    else if (segment !== '.' && (segment !== '' || index === 0)) segments.push(segment);
+  });
+  return segments;
+}
+
+function schedulePathLabel(projectPath, filePath) {
+  if (!projectPath) return filePath;
+  const windows = [projectPath, filePath].some(value => /^([A-Za-z]:|\\\\)/.test(String(value)));
+  const same = (a, b) => windows ? a.toLowerCase() === b.toLowerCase() : a === b;
+  const root = schedulePathSegments(projectPath, windows);
+  const file = schedulePathSegments(filePath, windows);
+  if (file.length <= root.length || !root.every((segment, index) => same(segment, file[index]))) return filePath;
+  return file.slice(root.length).join(windows && String(filePath).includes('\\') ? '\\' : '/');
+}
+
 function buildScheduleItem(project, schedule, data) {
   const item = document.createElement('article');
   item.className = 'schedule-item';
   item.tabIndex = -1;
   item.dataset.filepath = schedule.filePath;
   scheduleText(item, 'schedule-name', schedule.name);
-  scheduleText(item, 'schedule-path', schedule.filePath);
+  scheduleText(item, 'schedule-path', schedulePathLabel(project.projectPath, schedule.filePath)).title = schedule.filePath;
   const readError = schedule.readError;
-  scheduleText(item, 'schedule-cron', readError ? 'Schedule unknown' : `${schedule.cronText} · ${schedule.cron}`);
+  scheduleText(item, 'schedule-cron', readError || !schedule.cron ? 'Schedule unknown'
+    : schedule.cronText && schedule.cronText !== schedule.cron ? `${schedule.cronText} · ${schedule.cron}` : String(schedule.cron));
   const fatal = schedule.problems.filter(p => !p.startsWith('slug shared with '));
   const state = project.archived ? 'Suspended — project archived'
     : readError ? 'Unknown: the file could not be read'
@@ -575,9 +596,10 @@ function buildScheduleItem(project, schedule, data) {
   scheduleText(item, 'schedule-state', state);
   if (schedule.runAsBackground) scheduleText(item, 'schedule-state', project.remoteAlias ? 'Background option ignored: local schedules only'
     : project.sandboxed ? 'Background unavailable under sandbox: runs headless' : 'Background session: can be joined while it runs');
-  if (schedule.problems.length) scheduleText(item, 'schedule-problems', schedule.problems.join('; '));
+  const listed = state.startsWith('Never runs: ') ? schedule.problems.filter(p => !fatal.includes(p)) : schedule.problems;
+  if (listed.length) scheduleText(item, 'schedule-problems', listed.join('; '));
   if (readError) scheduleText(item, 'schedule-problems', `${readError.message}. Check the file's permissions and path, then Retry.`);
-  if (schedule.linked) scheduleText(item, 'schedule-problems', 'linked file: edit it at its source');
+  if (schedule.linked) scheduleText(item, 'schedule-note', 'linked file: edit it at its source');
   if (schedule.catchUp) {
     scheduleText(item, 'schedule-catch-up', !data.catchUpActive ? 'catch-up off in this instance'
       : schedule.catchUpDueMs != null ? `Catch-up pending: due ${new Date(schedule.catchUpDueMs).toLocaleString()}` : 'Catch-up on');

@@ -6,6 +6,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - Sidebar search now finds a session by its id or the first characters of it, and finds issue, pull request and merge request numbers such as `#1233`, `PR 1233` or `!12` anywhere in a session, including links and tool output. Every word must match, Enter searches at once instead of rereading every session first, each hit shows the matched text, subagent groups holding a hit open, and hits in hidden SDK sessions are counted with a way to show them for that search. The first launch rereads every session once in the background to collect the numbers. (#1255)
+- The Schedules tab no longer leaves an empty band under each schedule: its actions stay visible, projects read as headings, file paths are relative to the project, and a cron expression or a never-runs reason is no longer repeated. The Cancel and Save buttons at the bottom of Settings are centred in their bar. (#1256)
 
 ## v0.1.0-beta.1 — 2026-11-24
 
