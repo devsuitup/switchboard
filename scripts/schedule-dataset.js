@@ -96,24 +96,12 @@ function gitEnv(env) {
   return Object.fromEntries(Object.entries(env).filter(([key]) => !/^GIT_/i.test(key)));
 }
 
-function canSymlink(dir) {
-  const probe = path.join(dir, '.symlink-probe');
-  try {
-    fs.symlinkSync(path.join(dir, 'missing'), probe);
-    fs.unlinkSync(probe);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function createDataset({ home, dataDir, now }, { symlinks = canSymlink } = {}) {
+function createDataset({ home, dataDir, now }, { linkable = process.platform !== 'win32' } = {}) {
   if (fs.existsSync(home) && fs.readdirSync(home).length) throw new Error(`${home} is not empty; give a new directory`);
   const runsDir = path.join(dataDir, 'schedule-runs');
   const shared = path.join(home, 'shared');
   fs.mkdirSync(runsDir, { recursive: true });
   fs.mkdirSync(shared, { recursive: true });
-  const linkable = symlinks(shared);
   const projects = [];
   const skipped = [];
   for (const [name, schedules] of Object.entries(SCHEDULES)) {
@@ -158,7 +146,7 @@ if (require.main === module) {
       process.exit(2);
     }
     const { projects, skipped } = createDataset(args);
-    if (skipped.length) console.log(`Skipped (this account cannot create symbolic links): ${skipped.join(', ')}`);
+    if (skipped.length) console.log(`Skipped on Windows (symbolic links need a privilege there): ${skipped.join(', ')}`);
     console.log(`Fake HOME: ${args.home}\nData dir: ${args.dataDir}\nProjects (git checkouts with schedules are registered at first launch):\n${projects.map(p => `  ${p}`).join('\n')}`);
   } catch (error) {
     console.error(error.message);
@@ -166,4 +154,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { SCHEDULES, canSymlink, createDataset, gitEnv, parseArgs };
+module.exports = { SCHEDULES, createDataset, gitEnv, parseArgs };
