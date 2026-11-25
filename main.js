@@ -2891,10 +2891,10 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     }
   };
   session._statusOsc = { generation: statusGeneration };
-  session.inputAttach = createInputAttach();
+  session.inputAttach = typeof createInputAttach === 'function' ? createInputAttach() : null;
   ptyProcess.onData(data => {
     if (session.generation !== statusGeneration || session.pty && session.pty !== ptyProcess) return;
-    noteInputAttach(session.inputAttach, data);
+    if (session.inputAttach) noteInputAttach(session.inputAttach, data);
     const currentId = session.realSessionId || sessionId;
     if (session.backgroundCommandSource) {
       session.backgroundCommandOutput = ((session.backgroundCommandOutput || '') + data).slice(-1024);
