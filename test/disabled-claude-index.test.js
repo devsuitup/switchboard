@@ -108,7 +108,7 @@ function loadWatcher(t, f) {
     setTimeout: callback => { timers.set(++timerId, callback); return timerId; },
     clearTimeout: id => timers.delete(id),
     flushProjectsBeforeExit: null, localTranscriptTracker: { record() {} },
-    detectSessionTransitions: folder => transitions.push(folder), notifyRendererProjectsChanged() {},
+    detectSessionTransitions: folder => transitions.push(folder), notifyRendererProjectsChanged() {}, coldScanInFlight: () => null,
     writer: { refreshFolder: folder => { writes.push(folder); return cache.refreshFolder(folder); },
       dropFolderRows: folder => { writes.push(folder); return cache.dropFolderRows(folder); } },
     log: { info() {}, error() {} },

@@ -2205,7 +2205,7 @@ a newer generation already committed; newer starts/failures cannot starve an
 eligible completion. Projects/settings/terminal/poll facts are staged before the
 synchronous commit. Obsolete replies never dedup, mutate pending/terminal state,
 paint or observe diagnostics. Older admissible commits paint immediately while
-the newest pending request retains the Refreshing indicator. A newest failure
+the status line stays empty; only a load that starts with an empty sidebar shows `Loading…`. A newest failure
 does not remove accepted lists. Public callers follow the newest settlement
 transitively, even while their older operation remains independently admissible.
 Restore planner requests coalesce once per effective accepted generation; failed

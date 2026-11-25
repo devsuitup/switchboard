@@ -135,7 +135,7 @@ function watcherFixture(t) {
   const context = { ...time, path, Set, Map, console, require: createRequire(filename), PROJECTS_DIR: root,
     projectsWatcher: null, flushProjectsBeforeExit: null, getSetting: () => ({}),
     fs: { ...fs, watch: (_root, _opts, callback) => { changed = callback; return { on() {}, close() {} }; } },
-    detectSessionTransitions() {}, localTranscriptTracker: { record() {} },
+    detectSessionTransitions() {}, localTranscriptTracker: { record() {} }, coldScanInFlight: () => null,
     notifyRendererProjectsChanged: cause => notifications.push(cause),
     log: { info: (...args) => logs.push(['info', ...args]), error: (...args) => logs.push(['error', ...args]) },
     writer: { refreshFolder: async (folder, options) => {

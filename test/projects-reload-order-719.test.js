@@ -155,6 +155,18 @@ test('T4.2 actual reload-origin poll cannot publish PTY, busy, header or timer e
   polls[0].resolve([{ sessionId: 'old' }]); await flush();
   assert.deepEqual(applied, ['new']); assert.deepEqual(Array.from(h.w.activePtyIds), ['new']);
 });
+test('a background reload of a sidebar that already shows projects keeps the status silent', async t => {
+  const h = fixture(t);
+  const first = h.loadProjects();
+  assert.equal(h.w.loadingStatus.textContent, 'Loading…', 'an empty sidebar says it is loading');
+  h.reply(0, 'one'); await flush(); h.settings[0].resolve({}); await flush(); h.polls[0].resolve(); await first;
+  assert.equal(h.w.loadingStatus.textContent, ''); assert.equal(h.w.loadingStatus.style.display, 'none');
+  const second = h.loadProjects();
+  assert.equal(h.w.loadingStatus.textContent, '', 'no Refreshing text while a reload is pending');
+  assert.equal(h.w.loadingStatus.style.display, 'none');
+  h.reply(1, 'two'); await flush(); h.settings[1].resolve({}); await flush(); h.polls[1].resolve(); await second;
+  assert.equal(h.w.loadingStatus.textContent, ''); assert.equal(h.w.loadingStatus.style.display, 'none');
+});
 test('T4.3 newer failure rejects followers while an older eligible operation still publishes', async t => {
   const h = fixture(t);
   const first = h.loadProjects(); h.reply(0, 'old'); await flush();
@@ -196,7 +208,7 @@ for (const seeded of [false, true]) {
     };
     for (let i = 0; i < 11; i++) {
       t.mock.timers.tick(1500); calls.push(h.loadProjects());
-      if (i >= 3) { await complete(i - 3); assert.equal(w.loadingStatus.textContent, 'Refreshing…'); }
+      if (i >= 3) { await complete(i - 3); assert.equal(w.loadingStatus.textContent, ''); assert.equal(w.loadingStatus.style.display, 'none'); }
     }
     for (let n = 8; n < 11; n++) await complete(n);
     assert.equal((await Promise.all(calls)).every(r => r.accepted && r.generation === 11), true);

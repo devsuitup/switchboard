@@ -618,6 +618,59 @@ Every notifier caller supplies a cause; see `docs/activity-trace.md` for
 `projects.changed` and the renderer frame probe. The `activity` cause selects
 the deferred path; the other labels identify structural notification producers.
 
+## Watchers during the cold scan
+
+`refreshFolder` runs on the main thread, inside the writer's compute step, and
+reads a transcript that has no cache row in full (the "NEW file" branch). On an
+empty index every transcript is uncached, so before this rule each event of a
+live session (its transcript is appended to every few seconds) made main read
+that whole transcript synchronously: a probe under `ELECTRON_RUN_AS_NODE`
+measured 3.1 s of blocked event loop for one 136 MB file, and with several live
+sessions of hundreds of MB the first launch kept main blocked for 25 to 95 s.
+A blocked main answers no IPC, so the sandboxed preload and its synchronous
+`get-initial-theme` call never return and the window stays blank; every timer
+fires late, which is why the project-delete recovery log reported
+`elapsed=30650ms` and the Windows job helper and process-table probes timed
+out at the same instant. The recovery itself only waits for one writer read.
+
+`coldScanInFlight()` (session-cache) returns the population promise while the
+first population of an index runs (`!isInitialScanComplete()` when it
+started), and `null` otherwise, including for a later forced rescan. While it
+is set, the projects watcher and the harness watchers still run
+`detectSessionTransitions` and `resolvePendingLaunches` at once, but put the
+folder and its reported files aside instead of calling `writer.refreshFolder`.
+When the population settles, success or failure, the set-aside changes are
+merged back into the pending queue (a full-folder scope still dominates a
+targeted one) and flushed. The replay is not free: by then the scan has cached
+those transcripts, so a Claude transcript takes the existing-row branch (the
+display header, the message counter's incremental read from its recorded
+offset, a bounded continuation scan), but the counter can still ask for a full
+read (`needsFullRead`, e.g. a merged or bridged row without a count index),
+and a Codex rollout whose mtime or size changed since the scan is re-read in
+full by `refreshHarnessFolder`, which has no header-only path. What the rule
+removes is the full read of every live transcript while none of them is
+cached. The flush before exit sets changes aside too: an interrupted first
+scan leaves `initial_scan_complete` unset, and the next launch scans again.
+
+A harness watcher's `close()` cancels its debounce timer and clears both its
+pending and set-aside folders, and its flush returns as soon as the watcher is
+no longer in `harnessWatchers` (checked at the start and before each folder),
+so a CLI switched off after the scan settled never runs the replay. Because
+`close()` drops those queues, `restartHarnessWatchers()` closes only the
+watchers whose CLI is now disabled or whose sessions root moved; a watcher
+whose CLI stays enabled at the same root is kept as is (toggling Claude must
+not drop a pending Codex refresh), and `startHarnessWatchers()` skips a harness
+that already has a live watcher for that root. A watcher is dead once its
+native watcher emitted `error` or `close` (or `close()` was called): the
+restart replaces a dead watcher whose CLI is still enabled at that root, hands
+its pending and set-aside folders to the replacement (`takeQueued()`), and the
+replacement flushes them at once. A flush in progress keeps the folders it has
+not reached in an array registered with its watcher, so `takeQueued()` also
+takes those (and empties the array, which ends the old flush) but never the
+folder already submitted to `writer.refreshFolder`. The
+set-aside maps are deduplicated per folder and file, not capped: they grow
+with the distinct paths touched during the first scan.
+
 ## Incremental message counts
 
 `src/main/session-index/message-count.js` shares the full reader's counting predicate: user and

@@ -1513,6 +1513,9 @@ function sendIndexingProgress(payload) {
 
 let indexingFinished = false;
 function isIndexingFinished() { return indexingFinished && !populatePromise; }
+// see .ai/contexts/session-cache.md ("Watchers during the cold scan")
+let populateCold = false;
+function coldScanInFlight() { return populatePromise && populateCold ? populatePromise : null; }
 
 function sendIndexingFinished() {
   indexingFinished = true;
@@ -1882,6 +1885,7 @@ function populateCacheViaWorker({ force = false } = {}, retryTimerFired = false)
   const retryAttempt = populateRetry?.attempt || 0;
   const retryFolders = populateRetry?.folders;
   const coldStart = !isInitialScanComplete();
+  populateCold = coldStart;
   populateFull = force || coldStart;
   indexingFinished = false;
   sendStatus('Scanning projects…', 'active');
@@ -2055,6 +2059,7 @@ module.exports = { shutdownProducers,
   sendStatus,
   populateCacheViaWorker,
   isIndexingFinished,
+  coldScanInFlight,
   scanFoldersViaWorker,
   reindexRepairedFolders,
   setRemoteRoots,

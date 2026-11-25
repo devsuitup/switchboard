@@ -92,7 +92,7 @@ test('injected projects-watch notifications verify real files while indexing sta
     fs: { ...fs, watch: (_root, _opts, cb) => { callback = cb; return { on() {} }; } },
     mainWindow: { isDestroyed: () => false, webContents: { send: (...args) => sent.push(args) } },
     setTimeout: fn => { timers.push(fn); return fn; }, clearTimeout() {},
-    detectSessionTransitions() {}, notifyRendererProjectsChanged() {},
+    detectSessionTransitions() {}, notifyRendererProjectsChanged() {}, coldScanInFlight: () => null,
     writer: { refreshFolder: async (...args) => refreshed.push(args), async dropFolderRows() {} },
   });
   const declaration = mainSrc.slice(mainSrc.indexOf('const localTranscriptTracker ='), mainSrc.indexOf('\n\n// see .ai/contexts/cli-session-state.md', mainSrc.indexOf('const localTranscriptTracker =')));
