@@ -47,7 +47,7 @@ function watcher(h) {
       watch: (_dir, _opts, callback) => { watch = callback; return { on() {} }; },
     },
     path, PROJECTS_DIR: h.root, projectsWatcher: null, console, getSetting: () => ({}),
-    detectSessionTransitions() {}, localTranscriptTracker: { record() {} },
+    detectSessionTransitions() {}, localTranscriptTracker: { record() {} }, coldScanInFlight: () => null,
     writer: {
       refreshFolder: async (folder, opts) => { refreshes.push({ folder, opts }); return false; },
       dropFolderRows: async folder => { refreshes.push({ folder, dropped: true }); return false; },
