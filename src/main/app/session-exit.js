@@ -69,7 +69,6 @@ async function runExitHandoffs(ids, { send, status, waitForChange, now = Date.no
         const state = status(row.id);
         if (waited && now() >= deadline) return settle(row, { ok: false, code: 'busy-timeout' });
         if (state === 'waiting') return settle(row, { ok: false, code: 'needs-answer' });
-        if (state === 'shell') return settle(row, { ok: false, code: 'shell' });
         if (!state) return settle(row, { ok: false, code: 'refused' });
         if (state !== 'busy') break;
         if (!waited) progress({ id: row.id, phase: 'waiting' });

@@ -24,7 +24,6 @@ function backgroundRefusal(session, status, { force = false } = {}) {
   if (!isComposerEmpty(session.composerState)) return 'The prompt holds text you have not sent. Send it or clear it, then try again.';
   if (!status) return 'Switchboard cannot read this session’s state. Wait for its state to appear, then try again.';
   if (status === 'waiting') return 'Claude is waiting for an answer in the terminal. Answer it, then try again.';
-  if (status === 'shell') return 'A shell command is running in the prompt. Wait for it to finish, then try again.';
   if (status === 'busy' && !force) return 'Claude is working. Send to background once it is idle.';
   return null;
 }
@@ -123,7 +122,7 @@ async function sendToBackground(sessionId, deps) {
     if (!written) return { ok: false, code: 'write-failed', error: 'Could not write to the terminal. Try again when it is running.' };
     await deps.delay(300);
     const status = deps.getStatus(oldId);
-    if (!bound() || session.exited || status === 'waiting' || status === 'shell' || (status === 'busy' && !force) || !status || (composer && (composer.text !== command || composer.inPaste)) || session.composerState?.lastInputAt !== inputAt) {
+    if (!bound() || session.exited || status === 'waiting' || (status === 'busy' && !force) || !status || (composer && (composer.text !== command || composer.inPaste)) || session.composerState?.lastInputAt !== inputAt) {
       return { ok: false, code: 'write-failed', error: 'The terminal changed after ' + command + ' was typed, so Enter was withheld. Check the terminal and clear the command before trying again.' };
     }
     if (!deps.write(session, '\r')) return { ok: false, code: 'write-failed', error: 'Could not submit ' + command + ' to the terminal. Check the terminal before trying again.' };

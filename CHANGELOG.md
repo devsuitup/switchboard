@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- **Send to background** and **Move to background** at Quit no longer refuse a session because a shell command, such as a background Bash, is running. (#1278)
+
 ## v0.1.0-beta.2 — 2026-11-25
 
 ### Changed

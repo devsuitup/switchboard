@@ -53,8 +53,8 @@ test('T1: unsent composer text refuses before any write', async () => {
   assert.deepEqual(h.writes, []);
 });
 
-test('T2: waiting, shell and unknown status refuse before any write', async () => {
-  for (const status of ['waiting', 'shell', null]) {
+test('T2: waiting and unknown status refuse before any write', async () => {
+  for (const status of ['waiting', null]) {
     const h = setup({ status });
     assert.equal((await sendToBackground('old', h.deps)).code, 'refused');
     assert.deepEqual(h.writes, []);
@@ -304,12 +304,71 @@ test('T20b: a busy session with force submits /bg and confirms on the same proof
   assert.equal(result.jobId, '1234abcd');
 });
 
-test('T20c: force never lifts the waiting or shell refusal', async () => {
-  for (const status of ['waiting', 'shell', null]) {
+test('T20c: force never lifts the waiting or unknown-state refusal', async () => {
+  for (const status of ['waiting', null]) {
     const h = setup({ status });
     h.deps.force = true;
     assert.equal((await sendToBackground('old', h.deps)).code, 'refused');
     assert.deepEqual(h.writes, []);
+  }
+});
+
+for (const force of [false, true]) {
+  test(`T31: shell submits /bg once and succeeds on the usual proof (force=${force})`, async () => {
+    const h = setup({ status: 'shell' });
+    h.deps.force = force;
+    const result = await sendToBackground('old', h.deps);
+    assert.deepEqual(result, { ok: true, oldSessionId: 'old', jobId: '1234abcd', sessionId: 'new', cwd: '/project' }, JSON.stringify(result));
+    assert.deepEqual(h.writes, ['/bg', '\r']);
+  });
+}
+
+test('T31b: shell without the continuation proof still times out', async () => {
+  const h = setup({ status: 'shell', descriptors: [] });
+  const result = await sendToBackground('old', h.deps);
+  assert.equal(result.code, 'timeout', JSON.stringify(result));
+  assert.deepEqual(h.writes, ['/bg', '\r']);
+});
+
+for (const when of ['snapshot', 'gap']) {
+  test(`T31c: a turn to shell during the ${when} before Enter still submits`, async () => {
+    const h = setup();
+    if (when === 'snapshot') {
+      const read = h.deps.readContinuationIds;
+      h.deps.readContinuationIds = (...args) => { h.deps.getStatus = () => 'shell'; return read(...args); };
+    } else {
+      const delay = h.deps.delay;
+      h.deps.delay = async ms => { h.deps.getStatus = () => 'shell'; await delay(ms); };
+    }
+    const result = await sendToBackground('old', h.deps);
+    assert.equal(result.ok, true, when + ' ' + JSON.stringify(result));
+    assert.deepEqual(h.writes, ['/bg', '\r']);
+  });
+}
+
+test('T31d: shell sends after a submitted ! command but refuses ! text left in the prompt', async () => {
+  const sent = setup({ status: 'shell' });
+  noteUserInput(sent.session.composerState, '!sleep 40\r', 1);
+  assert.equal((await sendToBackground('old', sent.deps)).ok, true);
+  for (const text of ['!', '!ls']) {
+    const h = setup({ status: 'shell' });
+    noteUserInput(h.session.composerState, text, 1);
+    const result = await sendToBackground('old', h.deps);
+    assert.equal(result.code, 'refused');
+    assert.match(result.error, /have not sent/);
+    assert.deepEqual(h.writes, []);
+  }
+});
+
+test('T31e: in shell, input or a dialog before Enter still withholds it', async () => {
+  for (const change of ['input', 'waiting', 'unknown']) {
+    const h = setup({ status: 'shell' });
+    h.deps.delay = async ms => {
+      if (change === 'input') noteUserInput(h.session.composerState, 'x', ms);
+      else h.deps.getStatus = () => change === 'waiting' ? 'waiting' : null;
+    };
+    assert.equal((await sendToBackground('old', h.deps)).code, 'write-failed');
+    assert.deepEqual(h.writes, ['/bg']);
   }
 });
 

@@ -1367,8 +1367,7 @@ early in the job, not a duplicated side effect.
 
 Rule derived from that measurement: `backgroundRefusal(session, status,
 { force })` keeps refusing `waiting` (the Enter would answer the open dialog;
-M4 case 2, not re-measured) and `shell`, and an unknown status, with or
-without `force`. `busy` without `force` returns `{ ok: false, code: 'busy' }`
+M4 case 2, not re-measured) and an unknown status, with or without `force`. `busy` without `force` returns `{ ok: false, code: 'busy' }`
 and writes nothing; the renderer then asks once ("Send to background now?",
 naming the interrupted tool, Send now / Cancel) and retries with
 `{ force: true }` through the same IPC (`send-session-to-background`,
@@ -1378,6 +1377,18 @@ during the turn and the 300 ms post-write check no longer withholds Enter on
 exit batch (`runExitHandoffs`) never passes `force`: it keeps waiting for the
 turn to end, as decided on 2026-10-21. Tests: `test/bg-handoff.test.js`
 T20–T20d.
+
+**Shell state (#1278, decided by Jean-Baptiste on 2026-11-25).** `shell` is
+treated like `idle`: no refusal, no `force`, no withheld Enter, inventory class
+`ready`. The CLI reports it for a background Bash that outlives the turn (#791),
+and a typed `/bg` works there. The descriptor does not say whether the shell
+command is a background Bash or a `!` command, nor whether the prompt is in bash
+mode, where `/bg` would run as a shell command. `composerState` covers the
+latter only as far as it tracks text: an unsent `!` or `!ls` is pending text and
+refuses. Known blind spots, shared with `idle`: input that clears the model but
+may leave the CLI in bash mode (Ctrl+U, or Ctrl+W on a single word), and input
+Switchboard did not observe. Not measured with a real CLI: `/bg` submitted while
+a `!` command runs in the foreground. Tests: T31–T31e.
 
 **Continuations already hosted.** Before writing, main asks
 `bgAgents.continuationJobCheck(oldId)` through the `checkContinuations` port.
@@ -1418,8 +1429,9 @@ primitive. It takes `send`, `status`, `waitForChange(ms, signal)`, `now`, `busyB
 Rows start concurrently. A busy row emits `{ id, phase: 'waiting' }` and polls
 descriptor changes in steps of at most 1000 ms. `EXIT_BUSY_WAIT_MS` is ten
 minutes and can be overridden for tests. Deadline expiry returns
-`busy-timeout`; a transition to `waiting`, `shell` or an unreadable status
-returns `needs-answer`, `shell` or `refused` immediately, without a send.
+`busy-timeout`; a transition to `waiting` or an unreadable status returns
+`needs-answer` or `refused` immediately, without a send. A `shell` row is sent
+like an idle one (#1278).
 
 A ready row emits `moving` before calling `send`; a settled row emits `done`
 with its result. The first failure before a send cancels other unwritten rows
@@ -1464,8 +1476,8 @@ Issue #656 guards the handoff continuation reader with BigInt dev/ino/birthtime 
 The session header and sidebar context menu call `send-session-to-background`
 for one running local Claude tab. Main refuses plain terminals, attach tabs,
 remote tabs, sandboxed and pre-launch-command sessions, duplicate handoffs,
-unsubmitted composer text, unknown CLI state, open dialogs (`waiting`) and
-shell state before writing. Busy without `force` returns `code: 'busy'`
+unsubmitted composer text, unknown CLI state and open dialogs (`waiting`)
+before writing. Busy without `force` returns `code: 'busy'`
 ("Claude is working. Send to background once it is idle."); the renderer then
 asks "Send to background now?" and retries with `force` (see "Busy
 sessions"). Running subagents require an `appConfirm` warning first;

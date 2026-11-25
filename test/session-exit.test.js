@@ -9,7 +9,7 @@ test('C2 inventory classifies ready, busy and refused sessions with the main rea
   const cases = [
     ['idle', 'ready', {}], ['busy', 'busy', {}],
     ['busy', 'refused', { sandbox: true }], ['busy', 'refused', { composerState: { text: 'unsent' } }],
-    ['waiting', 'refused', {}], ['shell', 'refused', {}], [undefined, 'refused', {}],
+    ['waiting', 'refused', {}], ['shell', 'ready', {}], ['shell', 'refused', { composerState: { pending: 3 } }], [undefined, 'refused', {}],
     ['busy', 'refused', { preLaunch: true }], ['busy', 'refused', { backgrounding: true }],
   ];
   for (const [status, expected, extra] of cases) {

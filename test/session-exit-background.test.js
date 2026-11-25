@@ -48,7 +48,7 @@ test('C3 busy rows send once only after becoming idle', async () => {
   assert.ok(h.progress.some(e => e.phase === 'moving'));
 });
 
-for (const [status, code] of [['waiting', 'needs-answer'], ['shell', 'shell'], [undefined, 'refused']]) {
+for (const [status, code] of [['waiting', 'needs-answer'], [undefined, 'refused']]) {
   test(`C3 busy to ${status} fails immediately before a write`, async () => {
     const h = setup();
     const pending = runExitHandoffs(['a'], h.deps);
@@ -57,6 +57,17 @@ for (const [status, code] of [['waiting', 'needs-answer'], ['shell', 'shell'], [
     pending.then(value => { result = value; }); await tick();
     assert.equal(result?.[0].code, code, 'failure must not wait for the busy bound');
     assert.deepEqual(h.sends, []);
+  });
+}
+
+for (const from of ['shell', 'busy']) {
+  test(`C3 a ${from === 'shell' ? 'shell row' : 'busy row turning shell'} is sent`, async () => {
+    const h = setup(); h.states.set('a', from);
+    const pending = runExitHandoffs(['a'], h.deps);
+    if (from === 'busy') { h.states.set('a', 'shell'); await h.wake(); }
+    assert.deepEqual(h.sends, ['a']);
+    h.releases.get('a')({ ok: true });
+    assert.deepEqual(await pending, [{ id: 'a', ok: true }]);
   });
 }
 
@@ -135,11 +146,11 @@ test('C3 B2 a pre-write failure cancels the other busy row before its bound', as
 test('C3 B2 written rows finish after another row fails before writing', async () => {
   const h = setup(['a', 'b']); h.states.set('a', 'idle');
   const pending = runExitHandoffs(['a', 'b'], h.deps);
-  h.states.set('b', 'shell'); await h.wake();
+  h.states.set('b', 'waiting'); await h.wake();
   let finished = false; pending.then(() => { finished = true; }); await tick();
   assert.equal(finished, false);
   h.releases.get('a')({ ok: true });
-  assert.deepEqual(await pending, [{ id: 'a', ok: true }, { id: 'b', ok: false, code: 'shell' }]);
+  assert.deepEqual(await pending, [{ id: 'a', ok: true }, { id: 'b', ok: false, code: 'needs-answer' }]);
 });
 
 test('C3 failures after a write leave other busy rows eligible', async () => {
