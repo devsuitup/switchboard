@@ -166,4 +166,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { SCHEDULES, createDataset, gitEnv, parseArgs };
+module.exports = { SCHEDULES, canSymlink, createDataset, gitEnv, parseArgs };

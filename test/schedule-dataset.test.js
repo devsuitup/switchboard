@@ -9,7 +9,7 @@ const { spawnSync } = require('node:child_process');
 const runner = require('../src/main/schedules/schedule-runner');
 const { readScheduleRunResults } = require('../src/main/schedules/schedule-run-results');
 const { encodeProjectPath } = require('../encode-project-path');
-const { SCHEDULES, createDataset, gitEnv, parseArgs } = require('../scripts/schedule-dataset');
+const { SCHEDULES, canSymlink, createDataset, gitEnv, parseArgs } = require('../scripts/schedule-dataset');
 
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'schedule-dataset.js');
 const NOW = Date.parse('2026-11-25T08:00:00Z');
@@ -28,7 +28,8 @@ function transcripts(home, projectPath) {
 }
 
 test('every fixture schedule is listed by the scheduler with its name, state and link', t => {
-  const { projects, skipped } = dataset(t);
+  const { projects, skipped, home } = dataset(t);
+  assert.equal(skipped.length === 0, canSymlink(path.dirname(home)), 'the linked schedule is skipped only where links are refused');
   const listed = runner.listScheduleFiles(projects, { getSetting: () => ({}), defaultSandbox: false, home: os.homedir(), platform: 'linux' });
   const expected = Object.values(SCHEDULES).flat().filter(s => !skipped.includes(s.name));
   assert.deepEqual(listed.map(s => s.name).sort(), expected.map(s => s.name).sort());
