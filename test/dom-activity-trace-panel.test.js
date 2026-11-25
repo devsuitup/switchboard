@@ -162,7 +162,7 @@ test('the switch stays out of the Save payload, so Save cannot silently revert i
   try {
     await ctx.window.openSettingsViewer('global');
     await settle();
-    ctx.body().querySelector('#sv-save-btn').click();
+    ctx.document.querySelector('#sv-save-btn').click();
     await settle();
     assert.ok(ctx.window.__savedSettings, 'Save ran');
     assert.equal('activityTrace' in ctx.window.__savedSettings.value, false,

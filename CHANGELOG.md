@@ -9,12 +9,14 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### Changed
 - The sidebar no longer flashes "Refreshing…" each time it reloads in the background; only the first load, while the sidebar is still empty, shows "Loading…".
 - The Schedules tab has a new layout. Projects are collapsible cards like those of Sessions, with a **+** to add a schedule, and each schedule takes two lines: a status dot, the name, an on/off switch, Run now, Open and Delete, then the next run, the cadence and the last result, which opens the run history. The exact times, cron expression and full result are in the tooltips. (#1275)
+- The Cancel and Save buttons of Settings now sit on the right of a full-width bar at the bottom of the window. The unsaved-changes count shows as a pill only when there is something to save, and Save is highlighted until you save. In a narrow window, Cancel and Save share the width. (#1273)
 
 ### Fixed
 - The first launch with an empty index no longer leaves the window blank for half a minute or more while your open sessions keep writing: the window and the indexing banner appear at once, and changes those sessions make during that first indexing show once it finishes. (#1266)
 - Sidebar search now finds a session by its id or the first characters of it, and finds issue, pull request and merge request numbers such as `#1233`, `PR 1233` or `!12` anywhere in a session, including links and tool output. Every word must match, Enter searches at once instead of rereading every session first, each hit shows the matched text, subagent groups holding a hit open, and hits in hidden SDK sessions are counted with a way to show them for that search. The first launch rereads every session once in the background to collect the numbers. (#1255)
 - The Schedules tab no longer leaves an empty band under each schedule: its actions stay visible, projects read as headings, file paths are relative to the project, and a cron expression or a never-runs reason is no longer repeated. The Cancel and Save buttons at the bottom of Settings are centred in their bar. (#1256)
 - A trigger that opens or creates a session with a prompt now waits until Claude Code has finished starting and accepts keystrokes before typing it, so the prompt is submitted instead of sitting in the composer. A prompt is reported submitted only when Claude Code starts a turn or opens a dialog after the Enter, or when the session transcript records the prompt; otherwise the Enter is retried once and the result says the prompt was not confirmed. (#1261)
+- The sidebar keeps refreshing while many sessions are writing: a background index check that loses to those writes no longer makes the reload fail and leave the previous lists in place. (#1272)
 
 ## v0.1.0-beta.1 — 2026-11-24
 

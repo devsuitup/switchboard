@@ -800,7 +800,7 @@ Without a cached project, supplied path/folder identity remains visible and coun
 read Unavailable. Values use textContent. Archive Project and Delete Project move
 into its Danger zone before wiring, retaining their ids, deletion busy keys and
 handlers. Archive failures use the OK-only `appAlert` adapter from
-`public/app-dialogs.js`. The footer contains only Cancel and Save Settings. Identity wraps in
+`public/app-dialogs.js`. The footer contains only Cancel and Save Settings; it is moved out of `.settings-form` to the last child of `#settings-viewer` (a full-width `.settings-footer` bar, its buttons found through the `footer` and `saveButton` locals, never through the form or body), and `updateDirty()` toggles `dirty` on Save. Identity wraps in
 the existing ResizeObserver-driven narrow layout; no layout mode is added.
 The new shell adds no trigger controls or archive APIs.
 The host-list and refresh defaults now live in `SETTING_DEFAULTS`.

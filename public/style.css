@@ -4583,7 +4583,7 @@ body { display: flex; flex-direction: column; }
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  padding: 20px;
+  padding: 20px 20px 0;
   display: flex;
   justify-content: center;
 }
@@ -4669,7 +4669,7 @@ body { display: flex; flex-direction: column; }
 .settings-page {
   height: 100%;
   overflow-y: auto;
-  padding-right: 12px;
+  padding: 0 12px 20px 0;
 }
 
 .settings-page[hidden] {
@@ -4753,19 +4753,72 @@ body { display: flex; flex-direction: column; }
   margin-bottom: 8px;
 }
 
-.settings-unsaved {
-  margin-right: auto;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.settings-form > .settings-btn-row {
+#settings-viewer > .settings-footer {
   flex-shrink: 0;
-  flex-wrap: wrap;
-  margin-top: 0;
-  padding: 12px 12px 12px 0;
+  min-height: 52px;
+  margin: 0;
+  padding: 10px max(20px, calc((100% - 1100px) / 2));
   border-top: 1px solid var(--hairline);
   background: var(--surface-chrome);
+}
+
+.settings-footer .settings-unsaved {
+  padding: 2px 9px;
+  border: 1px solid var(--waiting-alpha-025);
+  border-radius: 10px;
+  background: var(--waiting-alpha-008);
+  color: var(--state-waiting);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.settings-footer .settings-unsaved:empty {
+  position: absolute;
+  padding: 0;
+  border: 0;
+}
+
+.settings-footer .settings-notice {
+  margin-bottom: 0;
+}
+
+.settings-footer .settings-cancel-btn {
+  margin-left: auto;
+}
+
+.settings-footer .settings-cancel-btn,
+.settings-footer .settings-save-btn {
+  padding: 7px 18px;
+}
+
+.settings-footer .settings-save-btn.dirty {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface-sunken);
+}
+
+.settings-footer .settings-save-btn.dirty:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.settings-compact > .settings-footer {
+  flex-wrap: wrap;
+}
+
+.settings-compact > .settings-footer .settings-notice {
+  flex: 1 1 100%;
+}
+
+.settings-compact > .settings-footer .settings-unsaved {
+  margin-right: 100%;
+}
+
+.settings-compact > .settings-footer .settings-cancel-btn,
+.settings-compact > .settings-footer .settings-save-btn {
+  flex: 1 1 0;
+  margin-left: 0;
+  padding: 8px 12px;
 }
 
 .settings-action-btn { background: var(--control-surface); border: 1px solid var(--control-border); color: var(--text-muted); font: inherit; font-size: 12px; padding: 6px 16px; border-radius: 8px; cursor: pointer; }
@@ -4831,10 +4884,6 @@ body { display: flex; flex-direction: column; }
 
 .settings-narrow .settings-field-info {
   min-width: 0;
-}
-
-.settings-narrow .settings-unsaved {
-  flex-basis: 100%;
 }
 
 /* --- Section titles --- */

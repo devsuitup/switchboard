@@ -37,7 +37,8 @@ function projects(t) {
   worker.postMessage = message => {
     messages.push(message);
     queueMicrotask(() => worker.emit('message', { id: message.id, result: {
-      defaultProjects: rows, allProjects: rows, effects: [{}], keptLiveRows: [], reconciled: message.reconcile,
+      defaultProjects: rows, allProjects: rows, effects: message.readOnly ? [] : [{}], keptLiveRows: [],
+      reconciled: !message.readOnly && !!message.reconcile,
     } }));
   };
   const context = {
@@ -51,8 +52,8 @@ function projects(t) {
     createProjectsWorkerClient(options) {
       client = createProjectsWorkerClient({ ...options, workerFactory: () => worker,
         snapshot: () => ({ version: revision, liveVersion: 'stable' }),
-        apply: async () => {
-          if (race) { revision++; throw Object.assign(new Error('cache snapshot changed before writer admission'), { code: 'WRITER_STALE' }); }
+        apply: async result => {
+          if (race && result.effects.length) { revision++; throw Object.assign(new Error('cache snapshot changed before writer admission'), { code: 'WRITER_STALE' }); }
         },
       });
       return client;
@@ -63,7 +64,7 @@ function projects(t) {
   return { time, invoke: () => invoke(null, 'both'), messages, notifications, logs, rows, race: value => { race = value; } };
 }
 
-test('writer racing every snapshot has one build per request, one reconcile per interval and no immediate re-notification', async t => {
+test('writer racing every snapshot has one build per request plus a read-only build for the lost reconcile, one reconcile per interval and no immediate re-notification', async t => {
   const f = projects(t);
   await f.invoke();
   await f.time.advance(5000);
@@ -74,24 +75,28 @@ test('writer racing every snapshot has one build per request, one reconcile per 
   const counts = { rounds: 10, builds: f.messages.length, reconciles: f.messages.filter(m => m.reconcile).length,
     notifications: f.notifications.length, pending: f.time.timers.size };
   t.diagnostic(JSON.stringify(counts));
-  assert.equal(counts.builds, 10, 'one build per request under continuous writer admission');
+  assert.equal(counts.builds, 11, 'one build per request plus one read-only build for the lost reconcile');
   assert.equal(counts.reconciles, 1, 'failed reconcile attempts must respect the five-second admission interval');
   assert.equal(counts.notifications, 0, 'conflicts must not immediately re-notify the renderer');
   assert.equal(counts.pending, 1, 'one coalesced delayed refresh');
-  for (const reply of replies) {
+  assert.equal(replies[0].projectsError, undefined, 'the lost reconcile does not fail its reload');
+  assert.ok(replies[0].allProjects.some(p => p.projectPath === '/consistent'));
+  for (const reply of replies.slice(1)) {
     assert.equal(reply.projectsError?.code, 'PROJECTS_SNAPSHOT_CONFLICT');
     assert.equal(reply.allProjects, undefined);
   }
-  for (let i = 0; i < 3; i++) {
+  for (const interval of [5000, 10000, 20000]) {
     const before = f.messages.length;
-    await f.time.advance(5000);
+    await f.time.advance(interval - 1);
+    assert.equal(f.messages.length, before, 'the retry respects its backoff');
+    await f.time.advance(1);
     assert.equal(f.messages.length - before, 1, 'a persistent race costs one pass per retry interval');
     assert.equal(f.time.timers.size, 1);
     assert.equal(f.notifications.length, 0);
   }
   f.race(false);
   f.rows.push({ projectPath: '/new', sessions: [] });
-  await f.time.advance(5000);
+  await f.time.advance(30000);
   assert.equal(f.time.timers.size, 0, 'successful retry drains the pending refresh');
   assert.deepEqual(f.notifications, ['reconcile']);
   const fresh = await f.invoke();
@@ -224,9 +229,10 @@ for (const code of ['PROJECTS_WORKER_TIMEOUT', 'PROJECTS_WORKER_EXIT']) test(`re
     console: { error: (...args) => errors.push(args) }, log: { info() {}, warn: (...args) => errors.push(args), error: (...args) => errors.push(args) },
     writer: { applyAndPersistArchived: async rows => rows }, mergePlaceholderSessions: rows => rows, annotateRemoteAttachable: rows => rows,
     notifyRendererProjectsChanged: cause => notifications.push(cause),
-    projectsClient: { request: async () => {
+    projectsClient: { request: async options => {
       if (phase !== 'fresh') throw Object.assign(new Error(phase), { code: phase === 'conflict' ? 'PROJECTS_SNAPSHOT_CONFLICT' : code });
-      return { defaultProjects: [], allProjects: [] };
+      if (options.reconcile) invoke.accepted({ reconciled: true });
+      return { defaultProjects: [], allProjects: [], reconciled: !!options.reconcile };
     } },
   });
   await invoke(null, 'both'); phase = 'failure'; errors.length = 0;
