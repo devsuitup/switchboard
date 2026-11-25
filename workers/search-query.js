@@ -58,25 +58,14 @@ try {
   process.exit(1);
 }
 
-// Query cap + MATCH construction shared with db.js via fts-match.js so the
-// worker and the synchronous fallback cannot drift apart.
-const { buildFtsMatch } = require('../fts-match');
-
-const searchQuery = db.prepare(`
-  SELECT search_map.id, snippet(search_fts, 1, '<mark>', '</mark>', '...', 40) as snippet
-  FROM search_fts
-  JOIN search_map ON search_fts.rowid = search_map.rowid
-  WHERE search_map.type = ? AND search_fts MATCH ?
-  ORDER BY rank
-  LIMIT ?
-`);
+// see .ai/contexts/session-cache.md ("Search")
+const { createSessionSearch } = require('../fts-match');
+const search = createSessionSearch(db);
 
 parentPort.on('message', (msg) => {
   const { id, type, query, limit, titleOnly } = msg;
   try {
-    const match = buildFtsMatch(query, titleOnly);
-    const results = searchQuery.all(type, match, limit || 50);
-    parentPort.postMessage({ id, results });
+    parentPort.postMessage({ id, results: search(type, query, limit || 50, titleOnly) });
   } catch (e) {
     parentPort.postMessage({ id, error: e.message });
   }

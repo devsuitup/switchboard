@@ -75,6 +75,7 @@ contextBridge.exposeInMainWorld('api', {
     ? ipcRenderer.invoke('open-terminal', id, projectPath, isNew, sessionOptions, initialSize)
     : ipcRenderer.invoke('open-terminal', id, projectPath, isNew, sessionOptions, initialSize, triggerRequestId),
   search: (type, query, titleOnly) => ipcRenderer.invoke('search', type, query, titleOnly),
+  searchRevealHidden: (ids) => ipcRenderer.invoke('search-reveal-hidden', ids),
   readSessionJsonl: (sessionId, options) => options === undefined
     ? ipcRenderer.invoke('read-session-jsonl', sessionId)
     : ipcRenderer.invoke('read-session-jsonl', sessionId, options),

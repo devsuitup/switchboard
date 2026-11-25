@@ -1,6 +1,6 @@
 // --- Sidebar rendering ---
 // Depends on globals: sidebarContent, openSessions, activeSessionId, activePtyIds,
-// pendingSessions, sessionMap, sortedOrder, searchMatchIds,
+// pendingSessions, sessionMap, sortedOrder, searchMatchIds, searchSnippets,
 // searchMatchProjectPaths, showStarredOnly, showRunningOnly, showTodayOnly,
 // visibleSessionCount, sessionMaxAgeDays, attentionSessions, responseReadySessions,
 // sessionBusyState, cachedProjects, cachedAllProjects, gridCards, gridViewActive (app.js)
@@ -664,6 +664,7 @@ function buildSubagentItem(session) {
 
   info.appendChild(summaryEl);
   info.appendChild(metaEl);
+  appendSearchSnippet(info, [session.sessionId]);
 
   row.appendChild(typePill);
   row.appendChild(icon);
@@ -671,6 +672,21 @@ function buildSubagentItem(session) {
   item.appendChild(row);
 
   return item;
+}
+
+// see .ai/contexts/session-cache.md ("Search")
+function appendSearchSnippet(info, ids) {
+  if (searchMatchIds === null || !searchSnippets) return;
+  const snippet = ids.map(id => searchSnippets.get(id)).find(Boolean);
+  if (!snippet) return;
+  const el = document.createElement('div');
+  el.className = 'session-search-snippet';
+  el.innerHTML = escapeHtml(snippet).replace(/&lt;(\/?)mark&gt;/g, '<$1mark>');
+  info.appendChild(el);
+}
+
+function holdsSearchHit(children) {
+  return searchMatchIds !== null && children.some(child => searchMatchIds.has(child.sessionId));
 }
 
 // see .ai/contexts/subagent-observability.md (capped subagent lists)
@@ -752,7 +768,7 @@ function buildSubagentGroup(parentSessionId, children, title) {
 
   const expandedSet = getExpandedSubagents();
   const caretId = caretIdFor(parentSessionId);
-  const isExpanded = expandedSet.has(parentSessionId);
+  const isExpanded = expandedSet.has(parentSessionId) || holdsSearchHit(children);
 
   const caret = document.createElement('div');
   caret.className = 'sidebar-children-caret js-stateful';
@@ -2996,6 +3012,7 @@ function buildSessionItem(session) {
   }
   info.appendChild(summaryEl);
   info.appendChild(metaEl);
+  appendSearchSnippet(info, [...ids, rowHeadId(session)]);
 
   // Action buttons container
   const actions = document.createElement('div');

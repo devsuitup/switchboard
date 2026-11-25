@@ -88,6 +88,7 @@ async function build(message) {
   cache.init({
     PROJECTS_DIR: workerData.projectsDir,
     activeSessions: new Map(message.activeSessions || []),
+    getSearchRevealedIds: () => message.searchRevealedIds || [],
     getLocalDescriptors: () => message.localDescriptors || [],
     getLocalJobs: () => new Map(message.localJobs || []),
     getMainWindow: () => null,

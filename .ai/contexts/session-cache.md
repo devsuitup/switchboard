@@ -379,6 +379,54 @@ queries use the ordered writer, never the readonly cache snapshot. See
 [session-index-writer.md](session-index-writer.md) for the journal ports,
 receipt/revision transaction and NORMAL durability boundary.
 
+## Search
+
+Issue #1255.
+
+
+`fts-match.js` holds the whole session query, so the search worker
+(`workers/search-query.js`) and the main-thread fallback (`searchByType` in
+`session-index-store.js`) run the same code: both call
+`createSessionSearch(db)` on their own connection.
+
+- **Terms.** The query is capped at `FTS_QUERY_MAX_CHARS` (48), split on
+  whitespace, and each term loses a leading `#` or `!`. Terms of fewer than 3
+  characters are dropped, and the rest are quoted and joined with `AND`:
+  `PR 1243` becomes `"1243"`, which matches "PR #1243". With the trigram
+  tokenizer a quoted term of 1 or 2 characters matches no row at all
+  (measured on SQLite 3.54: `"PR"` → 0 rows, `"PR" AND "1243"` → 0 rows), so
+  keeping it would empty every query that contains one. A query made only of
+  short terms has no FTS expression. Titles only wraps the terms as
+  `title:("a" AND "b")`.
+- **Id fast path.** `idLookupTerm` accepts one token: a full UUID, a hex prefix
+  of 6 to 36 characters holding at least one digit (so `facade` or `decade`
+  never take it), an `agent-` id, or a `sub:` id. It runs two range lookups,
+  `sessionId` on its primary key and `agentId` on `idx_session_cache_agent`,
+  and its rows come first; FTS hits follow without duplicates. Id rows carry
+  `idMatch: true` and no snippet.
+- **Snippets.** The query asks `snippet(search_fts, -1, …)`, letting FTS5 pick
+  the matching column. The renderer keeps them in `searchSnippets` and
+  `appendSearchSnippet` (`public/sidebar.js`) shows one line under the row,
+  escaping everything except the `<mark>` pairs.
+- **Enter and the refresh button.** Enter runs `runSearchQuery` at once over
+  the current index. Only the refresh button calls `rebuildCache()` (a forced
+  re-read of every transcript, several minutes on a large
+  `~/.claude/projects`) before searching again. Nothing else relied on Enter
+  rebuilding. Between full reads, the text of an active session's appended
+  lines stays out of the index, as before.
+- **Where hits are.** A subagent group holding a hit opens for the search
+  (`holdsSearchHit`), without touching the stored expanded set. Hits whose ids
+  are in no listed row (SDK sessions hidden by `hideSdkSessions`, hidden
+  projects, a disabled CLI) are counted in `#search-status` as "N matches in
+  hidden sessions". **Show them** sends those ids to `search-reveal-hidden`;
+  `main.js` keeps them (a `sub:` id as its parent) in `searchRevealedIds`, the
+  projects build treats them like open sessions in `hiddenSdkSessionIds`, and
+  the renderer reloads projects and searches again. The reveal is dropped
+  when the query changes, the search is cleared or the tab changes; the
+  setting is never written. Only SDK-hidden sessions can be revealed: hits in a
+  hidden project stay counted, without a second button. No hit at all shows
+  "No sessions match".
+
 ## Key files
 
 | File | LOC | Role |
@@ -807,7 +855,7 @@ A kept row is recorded with its folder. On PTY exit, `main.js` calls `releaseLiv
 
 - **The async write facade owns production cache injection (ADR 0004 slice 1a).** `main.js` calls `writer.initializeCache`; the facade injects the existing synchronous `db.js` backend into cache algorithms, and its asynchronous commands into worker/backfill producers. `test/main-ctx-db-wiring.test.js` checks the exported backend dependencies through this actual initialization boundary. Main retains its connection for reads. Writer inventory, aggregate command boundaries, ordering, lifecycle and the deliberately direct background-continuation metadata writer are documented in [session-index-writer.md](session-index-writer.md).
 
-- **`search` IPC is routed through a dedicated worker thread, with a bounded query.** Historically `ipcMain.handle('search', ...)` ran the `better-sqlite3` FTS5 `MATCH` query synchronously on the Electron main process — a long pasted string (e.g. a GitLab MR URL) became a ~58-trigram phrase intersect that pinned the main thread for up to ~60 s and froze the whole app (witnessed 2026-06-22). Two guards now exist: (1) `buildFtsMatch()` in `fts-match.js`, which `searchByType()` uses, truncates the query to `FTS_QUERY_MAX_CHARS` (48) before building the MATCH expression; (2) the `search` IPC goes through `searchViaWorker` (`search-worker-client.js` + `workers/search-query.js`) so even a slow query can't block IPC dispatch. The client falls back to the synchronous main-thread `searchByType` only when the worker isn't ready (first-launch race, or circuit-breaker open after repeated worker failures) — the length cap makes that fallback safe. Protocol logic (correlation IDs, drain, backoff, restart storm guard) is unit-tested in `test/search-worker-protocol.test.js`; the cap in `test/db-search-query-bound.test.js`.
+- **`search` IPC is routed through a dedicated worker thread, with a bounded query.** Historically `ipcMain.handle('search', ...)` ran the `better-sqlite3` FTS5 `MATCH` query synchronously on the Electron main process — a long pasted string (e.g. a GitLab MR URL) became a ~58-trigram phrase intersect that pinned the main thread for up to ~60 s and froze the whole app (witnessed 2026-06-22). Two guards now exist: (1) `buildFtsMatch()` in `fts-match.js`, shared by `searchByType()` and the worker, truncates the query to `FTS_QUERY_MAX_CHARS` (48) before building the MATCH expression (terms and the id path: "Search" above); (2) the `search` IPC goes through `searchViaWorker` (`search-worker-client.js` + `workers/search-query.js`) so even a slow query can't block IPC dispatch. The client falls back to the synchronous main-thread `searchByType` only when the worker isn't ready (first-launch race, or circuit-breaker open after repeated worker failures) — the length cap makes that fallback safe. Protocol logic (correlation IDs, drain, backoff, restart storm guard) is unit-tested in `test/search-worker-protocol.test.js`; the cap in `test/db-search-query-bound.test.js`.
 
 - **A manual `/compact` leaves a second transcript ("mirror") for the same session; it is merged on `bridgeSessionId`, not on file order, and NEITHER file is discarded (issue #197).** The CLI writes a `{"type":"bridge-session","bridgeSessionId":"cse_..."}` bookkeeping record into a transcript once bridging is established; both the pre-compaction file and the mirror it continues into carry the SAME `bridgeSessionId`. Measured on a real pair (16 MB parent + 3.1 MB mirror, same folder): **neither size nor first-event date tells them apart** — the mirror is *smaller* (it starts fresh at the compaction point) and *looks newer* (its first event is the compaction timestamp, later than the parent's). The parent's very last line is a `{"type":"continued-in","continuedInSessionId":"<mirror>"}` marker, after which the parent file goes quiet; the mirror keeps receiving new lines afterward — **the CLI keeps writing to the mirror, not the parent, once compaction happens.** `continued-in` is NOT a safe merge signal by itself: the same parent file carried a *second* `continued-in` record earlier, pointing at a transcript with a completely different `bridgeSessionId` (a genuinely independent session) — only a `bridgeSessionId` match is trustworthy.
   - **First cut of this fix kept the earliest file and dropped the mirror outright — wrong, caught in review before merge.** Given the CLI keeps writing to the mirror, discarding it forever would make every post-compaction message invisible to the cache: a session that compacts and keeps working loses all *later* activity, which is a worse failure mode than the double-count it replaces (double-count is a visible cost anomaly; silent loss of live activity is not visible at all, and this machine compacts routinely — nominal case, not an edge case). The design below is a real union instead.

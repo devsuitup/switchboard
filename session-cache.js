@@ -64,6 +64,7 @@ let getCachedMissingEntrypoint, setCachedEntrypoints, getCachedSession, setCache
 let entrypointBackfill = null;
 let getLocalDescriptors = () => [];
 let getLocalJobs = () => new Map();
+let getSearchRevealedIds = () => [];
 let setCachedCustomTitles, getCachedMissingCustomTitle;
 let customTitleBackfill = null;
 const continuationFiles = new Map();
@@ -224,6 +225,7 @@ function init(ctx) {
   activeSessions = ctx.activeSessions;
   getLocalDescriptors = ctx.getLocalDescriptors || (() => []);
   getLocalJobs = ctx.getLocalJobs || (() => new Map());
+  getSearchRevealedIds = ctx.getSearchRevealedIds || (() => []);
   setCachedCustomTitles = ctx.db.setCachedCustomTitles;
   getCachedMissingCustomTitle = ctx.db.getCachedMissingCustomTitle;
   customTitleBackfill = null;
@@ -1035,7 +1037,7 @@ function revealIfSdkSession(sessionId) {
 // see .ai/contexts/session-cache.md ("SDK-launched sessions")
 function hiddenSdkSessionIds(cachedRows, global, mergedChildrenByParent, rollup) {
   if (!(global.hideSdkSessions ?? SETTING_DEFAULTS.hideSdkSessions)) return new Set();
-  const kept = new Set((global.openWorkingSet || []).map(item => item && item.sessionId));
+  const kept = new Set([...(global.openWorkingSet || []).map(item => item && item.sessionId), ...getSearchRevealedIds()]);
   for (const [sessionId, session] of activeSessions || []) {
     if (!session.exited) kept.add(sessionId);
   }

@@ -213,6 +213,7 @@ db.exec(`
 
 db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_folder ON session_cache(folder)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_slug ON session_cache(slug)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_agent ON session_cache(agentId)');
 
 const migrations = [
   
@@ -401,7 +402,7 @@ db.exec('CREATE TEMP TABLE search_staging (token TEXT PRIMARY KEY, id TEXT, type
 db.pragma('busy_timeout = 100');
 const FTS_BODY_MAX_CHARS = 32768; 
 
-const { buildFtsMatch } = require('./fts-match');
+const { createSessionSearch } = require('./fts-match');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS search_content (
@@ -546,14 +547,6 @@ const stmts = {
   `),
   settingsDelete: db.prepare('DELETE FROM settings WHERE key = ?'),
   settingsKeysWithPrefix: db.prepare('SELECT key FROM settings WHERE substr(key, 1, ?) = ?'),
-  searchQuery: db.prepare(`
-    SELECT search_map.id, snippet(search_fts, 1, '<mark>', '</mark>', '...', 40) as snippet
-    FROM search_fts
-    JOIN search_map ON search_fts.rowid = search_map.rowid
-    WHERE search_map.type = ? AND search_fts MATCH ?
-    ORDER BY rank
-    LIMIT ?
-  `),
 };
 
 const metaFieldGet = db.prepare('SELECT revision, source, transcriptTitle, updatedAt FROM session_meta_fields WHERE sessionId = ? AND field = ?');
@@ -912,11 +905,11 @@ function updateSearchTitle(id, type, title) {
   } catch {}
 }
 
+let sessionSearch;
 function searchByType(type, query, limit = 50, titleOnly = false) {
   try {
-
-    const match = buildFtsMatch(query, titleOnly);
-    return stmts.searchQuery.all(type, match, limit);
+    sessionSearch ||= createSessionSearch(db);
+    return sessionSearch(type, query, limit, titleOnly);
   } catch {
     return [];
   }

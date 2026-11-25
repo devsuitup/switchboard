@@ -170,7 +170,7 @@ test('Show in sidebar reveals an old archived row through conflicting filters wi
   h.w.searchMatchIds = new Set(['other']);
   h.w.searchInput = h.document.createElement('input'); h.w.searchBar = h.document.createElement('div');
   h.w.activeTab = 'sessions';
-  loadAppFunctions(h.context, { functions: ['clearSearch', 'showArchivedSessionInSidebar'], declarations: ['searchGeneration', 'searchDebounceTimer', 'clearRenderRaf'] });
+  loadAppFunctions(h.context, { functions: ['clearSearch', 'endSessionSearch', 'paintSearchStatus', 'dropSearchReveal', 'showArchivedSessionInSidebar'], declarations: ['searchGeneration', 'searchDebounceTimer', 'clearRenderRaf', 'searchReveal', 'searchSnippets'] });
   h.w.closeSettingsViewer = () => h.container.remove();
   let renders = 0;
   h.w.refreshSidebar = () => { renders++; h.w.renderProjects(h.w.cachedAllProjects); };
