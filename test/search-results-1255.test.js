@@ -147,3 +147,44 @@ test('a subagent group already rendered collapsed opens for a hit through reconc
     ctx.destroy();
   }
 });
+
+test('a manual open or close during a search survives refreshes, and the search end restores the pre-search state', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const project = () => makeSampleProject({ sessions: [
+      { sessionId: PARENT, summary: 'top level', modified: '2026-11-01T10:00:00.000Z', messageCount: 4 },
+      { sessionId: SUB, parentSessionId: PARENT, agentId: 'agent-1', subagentType: 'explore', description: 'explore',
+        modified: '2026-11-01T09:00:00.000Z', messageCount: 2 },
+    ] });
+    const domKey = PARENT.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const container = () => ctx.document.getElementById('subc-' + domKey);
+    const caret = () => container().previousElementSibling;
+    const search = () => { ctx.window.searchMatchIds = new Set([SUB]); ctx.window.searchSnippets = new Map(); };
+    const endSearch = () => { ctx.window.searchMatchIds = null; ctx.window.searchSnippets = null; };
+
+    ctx.sidebar.renderProjects([project()], true);
+    search();
+    ctx.sidebar.renderProjects([project()], true);
+    assert.notEqual(container().style.display, 'none', 'the hit opens the group');
+    caret().click();
+    assert.equal(container().style.display, 'none');
+    ctx.sidebar.renderProjects([project()], true);
+    assert.equal(container().style.display, 'none', 'a manual close of an auto-opened group survives a refresh');
+    endSearch();
+    ctx.sidebar.renderProjects([project()], true);
+    assert.equal(container().style.display, 'none', 'collapsed before the search, collapsed after');
+
+    caret().click();
+    assert.notEqual(container().style.display, 'none', 'expanded by the user outside a search');
+    search();
+    ctx.sidebar.renderProjects([project()], true);
+    caret().click();
+    ctx.sidebar.renderProjects([project()], true);
+    assert.equal(container().style.display, 'none', 'a manual close of a saved-open group survives a refresh');
+    endSearch();
+    ctx.sidebar.renderProjects([project()], true);
+    assert.notEqual(container().style.display, 'none', 'the search end restores the saved open state');
+  } finally {
+    ctx.destroy();
+  }
+});

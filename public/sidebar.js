@@ -689,6 +689,15 @@ function holdsSearchHit(children) {
   return searchMatchIds !== null && children.some(child => searchMatchIds.has(child.sessionId));
 }
 
+const searchGroupChoices = { search: null, open: new Map() };
+function searchGroupChoice(key) {
+  if (searchGroupChoices.search !== searchMatchIds) {
+    searchGroupChoices.search = searchMatchIds;
+    searchGroupChoices.open.clear();
+  }
+  return searchGroupChoices.open.get(key);
+}
+
 // see .ai/contexts/subagent-observability.md (capped subagent lists)
 function splitSubagentsForPreview(list) {
   if (list.length <= SUBAGENT_PREVIEW_COUNT) return { shown: list, rest: [] };
@@ -768,8 +777,9 @@ function buildSubagentGroup(parentSessionId, children, title) {
 
   const expandedSet = getExpandedSubagents();
   const caretId = caretIdFor(parentSessionId);
-  const searchOpen = !expandedSet.has(parentSessionId) && holdsSearchHit(children);
-  const isExpanded = expandedSet.has(parentSessionId) || searchOpen;
+  const searching = searchMatchIds !== null;
+  const choice = searching ? searchGroupChoice(parentSessionId) : undefined;
+  const isExpanded = choice ?? (expandedSet.has(parentSessionId) || holdsSearchHit(children));
 
   const caret = document.createElement('div');
   caret.className = 'sidebar-children-caret js-stateful';
@@ -782,18 +792,21 @@ function buildSubagentGroup(parentSessionId, children, title) {
   childrenContainer.className = 'sidebar-subagents-container js-stateful';
   childrenContainer.id = 'subc-' + domKey;
   childrenContainer.style.display = isExpanded ? '' : 'none';
-  if (searchOpen) caret.dataset.searchOpen = childrenContainer.dataset.searchOpen = '1';
+  if (searching) caret.dataset.searchOpen = childrenContainer.dataset.searchOpen = '1';
 
   const restKey = 'p:' + parentSessionId;
   appendSubagentRows(childrenContainer, children, domKey, restKey, !!title);
 
   caret.addEventListener('click', (e) => {
     e.stopPropagation();
-    delete caret.dataset.searchOpen;
-    delete childrenContainer.dataset.searchOpen;
     const open = childrenContainer.style.display !== 'none';
     childrenContainer.style.display = open ? 'none' : '';
     caret.classList.toggle('expanded', !open);
+    if (searchMatchIds !== null) {
+      searchGroupChoice(parentSessionId);
+      searchGroupChoices.open.set(parentSessionId, !open);
+      return;
+    }
     const set = getExpandedSubagents();
     if (open) { set.delete(parentSessionId); } else { set.add(parentSessionId); }
     saveExpandedSubagents(set);
