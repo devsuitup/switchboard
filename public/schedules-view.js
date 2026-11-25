@@ -555,15 +555,22 @@ function updateScheduleRunButtons(filePath, original) {
   restorePendingScheduleFocus();
 }
 
+function schedulePathLabel(projectPath, filePath) {
+  const root = String(projectPath || '').replace(/[\\/]+$/, '');
+  const sep = filePath.charAt(root.length);
+  return root && filePath.startsWith(root) && (sep === '/' || sep === '\\') ? filePath.slice(root.length + 1) : filePath;
+}
+
 function buildScheduleItem(project, schedule, data) {
   const item = document.createElement('article');
   item.className = 'schedule-item';
   item.tabIndex = -1;
   item.dataset.filepath = schedule.filePath;
   scheduleText(item, 'schedule-name', schedule.name);
-  scheduleText(item, 'schedule-path', schedule.filePath);
+  scheduleText(item, 'schedule-path', schedulePathLabel(project.projectPath, schedule.filePath)).title = schedule.filePath;
   const readError = schedule.readError;
-  scheduleText(item, 'schedule-cron', readError ? 'Schedule unknown' : `${schedule.cronText} · ${schedule.cron}`);
+  scheduleText(item, 'schedule-cron', readError || schedule.cron == null ? 'Schedule unknown'
+    : schedule.cronText && schedule.cronText !== schedule.cron ? `${schedule.cronText} · ${schedule.cron}` : String(schedule.cron));
   const fatal = schedule.problems.filter(p => !p.startsWith('slug shared with '));
   const state = project.archived ? 'Suspended — project archived'
     : readError ? 'Unknown: the file could not be read'
@@ -575,9 +582,10 @@ function buildScheduleItem(project, schedule, data) {
   scheduleText(item, 'schedule-state', state);
   if (schedule.runAsBackground) scheduleText(item, 'schedule-state', project.remoteAlias ? 'Background option ignored: local schedules only'
     : project.sandboxed ? 'Background unavailable under sandbox: runs headless' : 'Background session: can be joined while it runs');
-  if (schedule.problems.length) scheduleText(item, 'schedule-problems', schedule.problems.join('; '));
+  const listed = state.startsWith('Never runs: ') ? schedule.problems.filter(p => !fatal.includes(p)) : schedule.problems;
+  if (listed.length) scheduleText(item, 'schedule-problems', listed.join('; '));
   if (readError) scheduleText(item, 'schedule-problems', `${readError.message}. Check the file's permissions and path, then Retry.`);
-  if (schedule.linked) scheduleText(item, 'schedule-problems', 'linked file: edit it at its source');
+  if (schedule.linked) scheduleText(item, 'schedule-note', 'linked file: edit it at its source');
   if (schedule.catchUp) {
     scheduleText(item, 'schedule-catch-up', !data.catchUpActive ? 'catch-up off in this instance'
       : schedule.catchUpDueMs != null ? `Catch-up pending: due ${new Date(schedule.catchUpDueMs).toLocaleString()}` : 'Catch-up on');
