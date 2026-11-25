@@ -111,7 +111,7 @@ function collectPrompts(entries) {
   return prompts.slice(-MAX_PROMPTS);
 }
 
-function promptMatches(text, command) {
+function promptMatches(text, command, { strict = false } = {}) {
   if (typeof text !== 'string' || typeof command !== 'string') return false;
   const want = command.trim();
   if (!want) return false;
@@ -124,7 +124,10 @@ function promptMatches(text, command) {
   }
   if (!COMMAND_ELEMENTS_ONLY.test(got)) return false;
   const name = got.match(/<command-name>([^<]*)<\/command-name>/);
-  return !!name && name[1].trim() === want.split(/\s/)[0];
+  if (!name || name[1].trim() !== want.split(/\s/)[0]) return false;
+  if (!strict) return true;
+  const args = got.match(/<command-args>([\s\S]*?)<\/command-args>/);
+  return (args ? args[1].trim() : '') === want.slice(want.split(/\s/)[0].length).trim();
 }
 
 function classifyTranscriptTail(text) {

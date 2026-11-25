@@ -95,3 +95,72 @@ for (const withFreshBusy of [false, true]) {
     assert.deepEqual(f.writes, []);
   });
 }
+
+test('startup: an idle the CLI rewrites after the Enter, with no busy and no own entry, is not a submission', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
+  const desc = { status: 'idle', statusUpdatedAt: 1000 };
+  const f = fixture(() => ({ ...desc }));
+  f.ctx.getTranscriptTurn = () => ({ prompts: [] });
+  f.handle.write = data => {
+    f.writes.push(data);
+    if (data === '\r' && f.writes.length === 2) setTimeout(() => { desc.statusUpdatedAt = Date.now(); }, 20);
+  };
+  const pending = watcher.deliverSingle({ ...f, sessionId: 'id', command: 'hello', wait: 'idle', v1: true,
+    deliveryDeadline: 3000, startup: true, launchStartedAt: 1000 });
+  await new Promise(resolve => setImmediate(resolve));
+  for (let i = 0; i < 300; i++) { t.mock.timers.tick(5); await new Promise(resolve => setImmediate(resolve)); }
+  const r = await pending;
+  assert.equal(r.submit_confirmed, false);
+  assert.equal(r.turn_observed, false);
+  assert.deepEqual(f.writes, ['hello', '\r', '\r'], 'the recovery Enter applies');
+});
+
+test('startup: a descriptor idle from boot does not release the prompt before the CLI attaches its input', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
+  const f = fixture(() => ({ status: 'idle', statusUpdatedAt: 1000 }));
+  let attachedAt = null;
+  f.ctx.getInputAttachedAt = () => attachedAt;
+  setTimeout(() => { attachedAt = Date.now(); }, 400);
+  let firstWriteAt = null;
+  f.handle.write = data => { if (firstWriteAt === null) firstWriteAt = Date.now(); f.writes.push(data); };
+  const pending = watcher.deliverSingle({ ...f, sessionId: 'id', command: 'hello', wait: 'idle', v1: true,
+    deliveryDeadline: 3000, startup: true, launchStartedAt: 1000 });
+  await new Promise(resolve => setImmediate(resolve));
+  for (let i = 0; i < 300; i++) { t.mock.timers.tick(5); await new Promise(resolve => setImmediate(resolve)); }
+  await pending;
+  assert.ok(attachedAt !== null, 'the input attached');
+  assert.ok(firstWriteAt !== null && firstWriteAt >= attachedAt + 10, `written at ${firstWriteAt}, input attached at ${attachedAt}`);
+});
+
+test('startup: input never attached within its bound falls back to the descriptor and says so', async t => {
+  const previous = process.env.SWITCHBOARD_STARTUP_INPUT_WAIT_MS;
+  process.env.SWITCHBOARD_STARTUP_INPUT_WAIT_MS = '200';
+  t.after(() => { if (previous === undefined) delete process.env.SWITCHBOARD_STARTUP_INPUT_WAIT_MS; else process.env.SWITCHBOARD_STARTUP_INPUT_WAIT_MS = previous; });
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
+  const f = fixture(() => ({ status: 'idle', statusUpdatedAt: 1000 }));
+  const warnings = [];
+  f.ctx.log.warn = (...args) => warnings.push(args.join(' '));
+  f.ctx.getInputAttachedAt = () => null;
+  let firstWriteAt = null;
+  f.handle.write = data => { if (firstWriteAt === null) firstWriteAt = Date.now(); f.writes.push(data); };
+  const pending = watcher.deliverSingle({ ...f, sessionId: 'id', command: 'hello', wait: 'idle', v1: true,
+    deliveryDeadline: 3000, startup: true, launchStartedAt: 1000 });
+  await new Promise(resolve => setImmediate(resolve));
+  for (let i = 0; i < 300; i++) { t.mock.timers.tick(5); await new Promise(resolve => setImmediate(resolve)); }
+  await pending;
+  assert.ok(firstWriteAt >= 1200, `written at ${firstWriteAt}`);
+  assert.ok(warnings.some(w => /never showed its input attached/.test(w)), warnings.join('\n'));
+});
+
+test('startup: input not attached at the deadline refuses with the starting reason', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
+  const f = fixture(() => ({ status: 'idle', statusUpdatedAt: 1000 }));
+  f.ctx.getInputAttachedAt = () => null;
+  const pending = watcher.deliverSingle({ ...f, sessionId: 'id', command: 'hello', wait: 'idle', v1: true,
+    deliveryDeadline: 1300, startup: true, launchStartedAt: 1000 });
+  await new Promise(resolve => setImmediate(resolve));
+  for (let i = 0; i < 100; i++) { t.mock.timers.tick(5); await new Promise(resolve => setImmediate(resolve)); }
+  const r = await pending;
+  assert.equal(r.reason, 'the CLI had not finished starting (its input was not attached yet) at the deadline; nothing was written');
+  assert.deepEqual(f.writes, []);
+});

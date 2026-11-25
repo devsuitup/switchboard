@@ -14,8 +14,9 @@ const { start } = require('./fixtures/trigger-watcher.cjs');
 const { resolveLocalTarget, resolveProject } = require('../src/main/triggers/trigger-actions');
 const { validateTriggerOpen } = require('../src/main/triggers/trigger-launch');
 const { encodeProjectPath } = require('../encode-project-path');
+const { createInputAttach, noteInputAttach } = require('../src/main/terminals/input-attach');
 
-async function fixture(t, { windowsStartup = false, delayedPid = false, freshTable = false, startupChange } = {}) {
+async function fixture(t, { windowsStartup = false, delayedPid = false, freshTable = false, startupChange, inputAttachMs } = {}) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sw-lifecycle-')));
   const dirs = Object.fromEntries(['sessions', 'projects', 'project', 'triggers'].map(name => [name, path.join(root, name)]));
   Object.values(dirs).forEach(dir => fs.mkdirSync(dir));
@@ -78,7 +79,13 @@ async function fixture(t, { windowsStartup = false, delayedPid = false, freshTab
   Object.assign(main.context, { mainWindow: win, PROJECTS_DIR: dirs.projects, cliSessionState: cli,
     triggerRendererBridge: broker, validateTriggerOpen: permit => validateTriggerOpen(permit, deps),
     encodeProjectPath, getCachedFolder: () => null,
-    wireSessionPty: session => { session.generation = 1; },
+    wireSessionPty: session => {
+      session.generation = 1;
+      if (inputAttachMs === undefined) return;
+      session.inputAttach = createInputAttach();
+      const timer = setTimeout(() => { events.push(['attach']); noteInputAttach(session.inputAttach, 'prompt\x1b[?2004h\x1b[?1004h'); }, inputAttachMs);
+      t.after(() => clearTimeout(timer));
+    },
     spawnPty: (_shell, args, options) => {
       events.push(['spawn', args, options]);
       const id = /--(?:resume|session-id)\s+([a-f0-9-]+)/.exec(args.join(' '))[1];
@@ -165,6 +172,20 @@ test('file -> watcher -> broker -> renderer -> main -> verified resume prompt ->
   assert.deepEqual(duplicate, result); assert.equal(f.events.filter(e => e[0] === 'spawn').length, 1);
   assert.deepEqual(f.writes, ['hello', '\r']);
 });
+for (const mode of ['resume', 'new']) {
+  test(`${mode}: a descriptor idle from boot does not release the prompt before the CLI attaches its input`, async t => {
+    const f = await fixture(t, { inputAttachMs: 600 });
+    const payload = mode === 'new' ? { new: { project: f.dirs.project, name: 'Starting' } } : { sessionId: ID };
+    const result = await f.publish({ version: 1, action: 'open', ...payload, prompt: 'hello', timeout_ms: 4000 });
+    assert.equal(result.outcome, 'opened', JSON.stringify(result));
+    const attach = f.events.findIndex(e => e[0] === 'attach');
+    const firstWrite = f.events.findIndex(e => e[0] === 'write');
+    assert.ok(attach !== -1, 'the input attach was emitted');
+    assert.ok(firstWrite > attach, `the prompt was written at event ${firstWrite}, before the input attach at ${attach}`);
+    assert.deepEqual(f.writes, ['hello', '\r']);
+  });
+}
+
 test('file -> ordinary new lifecycle saves exact new name before prompt', async t => {
   const f = await fixture(t);
   fs.writeFileSync(path.join(f.dirs.sessions, '999999.json'), '{');

@@ -14,7 +14,7 @@ sleep 0.3; desc idle
 stty raw -echo 2>/dev/null
 while IFS= read -r -s -n1 -d '' ch; do
   if [ "$ch" = $'\r' ] || [ "$ch" = $'\n' ]; then
-    echo ENTER >> "$FAKE_LOG"; desc busy; sleep 0.1; desc idle
+    echo ENTER >> "$FAKE_LOG"; desc busy; sleep 1; desc idle
   else
     printf '%s' "$ch" >> "$FAKE_LOG"
   fi

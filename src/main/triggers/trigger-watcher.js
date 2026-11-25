@@ -102,6 +102,7 @@ function reasonNoOwnEntry(ms) {
   return `the step was written while the CLI reported busy; the CLI did not react and the transcript did not show the step within ${Math.round(ms / 1000)} s of its Enter; nothing more was typed`;
 }
 const REASON_IDLE_UNSETTLED = 'the CLI was idle only briefly before the deadline; it never held long enough to settle; nothing was written';
+const REASON_CLI_STARTING = 'the CLI had not finished starting (its input was not attached yet) at the deadline; nothing was written';
 
 const ACCEPTED_WAITS = ['idle', 'none'];
 const REMOTE_SLASH_COMMANDS = ['/compact', '/clear'];
@@ -493,8 +494,9 @@ function waitForPendingConfirmation(sessionId, ctx, enterAtMs, command, deadline
     if (!ctx.getPtyForSession(sessionId)) {
       return resolve({ confirmed: false, sessionExited: true, timedOut: false, waited_ms });
     }
-    if (cliReactedSince(ctx, sessionId, enterAtMs)) {
-      return resolve({ confirmed: true, source: 'descriptor', sessionExited: false, timedOut: false, waited_ms });
+    const reaction = cliReactionTiedToEnter(ctx, sessionId, enterAtMs, command);
+    if (reaction) {
+      return resolve({ confirmed: true, source: reaction, sessionExited: false, timedOut: false, waited_ms });
     }
     const ownAt = transcriptOwnEntryAt(ctx, sessionId, enterAtMs, command, seen);
     if (ownAt !== null
@@ -647,9 +649,45 @@ function cliReactedSince(ctx, sessionId, sinceMs) {
   return !!s && CLI_REACTION_STATUSES.includes(s.status) && s.statusUpdatedAt >= sinceMs;
 }
 
+// see .ai/contexts/trigger-watcher.md, "Proof of submission by edge"
+function cliReactionTiedToEnter(ctx, sessionId, sinceMs, command) {
+  const s = readCliStatus(ctx, sessionId);
+  if (!s || !CLI_REACTION_STATUSES.includes(s.status) || s.statusUpdatedAt < sinceMs) return null;
+  if (s.status !== 'idle') return 'descriptor';
+  const turn = readTranscriptTurn(ctx, sessionId);
+  const own = !!turn && Array.isArray(turn.prompts) && turn.prompts.some((p) =>
+    Number.isFinite(p.at) && p.at >= sinceMs && promptMatches(p.text, command, { strict: true }));
+  return own ? 'transcript' : null;
+}
+
 function cliForbidsRecoveryEnter(ctx, sessionId) {
   const s = readCliStatusRaw(ctx, sessionId);
   return !!s && (s.status === 'waiting' || s.status === 'busy');
+}
+
+// see .ai/contexts/trigger-watcher.md, "Readiness of a freshly started CLI"
+const DEFAULT_STARTUP_INPUT_WAIT_MS = 15000; // ms
+function getStartupInputWaitMs() {
+  const v = envNumber('SWITCHBOARD_STARTUP_INPUT_WAIT_MS');
+  return v !== undefined ? v : DEFAULT_STARTUP_INPUT_WAIT_MS;
+}
+
+function createInputAttachProbe(ctx, sessionId, afterMs, start) {
+  const bound = start + getStartupInputWaitMs();
+  return {
+    sample(now) {
+      let at;
+      try {
+        at = typeof ctx.getInputAttachedAt === 'function' ? ctx.getInputAttachedAt(sessionId) : undefined;
+      } catch {
+        at = null;
+      }
+      if (at === undefined) return { ready: true, source: null, attachedAt: null };
+      if (Number.isFinite(at) && at >= afterMs) return { ready: true, source: 'attached', attachedAt: at };
+      if (now >= bound) return { ready: true, source: 'unobserved', attachedAt: null };
+      return { ready: false, source: null, attachedAt: null };
+    },
+  };
 }
 
 // see .ai/contexts/trigger-watcher.md, "Readiness before every step" (return shape, descriptor loss, deadline)
@@ -661,10 +699,12 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, 
   const dialog = createDialogProbe(ctx, sessionId, settleMs);
   let everRead = false;
   let firstIdleRead = true;
+  const input = startup ? createInputAttachProbe(ctx, sessionId, afterMs, start) : null;
   return pollLoop((resolve, scheduleNext) => {
     const now = Date.now();
     const waited_ms = now - start;
     const waitingSeen = dialog.seen(now);
+    const inputState = input ? input.sample(now) : null;
     if (!ctx.getPtyForSession(sessionId)) {
       return resolve({ ready: false, available: true, timedOut: false, sessionExited: true, waited_ms, lastStatus, waitingSeen });
     }
@@ -686,7 +726,8 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, 
           idleStamp = s.statusUpdatedAt;
         }
         firstIdleRead = false;
-        idleHeld = now - idleSince >= settleMs;
+        if (inputState && !inputState.ready) idleHeld = false;
+        else idleHeld = now - Math.max(idleSince, inputState?.attachedAt ?? -Infinity) >= settleMs;
       } else {
         idleSince = null;
         if (transcript && transcriptShowsTurnOver(ctx, sessionId, s, transcript.transcriptAfterMs, now, dialog.seen(now))) {
@@ -695,11 +736,13 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, 
         }
       }
     }
+    const inputEvidence = inputState?.source ? { input: inputState.source } : {};
     if (idleHeld && now < deadlineMs) {
-      return resolve({ ready: true, available: true, timedOut: false, sessionExited: false, waited_ms, lastStatus, waitingSeen, source });
+      return resolve({ ready: true, available: true, timedOut: false, sessionExited: false, waited_ms, lastStatus, waitingSeen, source, ...inputEvidence });
     }
     if (now >= deadlineMs) {
-      return resolve({ ready: false, available: true, timedOut: true, sessionExited: false, waited_ms, lastStatus, waitingSeen: dialog.seen(now), ...startupEvidence });
+      return resolve({ ready: false, available: true, timedOut: true, sessionExited: false, waited_ms, lastStatus, waitingSeen: dialog.seen(now), ...startupEvidence,
+        ...(inputState && !inputState.ready ? { inputPending: true } : {}) });
     }
     scheduleNext();
   });
@@ -768,7 +811,8 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
   let confirmSource = null;
   const probe = edgeMode
     ? () => {
-      if (cliReactedSince(ctx, sessionId, enterAt)) { confirmSource = 'descriptor'; return true; }
+      const reaction = cliReactionTiedToEnter(ctx, sessionId, enterAt, command);
+      if (reaction) { confirmSource = reaction; return true; }
       if (transcriptReaction && transcriptReactedSince(ctx, sessionId, enterAt, command, ownEntry)) { confirmSource = 'transcript'; return true; }
       return false;
     }
@@ -1118,12 +1162,16 @@ async function deliverSingle({ ctx, sessionId, command, wait = 'idle', entry: se
     if (!ready.available) {
       ctx.log.info(`[trigger-watcher] No usable CLI descriptor for ${sessionId} at the start of the readiness wait`);
     }
+    if (ready.input === 'unobserved') {
+      ctx.log.warn(`[trigger-watcher] The CLI of ${sessionId} never showed its input attached within ${getStartupInputWaitMs()} ms; writing on the descriptor alone`);
+    }
     if (startup && !ready.ready && !ready.fresh) return { ok: false, wrote: false, submitted: SUBMITTED_NO, reason: 'session readiness unavailable', sessionId, waited_ms };
     if (ready.timedOut) {
       const dialog = ready.waitingSeen || ready.lastStatus === 'waiting';
       let reason = REASON_CLI_NOT_IDLE;
       if (dialog) reason = REASON_DIALOG_OPEN;
       else if (ready.lastStatus === 'busy') reason = REASON_CLI_BUSY;
+      else if (ready.inputPending) reason = REASON_CLI_STARTING;
       else if (ready.lastStatus === 'idle') reason = REASON_IDLE_UNSETTLED;
       ctx.log.warn(`[trigger-watcher] CLI not ready (${ready.lastStatus}) after ${ready.waited_ms} ms, nothing sent:`, sessionId);
       return ({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason, sessionId, waited_ms });

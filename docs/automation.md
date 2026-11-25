@@ -354,7 +354,14 @@ Resume an exact local session ID, optionally delivering one prompt:
 ```
 
 Omit `prompt` to open alone. An already-open session is ensured open without
-spawning another CLI. Closed sessions need a readable local transcript, verified
+spawning another CLI. In a session the trigger has just started, the prompt is
+typed only once Claude Code has finished starting and reads keystrokes (it
+turns bracketed paste on then) and its descriptor has read `idle` for a
+moment; keys typed earlier land in the composer without being submitted. If
+that is not seen within 15 seconds (`SWITCHBOARD_STARTUP_INPUT_WAIT_MS`), the
+descriptor alone decides. If `timeout_ms` runs out first, nothing is typed and
+the result's `reason` is *the CLI had not finished starting (its input
+was not attached yet) at the deadline; nothing was written*. Closed sessions need a readable local transcript, verified
 recorded cwd and a known project. Live external, background, scheduled, remote
 and plain-terminal targets are refused. Unknown liveness is refused too.
 On Windows, a descriptor whose native PID is dead on two reads is absent;
@@ -892,7 +899,7 @@ not a message received. Four values, compared by strict equality, ordered
 
 | Value | Meaning |
 |---|---|
-| `confirmed` | for `/compact`, a new manual compaction boundary was observed after its Enter; for other commands, transport verification observed a turn after a clean write (or a CLI descriptor reaction) |
+| `confirmed` | for `/compact`, a new manual compaction boundary was observed after its Enter; for other commands, transport verification observed a turn after a clean write (or a CLI descriptor reaction: `busy` or `waiting` after the Enter, or `idle` after it together with the command's own entry in the session transcript; an `idle` alone is not a reaction) |
 | `activity` | the session was seen busy after the write, but either the prompt read-back could not rule out interference, or the session was already busy when the text was written |
 | `assumed` | written, no failure seen, nothing observed afterwards |
 | `no` | nothing was written, or it was written and not submitted |
