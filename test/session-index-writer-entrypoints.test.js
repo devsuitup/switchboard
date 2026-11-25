@@ -31,7 +31,7 @@ test('the projects watcher timer logs a rejected refresh instead of leaking its 
     PROJECTS_DIR: 'fixture', path, console, projectsWatcher: null, getSetting: () => ({}),
     fs: { existsSync: () => true, watch: (_dir, _opts, callback) => { watch = callback; return { on() {} }; } },
     setTimeout: fn => { timer = fn; return 1; }, clearTimeout() {},
-    detectSessionTransitions() {}, notifyRendererProjectsChanged() {},
+    detectSessionTransitions() {}, notifyRendererProjectsChanged() {}, coldScanInFlight: () => null,
     writer: { refreshFolder: async () => { throw new Error('refresh failed'); } },
     log: { error: (...args) => errors.push(args.join(' ')) },
   });

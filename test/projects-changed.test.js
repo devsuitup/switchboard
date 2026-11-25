@@ -76,7 +76,7 @@ function fixture(t) {
   const watcher = { PROJECTS_DIR: root, path, Set, Map, console, log: console, getSetting: () => ({}),
     fs: { ...fs, watch: (_dir, _options, callback) => { watched = callback; return { on() {} }; } },
     writer: { refreshFolder: async (...args) => cache.refreshFolder(...args), dropFolderRows: async (...args) => cache.dropFolderRows(...args) },
-    detectSessionTransitions() {}, localTranscriptTracker: { record() {} },
+    detectSessionTransitions() {}, localTranscriptTracker: { record() {} }, coldScanInFlight: () => null,
     notifyRendererProjectsChanged: (...args) => cache.notifyRendererProjectsChanged(...args),
     setTimeout: () => 1, clearTimeout() {}, projectsWatcher: null, flushProjectsBeforeExit: null,
   };

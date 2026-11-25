@@ -657,7 +657,7 @@ writer.initializeCache({
 });
 const { readSessionFile, readFolderFromFilesystem,
         backfillEntrypoints, backfillCustomTitles, revealIfSdkSession, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
-        scanFoldersViaWorker, setRemoteRoots, resolveFolderDir, isIndexingFinished } = sessionCache;
+        scanFoldersViaWorker, setRemoteRoots, resolveFolderDir, isIndexingFinished, coldScanInFlight } = sessionCache;
 // see .ai/contexts/session-cache.md ("Projects query worker")
 const { createProjectsWorkerClient } = require('./projects-worker-client');
 let projectsReconciledAt = 0;
@@ -4081,6 +4081,8 @@ function startProjectsWatcher() {
   // The watcher reports the specific filename, so for the common case of a
   // subagent appending JSONL we can stat one file instead of thousands.
   const pendingChanges = new Map();
+  const coldScanChanges = new Map();
+  let coldScanWait = null;
   const pendingWorkflowTitles = new Set();
   const workflowTitles = new Map();
   let debounceTimer = null;
@@ -4140,6 +4142,8 @@ function startProjectsWatcher() {
         if (fs.existsSync(folderPath)) {
           detectSessionTransitions(folder);
           if (!claudeIndexing()) continue;
+          const coldScan = coldScanInFlight();
+          if (coldScan) { deferUntilColdScanSettles(coldScan, folder, scope); continue; }
           folderChanged = await writer.refreshFolder(folder, scope === true ? undefined : { files: scope });
         } else {
           if (!claudeIndexing()) continue;
@@ -4176,6 +4180,24 @@ function startProjectsWatcher() {
     for (const folder of pendingChanges.keys()) at = Math.min(at, folderRetries.get(folder)?.at ?? now + 500);
     if (!Number.isFinite(at)) { debounceTimer = null; return; }
     debounceTimer = setTimeout(() => flushChanges().catch(err => log.error('[projects] watcher refresh failed:', err.message)), Math.max(0, at - now));
+  }
+
+  // see .ai/contexts/session-cache.md ("Watchers during the cold scan")
+  function deferUntilColdScanSettles(coldScan, folder, scope) {
+    const existing = coldScanChanges.get(folder);
+    if (scope === true || existing === true) coldScanChanges.set(folder, true);
+    else coldScanChanges.set(folder, new Set([...(existing || []), ...scope]));
+    if (coldScanWait) return;
+    coldScanWait = Promise.resolve(coldScan).catch(() => {}).then(() => {
+      coldScanWait = null;
+      if (projectsWatcher !== watcher) return;
+      for (const [deferredFolder, deferredScope] of coldScanChanges) {
+        if (deferredScope === true) recordChange(deferredFolder, null);
+        else for (const file of deferredScope) recordChange(deferredFolder, file);
+      }
+      coldScanChanges.clear();
+      scheduleChanges();
+    });
   }
 
   function recordChange(folder, relPath) {
@@ -4232,27 +4254,52 @@ function startProjectsWatcher() {
 
 // see .ai/contexts/session-cache.md ("Harness folders")
 const harnessWatchers = [];
-function startHarnessWatchers() {
+function startHarnessWatchers(inherited = new Map()) {
   for (const harness of prefixedHarnesses(getSetting('global')?.disabledHarnesses)) {
     const root = harness.sessionsRoot();
     if (!fs.existsSync(root)) continue;
+    if (harnessWatchers.some(watcher => !watcher.dead && watcher.harnessId === harness.id && watcher.harnessRoot === root)) continue;
     const pendingFolders = new Set();
-    let debounceTimer = null;
+    const coldScanFolders = new Set();
+    const flushing = new Set();
+    let debounceTimer = null, coldScanWait = null, active = null;
+    const schedule = delay => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => flush().catch(err => log.error(`[harness-watch] ${harness.id} refresh failed:`, err.message)), delay);
+    };
+    const live = () => harnessWatchers.includes(active);
     const flush = async () => {
       debounceTimer = null;
+      if (!live()) return;
       const folders = [...pendingFolders];
       pendingFolders.clear();
+      flushing.add(folders);
       let changed = false;
-      for (const folder of folders) {
+      try { while (folders.length) {
+        if (!live()) return;
+        const folder = folders.shift();
         // see .ai/contexts/cli-harnesses.md ("Launching: a session that learns its id afterwards")
         if (sessionTransitions.hasPendingLaunches()) {
           const dir = harness.folderPath(folder);
           try { if (dir) sessionTransitions.resolvePendingLaunches(harness, harness.listTranscripts(dir)); }
           catch (err) { log.error(`[launch-detect] ${harness.id} ${folder}:`, err.message); }
         }
+        // see .ai/contexts/session-cache.md ("Watchers during the cold scan")
+        const coldScan = coldScanInFlight();
+        if (coldScan) {
+          coldScanFolders.add(folder);
+          coldScanWait ||= Promise.resolve(coldScan).catch(() => {}).then(() => {
+            coldScanWait = null;
+            if (!live()) return;
+            for (const deferred of coldScanFolders) pendingFolders.add(deferred);
+            coldScanFolders.clear();
+            if (pendingFolders.size) schedule(0);
+          });
+          continue;
+        }
         try { if (await writer.refreshFolder(folder)) changed = true; }
         catch (err) { log.error(`[harness-watch] ${harness.id} ${folder}:`, err.message); }
-      }
+      } } finally { flushing.delete(folders); }
       if (changed) notifyRendererProjectsChanged('watcher');
     };
     try {
@@ -4261,12 +4308,35 @@ function startHarnessWatchers() {
         const folder = harness.watchFolderKey(filename.split(path.sep));
         if (!folder) return;
         pendingFolders.add(folder);
-        if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => flush().catch(err => log.error(`[harness-watch] ${harness.id} refresh failed:`, err.message)), 500);
+        schedule(500);
       });
-      watcher.on('error', err => log.error(`[harness-watch] ${harness.id}:`, err.message));
+      watcher.on('error', err => { watcher.dead = true; log.error(`[harness-watch] ${harness.id}:`, err.message); });
+      watcher.on('close', () => { watcher.dead = true; });
+      watcher.takeQueued = () => {
+        const queued = new Set([...[...flushing].flat(), ...pendingFolders, ...coldScanFolders]);
+        for (const folders of flushing) folders.length = 0;
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = null;
+        pendingFolders.clear();
+        coldScanFolders.clear();
+        return queued;
+      };
+      const close = watcher.close.bind(watcher);
+      watcher.close = () => {
+        watcher.dead = true;
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = null;
+        pendingFolders.clear();
+        coldScanFolders.clear();
+        return close();
+      };
+      watcher.harnessId = harness.id;
+      watcher.harnessRoot = root;
       harnessWatchers.push(watcher);
+      active = watcher;
       log.info(`[harness-watch] watching ${harness.id} at ${root}`);
+      for (const folder of inherited.get(harness.id + '|' + root) || []) pendingFolders.add(folder);
+      if (pendingFolders.size) schedule(0);
     } catch (err) {
       log.error(`[harness-watch] failed to watch ${harness.id}:`, err.message);
     }
@@ -4292,8 +4362,15 @@ function stopHarnessWatchers() {
 
 function restartHarnessWatchers() {
   if (!projectsWatcher) startProjectsWatcher();
-  for (const watcher of harnessWatchers.splice(0)) watcher.close();
-  startHarnessWatchers();
+  const enabled = new Map(prefixedHarnesses(getSetting('global')?.disabledHarnesses).map(harness => [harness.id, harness.sessionsRoot()]));
+  const inherited = new Map();
+  for (const watcher of harnessWatchers.splice(0)) {
+    const kept = enabled.get(watcher.harnessId) === watcher.harnessRoot;
+    if (kept && !watcher.dead) { harnessWatchers.push(watcher); continue; }
+    if (kept) inherited.set(watcher.harnessId + '|' + watcher.harnessRoot, watcher.takeQueued());
+    watcher.close();
+  }
+  startHarnessWatchers(inherited);
 }
 
 // --- IPC: app version ---
