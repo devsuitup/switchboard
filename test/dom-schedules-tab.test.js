@@ -51,6 +51,14 @@ function setup(t, run = () => ({ ok: true }), { render = true, api = {} } = {}) 
   return { dom, w, project, schedule, data, calls, emitHealth, get button() { return w.document.querySelector('.schedule-run-btn'); }, titles, opened };
 }
 
+const historyOpen = w => {
+  const open = w.document.querySelector('.schedule-last').getAttribute('aria-expanded') === 'true';
+  assert.equal(w.document.querySelector('.schedule-history').hidden, !open, 'the button and the panel agree');
+  return open;
+};
+const scheduleState = w => w.document.querySelector('.schedule-next').title;
+const historySessions = w => w.document.querySelector('.schedule-history-sessions');
+
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 test('Delete waits for the destructive confirmation naming the file and preserving past runs, then refreshes', async t => {
@@ -186,10 +194,11 @@ test('a schedule row shows its path relative to its project, with the full path 
   }
 });
 
-test('the cron line shows the expression once when it has no wording of its own', t => {
+test('the cadence shows the wording with the raw cron as its title, or the expression when it has none', t => {
   const h = setup(t);
-  const cron = () => h.w.document.querySelector('.schedule-cron').textContent;
-  assert.equal(cron(), 'every min · * * * * *');
+  const cron = () => h.w.document.querySelector('.schedule-cadence').textContent;
+  assert.equal(cron(), 'every min');
+  assert.equal(h.w.document.querySelector('.schedule-cadence').title, '* * * * *');
   h.schedule.cron = '17 12 * * 1';
   h.schedule.cronText = '17 12 * * 1';
   h.w.renderSchedules(h.data);
@@ -210,11 +219,12 @@ test('a fatal problem named by the Never runs state is not repeated below it', t
   h.schedule.problems = ['cron can never match', 'slug shared with schedule-other.md'];
   h.w.renderSchedules(h.data);
   const item = h.w.document.querySelector('.schedule-item');
-  assert.equal(item.querySelector('.schedule-state').textContent, 'Never runs: cron can never match');
-  assert.equal(item.querySelector('.schedule-problems').textContent, 'slug shared with schedule-other.md');
+  assert.equal(item.querySelector('.schedule-next').textContent, 'Never runs: cron can never match');
+  assert.ok(item.querySelector('.schedule-icon--problem'));
+  assert.equal(item.querySelector('.schedule-problem').textContent, 'slug shared with schedule-other.md');
   h.schedule.enabled = false;
   h.w.renderSchedules(h.data);
-  assert.equal(h.w.document.querySelector('.schedule-item .schedule-problems').textContent, 'cron can never match; slug shared with schedule-other.md');
+  assert.equal(h.w.document.querySelector('.schedule-item .schedule-problem').textContent, 'cron can never match; slug shared with schedule-other.md');
 });
 
 test('a linked schedule is noted, not reported as a problem', t => {
@@ -222,8 +232,8 @@ test('a linked schedule is noted, not reported as a problem', t => {
   h.schedule.linked = true;
   h.w.renderSchedules(h.data);
   const item = h.w.document.querySelector('.schedule-item');
-  assert.equal(item.querySelector('.schedule-note')?.textContent, 'linked file: edit it at its source');
-  assert.equal(item.querySelector('.schedule-problems'), null);
+  assert.equal(item.querySelector('.schedule-badge--linked')?.title, 'linked file: edit it at its source');
+  assert.equal(item.querySelector('.schedule-problem'), null);
 });
 
 for (const [result, expected] of [
@@ -241,8 +251,12 @@ for (const [result, expected] of [
     assert.match(h.w.scheduleOutcome(run), expected);
     h.schedule.runs = [run];
     h.w.renderSchedules(h.data);
-    assert.equal(h.w.document.querySelector('.schedule-history-run > *'), null, 'outcome text must not create markup');
-    assert.match(h.w.document.querySelector('.schedule-history-run').textContent.split(' — ').slice(1).join(' — '), expected);
+    const text = h.w.document.querySelector('.schedule-run-text');
+    assert.equal(text.childElementCount, 0, 'outcome text must not create markup');
+    assert.match(text.textContent, expected);
+    assert.equal(h.w.document.querySelector('.schedule-last').childElementCount, 0);
+    assert.match(h.w.document.querySelector('.schedule-last').title.split(' — ').slice(1).join(' — '), expected);
+    assert.ok(h.w.document.querySelector('.schedule-history-run').title.endsWith(text.textContent));
     assert.equal(h.w.scheduleOutcome({ ...run, running: true }), 'Running');
   });
 }
@@ -291,7 +305,8 @@ test('visible Run now stays in flight across refreshes and shows launch success 
   finish({ ok: true });
   await settle();
   assert.equal(button().title, 'Launched!', 'visible row retains launch acknowledgement after action reload');
-  assert.equal(button().textContent, '\u2713');
+  assert.equal(button().getAttribute('aria-label'), 'Launched!');
+  assert.equal(button().dataset.icon, 'done');
   assert.equal(button().disabled, false);
   await h.w.loadSchedules();
   assert.equal(button().classList.contains('done'), true);
@@ -324,9 +339,14 @@ test('visible history stays open across a refresh', async t => {
   const h = setup(t);
   h.w.setSchedulesVisible(true);
   await settle();
-  h.w.document.querySelector('details').open = true;
+  assert.equal(historyOpen(h.w), false);
+  const button = h.w.document.querySelector('.schedule-last');
+  assert.equal(h.w.document.getElementById(button.getAttribute('aria-controls')), h.w.document.querySelector('.schedule-history'));
+  button.click();
   await h.w.loadSchedules();
-  assert.equal(h.w.document.querySelector('details').open, true, 'open history survives refresh');
+  assert.equal(historyOpen(h.w), true, 'open history survives refresh');
+  h.w.document.querySelector('.schedule-last').click();
+  assert.equal(historyOpen(h.w), false);
 });
 
 test('a visible pending toggle recovers its current button even if the following reload fails', async t => {
@@ -348,8 +368,8 @@ test('visible focused row controls keep focus across refreshes', async t => {
   h.schedule.runs = [{ sessionId: 'focused', created: '2026-11-08T12:00Z', replied: true, result: null }];
   h.w.setSchedulesVisible(true);
   await settle();
-  for (const selector of ['.schedule-run-btn', '.schedule-toggle-btn', '.schedule-open-btn', 'summary', '.schedule-history-run', 'details button:last-child']) {
-    h.w.document.querySelector('details').open = true;
+  for (const selector of ['.schedule-run-btn', '.schedule-toggle-btn', '.schedule-open-btn', '.schedule-delete-btn', '.schedule-last', '.schedule-history-run', '.schedule-history-sessions', '.schedule-collapse-btn', '.project-new-btn']) {
+    if (!historyOpen(h.w)) h.w.document.querySelector('.schedule-last').click();
     h.w.document.querySelector(selector).focus();
     await h.w.loadSchedules();
     assert.equal(h.w.document.activeElement, h.w.document.querySelector(selector), `${selector} keeps focus`);
@@ -569,7 +589,8 @@ test('next-run wording uses minutes, today, tomorrow, weekday and date', t => {
   h.schedule.nextRunMs = new Date(2026, 10, 13, 9, 0).getTime();
   h.data.now = now;
   h.w.renderSchedules(h.data);
-  assert.match(h.w.document.querySelector('.schedule-state').textContent, /Friday 9:00/);
+  assert.equal(h.w.document.querySelector('.schedule-next').textContent, 'Friday 9:00');
+  assert.match(scheduleState(h.w), /^Next run: .*Friday 9:00/);
 });
 
 test('unknown project refusal is visible in row text', t => {
@@ -634,13 +655,18 @@ test('Run now reports success only after ok and clears the error for that file',
 test('schedule states, history and missing outcomes are shown without inventing success', async t => {
   const h = setup(t);
   const text = () => h.w.document.getElementById('schedules-content').textContent;
-  assert.match(text(), /No recorded run/);
-  assert.match(text(), /Next run:.*in 1 min/);
+  const chip = h.w.document.querySelector('.schedule-last');
+  assert.equal(historyOpen(h.w), false, 'the chip is read collapsed');
+  assert.equal(chip.textContent, 'no run yet');
+  assert.equal(chip.title, 'No recorded run');
+  assert.equal(chip.getAttribute('aria-label'), 'No recorded run');
+  assert.match(text(), /in 1 min/);
+  assert.match(scheduleState(h.w), /Next run:.*in 1 min/);
   for (const [change, expected] of [
     [{ enabled: false }, /Disabled/],
     [{ enabled: true, problems: ['no cron'] }, /Never runs: no cron/],
     [{ problems: [], nextRunMs: null }, /No run within a year/],
-  ]) { Object.assign(h.schedule, change); h.w.renderSchedules(h.data); assert.match(text(), expected); }
+  ]) { Object.assign(h.schedule, change); h.w.renderSchedules(h.data); assert.match(scheduleState(h.w), expected); }
   h.project.archived = true;
   h.w.renderSchedules(h.data);
   assert.match(text(), /Suspended — project archived/);
@@ -723,7 +749,7 @@ test('history follows its local run when registry and transcript project paths d
   group.id = 'schedule-' + encodeURIComponent(JSON.stringify(['', '/real', 'nightly']));
   parent.appendChild(group);
   h.w.document.body.appendChild(parent);
-  [...h.w.document.querySelectorAll('#schedules-content button')].find(b => b.textContent === 'Show history in Sessions').click();
+  historySessions(h.w).click();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(group.classList.contains('collapsed'), false, 'history expands the transcript project group, including a resolved registry alias');
   assert.equal(parent.classList.contains('collapsed'), false);
@@ -748,7 +774,7 @@ test('history opens a continuation member through its merged local row', async t
   group.id = 'schedule-' + encodeURIComponent(JSON.stringify(['', '/real', 'nightly']));
   parent.appendChild(group);
   h.w.document.body.appendChild(parent);
-  [...h.w.document.querySelectorAll('#schedules-content button')].find(b => b.textContent === 'Show history in Sessions').click();
+  historySessions(h.w).click();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(group.classList.contains('collapsed'), false, 'a physical run member expands its merged row project');
   h.w.document.querySelector('.schedule-history-run').click();
@@ -779,7 +805,7 @@ test('empty states tell apart no project, only archived projects and an empty pr
   assert.doesNotMatch(scheduleTabText(h), /Add a local project|No schedules found/);
   h.w.renderSchedules({ now: Date.now(), catchUpActive: true, projects: [{ ...h.project, schedules: [] }] });
   assert.equal(create().disabled, false);
-  assert.match(scheduleTabText(h), /No schedules found\. Use Create schedule to add one\./);
+  assert.match(scheduleTabText(h), /No schedules found\. Use New schedule to add one\./);
   assert.doesNotMatch(scheduleTabText(h), /Add a local project|Unarchive a project/);
   assert.deepEqual(apiCalls, [], 'guidance neither registers nor runs a project');
 });
@@ -1105,12 +1131,12 @@ test('a suspended scheduler shows a banner naming the records and marks next run
   assert.ok(banner, 'the Schedules tab shows the suspension');
   assert.equal(banner.getAttribute('role'), 'alert');
   assert.equal(banner.textContent, 'Automatic schedules are paused: the background-run records at /data/schedule-state/background could not be read (EACCES). Fix their permissions. Retrying every 5 min.');
-  assert.match(h.w.document.querySelector('.schedule-state').textContent, /^Paused: automatic launches are suspended \(next run due /);
+  assert.match(h.w.document.querySelector('.schedule-next').title, /^Paused: automatic launches are suspended \(next run due /);
   assert.equal(h.w.document.querySelectorAll('[data-notice-id="ScheduleSuspended"]').length, 1, 'an app notice is shown as well');
   h.data.health = { suspended: false, resultFailure: null };
   await h.w.loadSchedules();
   assert.equal(h.w.document.querySelector('#schedules-content .schedule-health'), null);
-  assert.match(h.w.document.querySelector('.schedule-state').textContent, /^Next run: /);
+  assert.match(scheduleState(h.w), /^Next run: /);
   assert.equal(h.w.document.querySelector('[data-notice-id="ScheduleSuspended"]'), null, 'the notice clears after a successful discovery');
 });
 
@@ -1144,7 +1170,7 @@ test('an older health snapshot never erases a newer push, from the startup reply
   await loading;
   assert.ok(h.w.document.querySelector('[data-notice-id="ScheduleSuspended"]'), 'a stale list refresh must not clear the live suspension notice');
   assert.ok(h.w.document.querySelector('#schedules-content .schedule-health'), 'the tab shows the newest health, not the stale one');
-  assert.match(h.w.document.querySelector('.schedule-state').textContent, /^Paused/);
+  assert.match(h.w.document.querySelector('.schedule-next').title, /^Paused/);
   h.emitHealth({ suspended: false, resultFailure: null, revision: 6 });
   assert.equal(h.w.document.querySelector('[data-notice-id="ScheduleSuspended"]'), null, 'a newer healthy push clears it');
 });
@@ -1164,7 +1190,10 @@ test('an imported run without a result says result unknown (imported), never an 
   assert.doesNotMatch(h.w.scheduleOutcome(run), /Exit|Failed/);
   h.schedule.runs = [run];
   h.w.renderSchedules(h.data);
-  assert.match(h.w.document.querySelector('.schedule-history-run').textContent, /Result unknown \(imported\)/);
+  const row = h.w.document.querySelector('.schedule-history-run');
+  assert.match(row.title, /Result unknown \(imported\) — replied$/);
+  assert.equal(row.querySelector('.schedule-run-text').textContent, 'Result unknown — replied');
+  assert.equal(row.querySelector('.archived-badge').textContent, 'imported');
 });
 
 test('the note about older runs appears only when the history has gaps', t => {
@@ -1212,4 +1241,145 @@ test('an import progress event reloads the visible tab', async t => {
   notify();
   await new Promise(resolve => setTimeout(resolve, 950));
   assert.equal(loads, 1);
+});
+
+test('the status dot, switch and actions name each state', t => {
+  const h = setup(t);
+  const q = selector => h.w.document.querySelector(selector);
+  const dot = () => [...q('.schedule-icon').classList].find(name => name.startsWith('schedule-icon--')).slice('schedule-icon--'.length);
+  const render = () => h.w.renderSchedules(h.data);
+  assert.equal(dot(), 'armed');
+  assert.equal(q('.schedule-icon').getAttribute('aria-label'), 'On');
+  assert.equal(q('.schedule-switch').getAttribute('role'), 'switch');
+  assert.equal(q('.schedule-switch').getAttribute('aria-checked'), 'true');
+  assert.equal(q('.schedule-switch').title, 'Turn off');
+  assert.deepEqual([...h.w.document.querySelectorAll('.schedule-actions button')].map(b => b.getAttribute('aria-label')), ['Enabled', 'Run now', 'Open', 'Delete']);
+  h.schedule.enabled = false;
+  render();
+  assert.equal(dot(), 'off');
+  assert.equal(q('.schedule-switch').getAttribute('aria-checked'), 'false');
+  assert.equal(q('.schedule-switch').title, 'Turn on');
+  h.schedule.linked = true;
+  render();
+  assert.equal(q('.schedule-switch').getAttribute('aria-label'), 'Enabled — linked file: edit it at its source');
+  Object.assign(h.schedule, { enabled: true, linked: false });
+  h.project.archived = true;
+  render();
+  assert.equal(dot(), 'suspended');
+  assert.equal(q('.project-new-btn').disabled, true);
+  h.project.archived = false;
+  h.schedule.nextRunMs = null;
+  render();
+  assert.equal(dot(), 'problem');
+});
+
+test('every row action has a hit box at least 22 px high in the shipped CSS', t => {
+  const h = setup(t);
+  const style = h.w.document.createElement('style');
+  style.textContent = fs.readFileSync(path.join(__dirname, '../public/style.css'), 'utf8');
+  h.w.document.head.appendChild(style);
+  const heights = [...h.w.document.querySelectorAll('.schedule-actions button')].map(button => {
+    const computed = h.w.getComputedStyle(button);
+    return [button.getAttribute('aria-label'), Math.max(parseFloat(computed.height) || 0, parseFloat(computed.minHeight) || 0)];
+  });
+  assert.deepEqual(heights.map(([name]) => name), ['Enabled', 'Run now', 'Open', 'Delete']);
+  for (const [name, height] of heights) assert.ok(height >= 22, `${name} is ${height} px high`);
+});
+
+test('a live run shows as running with its duration, and the last finished result stays in the chip', t => {
+  const h = setup(t);
+  const run = (sessionId, minutes, extra) => ({ sessionId, created: new Date(h.data.now - minutes * 60000).toISOString(), replied: true, messageCount: 2, running: false, result: null, ...extra });
+  h.schedule.runs = [run('live', 3, { running: true }), run('old', 20, { result: { outcome: 'timed-out' } })];
+  h.w.renderSchedules(h.data);
+  const q = selector => h.w.document.querySelector(selector);
+  assert.equal(q('.schedule-next').textContent, 'Running · 3 min');
+  assert.match(scheduleState(h.w), /^Started .*Next run: /);
+  assert.ok(q('.schedule-icon--running'));
+  assert.ok(q('.schedule-last').classList.contains('outcome-timeout'));
+  assert.match(q('.schedule-last').textContent, /timed out · 20 min ago$/);
+  assert.equal(q('.schedule-run-btn').classList.contains('live'), true);
+  assert.equal(q('.schedule-run-btn').dataset.icon, 'running');
+  assert.equal(q('.schedule-run-btn').disabled, false, 'a live run does not block Run now');
+  assert.match(q('.schedules-count').textContent, /^1 schedule · 1 on · 1 running$/);
+});
+
+for (const [result, kind, short] of [
+  [{ outcome: 'exited', exitCode: 0 }, 'ok', /^\u2713 5 min ago$/],
+  [{ outcome: 'exited', exitCode: 0, warning: 'late' }, 'ok', /\u26a0.*5 min ago$/],
+  [{ outcome: 'exited', exitCode: 3, failure: 'exit' }, 'failed', /exit 3 · 5 min ago$/],
+  [{ outcome: 'timed-out', cleanup: 'session removed' }, 'timeout', /timed out · 5 min ago$/],
+  [{ outcome: 'stopped' }, 'stopped', /stopped · 5 min ago$/],
+  [{ outcome: 'signal', signal: 'SIGTERM' }, 'stopped', /stopped · 5 min ago$/],
+  [{ outcome: 'job-missing' }, 'stopped', /job lost · 5 min ago$/],
+  [{ outcome: 'refused', error: 'x' }, 'failed', /refused · 5 min ago$/],
+  [{ outcome: 'spawn-error', error: 'x' }, 'failed', /not started · 5 min ago$/],
+  [null, 'unknown', /^\? 5 min ago$/],
+]) {
+  test(`the last-run chip colours and shortens ${JSON.stringify(result)}`, t => {
+    const h = setup(t);
+    h.schedule.runs = [{ sessionId: 'x', created: new Date(h.data.now - 5 * 60000).toISOString(), replied: true, messageCount: 2, running: false, result }];
+    h.w.renderSchedules(h.data);
+    const chip = h.w.document.querySelector('.schedule-last');
+    assert.ok(chip.classList.contains('outcome-' + kind));
+    assert.match(chip.textContent, short);
+    const full = h.w.scheduleOutcome(h.schedule.runs[0]);
+    assert.ok(chip.title.endsWith(full));
+    assert.equal(h.w.document.querySelector('.schedule-run-text').textContent, full, 'the history keeps the full text, suffixes included');
+  });
+}
+
+test('background and catch-up options show as pills with their explanation', t => {
+  const h = setup(t);
+  const pills = () => [...h.w.document.querySelectorAll('.schedule-item .bg-badge, .schedule-badge')].map(el => [el.className.split('--')[1] || 'bg', el.textContent, el.title]);
+  h.schedule.runAsBackground = true;
+  h.schedule.catchUp = true;
+  h.w.renderSchedules(h.data);
+  assert.deepEqual(pills(), [['bg', 'bg', 'Background session: can be joined while it runs'], ['catchup', 'catch-up', 'Catch-up on']]);
+  h.project.sandboxed = true;
+  h.schedule.catchUpDueMs = new Date(2026, 10, 25, 16, 5).getTime();
+  h.w.renderSchedules(h.data);
+  assert.deepEqual(pills().map(p => p.slice(0, 2)), [['muted', 'bg'], ['pending', 'catch-up 16:05']]);
+  assert.equal(pills()[0][2], 'Background unavailable under sandbox: runs headless');
+  assert.match(pills()[1][2], /^Catch-up pending: due /);
+  h.project.remoteAlias = 'vps';
+  h.data.catchUpActive = false;
+  h.w.renderSchedules(h.data);
+  assert.deepEqual(pills().map(p => p[2]), ['Background option ignored: local schedules only', 'catch-up off in this instance']);
+  assert.equal(h.w.document.querySelector('.project-header .remote-badge').textContent, 'vps');
+});
+
+test('a project card collapses, stays collapsed across refreshes and opens again when targeted', async t => {
+  const h = setup(t);
+  await settle();
+  const header = () => h.w.document.querySelector('.project-header');
+  const button = () => h.w.document.querySelector('.schedule-collapse-btn');
+  assert.equal(h.w.document.querySelector('.project-name').title, '/p');
+  assert.equal(h.w.document.querySelector('.schedule-count').textContent, '1');
+  button().click();
+  assert.equal(header().classList.contains('collapsed'), true);
+  await h.w.loadSchedules();
+  assert.equal(header().classList.contains('collapsed'), true);
+  assert.equal(button().getAttribute('aria-expanded'), 'false');
+  header().click();
+  assert.equal(header().classList.contains('collapsed'), false);
+  button().click();
+  h.w.showSchedules('/p');
+  await settle();
+  assert.equal(header().classList.contains('collapsed'), false, 'a targeted project is shown');
+});
+
+test('past times use minutes, hours, yesterday and dates', t => {
+  const h = setup(t);
+  const now = new Date(2026, 10, 25, 15, 0).getTime();
+  for (const [date, ago, when] of [
+    [new Date(2026, 10, 25, 14, 59, 40), 'just now', 'today 14:59'],
+    [new Date(2026, 10, 25, 14, 13), '47 min ago', 'today 14:13'],
+    [new Date(2026, 10, 25, 2, 0), '13 h ago', 'today 2:00'],
+    [new Date(2026, 10, 24, 18, 30), 'yesterday', 'yesterday 18:30'],
+    [new Date(2026, 9, 12, 9, 0), 'Oct 12', 'Oct 12, 9:00'],
+    [new Date(2025, 9, 12, 9, 0), 'Oct 12, 2025', 'Oct 12, 2025, 9:00'],
+  ]) {
+    assert.equal(h.w.scheduleAgo(date.getTime(), now), ago);
+    assert.equal(h.w.scheduleWhen(date.getTime(), now), when);
+  }
 });
