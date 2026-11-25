@@ -660,7 +660,11 @@ so a CLI switched off after the scan settled never runs the replay. Because
 watchers whose CLI is now disabled or whose sessions root moved; a watcher
 whose CLI stays enabled at the same root is kept as is (toggling Claude must
 not drop a pending Codex refresh), and `startHarnessWatchers()` skips a harness
-that already has a watcher for that root. The
+that already has a live watcher for that root. A watcher is dead once its
+native watcher emitted `error` or `close` (or `close()` was called): the
+restart replaces a dead watcher whose CLI is still enabled at that root, hands
+its pending and set-aside folders to the replacement (`takeQueued()`), and the
+replacement flushes them at once. The
 set-aside maps are deduplicated per folder and file, not capped: they grow
 with the distinct paths touched during the first scan.
 

@@ -4254,11 +4254,11 @@ function startProjectsWatcher() {
 
 // see .ai/contexts/session-cache.md ("Harness folders")
 const harnessWatchers = [];
-function startHarnessWatchers() {
+function startHarnessWatchers(inherited = new Map()) {
   for (const harness of prefixedHarnesses(getSetting('global')?.disabledHarnesses)) {
     const root = harness.sessionsRoot();
     if (!fs.existsSync(root)) continue;
-    if (harnessWatchers.some(watcher => watcher.harnessId === harness.id && watcher.harnessRoot === root)) continue;
+    if (harnessWatchers.some(watcher => !watcher.dead && watcher.harnessId === harness.id && watcher.harnessRoot === root)) continue;
     const pendingFolders = new Set();
     const coldScanFolders = new Set();
     let debounceTimer = null, coldScanWait = null, active = null;
@@ -4307,9 +4307,19 @@ function startHarnessWatchers() {
         pendingFolders.add(folder);
         schedule(500);
       });
-      watcher.on('error', err => log.error(`[harness-watch] ${harness.id}:`, err.message));
+      watcher.on('error', err => { watcher.dead = true; log.error(`[harness-watch] ${harness.id}:`, err.message); });
+      watcher.on('close', () => { watcher.dead = true; });
+      watcher.takeQueued = () => {
+        const queued = new Set([...pendingFolders, ...coldScanFolders]);
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = null;
+        pendingFolders.clear();
+        coldScanFolders.clear();
+        return queued;
+      };
       const close = watcher.close.bind(watcher);
       watcher.close = () => {
+        watcher.dead = true;
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = null;
         pendingFolders.clear();
@@ -4321,6 +4331,8 @@ function startHarnessWatchers() {
       harnessWatchers.push(watcher);
       active = watcher;
       log.info(`[harness-watch] watching ${harness.id} at ${root}`);
+      for (const folder of inherited.get(harness.id + '|' + root) || []) pendingFolders.add(folder);
+      if (pendingFolders.size) schedule(0);
     } catch (err) {
       log.error(`[harness-watch] failed to watch ${harness.id}:`, err.message);
     }
@@ -4347,11 +4359,14 @@ function stopHarnessWatchers() {
 function restartHarnessWatchers() {
   if (!projectsWatcher) startProjectsWatcher();
   const enabled = new Map(prefixedHarnesses(getSetting('global')?.disabledHarnesses).map(harness => [harness.id, harness.sessionsRoot()]));
+  const inherited = new Map();
   for (const watcher of harnessWatchers.splice(0)) {
-    if (enabled.get(watcher.harnessId) === watcher.harnessRoot) harnessWatchers.push(watcher);
-    else watcher.close();
+    const kept = enabled.get(watcher.harnessId) === watcher.harnessRoot;
+    if (kept && !watcher.dead) { harnessWatchers.push(watcher); continue; }
+    if (kept) inherited.set(watcher.harnessId + '|' + watcher.harnessRoot, watcher.takeQueued());
+    watcher.close();
   }
-  startHarnessWatchers();
+  startHarnessWatchers(inherited);
 }
 
 // --- IPC: app version ---

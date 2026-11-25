@@ -34,7 +34,8 @@ function loadWatchers(t, { coldScan }) {
     folderPath: () => null, listTranscripts: () => [] };
   const context = vm.createContext({
     fs: { ...fs, watch: (watchedRoot, _opts, callback) => {
-      const watcher = { root: watchedRoot, callback, closed: false, on() {}, close() { this.closed = true; } };
+      const watcher = { root: watchedRoot, callback, closed: false, handlers: {}, on(event, handler) { this.handlers[event] = handler; return this; },
+        close() { this.closed = true; } };
       watches.push(watcher);
       return watcher;
     } }, path, console, PROJECTS_DIR: projectsDir, DEFAULT_HARNESS: 'claude',
@@ -144,4 +145,19 @@ test('toggling an unrelated CLI keeps the other harness watcher and its pending 
   assert.equal(w.watches.filter(watch => watch.root.endsWith('codex')).length, 1, 'and is not replaced');
   await w.runTimers();
   assert.deepEqual(w.refreshes.map(([folder]) => folder), ['codex::2026'], 'the change seen before the toggle is still indexed');
+});
+
+test('a harness watcher that died on its own is replaced at the next restart, with its queued folders', async t => {
+  const w = loadWatchers(t, { coldScan: { current: null } });
+  w.context.startHarnessWatchers();
+  const first = w.watches.find(watch => watch.root.endsWith('codex'));
+  first.callback('change', path.join('2026', FILE));
+  first.handlers.error?.(new Error('watch failed'));
+  first.handlers.close?.();
+  w.context.restartHarnessWatchers();
+  const codex = w.watches.filter(watch => watch.root.endsWith('codex'));
+  assert.equal(codex.length, 2, 'the dead native watcher is replaced at the unchanged root');
+  assert.equal(codex[1].closed, false);
+  await w.runTimers();
+  assert.deepEqual(w.refreshes.map(([folder]) => folder), ['codex::2026'], 'the change it had queued is refreshed once, by the replacement');
 });
