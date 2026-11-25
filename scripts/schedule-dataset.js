@@ -5,6 +5,7 @@
 const { spawnSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { encodeProjectPath } = require('../encode-project-path');
 
@@ -96,8 +97,36 @@ function gitEnv(env) {
   return Object.fromEntries(Object.entries(env).filter(([key]) => !/^GIT_/i.test(key)));
 }
 
-function createDataset({ home, dataDir, now }, { linkable = process.platform !== 'win32' } = {}) {
-  if (fs.existsSync(home) && fs.readdirSync(home).length) throw new Error(`${home} is not empty; give a new directory`);
+function realTarget(dir) {
+  let existing = path.resolve(dir);
+  const rest = [];
+  while (!fs.existsSync(existing) && path.dirname(existing) !== existing) {
+    rest.unshift(path.basename(existing));
+    existing = path.dirname(existing);
+  }
+  return path.join(fs.realpathSync.native(existing), ...rest);
+}
+
+function within(child, parent, platform) {
+  const key = value => platform === 'win32' ? value.toLowerCase() : value;
+  const relative = path.relative(key(parent), key(child));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function checkDestinations({ home, dataDir }, { homedir = os.homedir(), tmpdir = os.tmpdir(), switchboardDataDir = process.env.SWITCHBOARD_DATA_DIR, platform = process.platform } = {}) {
+  const realHome = realTarget(homedir);
+  const realTmp = realTarget(tmpdir);
+  const appDirs = [path.join(realHome, '.switchboard'), switchboardDataDir && realTarget(switchboardDataDir)].filter(Boolean);
+  for (const [label, dir] of [['the fake home', home], ['--data-dir', dataDir]]) {
+    const target = realTarget(dir);
+    if (appDirs.some(app => within(target, app, platform) || within(app, target, platform))) throw new Error(`${label} ${dir} is or holds a Switchboard data directory; give a new directory under ${tmpdir}`);
+    if (within(realHome, target, platform) || (within(target, realHome, platform) && !within(target, realTmp, platform))) throw new Error(`${label} ${dir} is, holds or is inside your home directory; give a new directory under ${tmpdir}`);
+    if (fs.existsSync(target) && fs.readdirSync(target).length) throw new Error(`${label} ${dir} is not empty; give a new directory`);
+  }
+}
+
+function createDataset({ home, dataDir, now }, { linkable = process.platform !== 'win32', destinations } = {}) {
+  checkDestinations({ home, dataDir }, destinations);
   const runsDir = path.join(dataDir, 'schedule-runs');
   const shared = path.join(home, 'shared');
   fs.mkdirSync(runsDir, { recursive: true });
@@ -154,4 +183,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { SCHEDULES, createDataset, gitEnv, parseArgs };
+module.exports = { SCHEDULES, checkDestinations, createDataset, gitEnv, parseArgs };

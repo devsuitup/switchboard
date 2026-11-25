@@ -171,10 +171,16 @@ schedules and recorded runs, so the Schedules tab and the run history can be
 checked without your own schedules:
 
 ```bash
-node scripts/schedule-dataset.js /path/to/new-home [--data-dir <dir>] [--now 2026-11-25T08:00:00Z]
+node scripts/schedule-dataset.js "$(mktemp -d)" [--data-dir <dir>] [--now 2026-11-25T08:00:00Z]
 ```
 
-It refuses a directory that is not empty, and a `--now` before 2000. On Windows,
+Before writing anything it refuses, for both the fake home and `--data-dir`:
+a directory that is not empty; your home directory, a directory that holds
+it, or one inside it, unless it is under the system's temporary directory;
+and `~/.switchboard` or the `SWITCHBOARD_DATA_DIR` in use, or a directory
+inside or holding one. Paths are compared after resolving `..`, symbolic
+links and, on Windows, case and short names. It also refuses a `--now`
+before 2000. On Windows,
 where creating a symbolic link needs a privilege, the linked schedule is
 skipped and named in the output. Elsewhere the fake `HOME` must be on a file
 system that accepts symbolic links; on one that refuses them (FAT, exFAT) the

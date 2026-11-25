@@ -9,7 +9,7 @@ const { spawnSync } = require('node:child_process');
 const runner = require('../src/main/schedules/schedule-runner');
 const { readScheduleRunResults } = require('../src/main/schedules/schedule-run-results');
 const { encodeProjectPath } = require('../encode-project-path');
-const { SCHEDULES, createDataset, gitEnv, parseArgs } = require('../scripts/schedule-dataset');
+const { SCHEDULES, checkDestinations, createDataset, gitEnv, parseArgs } = require('../scripts/schedule-dataset');
 
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'schedule-dataset.js');
 const NOW = Date.parse('2026-11-25T08:00:00Z');
@@ -103,3 +103,61 @@ test('git runs without repository-routing variables, and dates before 2000 are r
   assert.throws(() => parseArgs(['/h', '--now', 'yesterday']), /--now must be a date/);
 });
 
+function destinations(t) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-schedule-dataset-dest-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const homedir = path.join(root, 'user');
+  const tmpdir = path.join(homedir, 'tmp');
+  const outside = path.join(root, 'outside');
+  for (const dir of [homedir, tmpdir, outside]) fs.mkdirSync(dir, { recursive: true });
+  const env = { homedir, tmpdir, switchboardDataDir: undefined, platform: process.platform };
+  const attempt = (home, dataDir, extra = {}) => () => createDataset({ home, dataDir, now: NOW }, { destinations: { ...env, ...extra } });
+  return { root, homedir, tmpdir, outside, env, attempt };
+}
+
+test('a new directory under the temporary directory or outside home is accepted', t => {
+  const d = destinations(t);
+  assert.doesNotThrow(() => checkDestinations({ home: path.join(d.tmpdir, 'a'), dataDir: path.join(d.tmpdir, 'a', '.switchboard-dev') }, d.env));
+  assert.doesNotThrow(() => checkDestinations({ home: path.join(d.outside, 'a'), dataDir: path.join(d.outside, 'b') }, d.env));
+});
+
+for (const [name, setup, pattern] of [
+  ['home itself', d => [d.homedir, path.join(d.outside, 'data')], /holds a Switchboard data directory|is, holds or is inside your home directory/],
+  ['a directory inside home', d => [path.join(d.homedir, 'scratch', 'fake'), path.join(d.outside, 'data')], /inside your home directory/],
+  ['a parent of home', d => [d.root, path.join(d.outside, 'data')], /holds a Switchboard data directory|holds or is inside your home directory/],
+  ['home reached through ..', d => [path.join(d.outside, '..', 'user', 'fake'), path.join(d.outside, 'data')], /inside your home directory/],
+  ['home reached through a symbolic link', d => {
+    if (process.platform === 'win32') return null;
+    fs.symlinkSync(d.homedir, path.join(d.outside, 'link'));
+    return [path.join(d.outside, 'link', 'fake'), path.join(d.outside, 'data')];
+  }, /inside your home directory/],
+  ['a --data-dir inside home', d => [path.join(d.outside, 'home'), path.join(d.homedir, '.switchboard-dev')], /--data-dir .* inside your home directory/],
+  ['the home .switchboard data directory', d => [path.join(d.tmpdir, 'home'), path.join(d.homedir, '.switchboard', 'x')], /--data-dir .* Switchboard data directory/],
+  ['a non-empty --data-dir', d => {
+    fs.writeFileSync(path.join(d.outside, 'keep'), '');
+    return [path.join(d.tmpdir, 'home'), d.outside];
+  }, /--data-dir .* is not empty/],
+]) {
+  test(`the destination check refuses ${name} before writing anything`, t => {
+    const d = destinations(t);
+    const target = setup(d);
+    if (!target) return t.skip('symbolic links need a privilege on Windows');
+    const before = JSON.stringify(fs.readdirSync(d.root, { recursive: true }).sort());
+    assert.throws(d.attempt(...target), pattern);
+    assert.equal(JSON.stringify(fs.readdirSync(d.root, { recursive: true }).sort()), before, 'nothing was written');
+  });
+}
+
+test('the SWITCHBOARD_DATA_DIR in use is refused as a destination', t => {
+  const d = destinations(t);
+  const live = path.join(d.outside, 'live-data');
+  assert.throws(d.attempt(path.join(d.tmpdir, 'home'), path.join(live, 'sub'), { switchboardDataDir: live }), /Switchboard data directory/);
+  assert.throws(d.attempt(live, path.join(d.tmpdir, 'data'), { switchboardDataDir: live }), /Switchboard data directory/);
+});
+
+test('on Windows the comparison ignores case', t => {
+  const d = destinations(t);
+  const upper = d.homedir.toUpperCase();
+  assert.throws(() => checkDestinations({ home: path.join(upper, 'fake'), dataDir: path.join(d.outside, 'data') }, { ...d.env, platform: 'win32', homedir: d.homedir }),
+    /inside your home directory/);
+});
