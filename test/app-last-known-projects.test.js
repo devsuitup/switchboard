@@ -119,6 +119,21 @@ test('startup paints the last known projects as inert provisional rows and the f
   } finally { s.h.destroy(); }
 });
 
+test('an empty last known snapshot keeps the Loading status until the first load lands', async () => {
+  const s = setup({ last: { defaultProjects: [], allProjects: [] } });
+  try {
+    const startup = s.w.loadStartupProjects();
+    s.releaseLast();
+    await flush();
+    assert.equal(s.w.cachedProjects.length, 0);
+    assert.equal(s.w.loadingStatus.textContent, 'Loading…');
+    assert.equal(s.w.loadingStatus.style.display, '');
+    s.releaseLoad();
+    await startup;
+    assert.equal(s.w.loadingStatus.textContent, '');
+  } finally { s.h.destroy(); }
+});
+
 test('a first load that lands before the last known rows are read wins and nothing provisional is painted', async () => {
   const s = setup();
   try {

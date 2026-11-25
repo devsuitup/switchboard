@@ -3375,7 +3375,7 @@ async function paintLastKnownProjects() {
   cachedProjects = last.defaultProjects;
   cachedAllProjects = last.allProjects;
   dedup([...cachedAllProjects, ...cachedProjects]);
-  if (loadProjects.state?.latest?.pending) {
+  if (cachedProjects.length > 0 && loadProjects.state?.latest?.pending) {
     loadingStatus.style.display = 'none';
     loadingStatus.className = '';
     loadingStatus.textContent = '';
