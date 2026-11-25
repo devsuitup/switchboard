@@ -176,7 +176,9 @@ node scripts/schedule-dataset.js /path/to/new-home [--data-dir <dir>] [--now 202
 
 It refuses a directory that is not empty, and a `--now` before 2000. On Windows,
 where creating a symbolic link needs a privilege, the linked schedule is
-skipped and named in the output. Git runs without inherited
+skipped and named in the output. Elsewhere the fake `HOME` must be on a file
+system that accepts symbolic links; on one that refuses them (FAT, exFAT) the
+script stops with the system's error. Git runs without inherited
 `GIT_*` variables, so `git init` lands in each fixture project. The data
 directory defaults to
 `<home>/.switchboard-dev`; launch the instance with `HOME`, the `XDG_*`
