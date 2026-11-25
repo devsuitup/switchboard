@@ -4261,6 +4261,7 @@ function startHarnessWatchers(inherited = new Map()) {
     if (harnessWatchers.some(watcher => !watcher.dead && watcher.harnessId === harness.id && watcher.harnessRoot === root)) continue;
     const pendingFolders = new Set();
     const coldScanFolders = new Set();
+    const flushing = new Set();
     let debounceTimer = null, coldScanWait = null, active = null;
     const schedule = delay => {
       if (debounceTimer) clearTimeout(debounceTimer);
@@ -4272,9 +4273,11 @@ function startHarnessWatchers(inherited = new Map()) {
       if (!live()) return;
       const folders = [...pendingFolders];
       pendingFolders.clear();
+      flushing.add(folders);
       let changed = false;
-      for (const folder of folders) {
+      try { while (folders.length) {
         if (!live()) return;
+        const folder = folders.shift();
         // see .ai/contexts/cli-harnesses.md ("Launching: a session that learns its id afterwards")
         if (sessionTransitions.hasPendingLaunches()) {
           const dir = harness.folderPath(folder);
@@ -4296,7 +4299,7 @@ function startHarnessWatchers(inherited = new Map()) {
         }
         try { if (await writer.refreshFolder(folder)) changed = true; }
         catch (err) { log.error(`[harness-watch] ${harness.id} ${folder}:`, err.message); }
-      }
+      } } finally { flushing.delete(folders); }
       if (changed) notifyRendererProjectsChanged('watcher');
     };
     try {
@@ -4310,7 +4313,8 @@ function startHarnessWatchers(inherited = new Map()) {
       watcher.on('error', err => { watcher.dead = true; log.error(`[harness-watch] ${harness.id}:`, err.message); });
       watcher.on('close', () => { watcher.dead = true; });
       watcher.takeQueued = () => {
-        const queued = new Set([...pendingFolders, ...coldScanFolders]);
+        const queued = new Set([...[...flushing].flat(), ...pendingFolders, ...coldScanFolders]);
+        for (const folders of flushing) folders.length = 0;
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = null;
         pendingFolders.clear();

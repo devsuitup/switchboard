@@ -664,7 +664,10 @@ that already has a live watcher for that root. A watcher is dead once its
 native watcher emitted `error` or `close` (or `close()` was called): the
 restart replaces a dead watcher whose CLI is still enabled at that root, hands
 its pending and set-aside folders to the replacement (`takeQueued()`), and the
-replacement flushes them at once. The
+replacement flushes them at once. A flush in progress keeps the folders it has
+not reached in an array registered with its watcher, so `takeQueued()` also
+takes those (and empties the array, which ends the old flush) but never the
+folder already submitted to `writer.refreshFolder`. The
 set-aside maps are deduplicated per folder and file, not capped: they grow
 with the distinct paths touched during the first scan.
 

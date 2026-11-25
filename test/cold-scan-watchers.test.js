@@ -17,7 +17,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-function loadWatchers(t, { coldScan }) {
+function loadWatchers(t, { coldScan, refreshGate = null }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cold-scan-watchers-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const projectsDir = path.join(root, 'projects'), codexRoot = path.join(root, 'codex');
@@ -48,7 +48,7 @@ function loadWatchers(t, { coldScan }) {
     detectSessionTransitions: folder => transitions.push(folder), notifyRendererProjectsChanged() {},
     coldScanInFlight: () => coldScan.current,
     writer: {
-      refreshFolder: (folder, opts) => { refreshes.push([folder, opts?.files ? [...opts.files] : null]); return false; },
+      refreshFolder: (folder, opts) => { refreshes.push([folder, opts?.files ? [...opts.files] : null]); return refreshGate ? refreshGate.then(() => false) : false; },
       dropFolderRows: () => false,
     },
     log: { info() {}, warn() {}, error() {} },
@@ -160,4 +160,24 @@ test('a harness watcher that died on its own is replaced at the next restart, wi
   assert.equal(codex[1].closed, false);
   await w.runTimers();
   assert.deepEqual(w.refreshes.map(([folder]) => folder), ['codex::2026'], 'the change it had queued is refreshed once, by the replacement');
+});
+
+test('a harness watcher replaced while its flush awaits hands over the folders that flush had not reached', async t => {
+  const gate = deferred();
+  const w = loadWatchers(t, { coldScan: { current: null }, refreshGate: gate.promise });
+  w.context.startHarnessWatchers();
+  const first = w.watches.find(watch => watch.root.endsWith('codex'));
+  first.callback('change', path.join('2025', FILE));
+  first.callback('change', path.join('2026', FILE));
+  const [flush] = [...w.timers.values()];
+  w.timers.clear();
+  const running = flush();
+  assert.deepEqual(w.refreshes.map(([folder]) => folder), ['codex::2025'], 'the flush is waiting on its first refresh');
+  first.handlers.close?.();
+  w.context.restartHarnessWatchers();
+  gate.resolve();
+  await running;
+  await w.runTimers();
+  assert.deepEqual(w.refreshes.map(([folder]) => folder), ['codex::2025', 'codex::2026'],
+    'the replacement refreshes the folder the dead watcher had not reached, and not the one already submitted');
 });
