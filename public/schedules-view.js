@@ -556,9 +556,9 @@ function updateScheduleRunButtons(filePath, original) {
 }
 
 function schedulePathLabel(projectPath, filePath) {
-  const root = String(projectPath || '').replace(/[\\/]+$/, '');
-  const sep = filePath.charAt(root.length);
-  return root && filePath.startsWith(root) && (sep === '/' || sep === '\\') ? filePath.slice(root.length + 1) : filePath;
+  const root = String(projectPath || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!projectPath || !String(filePath).replace(/\\/g, '/').startsWith(`${root}/`)) return filePath;
+  return filePath.slice(root.length + 1);
 }
 
 function buildScheduleItem(project, schedule, data) {

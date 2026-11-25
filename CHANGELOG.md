@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
-- The Schedules tab no longer leaves an empty band under each schedule: Run now, Turn off, Open and Delete stay visible. Projects read as section headings, a schedule's file is shown relative to its project, a cron expression is no longer printed twice, a linked file is noted rather than flagged as a problem, and the reason a schedule never runs is no longer repeated. The Cancel and Save buttons at the bottom of Settings are centred in their bar. (#1256)
+- The Schedules tab no longer leaves an empty band under each schedule: its actions stay visible, projects read as headings, file paths are relative to the project, and a cron expression or a never-runs reason is no longer repeated. The Cancel and Save buttons at the bottom of Settings are centred in their bar. (#1256)
 
 ## v0.1.0-beta.1 — 2026-11-24
 

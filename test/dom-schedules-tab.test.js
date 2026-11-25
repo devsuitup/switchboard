@@ -160,6 +160,17 @@ test('a schedule row shows its path relative to its project, with the full path 
   const inside = h.w.document.querySelector('.schedule-item .schedule-path');
   assert.equal(inside.textContent, 'schedule-nightly.md');
   assert.equal(inside.title, '/p/schedule-nightly.md');
+  for (const [projectPath, filePath, label] of [['/', '/.claude/commands/schedule-x.md', '.claude/commands/schedule-x.md'],
+    ['/p/', '/p/schedule-nightly.md', 'schedule-nightly.md'],
+    ['C:/fixture', 'C:\\fixture\\.claude\\commands\\schedule-x.md', '.claude\\commands\\schedule-x.md'],
+    ['C:\\fixture\\', 'C:\\fixture\\schedule-x.md', 'schedule-x.md'],
+    ['', '/p/schedule-nightly.md', '/p/schedule-nightly.md']]) {
+    h.project.projectPath = projectPath;
+    h.schedule.filePath = filePath;
+    h.w.renderSchedules(h.data);
+    assert.equal(h.w.document.querySelector('.schedule-item .schedule-path').textContent, label, JSON.stringify(projectPath));
+  }
+  h.project.projectPath = '/p';
   for (const filePath of ['/elsewhere/schedule-nightly.md', '/pother/schedule-nightly.md']) {
     h.schedule.filePath = filePath;
     h.w.renderSchedules(h.data);
