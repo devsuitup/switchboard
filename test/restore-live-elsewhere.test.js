@@ -875,3 +875,71 @@ for (const failure of ['refusal', 'rejection', 'missing result']) {
     assert.deepEqual(h.settings.global.openWorkingSet.map(i => i.sessionId), ['a', 'b']);
   });
 }
+
+const UNREADABLE_1277 = 'cannot identify background job for x: job 1234abcd has an unknown or unreadable state';
+for (const settles of [true, false]) {
+  test(`1277 a job state unreadable after a respawn is retried attach-only; readable on the third attempt=${settles}`, async t => {
+    const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true, attachJobId: '1234abcd' }], liveIds: [] });
+    t.after(() => h.dom.window.close());
+    const calls = [], logs = [];
+    const schedule = h.dom.window.setTimeout.bind(h.dom.window);
+    h.dom.window.setTimeout = (fn, ms) => schedule(fn, ms === 1000 ? 0 : ms);
+    h.dom.window.console.warn = message => logs.push(message);
+    h.dom.window.api.bgAgentVerb = async () => assert.fail('automatic retries must never respawn');
+    h.dom.window.api.restoreBackgroundJob = async (id, options) => {
+      calls.push(options?.attachOnly === true);
+      if (calls.length === 1) return { action: 'respawned-not-attached', jobId: '1234abcd' };
+      if (settles && calls.length === 3) return { action: 'attach', sessionId: id, jobId: '1234abcd' };
+      return { action: 'refuse', reason: UNREADABLE_1277, stateFile: 'transitional-state' };
+    };
+    h.dom.window.api.getSessionLiveElsewhere = async () => ({ kind: 'bg', jobId: '1234abcd', cwd: '/px' });
+    await h.restore();
+    assert.deepEqual(calls, [false, true, true], 'one respawning attempt, then attach-only retries');
+    assert.equal(calls.filter(attachOnly => !attachOnly).length, 1, 'exactly one attempt may respawn');
+    const notices = h.dom.window.document.querySelector('#app-notices');
+    if (settles) {
+      assert.equal(vm.runInContext('openSessions.get("x")?.attach', h.ctx), true, 'the background session is attached');
+      assert.equal(notices.children.length, 0);
+      assert.deepEqual(logs, []);
+    } else {
+      assert.equal(vm.runInContext('openSessions.has("x")', h.ctx), false, 'no foreground fallback');
+      assert.equal(notices.children.length, 1, 'one refusal');
+      assert.match(notices.textContent, /unknown or unreadable state/);
+      assert.equal(logs.length, 1);
+      assert.match(logs[0], /\[restore-bg\] session=x job=1234abcd outcome=refuse attempts=3 stateFile=transitional-state$/);
+    }
+  });
+}
+
+test('1277 an unreadable state on the first attempt is retried attach-only and logged by kind only', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true, attachJobId: '1234abcd' }], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  const calls = [], logs = [];
+  const schedule = h.dom.window.setTimeout.bind(h.dom.window);
+  h.dom.window.setTimeout = (fn, ms) => schedule(fn, ms === 1000 ? 0 : ms);
+  h.dom.window.console.warn = message => logs.push(message);
+  h.dom.window.api.restoreBackgroundJob = async (_id, options) => {
+    calls.push(options?.attachOnly === true);
+    return { action: 'refuse', reason: 'cannot identify background job for x: Unexpected token S in "SECRET" JSON', stateFile: 'unparsable' };
+  };
+  await h.restore();
+  assert.deepEqual(calls, [false, true, true]);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /outcome=refuse attempts=3 stateFile=unparsable$/);
+  assert.doesNotMatch(logs[0], /SECRET/);
+
+});
+
+test('1277 GUARD a refusal that names no state file fault is not retried and logs no stateFile', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true, attachJobId: '1234abcd' }], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  const calls = [], logs = [];
+  h.dom.window.console.warn = message => logs.push(message);
+  h.dom.window.api.restoreBackgroundJob = async (_id, options) => {
+    calls.push(options?.attachOnly === true);
+    return { action: 'refuse', jobId: '1234abcd', reason: 'job 1234abcd does not match saved session x', stateFile: 'id-mismatch' };
+  };
+  await h.restore();
+  assert.deepEqual(calls, [false]);
+  assert.match(logs[0], /attempts=1 stateFile=id-mismatch$/);
+});

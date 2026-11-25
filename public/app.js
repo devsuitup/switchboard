@@ -647,7 +647,8 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
     live = result?.live;
     const transient = result?.action === 'respawned-not-attached'
       || result?.action === 'refuse' && (/worker liveness unknown|background descriptor is no longer available|live worker has no attachable background descriptor/i.test(result.reason || '')
-        || recovery && /worker is not live/i.test(result.reason || ''));
+        || recovery && /worker is not live/i.test(result.reason || '')
+        || ['missing', 'unreadable', 'unparsable', 'no-state', 'transitional-state', 'unknown-state'].includes(result.stateFile));
     if (!transient) break;
   }
   const id = sessionActionNoticeId('Restore', session);
@@ -666,7 +667,8 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
   };
   const logFailure = outcome => {
     const logId = value => String(value || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 100);
-    console.warn(`[restore-bg] session=${logId(item.sessionId)} job=${logId(result?.jobId || item.attachJobId)} outcome=${outcome} attempts=${attempts}`);
+    console.warn(`[restore-bg] session=${logId(item.sessionId)} job=${logId(result?.jobId || item.attachJobId)} outcome=${outcome} attempts=${attempts}${result?.stateFile ? ` stateFile=${logId(result.stateFile)}` : ''}`);
+
   };
   if (result?.action === 'retire') {
     skippedWorkingSetEntries.delete(item.sessionId);

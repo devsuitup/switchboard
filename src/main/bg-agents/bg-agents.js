@@ -20,6 +20,19 @@ const VERB_TIMEOUT_MS = 60000;
 const VERBS = new Set(['stop', 'respawn', 'rm', 'transcript']);
 const ROOT_CACHE_MAX = 500;
 const ROOT_CONCURRENCY = 4;
+const TRANSITIONAL_JOB_STATES = new Set(['starting', 'resuming', 'adopted', 'crashed']);
+
+function stateReadFault(error) {
+  return error instanceof SyntaxError ? 'unparsable' : error?.code === 'ENOENT' ? 'missing' : 'unreadable';
+}
+
+function stateFileFault(raw, job, id) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'unparsable';
+  if (raw.state === undefined) return 'no-state';
+  if (!job?.state) return TRANSITIONAL_JOB_STATES.has(raw.state) ? 'transitional-state' : 'unknown-state';
+  if (raw.id && raw.id !== id) return 'id-mismatch';
+  return null;
+}
 
 let jobsDir = DEFAULT_JOBS_DIR;
 let homeDir = os.homedir();
@@ -383,18 +396,19 @@ async function workerEvidence(job, allStates = false) {
 async function conversationCheck(id, { workerLiveness = true } = {}) {
   if (typeof id !== 'string' || !JOB_ID_RE.test(id)) return { known: false, reason: 'invalid background session id' };
   const gen = generation;
-  let job, resumeSessionId;
+  let job, resumeSessionId, raw;
   try {
     const text = fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8');
     job = parseJobState(text);
+    try { raw = JSON.parse(text); } catch {}
     if (job?.state) {
-      const target = JSON.parse(text).resumeSessionId;
+      const target = raw.resumeSessionId;
       if (typeof target === 'string' && SESSION_ID_RE.test(target)) resumeSessionId = target.toLowerCase();
     }
   } catch (err) {
-    return { known: false, reason: `cannot read job ${id}: ${err.message}` };
+    return { known: false, reason: `cannot read job ${id}: ${err.message}`, stateFile: stateReadFault(err) };
   }
-  if (!job || !job.state) return { known: false, reason: `job ${id} has an unknown or unreadable state` };
+  if (!job || !job.state) return { known: false, reason: `job ${id} has an unknown or unreadable state`, stateFile: stateFileFault(raw, job, id) };
   const entry = roster.find(e => e.id === id);
   const sessionIds = [...new Set([job.sessionId, job.bridgeSessionId, entry && entry.sessionId]
     .filter(Boolean))];
@@ -467,13 +481,14 @@ function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false
       try {
         const text = fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8');
         record = { raw: JSON.parse(text), job: parseJobState(text) };
-      } catch (error) { record = { error }; }
-      restoreScan?.records.set(id, record);
+        record.stateFile = stateFileFault(record.raw, record.job, id);
+      } catch (error) { record = { error, stateFile: stateReadFault(error) }; }
+      if (!record.stateFile) restoreScan?.records.set(id, record);
     }
-    if (record.error) throw record.error;
+    if (record.error) throw Object.assign(new Error(record.error.message), { stateFile: record.stateFile });
     const { raw, job } = record;
     if (ignoreUnrelatedInvalid && !identity(raw, id).length) throw new Error(`job ${id} does not name its conversation; Switchboard uses the session id the Agents view last listed for that job; if Switchboard has no such list yet, a record that does not name its conversation refuses — open the Agents view, then retry`);
-    if (!job?.state || (raw.id && raw.id !== id)) throw new Error(`job ${id} has an unknown or unreadable state`);
+    if (record.stateFile) throw Object.assign(new Error(`job ${id} has an unknown or unreadable state`), { stateFile: record.stateFile });
     const rawTarget = raw.resumeSessionId ?? raw.sessionId;
     const resumeTarget = typeof rawTarget === 'string' && SESSION_ID_RE.test(rawTarget) ? rawTarget.toLowerCase() : null;
     const ownSessionId = sessionIdFromLinkScanPath(raw.linkScanPath) || sessionIdField(raw.sessionId);
@@ -536,7 +551,8 @@ function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false
       : `no background job record for ${sessionId}`, ...(!matches.length ? { missing: true } : {}) };
     return { known: true, job: matches[0] };
   } catch (err) {
-    return { known: false, reason: `cannot identify background job for ${sessionId}: ${err.message}` };
+    return { known: false, reason: `cannot identify background job for ${sessionId}: ${err.message}`, ...(err.stateFile ? { stateFile: err.stateFile } : {}) };
+
   }
 }
 
