@@ -555,9 +555,9 @@ function updateScheduleRunButtons(filePath, original) {
   restorePendingScheduleFocus();
 }
 
-function schedulePathSegments(value) {
+function schedulePathSegments(value, windows) {
   const segments = [];
-  String(value).replace(/\\/g, '/').split('/').forEach((segment, index) => {
+  (windows ? String(value).replace(/\\/g, '/') : String(value)).split('/').forEach((segment, index) => {
     if (segment === '..') { if (segments.length > 1) segments.pop(); }
     else if (segment !== '.' && (segment !== '' || index === 0)) segments.push(segment);
   });
@@ -566,12 +566,12 @@ function schedulePathSegments(value) {
 
 function schedulePathLabel(projectPath, filePath) {
   if (!projectPath) return filePath;
-  const windows = /^[A-Za-z]:|\\/.test(projectPath) || /^[A-Za-z]:|\\/.test(filePath);
+  const windows = [projectPath, filePath].some(value => /^([A-Za-z]:|\\\\)/.test(String(value)));
   const same = (a, b) => windows ? a.toLowerCase() === b.toLowerCase() : a === b;
-  const root = schedulePathSegments(projectPath);
-  const file = schedulePathSegments(filePath);
+  const root = schedulePathSegments(projectPath, windows);
+  const file = schedulePathSegments(filePath, windows);
   if (file.length <= root.length || !root.every((segment, index) => same(segment, file[index]))) return filePath;
-  return file.slice(root.length).join(String(filePath).includes('\\') ? '\\' : '/');
+  return file.slice(root.length).join(windows && String(filePath).includes('\\') ? '\\' : '/');
 }
 
 function buildScheduleItem(project, schedule, data) {
