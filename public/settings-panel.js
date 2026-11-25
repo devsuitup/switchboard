@@ -7,6 +7,7 @@
   const settingsViewerBody = document.getElementById('settings-viewer-body');
   let settingsResizeObserver = null;
   let savedFlashTimer = null;
+  let settingsFooter = null;
 
   function closeSettingsViewer() {
     settingsResizeObserver?.disconnect();
@@ -570,6 +571,11 @@
 
     const form = settingsViewerBody.querySelector('.settings-form');
     const footer = form.querySelector('.settings-btn-row');
+    footer.classList.add('settings-footer');
+    settingsFooter?.remove();
+    settingsFooter = footer;
+    settingsViewerBody.after(footer);
+    const saveButton = footer.querySelector('#sv-save-btn');
     const pageDefs = isProject
       ? [['launch', 'Launch'], ['project', 'This project']]
       : [['general', 'General'], ['sessions', 'Sessions'], ['keyboard', 'Keyboard'], ['automation', 'Automation'], ['remote', 'Remote hosts'], ['integrations', 'Integrations'], ['archived', 'Archived'], ['advanced', 'Advanced']];
@@ -631,7 +637,7 @@
       const danger = document.createElement('div');
       danger.className = 'settings-section settings-danger-zone';
       danger.innerHTML = '<h3 class="settings-section-title">Danger zone</h3><div class="settings-project-actions"></div>';
-      danger.querySelector('.settings-project-actions').append(form.querySelector('#sv-archive-btn'), form.querySelector('#sv-delete-btn'));
+      danger.querySelector('.settings-project-actions').append(footer.querySelector('#sv-archive-btn'), footer.querySelector('#sv-delete-btn'));
       pages.get('project').append(identity, danger);
     } else {
       moveGroup('general', 'Startup', ['sv-restore-startup']);
@@ -756,7 +762,7 @@
           const selected = pages.get(button.dataset.section);
           const page = selected.hidden ? [...pages.values()].find(page => !page.hidden) : selected;
           const control = page && [...page.querySelectorAll('input:not(:disabled), select:not(:disabled), textarea:not(:disabled), button:not(:disabled), summary')].find(control => !control.closest('[hidden]'));
-          (control || page?.querySelector('h2') || form.querySelector('#sv-save-btn')).focus();
+          (control || page?.querySelector('h2') || saveButton).focus();
         }
       });
     }
@@ -805,6 +811,7 @@
         + Number(JSON.stringify(remoteHosts) !== initialHosts)
         + Number(JSON.stringify(scShortcuts) !== initialShortcuts);
       unsaved.textContent = count ? `● ${count} unsaved change${count === 1 ? '' : 's'}` : '';
+      saveButton.classList.toggle('dirty', count > 0);
     }
     resetDirty();
     form.addEventListener('input', updateDirty);
@@ -1165,8 +1172,7 @@
         const notice = document.createElement('div');
         notice.className = 'settings-notice';
         notice.textContent = 'IDE Emulation setting changed. New sessions will use the updated setting \u2014 running sessions are not affected.';
-        const saveBtn = settingsViewerBody.querySelector('#sv-save-btn');
-        saveBtn.parentElement.insertBefore(notice, saveBtn);
+        footer.insertBefore(notice, footer.querySelector('#sv-cancel-btn'));
         setTimeout(() => notice.remove(), 8000);
       }
       appliedMcpEmulation = settings.mcpEmulation;
@@ -1206,17 +1212,15 @@
         submitted.hosts = JSON.stringify(remoteHosts);
       }
 
-      const saveBtn = settingsViewerBody.querySelector('#sv-save-btn');
-      saveBtn.textContent = rejectedHosts ? 'Some changes not saved' : deferred ? '✓ Applied' : '✓ Saved';
-      saveBtn.classList.toggle('saved', !rejectedHosts);
+      saveButton.textContent = rejectedHosts ? 'Some changes not saved' : deferred ? '✓ Applied' : '✓ Saved';
+      saveButton.classList.toggle('saved', !rejectedHosts);
       resetDirty(submitted, submittedEdits);
       clearTimeout(savedFlashTimer);
       savedFlashTimer = setTimeout(() => {
-        saveBtn.classList.remove('saved');
-        saveBtn.textContent = 'Save Settings';
+        saveButton.classList.remove('saved');
+        saveButton.textContent = 'Save Settings';
       }, 1500);
     }
-    const saveButton = form.querySelector('#sv-save-btn');
     saveButton.addEventListener('click', async () => {
       if (saveButton.disabled) return;
       saveButton.disabled = true;
@@ -1228,7 +1232,7 @@
     });
 
     // Cancel button
-    settingsViewerBody.querySelector('#sv-cancel-btn').addEventListener('click', () => {
+    footer.querySelector('#sv-cancel-btn').addEventListener('click', () => {
       stopShortcutCapture();
       closeSettingsViewer();
     });
