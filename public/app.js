@@ -530,10 +530,11 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           restoreInFlight.delete(originalId);
           continue;
         }
-        if (!item.chosenPart || s.sessionId !== originalId) {
+        let keptChoice;
+        {
           const partIds = [originalSession, s].flatMap(part => [part.sessionId, part.headSessionId, ...(part.mergedMemberIds || [])]);
           const background = [...list, ...[...skippedWorkingSetEntries.values()].map(entry => entry.item)]
-            .find(other => other.bg === true && other.sessionId !== originalId && partIds.includes(other.sessionId));
+            .find(other => other.bg === true && other.sessionId !== originalId && other.sessionId !== item.chosenPart && partIds.includes(other.sessionId));
           if (background && !deferredItems.has(item)) {
             deferredItems.add(item);
             ordered.push(item);
@@ -542,7 +543,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           if (background) {
             await backgroundTaskById.get(background.sessionId)?.catch(() => {});
             const open = openSessions.get(background.sessionId);
-            if (skippedWorkingSetEntries.get(background.sessionId)?.item.bg === true && (!open || open.closed)) {
+            if (!open || open.closed) {
               skippedWorkingSetEntries.set(originalId, { item, index: restoreSavedIndex.get(originalId) ?? position });
               skippedNow.push({ session: originalSession, continuation: true, reason: 'It continued in a background session that was not restored',
                 recovery: 'Open it from the sidebar to choose what to open.' });
@@ -550,8 +551,9 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
               continue;
             }
           }
-          if (s.sessionId === originalId && s.headSessionId && s.headSessionId !== originalId
+          if (s.sessionId === originalId && s.headSessionId && s.headSessionId !== originalId && s.headSessionId !== item.chosenPart
             && !(refusedBackgroundPart(s) && !(await window.api.getSessionLiveElsewhere(s.headSessionId).catch(() => null)))) s = rowHeadSession(s);
+          if (item.chosenPart && [s.sessionId, ...(s.mergedMemberIds || [])].includes(item.chosenPart)) keptChoice = item.chosenPart;
         }
         if (s.sessionId !== originalId) {
           restoreSavedIndex.set(s.sessionId, restoreSavedIndex.get(originalId) ?? position);
@@ -567,7 +569,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         let blockedBy;
         try {
           opened = await openSession(s, undefined, {
-            automatic: true, fromRestore: true, live, continuationResolved: true, chosenPart: s.sessionId === originalId ? item.chosenPart : undefined, allowBgAttach: s.sessionId !== originalId || item.bg === true, ...showWhenOpened(item),
+            automatic: true, fromRestore: true, live, continuationResolved: true, chosenPart: keptChoice, allowBgAttach: s.sessionId !== originalId || item.bg === true, ...showWhenOpened(item),
             onBlocked: part => { blockedBy = { session: part.sessionId === s.sessionId ? s : { sessionId: part.sessionId, projectPath: part.live?.cwd }, live: part.live }; },
           });
         } finally {
@@ -2930,6 +2932,48 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
       allowBgAttach = true;
       continuationResolved = true;
     }
+  }
+  if (mayBeHeld && !automatic && !triggerAction && !chooseAgain && backgroundHeld?.item?.bg !== true && partIds.length > 1
+    && refusedBackgroundPart(session) === session.sessionId) {
+    const heldId = session.sessionId, jobId = session.identityJobId;
+    let current = null;
+    try { current = await window.api.getSessionLiveElsewhere(heldId); } catch { current = null; }
+    if (!current) {
+      const choice = await chooseRefusedBackground(session, heldId, { jobId, recovery: 'respawn',
+        reason: `Job ${jobId} (${session.refusedJobState}) has no running worker` }, { choose: question => appChoose(question),
+        describe: id => {
+          const row = indexedRowOf(id);
+          const part = row?.conversationParts?.find(part => part.sessionId === id) || row;
+          return { name: cleanDisplayName(part?.name || part?.aiTitle || part?.summary) };
+        } });
+      if (!choice) return false;
+      if (choice.background) {
+        let error;
+        try {
+          const verb = await window.api.bgAgentVerb('respawn', jobId);
+          if (!verb?.ok) error = verb?.error || 'Respawn returned no result';
+        } catch (err) { error = err.message || String(err); }
+        for (let waited = 0; !error && waited <= 15000; waited += 500) {
+          try { current = await window.api.getSessionLiveElsewhere(heldId); } catch { current = null; }
+          if (current?.kind === 'bg' && current.jobId === jobId) break;
+          current = null;
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        if (!current) {
+          showSessionActionFailure('Attach background', session, error || `Job ${jobId} was respawned but has no live background descriptor`, 'Check the background session in the Agents view.');
+          return false;
+        }
+        customOptions = { type: 'attach', jobId, cwd: current.cwd || session.projectPath };
+      } else {
+        session = rowHeadSession(session, choice.sessionId);
+        const other = openingSessions.get(choice.sessionId);
+        if (open && other && other !== open) await other.promise.catch(() => {});
+        if (open) openingSessions.set(choice.sessionId, open);
+        restoreNoticeSessions.push(session);
+        continuationResolved = true;
+        chosenPart = heldId;
+      }
+    } else if (live === undefined) live = current;
   }
   let continuationNotice;
   if (!continuationResolved && customOptions?.type !== 'attach' && (chooseAgain || !openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {

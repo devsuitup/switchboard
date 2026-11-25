@@ -304,7 +304,8 @@ Renderer rules, all in `resume-guard.js` / `app.js`:
 
 - `runRestore` defers an interactive entry whose row (or resolved continuation)
   holds a saved bg entry to the end of the run, waits for that entry's task and
-  holds the interactive one if the bg one is still held. Both entries persist
+  holds the interactive one unless the bg one opened: a bg entry released as
+  missing or retired is not a choice either. Both entries persist
   under their own ids; the bg mark and job id are not overwritten.
 - `resolveResumeSession` keeps a row member as a candidate when it is the row's
   refused head and has no live process. Automatic callers hold; a manual open
@@ -313,12 +314,15 @@ Renderer rules, all in `resume-guard.js` / `app.js`:
 - A user open of any part of a row with a held bg entry calls
   `prepareBackgroundRestore` for that entry with `onRefused`; a refusal goes to
   `chooseRefusedBackground` (`appChoose`) instead of the notice. Rows with one
-  part keep the notice. Retired and missing jobs keep their own paths.
+  part keep the notice. A click on a refused head that was never saved (no bg
+  entry) gets the same question; its Respawn calls the checked verb and attaches
+  once the job's descriptor appears (15 s), and reports otherwise. Retired and missing jobs keep their own paths.
 - Choosing another part sets `chosenPart` (the background id it was chosen over)
   on its terminal entry and saved item;
   the bg entry is released only after the terminal opened. Such items ignore
-  that id as a continuation and skip the head mapping; a further continuation is
-  still followed.
+  that id as a continuation and as a head; other continuations and a newer head
+  (a compaction mirror) are still followed, and the mark is dropped once that id
+  leaves the row.
 - `reopenActiveSessionAfterReload` only reattaches an active part whose row has
   a refused head or a saved bg entry, unless it is a `chosenPart`.
 

@@ -12,17 +12,18 @@ const B = 'bbbbbbbb-0000-4000-8000-00000000000a';
 const JOB = 'bbbbbbbb';
 const REFUSAL = { action: 'refuse', jobId: JOB, reason: `Job ${JOB} (blocked): blocked job was not respawned automatically`, recovery: 'respawn' };
 
-function harness(t, { savedBackground = true, savedOlder = true, chosenPart = false, order = 'older-first', newest = B, merged = true, state = 'blocked', answer, refusal = REFUSAL, live = {} } = {}) {
+function harness(t, { savedBackground = true, savedOlder = true, chosenPart = false, order = 'older-first', newest = B, merged = true, state = 'blocked', answer, refusal = REFUSAL, live = {}, graph, decorate, jobs } = {}) {
   const older = { sessionId: A, active: true, ...(chosenPart ? { chosenPart: B } : {}) };
   const background = { sessionId: B, active: false, bg: true, attachJobId: JOB };
   const savedEntries = [...(savedOlder ? [older] : []), ...(savedBackground ? [background] : [])];
   if (order === 'background-first') savedEntries.reverse();
-  const h = setup(t, { parent: ['sibling', A], sibling: [], [A]: [B], [B]: [] }, { savedEntries, live });
+  const h = setup(t, graph || { parent: ['sibling', A], sibling: [], [A]: [B], [B]: [] }, { savedEntries, live });
   for (const item of h.saved) item.projectPath = h.root;
   for (const row of h.rows.values()) row.modified = row.sessionId === newest ? '2026-11-25T17:53:41Z' : '2026-11-19T08:00:00Z';
+  decorate?.(h.rows);
   cache.init({ PROJECTS_DIR: h.root, db: { ...h.db, isInitialScanComplete: () => true, getAllCached: () => [...h.rows.values()] },
     activeSessions: new Map(), getMainWindow: () => null, log: console, getLocalDescriptors: () => [],
-    getLocalJobs: () => new Map([[JOB, { state, sessionId: B }]]) });
+    getLocalJobs: () => jobs || new Map([[JOB, { state, sessionId: B }]]) });
   const rows = cache.buildProjectsFromCache(false).flatMap(project => project.sessions);
   h.ctx.sessionMap.clear();
   for (const row of rows) {
@@ -43,6 +44,7 @@ function harness(t, { savedBackground = true, savedOlder = true, chosenPart = fa
   h.dom.window.api.getSessionsLiveElsewhere = async ids => alive && ids.includes(B) ? { [B]: { kind: 'bg', jobId: JOB, cwd: h.root } }
     : Object.fromEntries(ids.filter(id => live[id]).map(id => [id, live[id]]));
   h.dom.window.api.bgAgentVerb = async (verb, id) => { calls.verbs.push([verb, id]); alive = true; return { ok: true }; };
+  h.revive = () => { alive = true; };
   h.dom.window.appChoose = async question => { calls.prompts.push(question); return answer ? { choice: answer } : null; };
   const row = () => h.ctx.sessionMap.get(A);
   const openRow = async (id) => {
@@ -186,6 +188,66 @@ test('#1276 a chosen part that continued again is still followed', async t => {
     await h.restore();
     assert.deepEqual(h.spawned.map(call => call.id), ['next']);
   }
+});
+
+const C = 'cccccccc-0000-4000-8000-00000000000a';
+const mirror = rows => {
+  const c = rows.get(C);
+  Object.assign(c, { mergedIntoSessionId: A, bridgeSessionId: 'cse_same', modified: '2026-11-26T12:00:00Z' });
+  rows.get(A).bridgeSessionId = 'cse_same';
+};
+
+for (const [name, graph] of [['a later mirror', { parent: ['sibling', A], sibling: [], [A]: [B], [B]: [], [C]: [] }],
+  ['a mirror A also points to', { parent: ['sibling', A], sibling: [], [A]: [B, C], [B]: [], [C]: [] }]]) {
+  test(`#1276 a chosen part still follows ${name} of its own (review R3)`, async t => {
+    const h = harness(t, { savedBackground: false, chosenPart: true, graph, decorate: mirror });
+    assert.equal(h.row().headSessionId, C);
+    await h.restore();
+    assert.deepEqual(h.spawned.map(call => call.id), [C]);
+  });
+}
+
+test('#1276 a stale choice does not pin the old part of a different continuation (review)', async t => {
+  const h = harness(t, { savedBackground: false, chosenPart: true, newest: C, graph: { [A]: [C], [C]: [] }, jobs: new Map() });
+  assert.equal(h.row().headSessionId, C);
+  await h.restore();
+  assert.deepEqual(h.spawned.map(call => call.id), [C]);
+});
+
+test('#1276 a released background entry is not consent to start the other part (review R2)', async t => {
+  for (const refusal of [{ action: 'refuse', missing: true, reason: 'background job not found' }, { action: 'retire', jobId: JOB }]) {
+    const h = harness(t, { newest: A, refusal });
+    await h.restore();
+    assert.deepEqual(h.spawned, []);
+    assert.ok(h.settings().openWorkingSet.some(item => item.sessionId === A));
+  }
+});
+
+test('#1276 a click on a refused head that was never saved asks instead of resuming it (review R1)', async t => {
+  const h = harness(t, { savedBackground: false });
+  await h.restore();
+  await h.openRow();
+  assert.deepEqual(h.spawned, []);
+  assert.equal(h.calls.prompts.length, 1);
+  assert.equal(h.calls.prompts[0].title, 'Background session not restored');
+  assert.deepEqual(savedIds(h), [A]);
+});
+
+test('#1276 Respawn from a refused head that was never saved attaches to it', async t => {
+  const h = harness(t, { savedBackground: false, answer: 'background' });
+  await h.restore();
+  await h.openRow();
+  assert.deepEqual(h.calls.verbs, [['respawn', JOB]]);
+  assert.deepEqual(h.spawned.map(call => [call.id, call.options.type, call.options.jobId]), [[B, 'attach', JOB]]);
+  assert.deepEqual(h.settings().openWorkingSet.map(item => [item.sessionId, !!item.bg]).sort(), [[A, false], [B, true]]);
+});
+
+test('#1276 a refused head that was never saved can be skipped for the older part', async t => {
+  const h = harness(t, { savedBackground: false, answer: 'part:' + A });
+  await h.restore();
+  await h.openRow();
+  assert.deepEqual(h.spawned.map(call => call.id), [A]);
+  assert.equal(h.settings().openWorkingSet.find(item => item.sessionId === A).chosenPart, B);
 });
 
 for (const [name, saved, expected] of [

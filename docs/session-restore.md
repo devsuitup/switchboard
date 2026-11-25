@@ -77,7 +77,8 @@ worker is gone, or one that cannot be checked), its sidebar row keeps showing
 it as the newest part. If another part of the same conversation is saved too,
 launch starts neither: both stay saved, and the notices name them. A part that
 continued in a blocked or stopped job is also held when only that part was
-saved. Nothing is asked at launch.
+saved, and when the background session disappeared or ended before it could
+be restored: only your choice opens the other part. Nothing is asked at launch.
 
 Opening the row asks **Background session not restored**, once, with:
 
@@ -91,7 +92,8 @@ Opening the row asks **Background session not restored**, once, with:
 - **Cancel**, which opens nothing.
 
 The opened part is remembered (`chosenPart` in its saved entry, the id it was chosen over) and restored
-directly at later launches. A row with a single part keeps the notice and its
+directly at later launches. The same question appears when the background session was not in the saved
+set. A part chosen this way still follows its own later continuations. A row with a single part keeps the notice and its
 **Respawn** button. A reload reattaches a part that is still running here, and
 otherwise leaves these rows to the saved set.
 
