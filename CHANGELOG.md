@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- The Schedules tab no longer leaves an empty band under each schedule: its actions stay visible, projects read as headings, file paths are relative to the project, and a cron expression or a never-runs reason is no longer repeated. The Cancel and Save buttons at the bottom of Settings are centred in their bar. (#1256)
+
 ## v0.1.0-beta.1 — 2026-11-24
 
 ### New

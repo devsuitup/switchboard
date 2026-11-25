@@ -1046,14 +1046,15 @@ recreated at the same path inherits no retained catch-up or run-result records.
 Publication debris follows D's existing ten-minute stale-file policy; a running
 child is not stopped by deleting its schedule.
 
-Delete is a native button in the existing `.schedule-actions` keyboard inventory:
-Tab reaches it, Enter/Space activates it, and `:has(:focus-visible)` reveals the
-action container. If a refresh removes the focused row after deletion, focus
+Delete is a native button in `.schedule-actions`, which is always visible
+(compact buttons, no hover reveal): a container hidden at `opacity: 0` keeps its
+height and leaves a blank band under every schedule, and `display: none` would
+take the buttons out of the Tab order. Tab reaches Delete, Enter/Space activates
+it. If a refresh removes the focused row after deletion, focus
 moves to the same control in the next row, otherwise the previous row, otherwise
 the list container (`tabIndex=-1`). The shared confirmation focuses Cancel and
 owns Escape and the modal Tab loop. Tests: `test/schedule-delete-file.test.js` and
-`test/dom-schedules-tab.test.js`; the existing `test/keyboard-focus-css.test.js`
-covers the shared action container.
+`test/dom-schedules-tab.test.js`.
 
 ## Run results
 
