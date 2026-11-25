@@ -272,7 +272,7 @@ the busy wait and running subagents that may stop. Plain terminals and panel
 shells always remain on the Stop side. Unknown inventory offers no Move.
 
 Move starts the main-owned batch with a persistent Cancel notice. Busy rows
-wait at most ten minutes; reaching a permission prompt or shell command fails
+wait at most ten minutes; reaching a permission prompt fails
 immediately and cancels other unwritten rows. Written handoffs finish before
 user cancellation settles. A successful row re-keys and marks its tab as a
 closed background attach, preserving its position without spawning a PTY.

@@ -212,7 +212,8 @@ restore at the next start.
 Send or clear an unsubmitted prompt and answer any terminal dialog first.
 Plain terminals, Codex, remote sessions, sandboxed sessions and sessions
 started through a pre-launch command cannot use this action. An unreadable
-state or a shell command running in the prompt also refuses the move.
+state also refuses the move. A running shell command, including a background
+Bash, does not: `/bg` is submitted as if you had typed it.
 While Claude is working, **Send to background now?** offers **Send now**:
 `/bg` interrupts the running tool and finishes the turn in the background.
 Switchboard also asks when subagents are running, since Claude may stop them.
@@ -234,8 +235,8 @@ Quit (Exit on Windows), Restart to update and window close offer **Move to
 background** for eligible sessions, alongside Stop and Cancel. The dialog
 names what moves and what stops, including plain terminals and panel shells.
 A working session waits up to ten minutes for its turn to end; Cancel remains
-available. A session that needs an answer or starts a shell command during
-that wait fails immediately. The progress notice also points to a terminal
+available. A session with only a shell command running moves without waiting.
+A session that needs an answer during that wait fails immediately. The progress notice also points to a terminal
 when Claude asks you to confirm Background or Stay after a move starts.
 
 On success, Switchboard saves the moved sessions and attaches them at the

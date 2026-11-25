@@ -476,7 +476,7 @@ test('C6 Move submits exactly K ids and C7 result without event saves only new b
   } finally { ctx.destroy(); }
 });
 
-for (const code of ['needs-answer', 'shell', 'busy-timeout', 'failed', 'unknown']) test(`C9 partial ${code} stays open, attaches once and names the failure`, async () => {
+for (const code of ['needs-answer', 'busy-timeout', 'failed', 'unknown']) test(`C9 partial ${code} stays open, attaches once and names the failure`, async () => {
   const ctx = setup();
   try {
     const detail = exitRuntime(ctx);
@@ -491,7 +491,7 @@ for (const code of ['needs-answer', 'shell', 'busy-timeout', 'failed', 'unknown'
     const text = ctx.window.document.getElementById('app-notices').textContent;
     assert.match(text, /Switchboard stayed open. 1 of 2 sessions moved to the background; nothing was stopped/);
     assert.match(text, /two:/);
-    assert.match(text, code === 'needs-answer' ? /needs an answer/ : code === 'shell' ? /shell command/ : code === 'busy-timeout' ? /still working after 10 minutes/ : /backend broke/);
+    assert.match(text, code === 'needs-answer' ? /needs an answer/ : code === 'busy-timeout' ? /still working after 10 minutes/ : /backend broke/);
     assert.equal(ctx.calls.saves.length, 0);
     assert.equal(ctx.calls.stops.length, 0, 'the Stop side must stay running on any partial failure');
   } finally { ctx.destroy(); }
