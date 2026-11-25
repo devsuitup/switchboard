@@ -96,7 +96,7 @@ This overrides only the input list; lint and selected tests still execute.
 
 CI (`.github/workflows/test.yml`) runs ESLint in its own job. Pull requests run
 coverage on Ubuntu with Node 20 and 22, plus platform-specific tests on Windows
-with Node 22. Pushes to main use Node 22 on both platforms. On pull requests,
+with Node 22. Pushes to `main` and `release/*` use Node 22 on both platforms. On pull requests,
 lines a change adds or
 modifies must be 80 % covered (`diff-cover`), `main.js`, `preload.js`, the MCP
 bridge, `claude-auth.js`, `public/app.js`, `public/terminal-manager.js`, the

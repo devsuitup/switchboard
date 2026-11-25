@@ -1,7 +1,7 @@
 # Releasing
 
-A release is a version tag on `main`. The version bump lands through a pull
-request first, because `main` is protected.
+A release is a version tag on a release branch, `release/X.Y`. The version bump
+lands there through a pull request first, because the branch is protected.
 
 Every `gh` command run by hand in this clone needs `--repo devsuitup/switchboard`:
 gh's default here is the upstream repository, `doctly/switchboard`.
@@ -27,19 +27,73 @@ is checked for its tag shape and `package.json` version only. That keeps a
 plain final releasable; the next version, `0.1.0`, ships as `0.1.0-beta.1`
 first (maintainer decision, 2026-11-24).
 
-From the last beta tag until the final tag, `main` takes **only the release
-PR**. Anything else merged in between makes the final differ from the beta in
-code, the tag check fails, and the fix is another beta. The final is then cut
-from that beta.
+## Release branches
+
+`main` never freezes: it takes every PR at any time (maintainer decision,
+2026-11-25). Stabilisation happens on `release/X.Y`, one branch per minor
+line. Betas, finals and hotfixes (`vX.Y.1-beta.1`, then `vX.Y.1`) are tagged
+from it.
+
+- **Cut.** `release/X.Y` is created at the last release tag, not at the tip of
+  `main`. `release/0.1` was cut at `v0.1.0-beta.2`. A new minor line enters
+  through its first beta: its bump PR lands on `main`, the merged commit is
+  tagged, and the branch is created at that tag:
+
+  ```bash
+  git push origin 'v0.2.0-beta.1^{commit}:refs/heads/release/0.2'
+  ```
+
+- **Fix.** A fix lands in `main` first, then is cherry-picked with `-x` onto a
+  branch cut from the release branch, and opened as a PR whose base is the
+  release branch:
+
+  ```bash
+  git fetch origin
+  git checkout -b backport/1300-to-0.1 origin/release/0.1
+  git cherry-pick -x <squash commit on main>
+  git push origin backport/1300-to-0.1
+  gh pr create --repo devsuitup/switchboard --base release/0.1 --title "fix(area): subject (#1300)" --fill
+  ```
+
+  The cherry-pick brings the fix's changelog entry: keep it under the release
+  branch's `## Unreleased`, and only that entry when the hunk conflicts.
+  Squash keeps the `cherry picked from commit` line, since the squash message
+  is the commit messages.
+- **Every code change on the branch ships in a new beta before the final.**
+  From the last beta tag until the final tag, `release/X.Y` takes **only the
+  release PR**; anything else merged in between makes the final differ from
+  the beta, the tag check fails, and the fix is another beta. Only the release
+  branch waits, never `main`.
+- **Branch names.** Bump branches are `bump/vX.Y.Z…`, cherry-pick branches
+  `backport/…`. Never `release/…`: the ruleset matches `release/*`, so such a
+  working branch could not be pushed to again or deleted.
+- **Port back.** After each release, its `CHANGELOG.md` section goes to `main`
+  by PR ([Steps](#steps), 7).
+- **One minor line in betas at a time.** A beta install takes the newest entry
+  of the releases feed, not the highest version: publishing `v0.1.1-beta.1`
+  after `v0.2.0-beta.1` hides the latter from beta installs until the next
+  publication. Publish a final of an older line with `--latest=false` once a
+  newer final exists.
+
+**CI on a release branch.** `test.yml` (PRs and pushes), `build.yml` and
+`pr-title.yml` (PRs) run for `release/*` as for `main`. GitHub reads a pull
+request's workflows from the PR merged into its base: a PR to a release branch
+runs CI only if that branch, or the PR itself, carries these triggers. A
+branch cut before they existed (`release/0.1`, at `v0.1.0-beta.2`) has none,
+and without its checks a PR cannot merge. It gets them through a backport of
+the trigger change that ships in its next beta, never straight in a final: the
+tag check refuses a final that differs from its last beta by a workflow file.
 
 ## Steps
 
-The examples cut `0.1.0-beta.1`, then the final `0.1.0`.
+The examples cut `0.1.0-beta.3`, then the final `0.1.0`, from `release/0.1`.
+The first beta of a new minor line is the exception: its bump PR has base
+`main`, and its tag is where the release branch is cut.
 
 1. **Bump the version and date the changelog** on a branch, and open the PR.
    In [`CHANGELOG.md`](../CHANGELOG.md) (see [Changelog](changelog.md)):
    - for a **beta**, rename `## Unreleased` to
-     `## v0.1.0-beta.1 — <today, YYYY-MM-DD>`, and open a new, empty
+     `## v0.1.0-beta.3 — <today, YYYY-MM-DD>`, and open a new, empty
      `## Unreleased` above it. The next beta's section holds only what changed
      since this one.
    - for the **final**, `## Unreleased` must be empty (anything in it shipped
@@ -51,12 +105,13 @@ The examples cut `0.1.0-beta.1`, then the final `0.1.0`.
    Read the section once more: it becomes the release notes as it stands.
 
    ```bash
-   git checkout -b release/v0.1.0-beta.1 origin/main
-   npm version --no-git-tag-version 0.1.0-beta.1   # package.json and package-lock.json
+   git fetch origin
+   git checkout -b bump/v0.1.0-beta.3 origin/release/0.1
+   npm version --no-git-tag-version 0.1.0-beta.3   # package.json and package-lock.json
    # edit CHANGELOG.md as above
-   git commit -am "chore(release): v0.1.0-beta.1"
-   git push origin release/v0.1.0-beta.1
-   gh pr create --repo devsuitup/switchboard --base main --title "chore(release): v0.1.0-beta.1" --fill
+   git commit -am "chore(release): v0.1.0-beta.3"
+   git push origin bump/v0.1.0-beta.3
+   gh pr create --repo devsuitup/switchboard --base release/0.1 --title "chore(release): v0.1.0-beta.3" --fill
    ```
 
    For the final, the same with `0.1.0`. Bump `package.json` and the lock only
@@ -67,7 +122,7 @@ The examples cut `0.1.0-beta.1`, then the final `0.1.0`.
    so a bump without its section does not pass CI.
 
    Commit subjects and PR titles use `type(area): subject`; the release title
-   is `chore(release): v0.1.0` (`chore(release): v0.1.0-beta.1` for a beta). The PR title becomes the squash commit title
+   is `chore(release): v0.1.0` (`chore(release): v0.1.0-beta.3` for a beta). The PR title becomes the squash commit title
    (`PR_TITLE`). The separate `pr-title` check is advisory during rollout and
    is not a required release check.
 
@@ -75,9 +130,12 @@ The examples cut `0.1.0-beta.1`, then the final `0.1.0`.
    `test (20, ubuntu-latest)`, `test (22, ubuntu-latest)`,
    `test (22, windows-2022)`, `changelog` and `e2e`: ruleset 17240725
    (`main-protection`) requires all six, and the classic branch protection on
-   `main` requires the same list minus `changelog`. Build is not required.
+   `main` requires the same list minus `changelog`. Ruleset 28112036
+   (`release-protection`) covers `refs/heads/release/*`: it requires a PR and
+   the same six checks, and forbids deletion and force-push; creating a branch
+   does not need the checks. Build is not required.
    Required checks and review requirements are GitHub repository settings,
-   separate from these workflow definitions: keep the ruleset and the branch
+   separate from these workflow definitions: keep both rulesets and the branch
    protection aligned whenever the test matrix changes. No approving review is
    required, so `gh pr merge --repo devsuitup/switchboard --auto --squash` can
    be armed once the required checks run.
@@ -86,7 +144,7 @@ The examples cut `0.1.0-beta.1`, then the final `0.1.0`.
 2. **Run the app before tagging.** The tag is what publishes, and nothing
    between the merge and the tag looks at the assembled whole; the test suite
    does not see layout, a control drawn in the wrong colour, or raw tool output
-   in a locale. Launch the merged `main` in an isolated instance and use it — see
+   in a locale. Launch the merged `release/0.1` in an isolated instance and use it — see
    [Testing a PR live](testing-a-pr.md) and
    [Live testing with a throwaway HOME](live-testing.md).
 
@@ -94,9 +152,13 @@ The examples cut `0.1.0-beta.1`, then the final `0.1.0`.
 
    ```bash
    git fetch origin
-   git tag v0.1.0-beta.1 origin/main
-   git push origin v0.1.0-beta.1
+   gh pr view <bump PR> --repo devsuitup/switchboard --json mergeCommit --jq .mergeCommit.oid
+   git tag v0.1.0-beta.3 <that commit>
+   git push origin v0.1.0-beta.3
    ```
+
+   Name the commit rather than a branch tip, which may have moved since,
+   `main` above all.
 
 4. **Wait for the build.** The tag starts `.github/workflows/build.yml`. Its
    `release-tag` job runs [the tag check](#the-tag-check) while the packages
@@ -114,7 +176,7 @@ The examples cut `0.1.0-beta.1`, then the final `0.1.0`.
 
    Tag artifacts are downloaded by publish in the same run and retained for
    14 days (PR artifacts: 3 days). Only older runs of the same PR are cancelled
-   by its newer runs; tag and main pushes never cancel in-progress runs.
+   by its newer runs; tag and branch pushes never cancel in-progress runs.
 
    To recover, re-run the failed macOS job in the tag's Actions run (or re-run
    failed jobs) and let the dependent publish job run once every build succeeds.
@@ -171,9 +233,12 @@ The examples cut `0.1.0-beta.1`, then the final `0.1.0`.
    - writes the release notes: the text of the tag's `CHANGELOG.md` section,
      without its heading (`scripts/changelog-section.js`), then a **Full
      changelog** link comparing the previous tag with this one (for a final,
-     the previous final, skipping its betas). It fails
+     the previous final, skipping its betas). The previous tag is looked up
+     on the tag's own history: the first beta of a new minor line and that
+     line's `X.Y.0` final do not see the tags made on an older release branch,
+     so correct their compare link in the draft by hand. It fails
      rather than publish an empty body when the section is missing or empty.
-     The fix is then in `CHANGELOG.md`, through a PR; `gh release edit
+     The fix is then in `CHANGELOG.md`, through a PR to the release branch; `gh release edit
      --repo devsuitup/switchboard --notes-file` can fill in the draft by hand meanwhile.
 
    Re-running CI while the release is a draft is fine: it completes or replaces
@@ -187,8 +252,8 @@ The examples cut `0.1.0-beta.1`, then the final `0.1.0`.
 5. **Publish a beta draft**, after checking its assets and its flag:
 
    ```bash
-   gh release view v0.1.0-beta.1 --repo devsuitup/switchboard --json assets,isPrerelease --jq '{assets: (.assets | length), isPrerelease}'
-   gh release edit v0.1.0-beta.1 --repo devsuitup/switchboard --draft=false --prerelease
+   gh release view v0.1.0-beta.3 --repo devsuitup/switchboard --json assets,isPrerelease --jq '{assets: (.assets | length), isPrerelease}'
+   gh release edit v0.1.0-beta.3 --repo devsuitup/switchboard --draft=false --prerelease
    gh api repos/devsuitup/switchboard/releases/latest --jq .tag_name   # must not contain "-"
    ```
 
@@ -196,11 +261,13 @@ The examples cut `0.1.0-beta.1`, then the final `0.1.0`.
    pick the release up from its `latest*.yml` manifests; a draft is invisible
    to them. The pre-release flag is the only thing that keeps the beta from
    stable installs: if the last command prints a `-beta` tag, set the flag
-   again at once (`gh release edit <tag> --prerelease`) and mark the previous
+   again at once (`gh release edit <tag> --repo devsuitup/switchboard --prerelease`) and mark the previous
    final `--latest`. On their first start after the update, the What's new
    dialog shows this section, and those of any version they skipped.
 
-   Fixes found on beta ship as `0.1.0-beta.2`, and so on, through steps 1–5.
+   Fixes found on beta land in `main`, are backported
+   ([Release branches](#release-branches)) and ship as `0.1.0-beta.4`, and so
+   on, through steps 1–5 and 7.
 
 6. **Cut the final**, only on the maintainer's go. First require at least
    24 hours of use on the last beta and no open issue labelled `regression`
@@ -211,8 +278,8 @@ The examples cut `0.1.0-beta.1`, then the final `0.1.0`.
    gh issue list --repo devsuitup/switchboard --state open --label regression --limit 1000
    ```
 
-   Then steps 1–4 again with `0.1.0`, `main` having taken nothing since the
-   last beta tag. The tag check compares the tag with `v0.1.0-beta.<last>`
+   Then steps 1–4 again with `0.1.0`, `release/0.1` having taken nothing
+   since the last beta tag; what `main` took meanwhile does not matter. The tag check compares the tag with `v0.1.0-beta.<last>`
    and fails the run before publish when anything else differs. Publish the
    final draft as the latest release:
 
@@ -224,6 +291,23 @@ The examples cut `0.1.0-beta.1`, then the final `0.1.0`.
 
    Stable installs are offered it, and so are beta installs: the beta channel
    moves from `0.1.0-beta.N` to `0.1.0`.
+
+7. **Port the changelog to `main`**, after every beta and final, from a branch
+   `bump/port-v0.1.0-beta.3` cut from `origin/main`, with a PR titled
+   `docs(changelog): port v0.1.0-beta.3`:
+   - insert the release's section as it stands at the tag, in version order
+     (newest first);
+   - remove from `## Unreleased` each entry that section contains. The rest
+     has not shipped and stays;
+   - for a final, also delete the `## v0.1.0-beta.N` sections it folds;
+   - when the released version is higher than the one in `main`'s
+     `package.json`, run `npm version --no-git-tag-version <version>` in the
+     same PR. `test/changelog.test.js` needs a section for the version in
+     `package.json`, and deleting the folded betas would leave `main` on a
+     version without one.
+
+   Copy the text; do not merge the release branch into `main`. A first beta
+   tagged on `main` has nothing to port.
 
 ## The tag check
 
@@ -292,18 +376,18 @@ Stable installs stop being offered the withdrawn version; new installs get the
 previous stable release. A stable install that already downloaded the withdrawn
 version still installs it at its next quit. Installs already on the withdrawn version keep it: never
 downgrade, because the SQLite cache only migrates forward. Fix forward with a
-beta of the next version (`v0.1.1-beta.1`), then its final through the same
-gate. Beta installs can still receive a withdrawn release, now a pre-release.
+beta of the next version (`v0.1.1-beta.1`, from `release/0.1`), then its final
+through the same gate. Beta installs can still receive a withdrawn release, now a pre-release.
 
 ## Fork release-flow gotchas
 
 - **Push with an explicit remote.** A clone whose `main` tracks `upstream`
   (`doctly/switchboard`) sends a bare `git push` there, which fails on
   permissions. `git push origin …` always targets the fork.
-- **Direct pushes to `main` are rejected** by the ruleset: the bump goes through
-  a PR.
+- **Direct pushes to `main` and `release/*` are rejected** by the rulesets: the
+  bump goes through a PR.
 - **Tag the merged commit, never the local bump commit.** A squash merge makes
-  a new commit; a tag on the pre-merge commit is not an ancestor of `main`, so
+  a new commit; a tag on the pre-merge commit is not an ancestor of the release branch, so
   `git describe --tags` and the release-notes range skip it. If a build already
   started from such a tag, cancel it (`gh run cancel --repo devsuitup/switchboard`), delete the tag locally
   and on `origin`, and tag the merged commit.

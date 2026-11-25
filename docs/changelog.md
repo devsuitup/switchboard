@@ -40,6 +40,11 @@ Older versions: see [GitHub Releases](…).
   headings deleted, so the file never holds a beta beside its final
   ([Releasing](releasing.md)). `test/changelog.test.js` and the release tag
   check enforce it.
+- Versions are cut on `release/X.Y`, each branch with its own `## Unreleased`.
+  After each release its section is ported to `main`, and an entry that
+  section contains is removed from `main`'s `## Unreleased`: an entry that
+  shipped from a release branch never stays there, or the next line's first
+  beta would announce it again ([Releasing](releasing.md#steps), step 7).
 - Up to three groups per version, in this order: `### New`, `### Changed`,
   `### Fixed`. A group with no entry is left out.
 - The `---` line closes the last section: the pointer to GitHub Releases below
@@ -63,6 +68,8 @@ Every PR that changes what a user sees or can do adds its entry under
 
 - One or two plain sentences, on what the user sees or can now do, not on the
   code that does it.
+- A backport to a release branch carries the same entry, under that branch's
+  `## Unreleased`; `main` keeps its own until the release is ported.
 - The PR or issue ref at the end: `(#338)`, or `(#337, #343)`.
 - If the change needs a caveat or an action from the user, say it in one
   sentence.
@@ -74,15 +81,15 @@ Every PR that changes what a user sees or can do adds its entry under
 ## The CI check
 
 The `changelog` job of `.github/workflows/test.yml` runs on every pull request.
-It is a required check of the `main-protection` ruleset, so a PR it fails
-cannot be merged. It fails when the PR changes app code and not
+It is a required check of the `main-protection` and `release-protection`
+rulesets, so a PR to `main` or `release/*` that it fails cannot be merged. It fails when the PR changes app code and not
 `CHANGELOG.md`. App code is what electron-builder ships: the `*.js` files at
 the root (`eslint.config.js` excepted), `public/`, `workers/`, `src/`, `harnesses/` and
 `scripts/claude-sandbox.sh`.
 
 The PR is judged on its whole diff: `git diff <base>...<head>`, from the PR's
 base SHA to its head SHA through their merge base, so every commit of the PR
-counts and changes merged in from `main` do not.
+counts and changes merged in from its base branch (`main` or `release/X.Y`) do not.
 
 A PR whose app change users do not see (a refactor, a log line) takes the
 `no-changelog` label instead. The script reads the labels through `gh api`
