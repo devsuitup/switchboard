@@ -669,7 +669,7 @@ function projectsSnapshot() {
       isAttach: !!s.isAttach, attachJobId: s.attachJobId, realSessionId: s.realSessionId, cwd: s.cwd, host: s.host,
     }]),
     remoteRoots: [...sessionCache.getRemoteRoots()],
-    searchRevealedIds,
+    searchRevealedIds: typeof searchRevealedIds === 'undefined' ? [] : searchRevealedIds,
     localDescriptors: cliSessionState.getSidebarDescriptors().map(d => ({
       sessionId: d.sessionId, kind: d.kind, jobId: d.jobId, cwd: d.cwd,
       name: d.name, nameSource: d.nameSource, startedAt: d.startedAt,

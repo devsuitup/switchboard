@@ -174,7 +174,8 @@ for (const away of [false, true]) test(`T5.5/T5.6 conflict errors cross the brid
   w.api.onProjectsChanged = callback => { event = callback; };
   w.setTimeout = callback => { timers.push(callback); return timers.length; }; w.clearTimeout = () => {};
   w.activeTab = away ? 'stats' : 'sessions';
-  loadAppFunctions(h.context, { declarations: ['searchGeneration', 'startupProjectsHandedOver'], functions: ['dedup', 'loadProjects', 'reloadProjects'] });
+  loadAppFunctions(h.context, { declarations: ['searchGeneration', 'startupProjectsHandedOver', 'searchReveal', 'searchSnippets'],
+    functions: ['dedup', 'loadProjects', 'reloadProjects', 'endSessionSearch', 'paintSearchStatus', 'dropSearchReveal'] });
   const appFilename = path.join(__dirname, '../public/app.js');
   const app = fs.readFileSync(appFilename, 'utf8');
   const eventStart = app.indexOf('let projectsChangedTimer = null;');

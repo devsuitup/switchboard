@@ -404,8 +404,8 @@ Issue #1255.
   `sessionId` on its primary key and `agentId` on `idx_session_cache_agent`,
   and its rows come first; FTS hits follow without duplicates. Id rows carry
   `idMatch: true` and no snippet.
-- **Snippets.** The query asks `snippet(search_fts, -1, …)`, letting FTS5 pick
-  the matching column. The renderer keeps them in `searchSnippets` and
+- **Snippets.** The query keeps `snippet(search_fts, 1, …)`, the body column
+  (a title-only hit shows the body's opening, unmarked). The renderer keeps them in `searchSnippets` and
   `appendSearchSnippet` (`public/sidebar.js`) shows one line under the row,
   escaping everything except the `<mark>` pairs.
 - **Enter and the refresh button.** Enter runs `runSearchQuery` at once over

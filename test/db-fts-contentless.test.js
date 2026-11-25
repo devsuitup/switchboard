@@ -222,7 +222,7 @@ test('searchUpdateTitle targets search_content (not search_fts) for title update
 
 test('searchQuery uses snippet(search_fts, 1, ...) to extract body preview', () => {
   assert.match(
-    dbSrc,
+    fs.readFileSync(path.join(__dirname, '..', 'fts-match.js'), 'utf8'),
     /snippet\s*\(\s*search_fts\s*,\s*1\s*,/,
     'searchQuery must call snippet(search_fts, 1, ...) for the body column'
   );

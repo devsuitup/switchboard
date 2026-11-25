@@ -34,7 +34,7 @@ function idLookupTerm(query) {
 
 function createSessionSearch(db) {
   const ftsQuery = db.prepare(`
-    SELECT search_map.id, snippet(search_fts, -1, '<mark>', '</mark>', '...', 24) as snippet
+    SELECT search_map.id, snippet(search_fts, 1, '<mark>', '</mark>', '...', 40) as snippet
     FROM search_fts
     JOIN search_map ON search_fts.rowid = search_map.rowid
     WHERE search_map.type = ? AND search_fts MATCH ?
