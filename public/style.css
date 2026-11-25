@@ -6714,12 +6714,13 @@ body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-ses
 .schedule-actions .schedule-play-btn:disabled { opacity: 0.35; }
 .schedule-actions .schedule-play-btn.live { color: var(--link); }
 .schedule-actions .schedule-play-btn.live svg { animation: spin-schedule 0.8s steps(8) infinite; }
-.schedule-switch { position: relative; flex-shrink: 0; width: 26px; height: 15px; margin-right: 4px; padding: 0; border: none; border-radius: 8px; background: var(--neutral-alpha-01); }
-.schedule-switch::before { content: ''; position: absolute; left: 2px; top: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--text-disabled); transition: transform 0.2s ease; }
-.schedule-switch:enabled:hover { background: var(--neutral-alpha-018); }
-.schedule-switch[aria-checked="true"] { background: var(--ok); }
-.schedule-switch[aria-checked="true"]:enabled:hover { background: var(--success-soft); }
-.schedule-switch[aria-checked="true"]::before { background: var(--surface-sunken); transform: translateX(11px); }
+.schedule-switch { position: relative; flex-shrink: 0; width: 26px; height: 22px; margin-right: 4px; padding: 0; border: none; border-radius: 8px; background: none; }
+.schedule-switch::before { content: ''; position: absolute; left: 0; top: 3.5px; width: 26px; height: 15px; border-radius: 8px; background: var(--neutral-alpha-01); }
+.schedule-switch::after { content: ''; position: absolute; left: 2px; top: 5.5px; width: 11px; height: 11px; border-radius: 50%; background: var(--text-disabled); transition: transform 0.2s ease; }
+.schedule-switch:enabled:hover::before { background: var(--neutral-alpha-018); }
+.schedule-switch[aria-checked="true"]::before { background: var(--ok); }
+.schedule-switch[aria-checked="true"]:enabled:hover::before { background: var(--success-soft); }
+.schedule-switch[aria-checked="true"]::after { background: var(--surface-sunken); transform: translateX(11px); }
 .schedule-last { margin-left: auto; max-width: 100%; padding: 0 2px; border: none; border-radius: 4px; background: none; font: inherit; font-size: 10.5px; text-align: right; }
 .schedule-last::after { content: '\25B8'; display: inline-block; margin-left: 3px; color: var(--text-timestamp); font-size: 9px; transition: transform 0.15s; }
 .schedule-last[aria-expanded="true"]::after { transform: rotate(90deg); }

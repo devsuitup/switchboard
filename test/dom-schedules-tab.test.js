@@ -655,7 +655,11 @@ test('Run now reports success only after ok and clears the error for that file',
 test('schedule states, history and missing outcomes are shown without inventing success', async t => {
   const h = setup(t);
   const text = () => h.w.document.getElementById('schedules-content').textContent;
-  assert.match(text(), /No recorded run/);
+  const chip = h.w.document.querySelector('.schedule-last');
+  assert.equal(historyOpen(h.w), false, 'the chip is read collapsed');
+  assert.equal(chip.textContent, 'no run yet');
+  assert.equal(chip.title, 'No recorded run');
+  assert.equal(chip.getAttribute('aria-label'), 'No recorded run');
   assert.match(text(), /in 1 min/);
   assert.match(scheduleState(h.w), /Next run:.*in 1 min/);
   for (const [change, expected] of [
@@ -1267,6 +1271,19 @@ test('the status dot, switch and actions name each state', t => {
   h.schedule.nextRunMs = null;
   render();
   assert.equal(dot(), 'problem');
+});
+
+test('every row action has a hit box at least 22 px high in the shipped CSS', t => {
+  const h = setup(t);
+  const style = h.w.document.createElement('style');
+  style.textContent = fs.readFileSync(path.join(__dirname, '../public/style.css'), 'utf8');
+  h.w.document.head.appendChild(style);
+  const heights = [...h.w.document.querySelectorAll('.schedule-actions button')].map(button => {
+    const computed = h.w.getComputedStyle(button);
+    return [button.getAttribute('aria-label'), Math.max(parseFloat(computed.height) || 0, parseFloat(computed.minHeight) || 0)];
+  });
+  assert.deepEqual(heights.map(([name]) => name), ['Enabled', 'Run now', 'Open', 'Delete']);
+  for (const [name, height] of heights) assert.ok(height >= 22, `${name} is ${height} px high`);
 });
 
 test('a live run shows as running with its duration, and the last finished result stays in the chip', t => {
