@@ -695,6 +695,7 @@ const projectsClient = createProjectsWorkerClient({
   accepted: (result, { delivered = true } = {}) => {
     if (!result.reconciled) return;
     projectsReconciledAt = Date.now();
+    noteProjectsReconcileAccepted();
     if (!delivered) notifyRendererProjectsChanged('reconcile');
   },
 });
@@ -1474,17 +1475,47 @@ let projectsReconcileAttemptedAt = -Infinity;
 let projectsRetryTimer = null;
 let projectsRetryRunning = false;
 let projectsRetryFailures = 0;
+let projectsReconcileStreak = null;
 
-function queueProjectsRetry(delay = 5000) {
+// see .ai/contexts/session-cache.md ("A reconcile that loses to writes")
+function projectsReconcileInterval() {
+  return Math.min(5000 * 2 ** Math.max(0, (projectsReconcileStreak?.conflicts || 0) - 1), 30000);
+}
+
+function projectsReconcileWait() {
+  return Math.max(0, projectsReconcileAttemptedAt + projectsReconcileInterval() - Date.now());
+}
+
+function noteProjectsConflict(err, reconcile, logConflict) {
+  const changed = err.reason === 'live' ? ` changed=${changedLiveComponents(err.before, err.after)}` : '';
+  const detail = `after ${err.dispatches ?? 'unknown'} dispatches: reason=${err.reason ?? 'unknown'}${changed}`;
+  if (!reconcile) {
+    if (logConflict) log.info(`[projects] snapshot conflict ${detail} reconcile=false`);
+  } else if (projectsReconcileStreak?.lastError !== err) {
+    projectsReconcileStreak ??= { conflicts: 0, startedAt: Date.now() };
+    projectsReconcileStreak.lastError = err;
+    if (++projectsReconcileStreak.conflicts === 1) log.info(`[projects] reconcile conflict ${detail}; retrying with backoff`);
+  }
+  queueProjectsRetry();
+}
+
+function noteProjectsReconcileAccepted() {
+  const streak = projectsReconcileStreak;
+  projectsReconcileStreak = null;
+  log.info(streak ? `[projects] reconcile accepted after ${streak.conflicts} conflicts over ${Math.round((Date.now() - streak.startedAt) / 1000)} s`
+    : '[projects] reconcile accepted');
+}
+
+function queueProjectsRetry(delay = Math.max(5000, projectsReconcileWait())) {
   if (projectsRetryTimer || projectsRetryRunning || appQuitting) return;
   projectsRetryTimer = setTimeout(async () => {
     projectsRetryTimer = null;
     if (appQuitting) return;
     projectsRetryRunning = true;
     let stale = false;
-    let retryDelay = 5000;
+    let retryDelay;
     try {
-      const reply = await getProjectsSnapshot('both', true);
+      const reply = await getProjectsSnapshot('both', true, { requireReconcile: true });
       stale = !!(reply.projectsStale || reply.projectsError);
       if (!stale) notifyRendererProjectsChanged('reconcile');
     } catch {
@@ -1493,12 +1524,12 @@ function queueProjectsRetry(delay = 5000) {
       retryDelay = [5000, 30000, 120000][projectsRetryFailures - 1];
     }
     finally { projectsRetryRunning = false; }
-    if (stale) queueProjectsRetry(retryDelay);
+    if (stale || projectsReconcileStreak) queueProjectsRetry(retryDelay);
   }, delay);
   projectsRetryTimer.unref?.();
 }
 
-async function getProjectsSnapshot(showArchived, retry = false, { logConflict = true } = {}) {
+async function getProjectsSnapshot(showArchived, retry = false, { logConflict = true, requireReconcile = false } = {}) {
   const started = TRACE.on ? performance.now() : null;
   try {
     const repairFolders = getSetting('bridge_uuid_reindex_folders');
@@ -1518,6 +1549,7 @@ async function getProjectsSnapshot(showArchived, retry = false, { logConflict = 
       if (result?.ok && isInitialScanComplete()) {
         projectsReconciledAt = Date.now();
         projectsReconcileAfterPopulate = false;
+        projectsReconcileStreak = null;
       }
     }, () => {});
     backfillEntrypoints();
@@ -1525,7 +1557,7 @@ async function getProjectsSnapshot(showArchived, retry = false, { logConflict = 
     const populating = !isIndexingFinished();
     if (populating) projectsReconcileAfterPopulate = true;
     const reconcile = !needsPopulate && !populating && !projectsReconciling
-      && Date.now() - projectsReconcileAttemptedAt >= 5000
+      && Date.now() - projectsReconcileAttemptedAt >= projectsReconcileInterval()
       && (projectsReconcileAfterPopulate || Date.now() - projectsReconciledAt >= 5000);
     if (reconcile) {
       projectsReconciling = true;
@@ -1540,11 +1572,17 @@ async function getProjectsSnapshot(showArchived, retry = false, { logConflict = 
       }
     } catch (err) {
       if (err.code !== 'PROJECTS_SNAPSHOT_CONFLICT') throw err;
-      const changed = err.reason === 'live' ? ` changed=${changedLiveComponents(err.before, err.after)}` : '';
-      if (logConflict) log.info(`[projects] snapshot conflict after ${err.dispatches ?? 'unknown'} dispatches: reason=${err.reason ?? 'unknown'}${changed} reconcile=${err.reconcile ?? 'unknown'}`);
-      queueProjectsRetry();
-      throw err;
+      const lostReconcile = err.reconcile ?? !!reconcile;
+      noteProjectsConflict(err, lostReconcile, logConflict);
+      if (!lostReconcile || requireReconcile) throw err;
     } finally { if (reconcile) projectsReconciling = false; }
+    if (!result) {
+      try { result = await projectsClient.request({ readOnly: true, measureBytes: TRACE.on }); }
+      catch (err) {
+        if (err.code === 'PROJECTS_SNAPSHOT_CONFLICT') noteProjectsConflict(err, false, logConflict);
+        throw err;
+      }
+    }
     const projection = result.projection
       ? { ...result.projection, removedInputs: structuredClone(result.projection.removedInputs) }
       : undefined;

@@ -752,7 +752,8 @@ read-only build, preserving the deletion fence without replaying old effects.
 Effect-free conflicted replies can be delivered stale; effect-bearing replies
 still reject internally without publishing their remaining effects.
 
-For every rejected conflict, paired and boolean callers receive the exact
+For every conflict main does not recover from (see "A reconcile that loses to
+writes"), paired and boolean callers receive the exact
 `projectsError` conflict envelope recognized by preload. Main retains no fallback
 worker-result cache, makes no full-result clone for it, and never reassembles or
 persists old lists after a rejection. The renderer keeps its previous lists and
@@ -764,7 +765,8 @@ last-known lists. No conflict or stale result immediately notifies the renderer.
 One unrefed five-second timer retries the snapshot in
 main, independently of renderer visibility. Concurrent failures share it; while
 it runs they cannot arm another timer. A stale or unavailable reply arms one
-further five-second interval. Non-conflict retry errors back off through 5 seconds,
+further interval: five seconds, or the reconcile backoff while a streak is
+open. Non-conflict retry errors back off through 5 seconds,
 30 seconds and a two-minute cap. The snapshot boundary logs each backoff step
 once, suppressing repeated capped errors. Any successful non-stale snapshot,
 including a foreground load, resets the failure count and log suppression.
@@ -778,8 +780,43 @@ projectsReconciledAt continues to mean accepted reconciliation or successful
 population, preserving #1185's startup rule. A separate
 projectsReconcileAttemptedAt records admission, including failed attempts.
 Both the usual five-second interval and post-populate reconciliation debt
-respect that attempt interval. A failed/partial populate still forces the first
+respect that attempt interval, which the backoff below extends. A failed/partial populate still forces the first
 eligible reconciliation; a failed attempt does not clear that debt.
+
+### A reconcile that loses to writes
+
+A lost reconcile does not fail the load it was attached to (#1272). The handler
+issues a separate `readOnly` request, whose reply has no effects, no retained
+rows and no reconciliation, so the client never rejects it for a conflict. It
+is a fresh build, never the rejected lists. A live change during it still
+delivers `projectsStale: true`. `readOnly` rather than `reconcile: false`
+matters when the request merges into a pending reconcile: it cancels that
+reconcile instead of being failed by it. The main-side retry passes
+`requireReconcile: true` and keeps the conflict envelope: falling back there
+would notify the renderer without a reconcile. Losing plain builds that carry
+effects still reject as before. Trigger lookups take the fallback and still
+refuse a stale reply.
+
+`projectsReconcileStreak` counts consecutive lost reconciles; callers sharing
+one rejected job count it once. Admission and the retry timer wait 5, 10, 20
+then 30 seconds after the first, second, third and later lost attempts. The
+streak closes only when a reconcile is accepted or a populate completes the
+index; a retry whose reconcile was not admitted, or was cancelled by a merge,
+re-arms the timer. The cap bounds the delay after writes pause. It does not
+make a reconcile win against writes that never pause: the epoch checks that
+stop effects computed from an old snapshot (#719) are unchanged, and batches
+committed before the loss stay committed.
+
+The log carries one `reconcile conflict` line when a streak opens and one
+`reconcile accepted` line per accepted reconcile, with the conflict count and
+duration when it ends a streak. Plain-build conflicts keep their own line. A
+streak interrupted by quit or ended by a populate has no closing line. A job
+whose callers have all timed out has nobody to report its conflict, so it does
+not count in the streak.
+
+Tests: `test/projects-reconcile-conflicts-1272.test.js`.
+
+### Lost watcher refreshes
 
 The filesystem watcher drains events into a batch but returns failed folder
 scopes to pendingChanges. Targeted scopes union with new files; a full-folder
@@ -797,7 +834,8 @@ exit still relies on the next startup scan.
 test/projects-conflict-loop.test.js executes the shipped handler, client and
 watcher with a synthetic writer admission race, controlled timers and disposable
 files. Across ten immediate requests it measures 30 builds / 30 reconciliations /
-10 notifications before #1194, and 10 / 1 / 0 after, with one pending retry.
+10 notifications before #1194, and 10 / 1 / 0 after, with one pending retry
+(11 / 1 / 0 since #1272, the extra being the read-only build).
 It covers continued contention, eventual convergence, deferred population,
 lost watcher events, scope merging and error classification. These are pass
 counts, not live CPU measurements.
