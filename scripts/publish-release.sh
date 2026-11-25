@@ -32,7 +32,15 @@ case "$draft" in
   *$'\n'*) echo "::error::more than one release carries ${GITHUB_REF_NAME}; refusing to pick one"; exit 1 ;;
   *) echo "::error::release ${GITHUB_REF_NAME} is already published; refusing to overwrite its assets"; exit 1 ;;
 esac
-if ! state="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq ".[] | select(.tag_name == \"${GITHUB_REF_NAME}\") | \"\(.draft) \(.prerelease)\"")"; then
+read_failed=0
+for i in 1 2 3 4 5; do
+  read_failed=0
+  state="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq ".[] | select(.tag_name == \"${GITHUB_REF_NAME}\") | \"\(.draft) \(.prerelease)\"")" || read_failed=1
+  if [ "$read_failed" = 0 ] && [ -n "$state" ]; then break; fi
+  echo "::warning::read-back of draft ${GITHUB_REF_NAME} attempt $i failed or found nothing; retrying in ${READ_BACK_DELAY:-3}s"
+  [ "$i" = 5 ] || sleep "${READ_BACK_DELAY:-3}"
+done
+if [ "$read_failed" = 1 ]; then
   echo "::error::could not read back the draft ${GITHUB_REF_NAME}; refusing to upload"
   exit 1
 fi

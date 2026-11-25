@@ -22,7 +22,15 @@ printf '%s\\t' "$@" >> "$GH_STUB_LOG"
 printf '\\n' >> "$GH_STUB_LOG"
 if [ "$1" = api ]; then
   case "$5" in
-    *prerelease*) printf '%s\\n' "$GH_STUB_STATE"; exit 0 ;;
+    *prerelease*)
+      if [ "\${GH_STUB_READ_FAILS:-0}" -gt 0 ]; then
+        echo x >> "$GH_STUB_READ_FILE"
+        if [ "$(wc -l < "$GH_STUB_READ_FILE")" -le "$GH_STUB_READ_FAILS" ]; then
+          if [ "$GH_STUB_READ_EMPTY" = 1 ]; then exit 0; fi
+          echo 'network connection failed' >&2; exit 1
+        fi
+      fi
+      printf '%s\\n' "$GH_STUB_STATE"; exit 0 ;;
   esac
   case "$GH_STUB_MODE" in
     missing) exit 0 ;;
@@ -74,6 +82,8 @@ function runRelease(t, mode, failOnce = false, draftValue = 'false', envOverride
     GH_TOKEN: 'stub-token',
     DIST_DIR: shellPath(dist),
     RETRY_DELAY: '0',
+    READ_BACK_DELAY: '0',
+    GH_STUB_READ_FILE: shellPath(path.join(temp, 'reads')),
     GH_STUB_MODE: mode,
     GH_STUB_DRAFT: draftValue,
     GH_STUB_STATE: 'true false',
@@ -191,6 +201,25 @@ test('given a transient read failure, publishing exits 1 without creating or upl
   assert.match(result.stderr, /network connection failed/);
   assert.match(result.stdout, /could not read the releases .* refusing to publish blind/);
   assert.deepEqual(result.calls.map((args) => args.slice(0, 2)), [['api', '--paginate']]);
+});
+
+test('given a read-back that fails or finds nothing at first, publishing retries it and uploads', (t) => {
+  if (!requireBash(t)) return;
+  for (const empty of ['0', '1']) {
+    const result = runRelease(t, 'missing', false, 'false', { GH_STUB_READ_FAILS: '4', GH_STUB_READ_EMPTY: empty });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /read-back of draft .* attempt 4 failed or found nothing; retrying in 0s/);
+    assert.equal(result.calls.filter((args) => args[1] === 'upload').length, 2);
+  }
+});
+
+test('given a read-back that keeps failing, publishing stops after five attempts and uploads nothing', (t) => {
+  if (!requireBash(t)) return;
+  const result = runRelease(t, 'missing', false, 'false', { GH_STUB_READ_FAILS: '9' });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout, /could not read back the draft .*; refusing to upload/);
+  assert.equal(result.calls.filter((args) => args[0] === 'api').length, 6);
+  assert.deepEqual(result.calls.filter((args) => args[1] === 'upload'), []);
 });
 
 test('given a draft and one failed upload, publishing retries and exits 0', (t) => {
