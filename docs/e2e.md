@@ -25,19 +25,21 @@ patch-coverage gate exclude `e2e/**`.
 ## In CI
 
 The `e2e` job of `.github/workflows/test.yml` runs on `ubuntu-latest` under
-`xvfb-run` (1920x1080 screen) on every pull request and every push to `main`.
+`xvfb-run` (1920x1080 screen) on every pull request and every push to `main` or
+`release/*`.
 Before the run, it checks that `better-sqlite3` and `node-pty` load under
 Electron's ABI. `postinstall` swallows a failed rebuild, and without that check
 a failed rebuild would show up as an app that does not start. When a journey
 fails, the job uploads `switchboard-e2e-results/` under the runner's temporary
 directory (a `trace.zip` and a `failure.png` for each failed journey) and the
 HTML report as the `e2e-results` artifact, retained for 3 days on PRs and
-14 days on main pushes. The job has a 10-minute timeout.
+14 days on pushes. The job has a 10-minute timeout.
 Open a trace with `npx playwright show-trace trace.zip`. It has the DOM and a
 screenshot for each step.
 
-The job is a required check of the `main-protection` ruleset, a repository
-setting outside this file (read from the GitHub API on 2026-10-28).
+The job is a required check of the `main-protection` and `release-protection`
+rulesets, repository settings outside this file (read from the GitHub API on
+2026-11-25).
 
 ## The journeys
 

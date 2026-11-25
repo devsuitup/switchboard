@@ -108,10 +108,10 @@ test('build failures remain failures on PRs and tags', () => {
   }
 });
 
-test('the workflow retains main PR and version-tag triggers', () => {
+test('the workflow runs on PRs to main and release branches and on version tags', () => {
   assert.deepEqual(workflow.on, {
     push: { tags: ['v*'] }, workflow_dispatch: null,
-    pull_request: { branches: ['main'], paths: [
+    pull_request: { branches: ['main', 'release/*'], paths: [
       'package.json', 'package-lock.json', 'postinstall.js', 'scripts/**',
       '.github/workflows/build.yml', 'build/**',
     ] },
@@ -183,8 +183,8 @@ test('Test uses three PR cells and two main-push cells with stable context names
   assert.equal(testWorkflow.jobs.test['runs-on'], '${{ matrix.os }}');
 });
 
-test('Test keeps its triggers, real-bwrap, patch coverage, lint and e2e conditions', () => {
-  assert.deepEqual(testWorkflow.on, { pull_request: { branches: ['main'] }, push: { branches: ['main'] } });
+test('Test runs on main and release branches and keeps real-bwrap, patch coverage, lint and e2e conditions', () => {
+  assert.deepEqual(testWorkflow.on, { pull_request: { branches: ['main', 'release/*'] }, push: { branches: ['main', 'release/*'] } });
   for (const id of ['lint', 'e2e', 'test']) assert.equal(testWorkflow.jobs[id].if, undefined, id);
   assert.equal(testWorkflow.jobs.changelog.if, "github.event_name == 'pull_request'");
   const steps = testWorkflow.jobs.test.steps;

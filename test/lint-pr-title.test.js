@@ -122,7 +122,7 @@ test('PR title workflow is isolated, advisory, and passes untrusted title via en
   assert.ok(fs.existsSync(filename), 'PR title workflow must exist');
   const workflow = yaml.load(fs.readFileSync(filename, 'utf8'));
   assert.deepEqual(workflow.on, {
-    pull_request: { branches: ['main'], types: ['opened', 'edited', 'synchronize', 'reopened'] },
+    pull_request: { branches: ['main', 'release/*'], types: ['opened', 'edited', 'synchronize', 'reopened'] },
   });
   assert.deepEqual(workflow.permissions, { contents: 'read' });
   assert.equal(Object.keys(workflow.jobs).length, 1);

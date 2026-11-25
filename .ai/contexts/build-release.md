@@ -2,7 +2,7 @@
 
 ## Advisory PR title check
 
-`.github/workflows/pr-title.yml` runs on PRs to `main` when opened, edited,
+`.github/workflows/pr-title.yml` runs on PRs to `main` and `release/*` when opened, edited,
 synchronized or reopened. Its separate workflow refreshes title diagnostics
 on edits without restarting the test/build workflows. It cancels older runs
 for the same PR, uses Node 22, read-only contents permission, no persisted
@@ -88,10 +88,41 @@ runner, and that electron-builder packages a `-beta.N` version on every target
 `0.1.0.0`, per app-builder-lib's `LinuxTargetHelper.getSanitizedVersion` and
 `AppInfo.getVersionInWeirdWindowsForm`).
 
+## Release branches (#1199)
+
+The maintainer decided on 2026-11-25 that `main` never freezes: releases are
+cut from `release/X.Y` ([releasing.md](../../docs/releasing.md#release-branches)).
+The workflow side is the trigger list `[main, 'release/*']` in `test.yml`
+(PR and push), `build.yml` (PR) and `pr-title.yml` (PR); tag pushes are not
+filtered by branch. `*` does not cross `/`, so `release/*` matches
+`release/0.1` and not `release/0.1/x`; the ruleset `release-protection` uses
+the same pattern, and a working branch named `release/vX` falls under both.
+
+No job names `main`: `changelog` and `docs` receive the PR's base and head
+SHAs and diff through the merge base, patch coverage compares with
+`origin/${{ github.base_ref }}` after fetching it (a base with a slash is an
+ordinary ref name), and `check-release-tag.js` compares trees and tags,
+whatever the branch. `docs` is not a required check on either base.
+
+Bootstrap: `pull_request` workflows are read from the PR's merge commit, so a
+PR to a release branch runs CI only if the base or the PR carries the
+triggers. `release/0.1` was cut at `v0.1.0-beta.2` without them; they reach it
+with a backport that ships in its next beta, because the tag check refuses a
+final differing from its last beta by a workflow file.
+
+Known limit: the notes' compare link uses `git describe` on the tag's own
+history. Finals tagged on one release branch are not ancestors of the next
+line, so a new line's `X.Y.0` compares with an older final; the link is
+corrected by hand in the draft.
+
+The triggers are pinned by `test/build-workflow.test.js` and
+`test/lint-pr-title.test.js`. Not covered: GitHub starting the runs, which the
+first PR to a release branch shows.
+
 ## Packaging and test workflows
 
 `.github/workflows/build.yml` runs on version-tag pushes, manual dispatches
-and packaging-related PRs to `main`. PRs and dispatches include Windows,
+and packaging-related PRs to `main` or `release/*`. PRs and dispatches include Windows,
 Linux x64 and Linux arm64. Only a `push` whose ref starts with `refs/tags/v`
 adds macOS; dispatching on a tag ref still uses the three-job matrix. The
 JSON arrays in `matrix.include` must keep the non-mac entries in sync.
@@ -153,18 +184,18 @@ the wrong architecture (issue #18).
 
 Both workflows group PR runs per PR number (`pr-<number>`) and give every other
 run its own group (`github.run_id`), and cancel older runs only for `pull_request`.
-Tag pushes, main pushes and dispatches never cancel in-progress runs. Every
+Tag pushes, branch pushes and dispatches never cancel in-progress runs. Every
 upload explicitly retains PR artifacts for 3 days and other artifacts for
 14 days. Tag artifacts feed `publish` through `actions/download-artifact` in
 the same run, so the 14-day retention does not change that dependency.
 
 `test.yml` has no path filter. PRs run Node 20/Linux and Node 22/Linux+Windows;
-main pushes run Node 22/Linux+Windows. Matrix keys remain `node-version`, then
+pushes to `main` and `release/*` run Node 22/Linux+Windows. Matrix keys remain `node-version`, then
 `os`, with no job-name override, retaining contexts such as
 `test (22, ubuntu-latest)`. No step depends on a Node 20 or Windows/Node 20
 cell. Linux real-bwrap enforcement stays on every Linux test cell; patch
 coverage stays on PR Node 22/Linux only. Lint and e2e still run for every PR
-and main push; changelog and docs stay PR-only. Test jobs have 25 minutes; lint,
+and push to these branches; changelog and docs stay PR-only. Test jobs have 25 minutes; lint,
 changelog, docs and e2e have 10 each.
 
 The `docs` job invokes `scripts/check-docs.js` with the PR base/head SHAs and
@@ -270,7 +301,9 @@ The required-check list is documented in [releasing.md](../../docs/releasing.md)
 Build is not a required check. JB owns the external settings update that removes
 `test (20, windows-2022)` from both ruleset 17240725 (`main-protection`) and the
 classic branch protection on `main` (`required_status_checks.contexts`); both
-must be updated together whenever the test matrix changes. Changing these
+must be updated together whenever the test matrix changes, with the
+`release-protection` ruleset (28112036, `refs/heads/release/*`), which requires
+the same six checks. Changing these
 workflows does not update those settings.
 
 To obtain an installer for any branch, dispatch the build and download that

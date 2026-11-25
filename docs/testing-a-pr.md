@@ -12,7 +12,7 @@ the default. Other values produce a usage error before any git command.
 
 ## Obtaining a PR installer
 
-PR installers are built only when a PR to `main` changes packaging files:
+PR installers are built only when a PR to `main` or `release/*` changes packaging files:
 `package.json`, `package-lock.json`, `postinstall.js`, `scripts/**`, `build/**`
 or `.github/workflows/build.yml`. Shipped source such as `main.js` or `public/`
 does not trigger a build. Other PRs have no automatic build artifacts. Build is
