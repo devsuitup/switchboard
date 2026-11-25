@@ -261,7 +261,7 @@ The first beta of a new minor line is the exception: its bump PR has base
    pick the release up from its `latest*.yml` manifests; a draft is invisible
    to them. The pre-release flag is the only thing that keeps the beta from
    stable installs: if the last command prints a `-beta` tag, set the flag
-   again at once (`gh release edit <tag> --prerelease`) and mark the previous
+   again at once (`gh release edit <tag> --repo devsuitup/switchboard --prerelease`) and mark the previous
    final `--latest`. On their first start after the update, the What's new
    dialog shows this section, and those of any version they skipped.
 
