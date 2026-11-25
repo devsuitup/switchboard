@@ -28,8 +28,8 @@ function transcripts(home, projectPath) {
 }
 
 test('every fixture schedule is listed by the scheduler with its name, state and link', t => {
-  const { projects, skipped, home } = dataset(t);
-  assert.equal(skipped.length === 0, canSymlink(path.dirname(home)), 'the linked schedule is skipped only where links are refused');
+  const { projects, skipped } = dataset(t);
+  if (process.platform !== 'win32') assert.deepEqual(skipped, [], 'links are always available outside Windows');
   const listed = runner.listScheduleFiles(projects, { getSetting: () => ({}), defaultSandbox: false, home: os.homedir(), platform: 'linux' });
   const expected = Object.values(SCHEDULES).flat().filter(s => !skipped.includes(s.name));
   assert.deepEqual(listed.map(s => s.name).sort(), expected.map(s => s.name).sort());
@@ -100,4 +100,12 @@ test('git runs without repository-routing variables, and dates before 2000 are r
   assert.deepEqual(gitEnv({ PATH: '/bin', GIT_DIR: '/elsewhere', git_work_tree: '/w', HOME: '/h' }), { PATH: '/bin', HOME: '/h' });
   assert.throws(() => parseArgs(['/h', '--now', '1970-01-01T00:00:00Z']), /from 2000-01-01 on/);
   assert.throws(() => parseArgs(['/h', '--now', 'yesterday']), /--now must be a date/);
+});
+
+test('the symlink probe reports a writable directory as capable outside Windows and a missing one as not', { skip: process.platform === 'win32' }, t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-schedule-dataset-probe-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  assert.equal(canSymlink(root), true);
+  assert.deepEqual(fs.readdirSync(root), [], 'the probe leaves nothing behind');
+  assert.equal(canSymlink(path.join(root, 'missing')), false);
 });
