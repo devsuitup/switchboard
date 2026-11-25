@@ -164,6 +164,50 @@ Keep new steps inside it, or temporary homes accumulate in `/tmp`.
 
 Journeys worth keeping belong in the CI suite: see [End-to-end journeys](e2e.md).
 
+## A dataset for the Schedules tab
+
+`scripts/schedule-dataset.js` fills a new throwaway `HOME` with projects,
+schedules and recorded runs, so the Schedules tab and the run history can be
+checked without your own schedules:
+
+```bash
+node scripts/schedule-dataset.js "$(mktemp -d)" [--data-dir <dir>] [--now 2026-11-25T08:00:00Z]
+```
+
+Before writing anything it refuses, for both the fake home and `--data-dir`:
+a directory that is not empty; your home directory or one inside it, unless
+it is under the system's temporary directory;
+and `~/.switchboard`, the `SWITCHBOARD_DATA_DIR` in use or `~/.claude`, or a
+directory inside or holding one. Paths are compared after resolving `..`, symbolic
+links and, on Windows, case and short names. It also refuses a `--now`
+before 2000. On Windows,
+where creating a symbolic link needs a privilege, the linked schedule is
+skipped and named in the output. Elsewhere the fake `HOME` must be on a file
+system that accepts symbolic links; on one that refuses them (FAT, exFAT) the
+script stops with the system's error. Git runs without inherited
+`GIT_*` variables, so `git init` lands in each fixture project. The data
+directory defaults to
+`<home>/.switchboard-dev`; launch the instance with `HOME`, the `XDG_*`
+directories and `SWITCHBOARD_DATA_DIR` pointing there, as in
+[What the environment needs](#what-the-environment-needs).
+
+| What | Where |
+|---|---|
+| Projects `alpha`, `beta` (with schedules) and `gamma` (none) | `<home>/work/<name>`, each a git repository, so Switchboard registers the ones with schedules at first launch |
+| One Add project seed transcript per project | `<home>/.claude/projects/<encoded path>/` |
+| Schedules covering the states the tab shows: worded and unworded cron, disabled, catch-up, background, a malformed expression, a cron that is never due, a symlink to a file outside the project, a long name | `<project>/.claude/commands/schedule-*.md`; the symlink target is under `<home>/shared` |
+| Runs: a transcript per run, first line `Scheduled Task: …` with its `scheduleSlug`, an assistant reply for a successful run | the project's transcript folder |
+| Results: exit 0, exit 1, a signal, a refusal, and one run without a result | `<data dir>/schedule-runs/` |
+
+The table of schedules and runs is `SCHEDULES` at the top of the script; add a
+case there, and `test/schedule-dataset.test.js` checks that the scheduler lists
+it and that its results read back as valid. Runs are dated relative to `--now`
+(default: the current time).
+
+Every schedule that can fire is due between 03:00 and 03:59. An instance left
+running then starts a real `claude` run in the fixture project; under the fake
+`HOME` that `claude` is not logged in, and the run fails.
+
 ## Which one to use
 
 | | `task test-pr` | Throwaway `HOME` |
