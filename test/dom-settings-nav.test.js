@@ -745,6 +745,31 @@ test('one Save persists edits on multiple pages, resets the counter and stays op
   assert.equal(h.q('#sv-visible-count').value, '42');
 });
 
+test('the footer is a full-width bar outside the form, kept single across reopens, and marks Save when dirty', async t => {
+  const h = setup(t);
+  for (const scope of ['global', 'project', 'global']) {
+    await h.open(scope);
+    const viewer = h.q('#settings-viewer');
+    const footers = viewer.querySelectorAll('.settings-footer');
+    assert.equal(footers.length, 1, scope + ' has one footer');
+    assert.equal(viewer.lastElementChild, footers[0], 'footer is the last child of the viewer');
+    assert.equal(footers[0].closest('.settings-form'), null, 'footer is outside the form');
+    assert.deepEqual([...footers[0].children].map(el => el.id), ['sv-unsaved', 'sv-cancel-btn', 'sv-save-btn']);
+  }
+  const save = h.q('#sv-save-btn');
+  assert.equal(save.classList.contains('dirty'), false);
+  h.click('sessions');
+  h.q('#sv-visible-count').value = '42';
+  h.q('#sv-visible-count').dispatchEvent(new h.w.Event('input', { bubbles: true }));
+  assert.equal(save.classList.contains('dirty'), true);
+  save.click();
+  await settle();
+  assert.equal(h.saved.global.visibleSessionCount, 42);
+  assert.equal(save.classList.contains('dirty'), false);
+  h.q('#sv-cancel-btn').click();
+  assert.equal(h.q('#settings-viewer').style.display, 'none');
+});
+
 test('all existing controls retain their ids, scope, groups and inheritance', async t => {
   const h = setup(t);
   const common = ['perm-mode', 'worktree', 'worktree-name', 'browser-mode', 'sandbox', 'pre-launch', 'add-dirs', 'save-btn', 'cancel-btn'];

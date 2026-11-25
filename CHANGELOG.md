@@ -8,6 +8,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Changed
 - The sidebar no longer flashes "Refreshing…" each time it reloads in the background; only the first load, while the sidebar is still empty, shows "Loading…".
+- The Cancel and Save buttons of Settings now sit on the right of a full-width bar at the bottom of the window. The unsaved-changes count shows as a pill only when there is something to save, and Save is highlighted until you save. In a narrow window, Cancel and Save share the width. (#1273)
 
 ### Fixed
 - The first launch with an empty index no longer leaves the window blank for half a minute or more while your open sessions keep writing: the window and the indexing banner appear at once, and changes those sessions make during that first indexing show once it finishes. (#1266)
