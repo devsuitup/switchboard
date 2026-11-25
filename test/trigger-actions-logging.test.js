@@ -341,10 +341,10 @@ test('repeated main snapshot conflicts emit at most one projects line per action
     getSetting: () => ({}), isInitialScanComplete: () => true, isCachePopulated: () => true,
     isSearchIndexPopulated: () => true, isIndexingFinished: () => true,
     backfillEntrypoints() {}, backfillCustomTitles() {}, projectsReconciling: false,
-    projectsReconcileAttemptedAt: 10000, projectsReconciledAt: 10000, projectsReconcileAfterPopulate: false,
+    projectsReconcileAttemptedAt: 10000, projectsReconciledAt: 10000, projectsReconcileAfterPopulate: false, projectsReconcileStreak: null,
     projectsClient: { request: conflict }, queueProjectsRetry() {},
     log: { info: line => f.logs.push(line) } });
-  for (const name of ['getProjectsSnapshot', 'getTriggerProjectSnapshot']) {
+  for (const name of ['getProjectsSnapshot', 'getTriggerProjectSnapshot', 'projectsReconcileInterval', 'noteProjectsConflict']) {
     vm.runInContext(extractFunction(source, name), context, { filename });
   }
   f.ctx.lifecycle.getProjectSnapshot = (...args) => {

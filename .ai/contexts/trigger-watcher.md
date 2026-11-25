@@ -717,7 +717,8 @@ resolves against those rows. A final partial wait consumes the remaining budget
 without starting another lookup at the deadline. Exhaustion refuses with
 `project lookup unavailable` and logs one `[trigger] project lookup unavailable
 after N lookups (last: reason)` line. The first snapshot read may log a
-`[projects] snapshot conflict`; retries suppress that line via `logConflict`.
+`[projects] snapshot conflict`; retries suppress that line via `logConflict`. A lost
+reconcile logs once per streak and the lookup gets a read-only build instead.
 A stalled read still means
 `session action timed out`; a consistent `unknown project` refuses immediately.
 Non-transient snapshot errors/missing provenance still refuse immediately with

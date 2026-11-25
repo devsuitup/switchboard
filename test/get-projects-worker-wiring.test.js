@@ -298,7 +298,7 @@ test('a terminal conflict logs the changed live component at info and returns an
   assert.match(warnings[2], /changed=activeSessions,localJobs/);
   error = conflict({ reason: 'db', reconcile: true });
   await invoke(null, 'both');
-  assert.match(warnings[3], /^\[projects\] snapshot conflict after 3 dispatches: reason=db reconcile=true$/);
+  assert.match(warnings[3], /^\[projects\] reconcile conflict after 3 dispatches: reason=db; retrying with backoff$/);
 });
 
 test('a caller timeout logs the job options and dispatch count, or unknown when the error carries none', async () => {

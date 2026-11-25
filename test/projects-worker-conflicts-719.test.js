@@ -141,7 +141,7 @@ for (const away of [false, true]) test(`T5.5/T5.6 conflict errors cross the brid
   const invoke = loadGetProjectsHandler({
     TRACE: { on: false }, console,
     getSetting: () => null, isInitialScanComplete: () => true, isCachePopulated: () => true, isSearchIndexPopulated: () => true,
-    backfillEntrypoints() {}, backfillCustomTitles() {}, projectsReconciledAt: 0, projectsClient: f.client,
+    backfillEntrypoints() {}, backfillCustomTitles() {}, projectsReconciledAt: Infinity, projectsClient: f.client,
     mergePlaceholderSessions: rows => { assemblies++; return rows; },
     lastKnownProjects: { load: async () => ({ defaultProjects: [{ projectPath: 'accepted', sessions: [] }], allProjects: [{ projectPath: 'accepted', sessions: [] }] }), remember() {} },
     setTimeout: (fn, delay) => { assert.equal(delay, 5000); mainTimers.push(fn); return { unref() {} }; },
