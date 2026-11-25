@@ -104,7 +104,8 @@ test('startup paints the last known projects as inert provisional rows and the f
     assert.equal(s.w.cachedAllProjects[0]?.projectPath, '/last-known');
     assert.equal(s.w.sidebarContent.classList.contains('projects-provisional'), true);
     assert.equal(s.calls.refreshes, 1, 'one paint');
-    assert.equal(s.w.loadingStatus.textContent, 'Refreshing…');
+    assert.equal(s.w.loadingStatus.textContent, '', 'the provisional rows show no status text while the load runs');
+    assert.equal(s.w.loadingStatus.style.display, 'none');
     s.item.click();
     assert.equal(s.calls.opened, 0, 'a provisional row is inert');
     s.releaseLoad();
