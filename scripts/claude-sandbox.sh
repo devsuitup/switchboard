@@ -295,12 +295,16 @@ fi
 
 # The host paths the sandbox can write, as bound, and their resolved form.
 WRITABLE_ROOTS=("$CLAUDE_DIR" "${RW_STATE_DIRS[@]}" "${RW_DIRS[@]}")
-STATE_LINK_ROOTS=()
+STATE_LINK_ROOTS=(); STATE_LINK_NAMES=()
 for _e in "${USER_STATE_ENTRIES[@]}"; do
-  [ -L "$CLAUDE_DIR/$_e" ] && [ -e "$CLAUDE_DIR/$_e" ] && STATE_LINK_ROOTS+=("$(readlink -f "$CLAUDE_DIR/$_e")")
+  if [ -L "$CLAUDE_DIR/$_e" ] && [ -e "$CLAUDE_DIR/$_e" ]; then
+    STATE_LINK_ROOTS+=("$(readlink -f "$CLAUDE_DIR/$_e")"); STATE_LINK_NAMES+=("$_e")
+  fi
 done
+PROJECTS_LINK_TARGET=""
 if [ -L "$CLAUDE_DIR/projects" ] && [ -d "$CLAUDE_DIR/projects" ]; then
-  STATE_LINK_ROOTS+=("$(readlink -f "$CLAUDE_DIR/projects")/$PROJECT_FOLDER")
+  PROJECTS_LINK_TARGET="$(readlink -f "$CLAUDE_DIR/projects")"
+  STATE_LINK_ROOTS+=("$PROJECTS_LINK_TARGET/$PROJECT_FOLDER"); STATE_LINK_NAMES+=(projects)
 fi
 WRITABLE_ROOTS+=(${STATE_LINK_ROOTS[@]+"${STATE_LINK_ROOTS[@]}"})
 WRITABLE_REALS=()
@@ -901,17 +905,45 @@ check_opt_in_binds() {
   done
 }
 
-# A writable state link target at or inside a protected path would make that
-# path writable wherever its read-only mount loses to the target's bind.
+# A state link target bound read-write must not overlap a private entry, nor
+# lie at or inside a path the sandbox keeps read-only, transcripts aside.
 check_state_link_binds() {
-  local s r
-  for s in ${STATE_LINK_ROOTS[@]+"${STATE_LINK_ROOTS[@]}"}; do
-    for r in "${!PROTECTED_SEEN[@]}"; do
-      case "$s/" in
-        "$r"/*) fail "refusing to launch: $s, which the sandbox binds read-write for a state entry of ~/.claude, is at or inside $r, which it keeps read-only; the session could change it there. Give that entry a directory of its own, or turn Sandbox off for this session." ;;
-      esac
+  local s r k i p
+  local -a privs=() ros=() reals=() targets=()
+  for p in "${USER_PRIVATE_ENTRIES[@]}"; do
+    privs+=("$CLAUDE_DIR/$p" "$(readlink -m -- "$CLAUDE_DIR/$p")")
+  done
+  for i in "${!M_OP[@]}"; do
+    [ "${M_OP[i]}" = --ro-bind ] && ros+=("${M_SRC[i]}")
+  done
+  [ "${#ros[@]}" -gt 0 ] && mapfile -d '' reals < <(readlink -m -z -- "${ros[@]}")
+  targets=(${STATE_LINK_ROOTS[@]+"${STATE_LINK_ROOTS[@]}"})
+  [ -z "$PROJECTS_LINK_TARGET" ] || targets+=("$PROJECTS_LINK_TARGET")
+  for s in ${targets[@]+"${targets[@]}"}; do
+    for r in "${privs[@]}"; do
+      case "$s/" in "$r"/*) state_link_refuse_private "$s" "$r" ;; esac
+      case "$r/" in "$s"/*) state_link_refuse_private "$s" "$r" ;; esac
     done
   done
+  for k in ${STATE_LINK_ROOTS[@]+"${!STATE_LINK_ROOTS[@]}"}; do
+    s="${STATE_LINK_ROOTS[k]}"
+    for r in "${!PROTECTED_SEEN[@]}"; do
+      case "$s/" in "$r"/*) state_link_refuse "$s" "$r" ;; esac
+    done
+    in_list "${STATE_LINK_NAMES[k]}" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"} && continue
+    for r in ${reals[@]+"${reals[@]}"}; do
+      [ "${STATE_LINK_NAMES[k]}" = projects ] && [ "$r" = "$PROJECTS_LINK_TARGET" ] && continue
+      case "$s/" in "$r"/*) state_link_refuse "$s" "$r" ;; esac
+    done
+  done
+}
+
+state_link_refuse() {
+  fail "refusing to launch: $1, which the sandbox binds read-write for a state entry of ~/.claude, is at or inside $2, which it keeps read-only; the session could change it there. Give that entry a directory of its own, or turn Sandbox off for this session."
+}
+
+state_link_refuse_private() {
+  fail "refusing to launch: $1, the target of a state entry of ~/.claude, overlaps $2, which the sandbox keeps private; binding it would expose or let the session change what other sessions source from there. Give that entry a directory of its own, or turn Sandbox off for this session."
 }
 
 # Sets OA_IDX to the mount that decides access at sandbox path $1, mount $2
