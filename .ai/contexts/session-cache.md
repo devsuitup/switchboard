@@ -696,7 +696,40 @@ each fetch. Shrink, changed witnesses, or another mtime at the same size recount
 from zero. The bounded witnesses cannot prove that an arbitrary rewrite preserved
 the entire prefix, so local atomic replacements retain the identity check.
 Counts also refresh for subagents
-and when display-header parsing fails. Count changes remain activity-only and
+and when display-header parsing fails.
+
+### Row head: last conversation time (#1282)
+
+The cursor also carries `conversationAt` and `sealedConversationAt`: the newest
+`timestamp` among counted records (the same `isCountedMessage` predicate, so
+`user`, `assistant` and legacy `message` records with those roles), with the
+tentative tail kept apart as for the count. Everything else is not
+conversation: `summary`, `custom-title`, `ai-title`, `last-prompt`,
+`queue-operation`, `continued-in`, `file-history-snapshot`, `system`,
+`bridge-session`, `schedule-provenance` and any other record type. The full
+reader (`readSessionFile`) sets both from records that survive the bridge cutoff
+and exclusions; `readMessageCount` advances them over appended records only.
+
+Only the choice of a rolled row's head reads it, through `lastConversationAt(row)`
+(`message-count.js`): the linear roll-up and compaction mirrors in
+`buildProjectsFromCache`, and `newestMember` in `mergeLocalBackgroundSessions`.
+`modified` keeps its meaning for every other consumer: the header refresh still
+sets it to the file mtime, so sidebar and grid sorting and dates, project
+activity, archived-project dates, the part list and chooser dates ("last
+active"), the heatmap (daily metrics, not `modified`) and search are unchanged.
+A metadata-only append to an older part therefore still moves that part's
+"last active" date and the row's sort time, but not the head. Single-part rows
+are unaffected.
+
+No schema change: the fields live in the existing `messageCountIndex` JSON,
+already upserted and witnessed. `lastConversationAt` falls back to `modified`
+when the cursor is null, unparsable or lacks `conversationAt` (no timestamped
+counted record, Codex rows, rows indexed before #1282). The parser output
+changed, so `SESSION_CONTENT_INDEX_VERSION` is 3: the first startup after the
+upgrade re-reads every folder once (reason `version`) and rewrites every cursor.
+A header refresh that meets a cursor without `sealedConversationAt` before that
+recounts from byte 0 instead of extending it (a filtered bridge cursor takes the
+full read), so no legacy cursor is extended without a base time. Count changes remain activity-only and
 retain the existing 30-second notification window. FTS and daily metrics retain
 their existing refresh policy.
 
@@ -3295,7 +3328,7 @@ Remote and cross-project rows remain separate. `/clear` creates no link and rema
 
 No transcript reads, stats or DB writes are added. `scripts/bench-continuation-rows-564.cjs [baseline-ref] [output-file]` compares 20 warm build medians on 5,000 rows under Node 22, including a no-edge fixture; the baseline defaults to `git merge-base HEAD origin/main` and is printed in the result. The added-cost budget is 10 ms. Each projects reload builds both archived views, so the work can run twice. This measures build cost, not first paint or resolution of #674.
 
-Click checks liveness across every part and opens the newest-modified head. Automatic restore resolves the saved part with the row's complete member list and head (#722), reusing `rowHeadSession(row, savedId)` for saved members. Same-row candidates, including same-bridge-group targets, do not count as branches. With no external candidate restore opens the row's head and rewrites the saved working-set entry to that id; otherwise its existing continuation and indexing rules apply. Several saved parts of one row reuse one tab, and the final open checks liveness across every member. Open-time index rescans persist without notifying projects; membership changes appear on the next reload. `mergedRowSnapshot` still ORs activity across all members (#563), so an older busy part makes the row busy. General session totals still count rolled parts. A later branch can split a row again; #567 owns its chooser.
+Click checks liveness across every part and opens the row's head, chosen by last conversation time (see "Row head: last conversation time (#1282)"). Automatic restore resolves the saved part with the row's complete member list and head (#722), reusing `rowHeadSession(row, savedId)` for saved members. Same-row candidates, including same-bridge-group targets, do not count as branches. With no external candidate restore opens the row's head and rewrites the saved working-set entry to that id; otherwise its existing continuation and indexing rules apply. Several saved parts of one row reuse one tab, and the final open checks liveness across every member. Open-time index rescans persist without notifying projects; membership changes appear on the next reload. `mergedRowSnapshot` still ORs activity across all members (#563), so an older busy part makes the row busy. General session totals still count rolled parts. A later branch can split a row again; #567 owns its chooser.
 
 Remembered branching choices (#567) are settings records keyed by this row's representative, not its latest head. Restore and reload load those records before opening; each resolved graph revalidates the candidate set and opens the chosen candidate's current row head with its complete member list. A proven linear continuation of the choice updates the record; new candidates or a vanished choice require a fresh manual choice. No external candidate deletes the stale record. See `.ai/contexts/cli-session-state.md` for the record and write-failure contract.
 

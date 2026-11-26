@@ -368,7 +368,9 @@ recency. A linear A-B pair rolls up and already chose B. While B's worker was
 live, the log shows the pair merged for one projection, then A
 `proof-invalid` until the next index of the folder.
 
-The head of such a row is now the newest member by cached `modified`; live
+The head of such a row is now the newest member by last conversation time
+(`lastConversationAt`, see session-cache.md, "Row head: last conversation
+time (#1282)"); live
 members (non-bg descriptor, accepted bg descriptor, open local PTY) are
 considered first, so a live conversation keeps the head over an older or newer
 dead copy its record points to. Descriptor/attach hosting is unchanged. The
@@ -410,10 +412,9 @@ returns: the saved entry's project, the `cwd` of the job's `state.json`
 `resolveWorktreePath`. With none of them known it refuses (fail closed), so a
 project deletion can never be raced by a Respawn of a job that was never saved.
 
-Known limit: `refreshFolder`'s header refresh sets `modified` to the file mtime
-(measured: a metadata-only append to A flips a rolled row's head to A). It was
-not the cause above. The held-entry question does not depend on the head, so it
-covers this for saved bg entries only.
+A metadata-only append to A (header refresh sets `modified` to the file mtime)
+no longer flips the head to A since #1282: the head compares last conversation
+times, not `modified`.
 
 Tests: `test/row-head-1276.test.js`, `test/restore-row-head-1276.test.js`.
 

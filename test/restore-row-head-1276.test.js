@@ -193,7 +193,7 @@ test('#1276 a chosen part that continued again is still followed', async t => {
 const C = 'cccccccc-0000-4000-8000-00000000000a';
 const mirror = rows => {
   const c = rows.get(C);
-  Object.assign(c, { mergedIntoSessionId: A, bridgeSessionId: 'cse_same', modified: '2026-11-26T12:00:00Z' });
+  Object.assign(c, { mergedIntoSessionId: A, bridgeSessionId: 'cse_same', modified: '2026-11-26T12:00:00Z', messageCountIndex: null });
   rows.get(A).bridgeSessionId = 'cse_same';
 };
 
