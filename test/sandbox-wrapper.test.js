@@ -1393,6 +1393,7 @@ test('sandbox wrapper: a .claude under a read-only tool directory stays protecte
       fs.writeFileSync(path.join(todos, 'hook.sh'), '');
       let res = rig.run(['--version'], { NVM_DIR: tools });
       assert.equal(res.status, 0, `a .claude under the tool directory alone launches\n${res.stderr}`);
+      fs.rmSync(path.join(dir, 'todos'), { recursive: true, force: true });
       fs.symlinkSync(todos, path.join(dir, 'todos'));
       res = rig.run(['--version'], { NVM_DIR: tools });
       assert.equal(res.status, 125, 'the nested .claude would be writable through the todos target');
