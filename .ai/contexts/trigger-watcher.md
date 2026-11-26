@@ -2627,22 +2627,30 @@ are unchanged: no recovery Enter while the descriptor reads `busy` or
 `waiting`, at most one otherwise. A chain step pending while the CLI stays
 busy goes through the same function in `waitForPendingConfirmation`.
 
-**Readiness.** `classifyTranscriptTail` returns `queueActivity`: walking
-back from the end of the tail to the last entry that closes a turn
-(`endsTurn`, with an `end_turn` closing even without a `turn_duration`
-after it: requiring one held 279 of the 6916 prompts the measured files show
-typed at an idle CLI, an `enqueue` followed by its `dequeue` within 300 ms;
-without it, 63),
-`enqueue`s not yet consumed by a `dequeue`, `remove` or `popAll`, or any
-`dequeue` (a queued item started a turn that has not closed). Notification
-and automatic-summary `user` entries do not stop the walk, as in the closed
-rule. `waitForCliIdleAfter` treats a descriptor `idle` as not ready while
+**Readiness.** `classifyTranscriptTail` returns `queueActivity`, true in
+two cases. (1) An `enqueue` not yet consumed: the queue is balanced over the
+whole tail, each `dequeue`, `remove` or `popAll` consuming one item, never
+below zero (a consumption whose `enqueue` lies before the tail is ignored).
+A turn's close never consumes anything: a notification queued while the
+previous turn ran and still pending when it closes keeps the hold (review r1
+of #1285). (2) A `dequeue` after the last entry that closes a turn: a queued
+item started a turn that has not closed (`endsTurn`, with an `end_turn`
+closing even without a `turn_duration` after it: requiring one held 279 of
+the 6916 prompts the measured files show typed at an idle CLI, an `enqueue`
+followed by its `dequeue` within 300 ms; without it, 63, counting only from
+the last close). Notification and
+automatic-summary `user` entries do not close, as in the closed rule. The
+tail is bounded (256 KiB, `transcript-tail`): an `enqueue` older than the
+tail is invisible and does not hold; the descriptor alone decides then. `waitForCliIdleAfter` treats a descriptor `idle` as not ready while
 `queueActivity` holds and the transcript was written less than
 `SWITCHBOARD_TRANSCRIPT_QUIET_MS` (default 3000 ms) ago, and restarts the
-settle when it stops holding. The quiet window is the bound for the cases the
-walk cannot close, those 63 among them: an `enqueue` left by a process that died (seen in the
+settle when it stops holding. The quiet window is the bound for what the
+balance cannot settle: an `enqueue` left by a process that died (seen in the
 measured files, never consumed after the resume), or a dequeued notification
-that produced no reply. A turn that keeps writing keeps the hold; a turn the
+that produced no reply. Balanced over whole files, 1309 of the 6926 idle
+prompts measured see such a leftover count; the hold then costs at most the
+quiet window after the last transcript write, and nothing once the
+transcript is quiet. A turn that keeps writing keeps the hold; a turn the
 descriptor reads as `busy` is held by the descriptor anyway. It applies to
 every `wait: "idle"` readiness: single triggers, `open`/`create` prompts
 (startup path) and chain steps; `wait: "none"` does not wait for it. The read

@@ -228,6 +228,49 @@ test('readiness: still held by the CLI\'s own turn at the deadline -> nothing wr
   assert.equal(r.reason, 'the transcript showed a queued item or a turn the CLI started on its own still running at the deadline; nothing was written');
 });
 
+test('classifier: an enqueue written during the previous turn stays pending after that turn closes', () => {
+  const at = (s) => new Date(T0 + s).toISOString();
+  const lines = (...entries) => entries.map((e, i) => JSON.stringify({ timestamp: at(i), ...e })).join('\n') + '\n';
+  const turn = classifyTranscriptTail(lines(
+    { type: 'user', message: { content: 'previous task' } },
+    { type: 'queue-operation', operation: 'enqueue', content: NOTIFICATION },
+    { type: 'assistant', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'done' }] } },
+    { type: 'system', subtype: 'turn_duration' },
+  ));
+  assert.equal(turn.queueActivity, true);
+});
+
+test('classifier: a dequeue whose enqueue lies before the tail does not hide a later pending enqueue, nor invent one', () => {
+  const at = (s) => new Date(T0 + s).toISOString();
+  const lines = (...entries) => entries.map((e, i) => JSON.stringify({ timestamp: at(i), ...e })).join('\n') + '\n';
+  const done = [
+    { type: 'user', message: { content: 'x' } },
+    { type: 'assistant', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'y' }] } },
+  ];
+  const deq = { type: 'queue-operation', operation: 'dequeue' };
+  const enq = { type: 'queue-operation', operation: 'enqueue', content: NOTIFICATION };
+  assert.equal(classifyTranscriptTail(lines(deq, ...done)).queueActivity, false);
+  assert.equal(classifyTranscriptTail(lines(deq, ...done, enq)).queueActivity, true);
+});
+
+test('readiness: an enqueue queued while the previous turn ran, not yet dequeued at its close, holds the prompt until its own turn ends', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: T0 });
+  let foreignEndAt = null;
+  const f = fixture({ onEnter: (n, desc, tr) => {
+    if (n === 1) setTimeout(() => { tr.enqueue('hello'); tr.dequeue(); tr.user('hello'); set(desc, 'busy'); }, 20);
+  } });
+  f.tr.user('previous task');
+  f.tr.enqueue(NOTIFICATION);
+  f.tr.reply();
+  set(f.desc, 'idle');
+  setTimeout(() => { f.tr.dequeue(); f.tr.user(NOTIFICATION); set(f.desc, 'busy'); }, 600);
+  setTimeout(() => { f.tr.reply(); set(f.desc, 'idle'); foreignEndAt = Date.now(); }, 2000);
+  const r = await drive(t, single(f), 7000);
+  assert.ok(foreignEndAt !== null, 'the foreign turn ended before the prompt was written');
+  assert.ok(f.firstWriteAt() >= foreignEndAt, `written at +${f.firstWriteAt() - T0} ms, the foreign turn ended at +${foreignEndAt - T0} ms`);
+  assert.equal(r.submit_confirmed, true, JSON.stringify(r));
+});
+
 test('classifier: queue activity is pending enqueues, or a dequeue whose turn has not closed', () => {
   const at = (s) => new Date(T0 + s).toISOString();
   const lines = (...entries) => entries.map((e, i) => JSON.stringify({ timestamp: at(i), ...e })).join('\n') + '\n';

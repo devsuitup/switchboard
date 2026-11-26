@@ -138,20 +138,20 @@ function isNotificationOrAutoSummary(entry, previous) {
 // see .ai/contexts/trigger-watcher.md, "A turn the CLI starts on its own (issue #1284)"
 function queueActivityOf(entries) {
   let pending = 0;
-  let dequeued = 0;
-  for (let i = entries.length - 1; i >= 0; i -= 1) {
+  let dequeuedSinceClose = false;
+  for (let i = 0; i < entries.length; i += 1) {
     const entry = entries[i];
     if (entry.type === 'queue-operation') {
       if (entry.operation === 'enqueue') pending += 1;
-      else if (entry.operation === 'dequeue') { pending -= 1; dequeued += 1; }
-      else if (entry.operation === 'remove' || entry.operation === 'popAll') pending -= 1;
+      else if (['dequeue', 'remove', 'popAll'].includes(entry.operation)) pending = Math.max(0, pending - 1);
+      if (entry.operation === 'dequeue') dequeuedSinceClose = true;
       continue;
     }
     if (entry.type !== 'user' && entry.type !== 'assistant') continue;
     if (isNotificationOrAutoSummary(entry, entries[i - 1])) continue;
-    if (endsTurn(entry, true, entries[i - 1])) break;
+    if (endsTurn(entry, true, entries[i - 1])) dequeuedSinceClose = false;
   }
-  return pending > 0 || dequeued > 0;
+  return pending > 0 || dequeuedSinceClose;
 }
 
 function classifyTranscriptTail(text) {
