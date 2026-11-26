@@ -182,7 +182,7 @@ for (const mode of ['resume', 'new']) {
     const firstWrite = f.events.findIndex(e => e[0] === 'write');
     assert.ok(attach !== -1, 'the input attach was emitted');
     assert.ok(firstWrite > attach, `the prompt was written at event ${firstWrite}, before the input attach at ${attach}`);
-    assert.deepEqual(f.writes, ['hello', '\r']);
+    assert.deepEqual(f.writes, ['\x1b[200~hello\x1b[201~', '\r']);
   });
 }
 
