@@ -470,7 +470,19 @@ execution target. Bootstrap and execution deadlines are 30 s. The worker sends a
 started message on first execution, so time spent queued does not start the command
 deadline. A command timeout reports its id and unknown outcome but keeps a responsive
 worker alive; a late ACK still updates committed settings. Heartbeats distinguish
-an unresponsive worker and permit termination. Crashes reject in-flight requests
+an unresponsive worker and permit termination. A heartbeat deadline that fires
+at least 1 s after it was due, by the wall clock or the monotonic clock, means
+main's own event loop was paused (system sleep, Windows Modern Standby, a long
+synchronous block): the client logs one `heartbeat deadline reached N ms late`
+warning and re-arms one more interval instead of failing the worker (#1037).
+Main's timer can run before the worker's queued 1 s heartbeats are delivered.
+One grace is granted per period of worker silence: only a message from the
+worker clears it, so a second late deadline with no message in between fails
+the worker (repeated main-loop blocks at each deadline cannot defer it
+forever). A deadline that fires on time with no message still fails the
+worker, so a real stall is detected at most one interval later. Bootstrap and command
+deadlines are not suspend-aware. Covered by
+`test/writer-heartbeat-suspend.test.js`. Crashes reject in-flight requests
 with unknown outcomes; they are never replayed automatically. Only after awaited
 termination may a replacement writer open, after 100/500/1000 ms backoff. At most
 three restarts are admitted in a sliding 60-second window. A quiet window restores

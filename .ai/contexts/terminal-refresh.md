@@ -84,6 +84,19 @@ occurrence; no live standby reproduction has established the incident's cause
 or resolution. No background throttling or power policy is changed. The
 existing unsaved quit guard keeps its listener.
 
+`backgroundThrottling` stays at its default (`true`). Electron 41's
+`electron.d.ts` says that disabling it keeps animations and timers running in
+the background, also affects the Page Visibility API, and makes the whole
+window draw and swap frames. It cannot help during a true S0 freeze, when the
+process does not run at all; the 1000 ms timer fallback already covers a
+paused rAF while timers run; and several renderer paths depend on
+`document.hidden` (the hidden-duration backlog report, the refit on return,
+the busy-spinner pause, marking visible output as seen). Revisit only if a
+wake measurement shows a throttled backlog that the fallback does not drain.
+
+The session-index writer's heartbeat no longer counts a paused event loop as a
+stalled worker; see [session-index-writer.md](session-index-writer.md).
+
 Tests: `test/terminal-standby.test.js`, `test/power-log.test.js` and the existing
 terminal lifecycle, hidden replay, rekey and render-stat suites. Live S0 standby,
 GPU behavior and the size of the main-to-renderer IPC queue require a separately

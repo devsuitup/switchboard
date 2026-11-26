@@ -45,7 +45,7 @@ function commandTimeoutMs(command, args, timeoutMs) {
 }
 
 function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusyCounts = () => {}, onBootstrap = () => {}, timeoutMs = 30000, maxRestarts = 3,
-  now = () => Date.now(), clock = writerClock, setTimeout = global.setTimeout, clearTimeout = global.clearTimeout, heartbeatMs = 30000, log = console }) {
+  now = () => Date.now(), clock = writerClock, setTimeout = global.setTimeout, clearTimeout = global.clearTimeout, heartbeatMs = 30000, heartbeatLateMs = 1000, log = console }) {
   let worker, closing, stopped = false, terminated = false, nextId = 0, restartTimer;
   const restarts = [];
   const queue = [];
@@ -156,9 +156,16 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
     worker = current;
     current.terminationConfirmed = new Promise(resolve => { current.confirmTermination = resolve; });
     current.bootTimer = setTimeout(() => void fail(current, new Error('writer bootstrap timed out')), timeoutMs);
-    const heartbeat = () => {
+    const heartbeat = (grace = false) => {
       clearTimeout(current.heartbeatTimer);
-      current.heartbeatTimer = setTimeout(() => void fail(current, new Error('writer heartbeat timed out; unresponsive')), heartbeatMs);
+      current.heartbeatGraced = grace;
+      const armedAt = now(), armedClock = clock();
+      current.heartbeatTimer = setTimeout(() => {
+        const late = Math.max(now() - armedAt, clock() - armedClock) - heartbeatMs;
+        if (current.heartbeatGraced || !(late >= heartbeatLateMs)) return void fail(current, new Error('writer heartbeat timed out; unresponsive'));
+        try { log.warn(`[session-index-writer] heartbeat deadline reached ${Math.round(late)} ms late; the event loop was paused, waiting one more interval`); } catch {}
+        heartbeat(true);
+      }, heartbeatMs);
     };
     current.on('message', message => {
       if (worker !== current) return;
