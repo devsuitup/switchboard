@@ -1927,7 +1927,12 @@ one changed file" for `syncMirror`.
   `remote-index.js`'s `hostBackoff` — lost on restart, which just logs once
   again, cheap) and logs on count 1, 2, 4, 8, 16, ... A file that stops being
   skipped/deferred has its streak dropped (`pruneStreaks`), so a later
-  recurrence logs fresh rather than resuming at its old tier.
+  recurrence logs fresh rather than resuming at its old tier. An oversized
+  file's streak also remembers its size and mtime: a cycle that finds it
+  unchanged never logs, so a stable oversized transcript warns once per
+  process; when either changes, that cycle logs if its count is a tier (#1037,
+  `test/remote-mirror.test.js` "an oversized file warns again only after its
+  size or mtime changes"). Deferrals keep the plain doubling.
 - **Mutation-proven**: setting the incremental branch's `offset` to `0`
   instead of `localSize` (i.e. breaking the range start so it always starts
   from byte 0) reddens `test/remote-mirror.test.js`'s "a transcript that only
