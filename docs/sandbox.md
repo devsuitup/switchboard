@@ -102,7 +102,7 @@ terminal.
 | In each of the above: `.claude`, `.git/config`, `.git/hooks` | see [What the sandbox protects](#what-the-sandbox-protects) |
 | `~/.claude` | its state read-write, its configuration read-only, `projects` read-only except the session's own folder — see [What the sandbox protects](#what-the-sandbox-protects) |
 | `~/.claude.json` | a private copy, dropped when the session ends |
-| `~/.config/claude`, `~/.cache/claude`, `~/.local/share/claude` | read-write |
+| `~/.config/claude`, `~/.cache/claude`, `~/.local/share/claude` | read-write. One that is a symbolic link is followed only to a directory named `claude`, and never to `/` or a parent of `$HOME`; any other target is refused |
 | `/usr`, `/etc` | read-only |
 | What `/etc/resolv.conf`, `/etc/hosts`, `/etc/nsswitch.conf`, `/etc/host.conf` or `/etc/gai.conf` links to, when outside `/etc` and `/usr`: the directory under `/run` (with systemd-resolved, `/run/systemd/resolve`), since the resolver replaces the file by a rename; the file itself elsewhere | read-only |
 | `/bin`, `/sbin`, `/lib`, `/lib64` | symbolic links into `/usr` |
@@ -299,8 +299,11 @@ directory in between is not detected.
 Before bwrap starts, the wrapper checks the whole list of mounts once more, on
 resolved paths. Every path it keeps read-only (past `/usr`, `/etc` and the
 interpreter and `$NVM_DIR` mounts, which only make programs available), every
-private entry of `~/.claude` and the target of a `~/.claude.json` that is a
-symbolic link must stay that way wherever a read-write mount reaches it:
+`.claude` or `.git` found below a bound directory but left to one of those
+mounts, every private entry of `~/.claude` and the target of a `~/.claude.json`
+that is a symbolic link must stay that way wherever a read-write mount reaches
+it. A read-write mount whose source resolves to `/` or to a parent of `$HOME`
+is refused outright. Beyond that:
 
 - a read-write mount that contains a read-only path must show it read-only at
   its own place too, so a project reached as `project-alias` whose real

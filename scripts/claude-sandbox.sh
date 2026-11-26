@@ -589,15 +589,33 @@ protect_links_below() {
   done
 }
 
+# True when resolved path $1 is / or contains $HOME, however it is spelled.
+covers_home() {
+  local f
+  [ "$1" = / ] && return 0
+  while IFS= read -r f; do
+    case "$f/" in "$1"/*) return 0 ;; esac
+  done <<<"$_home_forms"
+  return 1
+}
+
+# ~/.config/claude and the like: a link is followed only to a directory named
+# claude, never to / or a parent of $HOME.
+check_state_dir_link() {
+  local target
+  IFS= read -r -d '' target < <(readlink -f -z -- "$1" 2>/dev/null)
+  if [ -z "$target" ] || covers_home "$target" || [ "${target##*/}" != claude ] || [ ! -d "$target" ]; then
+    fail "refusing to launch: $1 links to ${target:-nothing}. A linked $1 is followed only to a directory named claude, elsewhere, and never to / or a parent of \$HOME; point it at one, or turn Sandbox off for this session."
+  fi
+}
+
 # A symlinked state entry of ~/.claude is followed only to a target of the
 # same kind and name, and never to $HOME or a parent of it.
 bind_state_link_target() {
   local link="$1" name="${1##*/}" target
   target="$(readlink -f "$link" 2>/dev/null)" || return 0
   [ -n "$target" ] && [ -e "$target" ] || { debug "state link $link dangles"; return 0; }
-  case "$HOME/" in
-    "$target"/*) fail "refusing to launch: $link links to $target, which contains \$HOME, so binding it would expose everything the sandbox hides. Point the link at a directory of its own." ;;
-  esac
+  covers_home "$target" && fail "refusing to launch: $link links to $target, which contains \$HOME, so binding it would expose everything the sandbox hides. Point the link at a directory of its own."
   if [ "${target##*/}" != "$name" ] || { [ "$2" = dir ] && [ ! -d "$target" ]; } || { [ "$2" = file ] && [ ! -f "$target" ]; }; then
     fail "refusing to launch: $link links to $target. A symbolic link in ~/.claude is followed only to a $2 of the same name ($name), elsewhere; point it at one, or turn Sandbox off for this session."
   fi
@@ -681,7 +699,7 @@ bind_user_claude_dir() {
 # created next to them.
 bind_project_claude_dir() {
   local dir="$1" e name restore_glob
-  inside_ro_area "$dir" && return 0
+  if inside_ro_area "$dir"; then RO_REQUIRED+=("$dir"); return 0; fi
   mount_op --ro-bind "$dir" "$dir"
   restore_glob="$(shopt -p nullglob dotglob)"
   shopt -s nullglob dotglob
@@ -803,7 +821,7 @@ protect_tree() {
   local d="$1" create="$2" n
   protect_repo_root "$d" "$create"
   while IFS= read -r -d '' n; do
-    inside_ro_area "$n" && continue
+    if inside_ro_area "$n"; then RO_REQUIRED+=("$n"); continue; fi
     case "${n##*/}" in
       .claude) protect_claude_dir "$n" "$create" ;;
       .git) protect_repo_root "$(dirname "$n")" "$create" ;;
@@ -967,10 +985,18 @@ check_mount_plan() {
   if [ -L "$CLAUDE_JSON" ] && IFS= read -r -d '' h < <(readlink -m -z -- "$CLAUDE_JSON"); then
     ph+=("$h"); pd+=("$CLAUDE_JSON"); pk+=(json)
   fi
+  for p in ${RO_REQUIRED[@]+"${RO_REQUIRED[@]}"}; do
+    IFS= read -r -d '' h < <(readlink -m -z -- "$p") || continue
+    ph+=("$h"); pd+=("$p"); pk+=(ro)
+  done
   for n in ${rw[@]+"${rw[@]}"}; do
     i="${idx[n]}"; src="${reals[n]}"
+    if [ -z "$src" ] || covers_home "$src"; then
+      fail "refusing to launch: ${M_DEST[i]}, which the sandbox mounts read-write, resolves to ${src:-nothing}, which is the filesystem root or contains \$HOME; the sandbox would expose everything it is meant to hide."
+    fi
     for k in "${!ph[@]}"; do
       h="${ph[k]}"
+      [ "$h" != / ] || plan_refuse_inside "${M_DEST[i]}" "$h" "${pd[k]}"
       case "$h/" in "$src"/*)
         v="${M_DEST[i]}${h#"$src"}"
         effective_access "$v"
@@ -1054,6 +1080,7 @@ build_bwrap_args() {
   PRIVATE_LINKS=()
   CONTROL_VIEWS=()
   RW_EXCEPTIONS=()
+  RO_REQUIRED=()
   WRITABLE_ROOTS=("${BASE_WRITABLE_ROOTS[@]}")
   WRITABLE_REALS=()
   for d in "${WRITABLE_ROOTS[@]}"; do WRITABLE_REALS+=("$(readlink -m -- "$d" 2>/dev/null || true)"); done
@@ -1088,6 +1115,7 @@ build_bwrap_args() {
   # bwrap is going to refuse must not leave anything behind in $HOME.
   for d in "${RW_STATE_DIRS[@]}"; do
     if [ -e "$d" ]; then
+      [ -L "$d" ] && check_state_dir_link "$d"
       mount_op --bind "$d" "$d"
     else
       MISSING_DIRS+=("$d")
@@ -1126,7 +1154,7 @@ build_bwrap_args() {
 }
 
 declare -A MOUNTED PROTECTED_SEEN GIT_DONE
-declare -a RW_EXCEPTIONS
+declare -a RW_EXCEPTIONS RO_REQUIRED
 
 # The copy of ~/.claude.json the sandbox starts from. An empty object, not an
 # empty file, when there is none: claude parses this path as JSON.
