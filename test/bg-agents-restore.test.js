@@ -386,3 +386,93 @@ test('S2c GUARD default lookup keeps unrelated invalid raw identity despite a ma
   assert.equal(bg.findRestoreJob(SID).job?.id, 'aaaaaaaa');
   assert.equal(bg.findRestoreJob(SID, undefined, { ignoreUnrelatedInvalid: true }).known, false);
 });
+
+test('1277 an explicit saved job names the kind of state file fault, never its content', t => {
+  const write = fixture(t);
+  const file = path.join(write.jobsDir, 'aaaaaaaa', 'state.json');
+  const cases = [
+    ['missing', () => fs.unlinkSync(file)],
+    ['unparsable', () => fs.writeFileSync(file, '{"state":"working","sessionId":"SECRET')],
+    ['unparsable', () => fs.writeFileSync(file, 'null')],
+    ['no-state', () => fs.writeFileSync(file, JSON.stringify({ sessionId: SID, detail: 'SECRET' }))],
+    ['transitional-state', () => write('aaaaaaaa', { state: 'starting' })],
+    ['transitional-state', () => write('aaaaaaaa', { state: 'resuming' })],
+    ['unknown-state', () => write('aaaaaaaa', { state: 'SECRET-state' })],
+    ['id-mismatch', () => write('aaaaaaaa', { id: 'bbbbbbbb' })],
+  ];
+  for (const [kind, damage] of cases) {
+    write('aaaaaaaa');
+    damage();
+    const lookup = bg.findRestoreJob(SID, 'aaaaaaaa', { findNewer: true, restoreScan: { records: new Map() } });
+    assert.equal(lookup.known, false, kind);
+    assert.equal(lookup.missing, undefined, `${kind}: a job directory without a readable state is not a missing job`);
+    assert.equal(lookup.stateFile, kind);
+    assert.doesNotMatch(JSON.stringify(lookup.stateFile), /SECRET/);
+  }
+  write('aaaaaaaa');
+  assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa').stateFile, undefined, 'a readable state names no fault');
+});
+
+test('1277 a legacy lookup that throws on the matching record names its fault', t => {
+  const write = fixture(t);
+  write('aaaaaaaa', { state: 'starting' });
+  const lookup = bg.findRestoreJob(SID);
+  assert.equal(lookup.known, false);
+  assert.equal(lookup.stateFile, 'transitional-state');
+});
+
+test('1277 the shared restore snapshot does not keep a state it could not use', t => {
+  const write = fixture(t);
+  const restoreScan = { records: new Map() };
+  write('aaaaaaaa', { state: 'starting' });
+  assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa', { findNewer: true, restoreScan }).known, false);
+  fs.writeFileSync(path.join(write.jobsDir, 'aaaaaaaa', 'state.json'), '{"state":');
+  assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa', { findNewer: true, restoreScan }).stateFile, 'unparsable', 'a retry rereads the file');
+  write('aaaaaaaa');
+  const lookup = bg.findRestoreJob(SID, 'aaaaaaaa', { findNewer: true, restoreScan });
+  assert.equal(lookup.known, true, 'a retry within the snapshot window sees the rewritten state');
+  write('aaaaaaaa', { state: 'starting' });
+  assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa', { findNewer: true, restoreScan }).known, true, 'a usable record is still shared within the window');
+});
+
+test('1277 conversationCheck names the kind of state file fault', async t => {
+  const write = fixture(t);
+  const file = path.join(write.jobsDir, 'aaaaaaaa', 'state.json');
+  write('aaaaaaaa');
+  fs.unlinkSync(file);
+  assert.equal((await bg.conversationCheck('aaaaaaaa', { workerLiveness: false })).stateFile, 'missing');
+  fs.writeFileSync(file, '{"state":');
+  assert.equal((await bg.conversationCheck('aaaaaaaa', { workerLiveness: false })).stateFile, 'unparsable');
+  write('aaaaaaaa', { state: 'adopted' });
+  assert.equal((await bg.conversationCheck('aaaaaaaa', { workerLiveness: false })).stateFile, 'transitional-state');
+  write('aaaaaaaa');
+  assert.equal((await bg.conversationCheck('aaaaaaaa', { workerLiveness: false })).stateFile, undefined);
+});
+
+for (const phase of ['lookup', 'conversation']) {
+  test(`1277 restore-background-job passes the ${phase} state fault through without respawning`, async t => {
+    const write = fixture(t);
+    write('aaaaaaaa', phase === 'lookup' ? { state: 'starting' } : {});
+    const handlers = new Map(), calls = [];
+    t.mock.method(bg, 'runVerb', async (...args) => { calls.push(args); return { ok: true }; });
+    if (phase === 'conversation') t.mock.method(bg, 'conversationCheck', async () => ({ known: false, reason: 'job aaaaaaaa has an unknown or unreadable state', stateFile: 'no-state' }));
+    require('../src/main/bg-agents/bg-agents-ipc').init({
+      ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, bgAgents: bg,
+      getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map(),
+      getSetting: () => ({ openWorkingSet: [{ sessionId: SID, projectPath: '/p', bg: true, attachJobId: 'aaaaaaaa' }] }),
+      sessionHasPty: () => false, ptyPids: () => [],
+      cliSessionState: { readAllDescriptors: () => [], onDescriptorsChanged: () => () => {}, liveElsewhereChecked: async () => ({ known: true, live: null }) },
+    });
+    const result = await handlers.get('restore-background-job')({}, SID);
+    assert.equal(result.action, 'refuse');
+    assert.match(result.reason, /unknown or unreadable state/);
+    assert.equal(result.stateFile, phase === 'lookup' ? 'transitional-state' : 'no-state');
+    assert.deepEqual(calls, []);
+  });
+}
+
+test('1277 a mismatched id is classified before a start-up state', t => {
+  const write = fixture(t);
+  write('aaaaaaaa', { state: 'starting', id: 'bbbbbbbb' });
+  assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa').stateFile, 'id-mismatch');
+});

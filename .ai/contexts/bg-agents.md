@@ -157,7 +157,9 @@ workers still attach. The exception does not infer worker death from `done`,
 and does not change recovery for other states. Legacy lookups retain
 their unique-match requirement. Explicit-id restore lookups share directory names
 and parsed state records for a fixed one-second window, including calls separated
-by asynchronous settings reads. The snapshot is keyed by jobs directory; a directory
+by asynchronous settings reads. Only a usable record is shared: a state file that is
+missing, unreadable, unparsable or without a known `state` is read again by the
+next lookup, so a retry inside the window sees a rewritten file (#1277). The snapshot is keyed by jobs directory; a directory
 change or an expired window reads fresh evidence. It holds at most one record per
 job encountered in that window. Supersession reads the candidate's own identity
 directly from `linkScanPath` or a valid `sessionId`; `parseJobState` retains its
@@ -189,6 +191,9 @@ the user to the Agents view or the sidebar rather than choosing a job for them.
 `prepareBackgroundRestore` retries worker-liveness-unknown and unavailable
 background-descriptor outcomes twice, with a one-second backoff before each
 retry. Both retries pass `attachOnly: true`; they cannot invoke Respawn (#785).
+A refusal whose job state file could not be used is retried attach-only too
+(#1277, "Unusable job state after a respawn" below), so a job respawned by the
+first attempt is never respawned again.
 Each attempt, including the descriptor recheck, has a 120-second renderer bound,
 named `RESTORE_BACKGROUND_VERB_RECONCILE_DESCRIPTOR_CHECK_TIMEOUT_MS` in
 `prepareBackgroundRestore`:
@@ -205,7 +210,8 @@ through the expired preparation. Only the final outcome is reported.
 
 Each failed preparation or subsequent terminal attach emits one `console.warn`
 line with `[restore-bg]`,
-session id, job id, outcome and attempt count. The existing `main.js`
+session id, job id, outcome, attempt count and, when the refusal names one, the
+kind of state file fault (`stateFile=`, #1277). The existing `main.js`
 `console-message` bridge writes warning/error levels to `main.log`. The line
 omits names, cwd, reason text and prompts; identifiers are character-filtered
 and length-bounded. Successful retries and informational retirement do not log
@@ -213,6 +219,76 @@ a failure. The returned `onOpenError` callback moves a terminal-attach failure
 into the same notice group and records `attach-failed`. Tests capture that warning
 and execute the extracted console-message bridge without executing
 Electron; the physical log transport is not exercised by these Node tests.
+
+### Unusable job state after a respawn (#1277)
+
+Measured in the issue on v0.1.0-beta.1 (main.log, daemon.log, 2026-11-25): the daemon
+spawned both jobs `(fleet)` and 6 to 10 s later both restores refused with
+`cannot identify background job for <session>: job <id> has an unknown or
+unreadable state`, `attempts=2` (and once `attempts=1`); both jobs were live
+later. That reason was not in the transient list, so the loop stopped.
+
+Read from the code: `findRestoreJob` parses the file with `JSON.parse` before
+that check, so this exact message means the file parsed as JSON; a torn or
+missing file gives the parser's or the file system's own message instead. The
+record therefore had no `state` that `JOB_STATES` knows (or a different `id`).
+Read statically from the installed CLI 2.1.302 (the version in daemon.log;
+not run): its job records also take `starting`, `resuming`, `adopted` and
+`crashed`, the states it shows as "Session is starting"; its write helper
+takes a rename step, and one seed path creates the file with `wx`. Inferred, not
+observed: the record was in one of those start-up states, not in a rename
+window. Switchboard does not add them to `JOB_STATES`; it only retries.
+
+`findRestoreJob` and `conversationCheck` now return `stateFile` with the kind
+of fault, never content: `missing`, `unreadable` (another read error),
+`unparsable` (invalid JSON or not an object), `id-mismatch` (checked before
+the state), `no-state`,
+`transitional-state` (one of the four CLI start-up states) or
+`unknown-state`. `restore-background-job` passes it through on a refusal.
+
+`crashed` is polled with the start-up states: in the CLI it is an
+intermediate state (the daemon rewrites it as `failed`, stripping a
+"; respawning" detail). A `crashed` that persists 30 s is refused with no
+Respawn action, and the manual `bg-agent-verb` 'respawn' also refuses it,
+because its checks go through `conversationCheck`, which only accepts
+`JOB_STATES`. Treating `crashed` as dead would mean adding it to the states
+the verb accepts; that was not done here.
+
+Every kind but `id-mismatch` is transient for `prepareBackgroundRestore`.
+`transitional-state` is polled: attach-only, about once a second, rereading
+the record each time (the snapshot never keeps it), until the job leaves that
+state or an absolute deadline 30 s after the first attempt
+(`RESTORE_BACKGROUND_TRANSITIONAL_STATE_MS`); the field refusals came 6 to
+10 s after the spawn, beyond two one-second retries. Once a poll has started,
+the deadline is checked before each new request, also when the pause, the wait
+for a slot or an ordinary retry wait (a later reply of another transient kind)
+ran past it, and the three-attempt minimum does not extend it.
+
+The other kinds keep the three-attempt rule. Still unusable at the bound, the
+entry is refused as before. The `[restore-bg]` line adds `stateFile=<kind>` and `elapsedMs=` (from
+the first attempt) when the final refusal has a kind.
+
+While polling, the wait goes through the caller's `pause(ms, deadline)`:
+`runRestore` releases its background slot for the wait and queues for one
+again until the deadline (`acquireBackgroundSlotBefore`); a waiter still queued
+at the deadline leaves the queue and the task, holding no slot, releases none.
+So a polling entry does not hold back the other saved entries. After the pause
+and after every request of a started poll (its reply and descriptor check), the
+loop stops, with no notice and one `outcome=cancelled` line, before using the
+reply, when the app is quitting (`exitingApp`), another
+`prepareBackgroundRestore` call for the same id has started (a user open; the
+latest call's token is kept in `prepareBackgroundRestore.polls`), the session
+is open, its held entry was released, or its project is being deleted.
+
+When the first attempt saw an unusable state and the attach-only retry finds
+the worker dead (`worker is not live — not attached`), nothing was respawned.
+The refusal is then given `recovery: 'respawn'`, so the notice (or the
+refused-part question) offers Respawn, which goes through the checked
+`bg-agent-verb` 'respawn' and its project gate (#1276). Before this the notice
+showed the same reason with no action.
+
+Tests: `test/bg-agents-restore.test.js` and `test/restore-live-elsewhere.test.js`
+(`1277 …`).
 
 `conversationCheck(id, { workerLiveness: 'all' })` requests S1a's classifier
 for terminal states too. Live attaches; dead `working`, `done`, `running` and `failed` jobs go through
