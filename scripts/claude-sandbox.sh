@@ -295,9 +295,14 @@ fi
 
 # The host paths the sandbox can write, as bound, and their resolved form.
 WRITABLE_ROOTS=("$CLAUDE_DIR" "${RW_STATE_DIRS[@]}" "${RW_DIRS[@]}")
-for _e in ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; do
-  [ -L "$CLAUDE_DIR/$_e" ] && [ -d "$CLAUDE_DIR/$_e" ] && WRITABLE_ROOTS+=("$(readlink -f "$CLAUDE_DIR/$_e")")
+STATE_LINK_ROOTS=()
+for _e in "${USER_STATE_ENTRIES[@]}"; do
+  [ -L "$CLAUDE_DIR/$_e" ] && [ -e "$CLAUDE_DIR/$_e" ] && STATE_LINK_ROOTS+=("$(readlink -f "$CLAUDE_DIR/$_e")")
 done
+if [ -L "$CLAUDE_DIR/projects" ] && [ -d "$CLAUDE_DIR/projects" ]; then
+  STATE_LINK_ROOTS+=("$(readlink -f "$CLAUDE_DIR/projects")/$PROJECT_FOLDER")
+fi
+WRITABLE_ROOTS+=(${STATE_LINK_ROOTS[@]+"${STATE_LINK_ROOTS[@]}"})
 WRITABLE_REALS=()
 for _r in "${WRITABLE_ROOTS[@]}"; do
   WRITABLE_REALS+=("$(readlink -f "$_r" 2>/dev/null || true)")
@@ -391,6 +396,16 @@ check_chain() {
   done
 }
 
+# True when sandbox path $1 is at or below a private entry of ~/.claude, where
+# the sandbox sees its own tmpfs rather than the host.
+in_private_area() {
+  local p
+  for p in "${USER_PRIVATE_ENTRIES[@]}"; do
+    case "$1/" in "$CLAUDE_DIR/$p"/*) return 0 ;; esac
+  done
+  return 1
+}
+
 # Mounts the resolved host path $1 read-only at every place the sandbox sees
 # it, under each writable root that contains it, and remembers each for the
 # pins below.
@@ -407,6 +422,7 @@ protect_resolved() {
       "$root"/*) view="${WRITABLE_ROOTS[i]}${real#"$root"}" ;;
       *) continue ;;
     esac
+    in_private_area "$view" && continue
     found=0
     mount_op --ro-bind "$real" "$view"
     PIN_VIEWS+=("$view"); PIN_IDX+=("$i")
@@ -885,6 +901,19 @@ check_opt_in_binds() {
   done
 }
 
+# A writable state link target at or inside a protected path would make that
+# path writable wherever its read-only mount loses to the target's bind.
+check_state_link_binds() {
+  local s r
+  for s in ${STATE_LINK_ROOTS[@]+"${STATE_LINK_ROOTS[@]}"}; do
+    for r in "${!PROTECTED_SEEN[@]}"; do
+      case "$s/" in
+        "$r"/*) fail "refusing to launch: $s, which the sandbox binds read-write for a state entry of ~/.claude, is at or inside $r, which it keeps read-only; the session could change it there. Give that entry a directory of its own, or turn Sandbox off for this session." ;;
+      esac
+    done
+  done
+}
+
 # Sets OA_IDX to the mount that decides access at sandbox path $1, mount $2
 # left out: the deepest at or above it, the later one on the same path.
 opt_in_access_at() {
@@ -979,6 +1008,7 @@ build_bwrap_args() {
   pin_protected_paths
   verify_control_mounts
   check_opt_in_binds
+  check_state_link_binds
 
   BWRAP_ARGS=(--unshare-all --share-net --die-with-parent)
   local order
