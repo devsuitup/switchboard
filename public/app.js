@@ -485,7 +485,11 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
             try {
               await acquireBackgroundSlot();
               try {
-                const background = await prepareBackgroundRestore(session, item);
+                const background = await prepareBackgroundRestore(session, item, { pause: async ms => {
+                  releaseBackgroundSlot();
+                  try { await new Promise(resolve => setTimeout(resolve, ms)); } finally { await acquireBackgroundSlot(); }
+                } });
+
                 if (background && !window.isDeletedProjectRestoreTarget?.(item)) await openSession(session, undefined, { automatic: true, fromRestore: true, allowBgAttach: true, continuationResolved: true, ...showWhenOpened(item), ...background });
               } finally { releaseBackgroundSlot(); }
               reorderRestoredTabs();
@@ -617,15 +621,29 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
 }
 
 
-async function prepareBackgroundRestore(session, item, { attachOnly = false, interactive = false, onRefused } = {}) {
+async function prepareBackgroundRestore(session, item, { attachOnly = false, interactive = false, onRefused,
+  pause = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   const RESTORE_BACKGROUND_VERB_RECONCILE_DESCRIPTOR_CHECK_TIMEOUT_MS = 120000;
+  const RESTORE_BACKGROUND_TRANSITIONAL_STATE_MS = 30000;
   let result;
   let attempts = 0;
   let live;
   let recovery;
   let respawned = false;
-  for (; attempts < 3;) {
-    if (attempts) await new Promise(resolve => setTimeout(resolve, 1000));
+  let unusableFirst = false;
+  let polling = false;
+  let cancelled = false;
+  const polls = prepareBackgroundRestore.polls ||= new Map();
+  const token = {};
+  polls.set(item.sessionId, token);
+  const firstAt = Date.now();
+  const abandoned = () => exitingApp || polls.get(item.sessionId) !== token || openSessions.has(item.sessionId)
+    || !skippedWorkingSetEntries.has(item.sessionId) || !!window.isDeletedProjectRestoreTarget?.(item);
+  for (; attempts < 3 || polling;) {
+    if (polling) {
+      await pause(1000);
+      if (abandoned()) { cancelled = true; break; }
+    } else if (attempts) await new Promise(resolve => setTimeout(resolve, 1000));
     attempts++;
     let timer;
     try {
@@ -649,8 +667,13 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
       || result?.action === 'refuse' && (/worker liveness unknown|background descriptor is no longer available|live worker has no attachable background descriptor/i.test(result.reason || '')
         || recovery && /worker is not live/i.test(result.reason || '')
         || ['missing', 'unreadable', 'unparsable', 'no-state', 'transitional-state', 'unknown-state'].includes(result.stateFile));
+    if (attempts === 1 && result?.stateFile) unusableFirst = true;
+    polling = result?.stateFile === 'transitional-state' && Date.now() - firstAt < RESTORE_BACKGROUND_TRANSITIONAL_STATE_MS;
     if (!transient) break;
   }
+  if (polls.get(item.sessionId) === token) polls.delete(item.sessionId);
+  if (unusableFirst && !respawned && result?.action === 'refuse' && !result.recovery && typeof result.jobId === 'string' && result.jobId
+    && /worker is not live/i.test(result.reason || '')) result = { ...result, recovery: 'respawn' };
   const id = sessionActionNoticeId('Restore', session);
   const report = (reason, actionLabel, onAction, kind = 'error') => {
     const member = { id, kind, actionLabel, onAction, session, logText: `${sessionActionDescription(session, { log: true })}, job ${result?.jobId || item.attachJobId || 'unknown'}: ${reason}`, text: `${sessionActionDescription(session)}, job ${result?.jobId || item.attachJobId || 'unknown'}: ${reason}` };
@@ -667,9 +690,13 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
   };
   const logFailure = outcome => {
     const logId = value => String(value || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 100);
-    console.warn(`[restore-bg] session=${logId(item.sessionId)} job=${logId(result?.jobId || item.attachJobId)} outcome=${outcome} attempts=${attempts}${result?.stateFile ? ` stateFile=${logId(result.stateFile)}` : ''}`);
+    console.warn(`[restore-bg] session=${logId(item.sessionId)} job=${logId(result?.jobId || item.attachJobId)} outcome=${outcome} attempts=${attempts}${result?.stateFile ? ` stateFile=${logId(result.stateFile)} elapsedMs=${Math.max(0, Date.now() - firstAt)}` : ''}`);
 
   };
+  if (cancelled) {
+    logFailure('cancelled');
+    return null;
+  }
   if (result?.action === 'retire') {
     skippedWorkingSetEntries.delete(item.sessionId);
     clearDormantRow(item.sessionId);

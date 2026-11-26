@@ -191,8 +191,9 @@ the user to the Agents view or the sidebar rather than choosing a job for them.
 `prepareBackgroundRestore` retries worker-liveness-unknown and unavailable
 background-descriptor outcomes twice, with a one-second backoff before each
 retry. Both retries pass `attachOnly: true`; they cannot invoke Respawn (#785).
-A refusal whose job state file could not be used is retried the same way
-(#1277), so a job respawned by the first attempt is never respawned again.
+A refusal whose job state file could not be used is retried attach-only too
+(#1277, "Unusable job state after a respawn" below), so a job respawned by the
+first attempt is never respawned again.
 Each attempt, including the descriptor recheck, has a 120-second renderer bound,
 named `RESTORE_BACKGROUND_VERB_RECONCILE_DESCRIPTOR_CHECK_TIMEOUT_MS` in
 `prepareBackgroundRestore`:
@@ -243,11 +244,31 @@ of fault, never content: `missing`, `unreadable` (another read error),
 `unparsable` (invalid JSON or not an object), `no-state`,
 `transitional-state` (one of the four CLI start-up states), `unknown-state`
 or `id-mismatch`. `restore-background-job` passes it through on a refusal.
-Every kind but `id-mismatch` is transient for `prepareBackgroundRestore`;
-still unusable on the third attempt, it is refused as before. The
-`[restore-bg]` line adds `stateFile=<kind>` when the final refusal has one.
-Not established: whether two retries one second apart outlast the CLI's
-start-up states; the bound was kept as it was.
+Every kind but `id-mismatch` is transient for `prepareBackgroundRestore`.
+`transitional-state` is polled: attach-only, about once a second, rereading
+the record each time (the snapshot never keeps it), until the job leaves that
+state or 30 s have passed since the first attempt
+(`RESTORE_BACKGROUND_TRANSITIONAL_STATE_MS`); the field refusals came 6 to
+10 s after the spawn, beyond two one-second retries. The other kinds keep the
+three-attempt rule. Still unusable at the bound, the entry is refused as
+before. The `[restore-bg]` line adds `stateFile=<kind>` and `elapsedMs=` (from
+the first attempt) when the final refusal has a kind.
+
+While polling, the wait goes through the caller's `pause`: `runRestore`
+releases its background slot for the wait and takes one again before the next
+attempt, so a polling entry does not hold back the other saved entries. Before
+each poll attempt the loop stops, with no notice and one `outcome=cancelled`
+line, when the app is quitting (`exitingApp`), another
+`prepareBackgroundRestore` call for the same id has started (a user open; the
+latest call's token is kept in `prepareBackgroundRestore.polls`), the session
+is open, its held entry was released, or its project is being deleted.
+
+When the first attempt saw an unusable state and the attach-only retry finds
+the worker dead (`worker is not live — not attached`), nothing was respawned.
+The refusal is then given `recovery: 'respawn'`, so the notice (or the
+refused-part question) offers Respawn, which goes through the checked
+`bg-agent-verb` 'respawn' and its project gate (#1276). Before this the notice
+showed the same reason with no action.
 
 Tests: `test/bg-agents-restore.test.js` and `test/restore-live-elsewhere.test.js`
 (`1277 …`).
