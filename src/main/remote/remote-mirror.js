@@ -14,19 +14,23 @@ const MAX_CYCLE_FILES = 500;
 const MAX_CYCLE_BYTES = 256 * 1024 * 1024;
 
 // see .ai/contexts/session-cache.md ("Remote hosts — incremental fetch")
-const cycleStreaks = new Map(); // manifestPath -> Map<rel, count>
+const cycleStreaks = new Map(); // manifestPath -> Map<rel, { count, logged }>
 
 function isLogTier(count) {
   return count === 1 || (count & (count - 1)) === 0; // 1, 2, 4, 8, 16, ...
 }
 
 // Returns { count, shouldLog }. see .ai/contexts/session-cache.md ("Remote hosts — incremental fetch")
-function bumpStreak(manifestPath, rel) {
+function bumpStreak(manifestPath, rel, meta) {
   let streaks = cycleStreaks.get(manifestPath);
   if (!streaks) { streaks = new Map(); cycleStreaks.set(manifestPath, streaks); }
-  const count = (streaks.get(rel) || 0) + 1;
-  streaks.set(rel, count);
-  return { count, shouldLog: isLogTier(count) };
+  const previous = streaks.get(rel);
+  const count = (previous?.count || 0) + 1;
+  const logged = previous?.logged;
+  const unchanged = Boolean(meta && logged && logged.size === meta.size && logged.mtimeMs === meta.mtimeMs);
+  const shouldLog = !unchanged && isLogTier(count);
+  streaks.set(rel, { count, logged: shouldLog && meta ? { size: meta.size, mtimeMs: meta.mtimeMs } : logged });
+  return { count, shouldLog };
 }
 
 function pruneStreaks(manifestPath, seenThisCycle) {
@@ -104,7 +108,7 @@ async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) 
     if (meta.size > MAX_FILE_BYTES) {
       oversizedFiles.push({ rel, ...meta });
       seenThisCycle.add(rel);
-      const { count, shouldLog } = bumpStreak(manifestPath, rel);
+      const { count, shouldLog } = bumpStreak(manifestPath, rel, meta);
       if (shouldLog && log && log.warn) {
         log.warn(`[remote:${alias}] ${rel} full mirror not fetched: ${meta.size} bytes exceeds ${MAX_FILE_BYTES}; live head uses a separate turn-state tail (${count}x consecutive)`);
       }
