@@ -1257,6 +1257,51 @@ test('sandbox wrapper: refuses a state link whose target is, or is inside, a pat
     }
   });
 
+test('sandbox wrapper: refuses a state link whose target overlaps a private entry of ~/.claude',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      const inside = path.join(dir, 'shell-snapshots', 'todos');
+      fs.mkdirSync(path.join(inside, 'hooks'), { recursive: true });
+      fs.symlinkSync(inside, path.join(dir, 'todos'));
+      fs.symlinkSync(path.join(inside, 'hooks'), path.join(dir, 'hooks'));
+      let res = rig.run();
+      assert.equal(res.status, 125, 'a state target inside a private entry must fail closed');
+      assert.match(res.stderr, /overlaps .*shell-snapshots, which the sandbox keeps private/);
+
+      fs.unlinkSync(path.join(dir, 'todos'));
+      fs.unlinkSync(path.join(dir, 'hooks'));
+      fs.rmSync(path.join(dir, 'shell-snapshots'), { recursive: true });
+      const todos = path.join(rig.root, 'store', 'todos');
+      fs.mkdirSync(path.join(todos, 'shell-snapshots'), { recursive: true });
+      fs.symlinkSync(todos, path.join(dir, 'todos'));
+      fs.symlinkSync(path.join(todos, 'shell-snapshots'), path.join(dir, 'shell-snapshots'));
+      res = rig.run();
+      assert.equal(res.status, 125, 'a private target inside a state target must fail closed');
+      assert.match(res.stderr, /overlaps .*shell-snapshots, which the sandbox keeps private/);
+      assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), [], 'refused before bwrap');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a state link whose target is inside an entry of ~/.claude mounted read-only',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(path.join(dir, 'hooks', 'todos'), { recursive: true });
+      fs.symlinkSync(path.join(dir, 'hooks', 'todos'), path.join(dir, 'todos'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 125, 'must fail closed');
+      assert.match(stderr, /binds read-write for a state entry of ~\/\.claude, is at or inside .*hooks/);
+      assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), [], 'refused before bwrap');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
 test('sandbox wrapper: a protected path inside a private entry of ~/.claude gets no host mount over its tmpfs',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
