@@ -4,10 +4,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { encodeProjectPath } = require('../../../encode-project-path');
+const { encodeProjectPath, encodedFolderMayExtend } = require('../../../encode-project-path');
 const { renameWithRetry } = require('../shared/atomic-write');
 
-const MARKER = 'scheduleHistoryImported';
+const STORE_VERSION = 2;
 const SEED_FIRST_BYTES = 8 * 1024;
 const SEED_MAX_BYTES = 64 * 1024;
 const BATCH = 32;
@@ -44,17 +44,49 @@ function isoTime(value) {
   return typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 }
 
-function samePath(a, b) {
-  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+function caseKey(value) {
+  return process.platform === 'win32' ? value.toLowerCase() : value;
 }
 
-function pathForms(target, realpath) {
+function samePath(a, b) {
+  return caseKey(a) === caseKey(b);
+}
+
+function inside(child, parent) {
+  const relative = path.relative(caseKey(parent), caseKey(child));
+  return !!relative && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
+}
+
+function realpathsOf(realpath, nativeRealpath) {
+  return nativeRealpath ? [realpath, nativeRealpath] : [realpath];
+}
+
+function pathForms(target, realpaths) {
   const forms = new Set([path.resolve(target)]);
-  try { forms.add(realpath(target)); } catch {}
+  for (const realpath of realpaths) {
+    try { forms.add(realpath(target)); } catch {}
+  }
   return [...forms];
 }
 
-function seedAttribution(line, { sessionId, folder, projectPath, realpath = fs.realpathSync }) {
+function readFolderNames(projectsDir) {
+  try { return fs.readdirSync(projectsDir); }
+  catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+function projectFolders(projectPath, folderNames, { realpath = fs.realpathSync, nativeRealpath = fs.realpathSync.native } = {}) {
+  const folders = new Set(pathForms(projectPath, realpathsOf(realpath, nativeRealpath)).map(encodeProjectPath));
+  if (process.platform === 'win32') {
+    const keys = new Set([...folders].map(caseKey));
+    for (const name of folderNames) if (keys.has(caseKey(name))) folders.add(name);
+  }
+  return folders;
+}
+
+function seedAttribution(line, { sessionId, folder, projectPath, realpath = fs.realpathSync, nativeRealpath = fs.realpathSync.native, worktree = false }) {
   let seed;
   try { seed = JSON.parse(line); } catch { return null; }
   if (!seed || typeof seed !== 'object' || Array.isArray(seed)) return null;
@@ -65,8 +97,10 @@ function seedAttribution(line, { sessionId, folder, projectPath, realpath = fs.r
   if (typeof slug !== 'string' || !slug || !isoTime(timestamp)) return null;
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd) || !samePath(encodeProjectPath(cwd), folder)) return null;
   if (projectPath !== undefined) {
-    const owners = pathForms(projectPath, realpath);
-    if (!pathForms(cwd, realpath).some(form => owners.some(owner => samePath(form, owner)))) return null;
+    const realpaths = realpathsOf(realpath, nativeRealpath);
+    const owners = pathForms(projectPath, realpaths);
+    const owned = worktree ? inside : samePath;
+    if (!pathForms(cwd, realpaths).some(form => owners.some(owner => owned(form, owner)))) return null;
   }
   if (!message || typeof message !== 'object' || Object.keys(message).sort().join() !== 'content,role') return null;
   if (message.role !== 'user' || typeof message.content !== 'string') return null;
@@ -77,13 +111,13 @@ function seedAttribution(line, { sessionId, folder, projectPath, realpath = fs.r
     if (heading[2] !== timestamp || !isoTime(heading[1]) || Date.parse(heading[1]) > Date.parse(timestamp)) return null;
     dueMs = Date.parse(heading[1]);
   }
-  return { slug, created: timestamp, dueMs };
+  return { slug, created: timestamp, dueMs, cwd };
 }
 
 function readStore(file) {
   try {
     const store = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (store?.v === 1 && store.projects && typeof store.projects === 'object' && !Array.isArray(store.projects)) return store;
+    if ((store?.v === 1 || store?.v === STORE_VERSION) && store.projects && typeof store.projects === 'object' && !Array.isArray(store.projects)) return store;
   } catch {}
   return null;
 }
@@ -99,18 +133,24 @@ function writeStore(file, store) {
   }
 }
 
+function isDirectory(target) {
+  try { return fs.statSync(target).isDirectory(); } catch { return false; }
+}
+
 function createScheduleHistoryImport(deps) {
   const { dataDir, projectsDir, scheduleProjects, listSchedules, getCachedByFolder,
-    isIndexReady = () => true, isMarked, mark, onProgress = () => {}, onSettled = () => {}, log = console,
+    isIndexReady = () => true, onProgress = () => {}, onSettled = () => {}, log = console,
     readHead = readSeedLine, pause = () => new Promise(resolve => setImmediate(resolve)), realpath = fs.realpathSync,
-    now = Date.now, retryMs = RETRY_MS } = deps;
+    nativeRealpath = realpath === fs.realpathSync ? fs.realpathSync.native : null, now = Date.now, retryMs = RETRY_MS } = deps;
   const file = storeFileOf(dataDir);
+  const realpaths = realpathsOf(realpath, nativeRealpath);
   let store = readStore(file);
-  let state = store && isMarked() ? 'done' : 'pending';
+  let state = store ? 'done' : 'pending';
   let error = null;
   let running = null;
   let imported = null;
   let retryAt = 0;
+  const readThisLaunch = new Set();
 
   function importedRuns() {
     if (imported) return imported;
@@ -128,7 +168,15 @@ function createScheduleHistoryImport(deps) {
     return error ? { state, unattributed, error } : { state, unattributed };
   }
 
-  async function importProject(projectPath) {
+  function needsReading(projectPath) {
+    const entry = store?.projects[projectPath];
+    return !entry || entry.final !== true && !readThisLaunch.has(projectPath);
+  }
+
+  async function importProject(projectPath, pass) {
+    const previous = store?.projects[projectPath];
+    const runs = { ...(previous?.runs || {}) };
+    if (!isDirectory(projectPath)) return { runs, unattributed: previous?.unattributed || 0, final: false };
     let scanError = null;
     const schedules = listSchedules([projectPath], { onScanError: (_projectPath, error) => { scanError ||= error; } });
     const unreadable = scanError || schedules.find(schedule => schedule.readError)?.readError;
@@ -138,18 +186,28 @@ function createScheduleHistoryImport(deps) {
     for (const [owner, entry] of Object.entries(store?.projects || {})) {
       if (owner !== projectPath) for (const sessionId of Object.keys(entry?.runs || {})) claimed.add(sessionId);
     }
-    const folders = new Set([encodeProjectPath(projectPath)]);
-    try { folders.add(encodeProjectPath(realpath(projectPath))); } catch {}
-    const runs = {};
+    const owners = pass.forms.get(projectPath);
+    const nested = [...pass.forms].filter(([other, forms]) => other !== projectPath
+      && forms.some(form => owners.some(owner => inside(form, owner)))).flatMap(([, forms]) => forms);
+    const folders = projectFolders(projectPath, pass.folderNames, { realpath, nativeRealpath });
+    const worktreeFolders = pass.folderNames.filter(name => !pass.registryFolders.has(caseKey(name))
+      && owners.some(owner => encodedFolderMayExtend(caseKey(name), caseKey(owner))));
     let unattributed = 0;
+    let orphaned = 0;
+    let candidates = 0;
     let read = 0;
     const seen = new Set();
-    for (const folder of folders) {
+    const scan = async (folder, worktree) => {
       for (const row of await getCachedByFolder(folder)) {
         if (seen.has(row.sessionId) || claimed.has(row.sessionId) || row.scheduleSlug || row.parentSessionId || !UUID_RE.test(row.sessionId || '')) continue;
         const lookalike = LOOKALIKE_RE.test(row.firstPrompt || row.summary || '');
         if (!lookalike && !slugs.has(row.slug)) continue;
         seen.add(row.sessionId);
+        candidates++;
+        if (runs[row.sessionId]) {
+          if (!slugs.has(runs[row.sessionId].slug)) orphaned++;
+          continue;
+        }
         if (++read % BATCH === 0) await pause();
         let line;
         try { line = await readHead(path.join(projectsDir, folder, `${row.sessionId}.jsonl`)); }
@@ -157,52 +215,71 @@ function createScheduleHistoryImport(deps) {
           if (readError.code === 'ENOENT') continue;
           throw readError;
         }
-        const attribution = line === null ? null : seedAttribution(line, { sessionId: row.sessionId, folder, projectPath, realpath });
+        const attribution = line === null ? null : seedAttribution(line, { sessionId: row.sessionId, folder, projectPath, realpath, nativeRealpath, worktree });
+        if (attribution && worktree && pathForms(attribution.cwd, realpaths).some(form => nested.some(owner => samePath(form, owner) || inside(form, owner)))) continue;
         if (attribution && slugs.has(attribution.slug)) runs[row.sessionId] = { slug: attribution.slug, folder, created: attribution.created, dueMs: attribution.dueMs };
-        else if (!attribution && lookalike && (line === null || !seedAttribution(line, { sessionId: row.sessionId, folder }))) unattributed++;
+        else if (attribution) orphaned++;
+        else if (!worktree && lookalike && (line === null || !seedAttribution(line, { sessionId: row.sessionId, folder }))) unattributed++;
       }
-    }
-    return { runs, unattributed };
+    };
+    for (const folder of folders) await scan(folder, false);
+    for (const folder of worktreeFolders) await scan(folder, true);
+    return { runs, unattributed: unattributed + orphaned, final: candidates > 0 && orphaned === 0 };
   }
 
   async function run() {
-    state = 'running';
-    error = null;
+    const before = state;
+    let changed = false;
     try {
-      if (!store) store = { v: 1, projects: {} };
-      let firstFailure = null;
-      for (const projectPath of await scheduleProjects().list()) {
-        if (Object.hasOwn(store.projects, projectPath)) continue;
-        try {
-          const entry = await importProject(projectPath);
-          const next = { ...store, projects: { ...store.projects, [projectPath]: entry } };
-          writeStore(file, next);
-          store = next;
-          imported = null;
-          onProgress(projectPath);
-        } catch (failure) { firstFailure ||= failure; }
-        await pause();
+      const registry = await scheduleProjects().list();
+      const todo = registry.filter(needsReading);
+      if (todo.length) {
+        if (state !== 'done') state = 'running';
+        error = null;
+        if (!store) store = { v: STORE_VERSION, projects: {} };
+        const forms = new Map(registry.map(projectPath => [projectPath, pathForms(projectPath, realpaths)]));
+        const pass = { forms, folderNames: readFolderNames(projectsDir),
+          registryFolders: new Set([...forms.values()].flat().map(form => caseKey(encodeProjectPath(form)))) };
+        let firstFailure = null;
+        for (const projectPath of todo) {
+          try {
+            const entry = await importProject(projectPath, pass);
+            if (store.v !== STORE_VERSION || JSON.stringify(entry) !== JSON.stringify(store.projects[projectPath])) {
+              const next = { v: STORE_VERSION, projects: { ...store.projects, [projectPath]: entry } };
+              writeStore(file, next);
+              store = next;
+              imported = null;
+              changed = true;
+              onProgress(projectPath);
+            }
+            readThisLaunch.add(projectPath);
+          } catch (failure) { firstFailure ||= failure; }
+          await pause();
+        }
+        if (firstFailure) throw firstFailure;
       }
-      if (firstFailure) throw firstFailure;
-      await mark();
       state = 'done';
-      log.info?.(`[schedules] Imported ${importedRuns().size} run(s) made before the schedule marker`);
+      error = null;
+      if (changed || before !== 'done') log.info?.(`[schedules] Imported ${importedRuns().size} run(s) made before the schedule marker`);
     } catch (failure) {
       state = 'failed';
       error = failure.message;
       retryAt = now() + retryMs;
       log.warn?.(`[schedules] Run history import incomplete, retried in ${Math.round(retryMs / 60000)} min: ${failure.message}`);
     }
-    onSettled(state);
+    if (changed || state !== 'done' || before !== 'done') onSettled(state);
   }
 
   function ensureStarted() {
-    if (running || state === 'done' || state === 'failed' && now() < retryAt) return;
-    if (!isIndexReady()) { state = 'waiting'; return; }
+    if (running || state === 'failed' && now() < retryAt) return;
+    if (!isIndexReady()) {
+      if (state !== 'done') state = 'waiting';
+      return;
+    }
     running = run().finally(() => { running = null; });
   }
 
   return { ensureStarted, status, importedRuns, whenIdle: () => running || Promise.resolve() };
 }
 
-module.exports = { MARKER, RETRY_MS, SEED_MAX_BYTES, storeFileOf, readSeedLine, seedAttribution, createScheduleHistoryImport };
+module.exports = { RETRY_MS, SEED_MAX_BYTES, storeFileOf, readSeedLine, readFolderNames, projectFolders, seedAttribution, createScheduleHistoryImport };
