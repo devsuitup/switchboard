@@ -620,3 +620,53 @@ test('a registry path whose case differs from the transcript folder imports and 
   const listing = await f.list(historyImport);
   assert.deepEqual(schedulesOf(listing, 'journal').runs.map(run => run.sessionId), [marked, id]);
 });
+
+test('a worktree whose encoded folder is also a nested registry project\'s folder is still imported (#1262 r1)', async t => {
+  const f = fixture(t);
+  const owner = f.addProject('alpha', { daily: '' });
+  const neighbour = f.addProject(path.join('alpha', 'worktrees-feature'), { daily: '' });
+  const wt = f.addFolder(path.join(owner.projectPath, 'worktrees', 'feature'));
+  fs.mkdirSync(wt.projectPath, { recursive: true });
+  assert.equal(wt.folder, neighbour.folder, 'the worktree and the nested project share one transcript folder');
+  const id = f.writeSession(wt, [seedV025(crypto.randomUUID(), { cwd: wt.projectPath, slug: 'daily', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const own = f.writeSession(neighbour, [seedV025(crypto.randomUUID(), { cwd: neighbour.projectPath, slug: 'daily', prompt: 'Write', timestamp: '2026-05-03T07:00:00.000Z' })]);
+  const historyImport = await pass(f);
+  assert.equal(historyImport.importedRuns().get(id)?.projectPath, owner.projectPath, 'the seed goes to the project its cwd lies in');
+  assert.equal(historyImport.importedRuns().get(own)?.projectPath, neighbour.projectPath, 'the nested project keeps its own run');
+  assert.equal(historyImport.status().unattributed, 0);
+});
+
+test('a run of an unregistered prefix neighbour does not make a project final (#1262 r1)', async t => {
+  const f = fixture(t);
+  const owner = f.addProject('alpha', { daily: '' });
+  const sibling = f.addFolder(path.join(f.root, 'alpha-beta'));
+  fs.mkdirSync(sibling.projectPath, { recursive: true });
+  f.writeSession(sibling, [seedV025(crypto.randomUUID(), { cwd: sibling.projectPath, slug: 'daily', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const first = await pass(f);
+  assert.equal(first.importedRuns().size, 0);
+  const id = f.writeSession(owner, [seedV025(crypto.randomUUID(), { cwd: owner.projectPath, slug: 'daily', prompt: 'Write', timestamp: '2026-05-03T07:00:00.000Z' })]);
+  const next = await pass(f);
+  assert.deepEqual([...next.importedRuns().keys()], [id], 'the project stays retryable until it owns a run');
+});
+
+test('a seed judged once is not read again at later launches (#1262 r1)', async t => {
+  const f = fixture(t);
+  const p = f.addProject('alpha', { daily: '' });
+  const orphan = f.writeSession(p, [seedV025(crypto.randomUUID(), { cwd: p.projectPath, slug: 'deleted', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  f.writeSession(p, handStarted(crypto.randomUUID(), { cwd: p.projectPath, slug: 'daily', content: 'Scheduled Task: Write', timestamp: '2026-05-03T07:00:00.000Z' }));
+  const sibling = f.addFolder(path.join(f.root, 'alpha-beta'));
+  fs.mkdirSync(sibling.projectPath, { recursive: true });
+  f.writeSession(sibling, [seedV025(crypto.randomUUID(), { cwd: sibling.projectPath, slug: 'daily', prompt: 'Write', timestamp: '2026-05-04T07:00:00.000Z' })]);
+  const first = await pass(f);
+  assert.equal(f.reads.length, 3);
+  assert.deepEqual(first.status(), { state: 'done', unattributed: 2 });
+  f.reads.length = 0;
+  const second = await pass(f);
+  assert.deepEqual(f.reads, [], 'the next launch reuses the verdicts instead of reading the heads again');
+  assert.deepEqual(second.status(), { state: 'done', unattributed: 2 });
+  fs.writeFileSync(path.join(p.commands, 'schedule-deleted.md'), '---\ncron: 0 7 * * *\n---\nWrite');
+  const third = await pass(f);
+  assert.deepEqual(f.reads, []);
+  assert.deepEqual([...third.importedRuns().keys()], [orphan], 'a stored orphan is imported once its schedule exists again');
+  assert.deepEqual(third.status(), { state: 'done', unattributed: 1 });
+});

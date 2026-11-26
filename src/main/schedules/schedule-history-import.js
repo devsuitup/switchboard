@@ -176,7 +176,9 @@ function createScheduleHistoryImport(deps) {
   async function importProject(projectPath, pass) {
     const previous = store?.projects[projectPath];
     const runs = { ...(previous?.runs || {}) };
-    if (!isDirectory(projectPath)) return { runs, unattributed: previous?.unattributed || 0, final: false };
+    const orphans = { ...(previous?.orphans || {}) };
+    const rejected = { ...(previous?.rejected || {}) };
+    if (!isDirectory(projectPath)) return { runs, orphans, rejected, unattributed: previous?.unattributed || 0, final: false };
     let scanError = null;
     const schedules = listSchedules([projectPath], { onScanError: (_projectPath, error) => { scanError ||= error; } });
     const unreadable = scanError || schedules.find(schedule => schedule.readError)?.readError;
@@ -190,11 +192,11 @@ function createScheduleHistoryImport(deps) {
     const nested = [...pass.forms].filter(([other, forms]) => other !== projectPath
       && forms.some(form => owners.some(owner => inside(form, owner)))).flatMap(([, forms]) => forms);
     const folders = projectFolders(projectPath, pass.folderNames, { realpath, nativeRealpath });
-    const worktreeFolders = pass.folderNames.filter(name => !pass.registryFolders.has(caseKey(name))
+    const ownKeys = new Set([...folders].map(caseKey));
+    const worktreeFolders = pass.folderNames.filter(name => !ownKeys.has(caseKey(name))
       && owners.some(owner => encodedFolderMayExtend(caseKey(name), caseKey(owner))));
     let unattributed = 0;
     let orphaned = 0;
-    let candidates = 0;
     let read = 0;
     const seen = new Set();
     const scan = async (folder, worktree) => {
@@ -203,9 +205,19 @@ function createScheduleHistoryImport(deps) {
         const lookalike = LOOKALIKE_RE.test(row.firstPrompt || row.summary || '');
         if (!lookalike && !slugs.has(row.slug)) continue;
         seen.add(row.sessionId);
-        candidates++;
         if (runs[row.sessionId]) {
           if (!slugs.has(runs[row.sessionId].slug)) orphaned++;
+          continue;
+        }
+        if (orphans[row.sessionId]) {
+          if (slugs.has(orphans[row.sessionId].slug)) {
+            runs[row.sessionId] = orphans[row.sessionId];
+            delete orphans[row.sessionId];
+          } else orphaned++;
+          continue;
+        }
+        if (Object.hasOwn(rejected, row.sessionId)) {
+          unattributed += rejected[row.sessionId];
           continue;
         }
         if (++read % BATCH === 0) await pause();
@@ -215,16 +227,25 @@ function createScheduleHistoryImport(deps) {
           if (readError.code === 'ENOENT') continue;
           throw readError;
         }
-        const attribution = line === null ? null : seedAttribution(line, { sessionId: row.sessionId, folder, projectPath, realpath, nativeRealpath, worktree });
-        if (attribution && worktree && pathForms(attribution.cwd, realpaths).some(form => nested.some(owner => samePath(form, owner) || inside(form, owner)))) continue;
-        if (attribution && slugs.has(attribution.slug)) runs[row.sessionId] = { slug: attribution.slug, folder, created: attribution.created, dueMs: attribution.dueMs };
-        else if (attribution) orphaned++;
-        else if (!worktree && lookalike && (line === null || !seedAttribution(line, { sessionId: row.sessionId, folder }))) unattributed++;
+        let attribution = line === null ? null : seedAttribution(line, { sessionId: row.sessionId, folder, projectPath, realpath, nativeRealpath, worktree });
+        if (attribution && worktree && pathForms(attribution.cwd, realpaths).some(form => nested.some(owner => samePath(form, owner) || inside(form, owner)))) attribution = null;
+        if (attribution) {
+          const record = { slug: attribution.slug, folder, created: attribution.created, dueMs: attribution.dueMs };
+          if (slugs.has(attribution.slug)) runs[row.sessionId] = record;
+          else {
+            orphans[row.sessionId] = record;
+            orphaned++;
+          }
+        } else {
+          const counted = !worktree && lookalike && (line === null || !seedAttribution(line, { sessionId: row.sessionId, folder })) ? 1 : 0;
+          rejected[row.sessionId] = counted;
+          unattributed += counted;
+        }
       }
     };
     for (const folder of folders) await scan(folder, false);
     for (const folder of worktreeFolders) await scan(folder, true);
-    return { runs, unattributed: unattributed + orphaned, final: candidates > 0 && orphaned === 0 };
+    return { runs, orphans, rejected, unattributed: unattributed + orphaned, final: Object.keys(runs).length > 0 && orphaned === 0 };
   }
 
   async function run() {
@@ -238,8 +259,7 @@ function createScheduleHistoryImport(deps) {
         error = null;
         if (!store) store = { v: STORE_VERSION, projects: {} };
         const forms = new Map(registry.map(projectPath => [projectPath, pathForms(projectPath, realpaths)]));
-        const pass = { forms, folderNames: readFolderNames(projectsDir),
-          registryFolders: new Set([...forms.values()].flat().map(form => caseKey(encodeProjectPath(form)))) };
+        const pass = { forms, folderNames: readFolderNames(projectsDir) };
         let firstFailure = null;
         for (const projectPath of todo) {
           try {

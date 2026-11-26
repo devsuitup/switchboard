@@ -1258,10 +1258,13 @@ leaves them as they are.
   because `getCachedByFolder` matches the folder exactly (`WHERE folder = ?`,
   no `COLLATE`) and `encodeProjectPath` keeps case. Worktree folders are the
   names of `projectsDir` that `encodedFolderMayExtend` one of the project's
-  path forms (compared ignoring case on win32) and are no registry project's
-  folder; there, only seeds that pass with the worktree rule are imported or
-  counted, so a neighbour such as `/work/alpha-beta` is never judged as a
-  worktree of `/work/alpha`.
+  path forms (compared ignoring case on win32) and are not one of the
+  project's own folders. A worktree folder may also be a nested registry
+  project's folder (`/work/alpha/worktrees/feature` and the registered
+  `/work/alpha/worktrees-feature` encode alike), so no encoded folder is
+  excluded wholesale: each seed goes by its validated `cwd`. There, only seeds
+  that pass with the worktree rule are imported or counted, so a neighbour
+  such as `/work/alpha-beta` is never judged as a worktree of `/work/alpha`.
 - **Candidates from the index.** Per registry project, `getCachedByFolder` for
   each folder; rows without `scheduleSlug` or `parentSessionId` whose `slug`
   names a current schedule of the project or whose `firstPrompt` starts with
@@ -1272,14 +1275,21 @@ leaves them as they are.
   every 32 candidates and after each project.
 - **Store.** `<dataDir>/schedule-history/imported.json`, `{ v: 2, projects:
   { <registry path>: { runs: { <sessionId>: { slug, folder, created, dueMs } },
-  unattributed, final } } }`, written atomically (temp + `renameWithRetry`)
+  orphans, rejected, unattributed, final } } }`, written atomically (temp + `renameWithRetry`)
   after each project whose entry changed. The in-memory store takes the
   project only after that write succeeds, so a failed publication leaves the
   project to the retry. Then `onProgress` sends `schedule-history-imported`
   (preload `onScheduleHistoryImported`); the tab queues its debounced reload.
-  `final` is true only when the project's root was a readable directory, at
-  least one candidate row was found and no attributed seed named a missing
-  schedule. A project missing from the store is read by the next pass,
+  `final` is true only when the project's root was a readable directory, it
+  owns at least one imported run and no attributed seed names a missing
+  schedule; a candidate it does not own (a prefix neighbour's run, a
+  hand-started look-alike) never makes it final. `orphans` holds seeds that
+  passed but name no current schedule, imported without a read once a
+  schedule of that slug exists; `rejected` maps every other candidate it read
+  to 1 when counted in `unattributed`, 0 when not. Both are verdicts on line 1
+  and the project's path, so a head is read at most once per store: a reread
+  of a non-final project costs only its `getCachedByFolder` queries plus the
+  heads of candidates new since the last pass, and needs no global cap. A project missing from the store is read by the next pass,
   whenever it joined the registry; a non-final one is read once per launch;
   a final one is never read again. A reread keeps the runs already stored
   for the project and only adds to them, so no run is listed twice. An
@@ -1328,7 +1338,8 @@ folder, and the failure-reload loop; and those of #1262: an unreachable
 project read again at the next launch, a project with no candidate read
 again, a renamed schedule counted then imported, a project registered after
 the import, a `v: 1` beta store, a quiet note with a store present, worktree
-runs with a nested project and a prefix neighbour, and a lower-cased registry
-path on win32), `test/dom-schedules-tab.test.js` (outcome
+runs with a nested project and a prefix neighbour, a worktree sharing a nested
+project's folder, a neighbour that must not make a project final, verdicts
+reused across launches, and a lower-cased registry path on win32), `test/dom-schedules-tab.test.js` (outcome
 text, note only on gaps, reload on progress) and `test/schedule-list.test.js`
 (main wiring).
