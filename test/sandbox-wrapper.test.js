@@ -1381,6 +1381,54 @@ test('sandbox wrapper: a state link to a project\'s agent-memory, already writab
     }
   });
 
+test('sandbox wrapper: a .claude under a read-only tool directory stays protected against a state link into it',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const tools = path.join(rig.proj, 'tools');
+      const todos = path.join(tools, 'sample', '.claude', 'todos');
+      fs.mkdirSync(todos, { recursive: true });
+      fs.writeFileSync(path.join(todos, 'hook.sh'), '');
+      let res = rig.run(['--version'], { NVM_DIR: tools });
+      assert.equal(res.status, 0, `a .claude under the tool directory alone launches\n${res.stderr}`);
+      fs.symlinkSync(todos, path.join(dir, 'todos'));
+      res = rig.run(['--version'], { NVM_DIR: tools });
+      assert.equal(res.status, 125, 'the nested .claude would be writable through the todos target');
+      assert.match(res.stderr, /mounts read-write, is at or inside .*sample\/\.claude, which it keeps read-only/);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: a linked state directory outside ~/.claude is followed only to a directory named claude, never to / or a parent of $HOME',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      fs.mkdirSync(path.join(rig.home, '.cache'));
+      const link = path.join(rig.home, '.cache', 'claude');
+      for (const target of ['/', rig.root, path.join(rig.root, 'store', 'other')]) {
+        fs.mkdirSync(target, { recursive: true });
+        fs.rmSync(link, { force: true });
+        fs.symlinkSync(target, link);
+        const { status, stderr } = rig.run();
+        assert.equal(status, 125, `~/.cache/claude -> ${target} must fail closed`);
+        assert.match(stderr, /\.cache\/claude links to /);
+      }
+      const data = path.join(rig.root, 'data', 'claude');
+      fs.mkdirSync(data, { recursive: true });
+      fs.rmSync(link, { force: true });
+      fs.symlinkSync(data, link);
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      assert.equal(accessAt(parseMounts(rig.lastBwrapArgs()), path.join(link, 'x')), '--bind');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
 test('sandbox wrapper: a protected path inside a private entry of ~/.claude gets no host mount over its tmpfs',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
