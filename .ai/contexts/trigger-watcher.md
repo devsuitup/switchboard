@@ -2050,8 +2050,14 @@ session, which has no local descriptor). No new watcher: it reuses the cache
 - **Proof of submission by edge.** When a descriptor with an integer
   `statusUpdatedAt` is available, a submission counts when the descriptor
   shows a `busy` or `waiting` write with a `statusUpdatedAt` at or after the
-  moment of our Enter (`cliReactionTiedToEnter`, `confirm_source`
-  `descriptor`): a turn started, or our Enter opened a dialog. An `idle`
+  moment of our Enter and the transcript holds the command's own entry
+  stamped at or after the Enter, matched strictly as below
+  (`cliReactionTiedToEnter`, `confirm_source` `descriptor`): a turn started
+  on our prompt, or our prompt opened a dialog. A `busy` or `waiting` alone
+  proves nothing when the transcript is readable (#1284, see "A turn the CLI
+  starts on its own"); it still counts alone when the transcript reader
+  returns nothing or no prompt list (no `ctx.getTranscriptTurn`, no file yet
+  for a new session). An `idle`
   write at or after the Enter counts only when the transcript holds the
   command's own entry stamped at or after the Enter, matched as below but
   strictly (`promptMatches(…, { strict: true })`: a structured slash entry
@@ -2584,6 +2590,84 @@ Tests: `test/trigger-startup-v1.test.js` (readiness, fallback, deadline,
 edge proof on the startup path), `test/trigger-lifecycle-v1.test.js` (`open`
 resume and new through the real watcher, actions and context),
 `test/input-attach.test.js` (the output scan and the context accessor).
+
+### A turn the CLI starts on its own (issue #1284)
+
+Field case (2026-11-26, 0.1.0-beta.2, reported by jbr-sekoia): of about thirty
+morning `open` triggers, four reported `submitted: "confirmed"`,
+`submit_confirmed: true` and `turn_observed: true` while their prompt stayed
+in the input box, its Enter shown as a newline. In each, the first user entry
+after the Enter was not the prompt: a `<task-notification>` (a background
+task of the previous run, or `__orphan_summary__` after the resume) or a
+message from another session. In the transcript of the detailed case, a
+`queue-operation` `enqueue` of the notification came 0.9 s before our Enter,
+its `dequeue` 0.2 s after, then the notification's `user` entry. The CLI went
+`busy` for that turn, and the edge proof read that `busy` as our reaction.
+Why the CLI turned our Enter into a newline rather than queueing the prompt
+is not established.
+
+**How the transcript encodes it** (measured on the local transcripts of
+2026-11, 12 files): every prompt, including one typed at an idle CLI, is
+written as an `enqueue` carrying its text in `content`, then a `dequeue`
+(about 80 ms later when idle), then the `user` entry. Each `enqueue` is
+consumed by exactly one `dequeue`, `remove` or `popAll` (11775 against
+8249 + 3519 + 4). Task notifications go through the same queue and their
+`user` entry starts with `<task-notification>`; a message from another
+session is a `user` entry with `isMeta`, which `collectPrompts` skips. A
+slash command's `user` entry is the structured `<command-name>` form. So
+`turn.prompts` lists a queued notification too, and only a strict text match
+tells our prompt from it.
+
+**Proof.** `busy` and `waiting` now need the command's own entry, as `idle`
+already did (#1261): a `user` entry or an `enqueue` whose text matches the
+command under `promptMatches(…, { strict: true })`, stamped at or after the
+Enter. Without it the probe keeps polling within the verify window; still
+nothing, `confirmed: false`, `turn_observed: false`, and the recovery rules
+are unchanged: no recovery Enter while the descriptor reads `busy` or
+`waiting`, at most one otherwise. A chain step pending while the CLI stays
+busy goes through the same function in `waitForPendingConfirmation`.
+
+**Readiness.** `classifyTranscriptTail` returns `queueActivity`: walking
+back from the end of the tail to the last entry that closes a turn
+(`endsTurn`, with an `end_turn` closing even without a `turn_duration`
+after it: requiring one held 279 of the 6916 prompts the measured files show
+typed at an idle CLI, an `enqueue` followed by its `dequeue` within 300 ms;
+without it, 63),
+`enqueue`s not yet consumed by a `dequeue`, `remove` or `popAll`, or any
+`dequeue` (a queued item started a turn that has not closed). Notification
+and automatic-summary `user` entries do not stop the walk, as in the closed
+rule. `waitForCliIdleAfter` treats a descriptor `idle` as not ready while
+`queueActivity` holds and the transcript was written less than
+`SWITCHBOARD_TRANSCRIPT_QUIET_MS` (default 3000 ms) ago, and restarts the
+settle when it stops holding. The quiet window is the bound for the cases the
+walk cannot close, those 63 among them: an `enqueue` left by a process that died (seen in the
+measured files, never consumed after the resume), or a dequeued notification
+that produced no reply. A turn that keeps writing keeps the hold; a turn the
+descriptor reads as `busy` is held by the descriptor anyway. It applies to
+every `wait: "idle"` readiness: single triggers, `open`/`create` prompts
+(startup path) and chain steps; `wait: "none"` does not wait for it. The read
+is the cached tail reader (`createTranscriptTurnReader`, a stat per poll, a
+re-read only when the file changed), never the whole file.
+
+**Bound and result.** The hold never extends the trigger or step deadline.
+Still held at the deadline: nothing written, `readiness.ownTurnHeld`, and
+`reason` "the transcript showed a queued item or a turn the CLI started on
+its own still running at the deadline; nothing was written" (after the
+dialog, busy and starting reasons, which take precedence).
+
+**Not covered.** An Enter that reaches the CLI between our readiness and its
+own `dequeue` with no `enqueue` in the transcript yet is still lost, and is
+now reported unconfirmed rather than confirmed. A prompt whose own entry the
+CLI writes later than the verify window after its `busy` is reported
+unconfirmed. A slash command that opens a dialog without writing a
+transcript entry first now reports unconfirmed (no recovery Enter, the
+descriptor reads `waiting`). Not measured against a real CLI: the order in
+which the descriptor and the transcript are written for one prompt.
+
+Tests: `test/trigger-own-turn-proof-1284.test.js` (proof for `busy` and
+`waiting`, own `user` entry and own `enqueue`, strict slash match;
+readiness for a single trigger, `open`, the quiet bound and the deadline
+reason; the classifier; a chain step through the real watcher).
 
 ### Why `composerEmptyAfterWrite` cannot be made to prove submission, even by feeding it our own writes
 

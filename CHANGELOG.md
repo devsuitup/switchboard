@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
+- A trigger whose prompt stayed in the input box is no longer reported as submitted when Claude Code starts a turn of its own at the same moment, for a background task notification or a message from another session. Switchboard now requires the prompt's own entry in the transcript, and a trigger waits until such a turn has ended before it types. (#1284)
 - At launch, a background session whose job had just been restarted is no longer left unattached because its job record could not be read yet. Switchboard tries again without restarting the job a second time, for up to 30 seconds while the job is still starting, without holding up your other sessions. If the job turns out to have stopped, the notice now offers **Respawn**. (#1277)
 - **Send to background** and **Move to background** at Quit no longer refuse a session because a shell command, such as a background Bash, is running. (#1278)
 - A conversation whose newest part is a background session that could not be restarted no longer opens an older part by itself, at launch or on click. Its row stays on the newest part, launch starts neither, and opening the row asks whether to respawn the background session, open another part, or do nothing; the answer is kept at the next launch. (#1276)

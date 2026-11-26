@@ -103,6 +103,7 @@ function reasonNoOwnEntry(ms) {
 }
 const REASON_IDLE_UNSETTLED = 'the CLI was idle only briefly before the deadline; it never held long enough to settle; nothing was written';
 const REASON_CLI_STARTING = 'the CLI had not finished starting (its input was not attached yet) at the deadline; nothing was written';
+const REASON_CLI_OWN_TURN = 'the transcript showed a queued item or a turn the CLI started on its own still running at the deadline; nothing was written';
 
 const ACCEPTED_WAITS = ['idle', 'none'];
 const REMOTE_SLASH_COMMANDS = ['/compact', '/clear'];
@@ -653,11 +654,19 @@ function cliReactedSince(ctx, sessionId, sinceMs) {
 function cliReactionTiedToEnter(ctx, sessionId, sinceMs, command) {
   const s = readCliStatus(ctx, sessionId);
   if (!s || !CLI_REACTION_STATUSES.includes(s.status) || s.statusUpdatedAt < sinceMs) return null;
-  if (s.status !== 'idle') return 'descriptor';
   const turn = readTranscriptTurn(ctx, sessionId);
-  const own = !!turn && Array.isArray(turn.prompts) && turn.prompts.some((p) =>
+  if (!turn || !Array.isArray(turn.prompts)) return s.status === 'idle' ? null : 'descriptor';
+  const own = turn.prompts.some((p) =>
     Number.isFinite(p.at) && p.at >= sinceMs && promptMatches(p.text, command, { strict: true }));
-  return own ? 'transcript' : null;
+  if (!own) return null;
+  return s.status === 'idle' ? 'transcript' : 'descriptor';
+}
+
+// see .ai/contexts/trigger-watcher.md, "A turn the CLI starts on its own (issue #1284)"
+function transcriptHoldsOwnTurn(ctx, sessionId, now) {
+  const turn = readTranscriptTurn(ctx, sessionId);
+  return !!turn && turn.queueActivity === true && Number.isFinite(turn.mtimeMs)
+    && now - turn.mtimeMs < getTranscriptQuietMs();
 }
 
 function cliForbidsRecoveryEnter(ctx, sessionId) {
@@ -699,6 +708,7 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, 
   const dialog = createDialogProbe(ctx, sessionId, settleMs);
   let everRead = false;
   let firstIdleRead = true;
+  let ownTurnHeld = false;
   const input = startup ? createInputAttachProbe(ctx, sessionId, afterMs, start) : null;
   return pollLoop((resolve, scheduleNext) => {
     const now = Date.now();
@@ -726,10 +736,13 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, 
           idleStamp = s.statusUpdatedAt;
         }
         firstIdleRead = false;
+        ownTurnHeld = transcriptHoldsOwnTurn(ctx, sessionId, now);
+        if (ownTurnHeld) idleSince = now;
         if (inputState && !inputState.ready) idleHeld = false;
-        else idleHeld = now - Math.max(idleSince, inputState?.attachedAt ?? -Infinity) >= settleMs;
+        else idleHeld = !ownTurnHeld && now - Math.max(idleSince, inputState?.attachedAt ?? -Infinity) >= settleMs;
       } else {
         idleSince = null;
+        ownTurnHeld = false;
         if (transcript && transcriptShowsTurnOver(ctx, sessionId, s, transcript.transcriptAfterMs, now, dialog.seen(now))) {
           idleHeld = true;
           source = 'transcript';
@@ -742,7 +755,7 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, 
     }
     if (now >= deadlineMs) {
       return resolve({ ready: false, available: true, timedOut: true, sessionExited: false, waited_ms, lastStatus, waitingSeen: dialog.seen(now), ...startupEvidence,
-        ...(inputState && !inputState.ready ? { inputPending: true } : {}) });
+        ...(inputState && !inputState.ready ? { inputPending: true } : {}), ...(ownTurnHeld ? { ownTurnHeld: true } : {}) });
     }
     scheduleNext();
   });
@@ -1172,6 +1185,7 @@ async function deliverSingle({ ctx, sessionId, command, wait = 'idle', entry: se
       if (dialog) reason = REASON_DIALOG_OPEN;
       else if (ready.lastStatus === 'busy') reason = REASON_CLI_BUSY;
       else if (ready.inputPending) reason = REASON_CLI_STARTING;
+      else if (ready.ownTurnHeld) reason = REASON_CLI_OWN_TURN;
       else if (ready.lastStatus === 'idle') reason = REASON_IDLE_UNSETTLED;
       ctx.log.warn(`[trigger-watcher] CLI not ready (${ready.lastStatus}) after ${ready.waited_ms} ms, nothing sent:`, sessionId);
       return ({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason, sessionId, waited_ms });
@@ -1935,7 +1949,8 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       }
       if (ready.timedOut) {
         const dialog = ready.waitingSeen || ready.lastStatus === 'waiting';
-        const reason = dialog ? REASON_DIALOG_OPEN : (ready.lastStatus === 'busy' ? REASON_CLI_BUSY : REASON_CLI_NOT_IDLE);
+        const reason = dialog ? REASON_DIALOG_OPEN : ready.lastStatus === 'busy' ? REASON_CLI_BUSY
+          : ready.ownTurnHeld ? REASON_CLI_OWN_TURN : REASON_CLI_NOT_IDLE;
         ctx.log.warn(`[trigger-watcher] CLI not ready (${ready.lastStatus}) after ${readyWaitedMs} ms, chain step ${i} not written:`, sessionId);
         steps.push({
           idx: i, command: step.command, sent_at: stepSentAt, waited_ms: polite.waited_ms + readyWaitedMs,
