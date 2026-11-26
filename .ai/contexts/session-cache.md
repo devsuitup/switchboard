@@ -1928,9 +1928,11 @@ one changed file" for `syncMirror`.
   again, cheap) and logs on count 1, 2, 4, 8, 16, ... A file that stops being
   skipped/deferred has its streak dropped (`pruneStreaks`), so a later
   recurrence logs fresh rather than resuming at its old tier. An oversized
-  file's streak also remembers its size and mtime: a cycle that finds it
-  unchanged never logs, so a stable oversized transcript warns once per
-  process; when either changes, that cycle logs if its count is a tier (#1037,
+  file's streak also remembers the size and mtime it was last logged with: a
+  cycle that finds the same values never logs, so a stable oversized
+  transcript warns once per process; after either changes, the next cycle
+  whose count is a tier logs it, even if the change happened between tiers
+  (#1037,
   `test/remote-mirror.test.js` "an oversized file warns again only after its
   size or mtime changes"). Deferrals keep the plain doubling.
 - **Mutation-proven**: setting the incremental branch's `offset` to `0`

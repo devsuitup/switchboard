@@ -156,14 +156,15 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
     worker = current;
     current.terminationConfirmed = new Promise(resolve => { current.confirmTermination = resolve; });
     current.bootTimer = setTimeout(() => void fail(current, new Error('writer bootstrap timed out')), timeoutMs);
-    const heartbeat = () => {
+    const heartbeat = (grace = false) => {
       clearTimeout(current.heartbeatTimer);
+      current.heartbeatGraced = grace;
       const armedAt = now(), armedClock = clock();
       current.heartbeatTimer = setTimeout(() => {
         const late = Math.max(now() - armedAt, clock() - armedClock) - heartbeatMs;
-        if (!(late >= heartbeatLateMs)) return void fail(current, new Error('writer heartbeat timed out; unresponsive'));
+        if (current.heartbeatGraced || !(late >= heartbeatLateMs)) return void fail(current, new Error('writer heartbeat timed out; unresponsive'));
         try { log.warn(`[session-index-writer] heartbeat deadline reached ${Math.round(late)} ms late; the event loop was paused, waiting one more interval`); } catch {}
-        heartbeat();
+        heartbeat(true);
       }, heartbeatMs);
     };
     current.on('message', message => {

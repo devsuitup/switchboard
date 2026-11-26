@@ -476,8 +476,11 @@ main's own event loop was paused (system sleep, Windows Modern Standby, a long
 synchronous block): the client logs one `heartbeat deadline reached N ms late`
 warning and re-arms one more interval instead of failing the worker (#1037).
 Main's timer can run before the worker's queued 1 s heartbeats are delivered.
-A deadline that fires on time with no message still fails the worker, so a
-real stall is detected at most one interval later. Bootstrap and command
+One grace is granted per period of worker silence: only a message from the
+worker clears it, so a second late deadline with no message in between fails
+the worker (repeated main-loop blocks at each deadline cannot defer it
+forever). A deadline that fires on time with no message still fails the
+worker, so a real stall is detected at most one interval later. Bootstrap and command
 deadlines are not suspend-aware. Covered by
 `test/writer-heartbeat-suspend.test.js`. Crashes reject in-flight requests
 with unknown outcomes; they are never replayed automatically. Only after awaited

@@ -116,3 +116,43 @@ test('a deadline under one second late is not treated as a sleep', async () => {
     assert.deepEqual(f.warnings, []);
   } finally { await f.client.terminate(); }
 });
+
+test('a second late deadline with no worker message in between fails the writer', async () => {
+  const f = fixture();
+  await f.client.ready;
+  try {
+    let settled = false;
+    const job = f.client.request('setSetting', 'k', 1);
+    job.catch(() => {}).finally(() => { settled = true; });
+    const failed = assert.rejects(job, /heartbeat timed out; unresponsive/);
+    f.timers.advance(499);
+    f.timers.advance(1001);
+    await turn();
+    assert.equal(settled, false, 'the first late deadline is granted one interval');
+    f.timers.advance(499);
+    f.timers.advance(1001);
+    await turn();
+    assert.equal(settled, true, 'no second grace without proof the writer is alive');
+    await failed;
+    assert.equal(f.warnings.length, 1);
+  } finally { await f.client.terminate(); }
+});
+
+test('a worker message after a grace allows a later late deadline its own grace', async () => {
+  const f = fixture();
+  await f.client.ready;
+  try {
+    let outcome = 'pending';
+    const job = f.client.request('setSetting', 'k', 1);
+    job.then(() => { outcome = 'resolved'; }, error => { outcome = error.message; });
+    f.timers.advance(499);
+    f.timers.advance(1001);
+    f.workers[0].emit('message', { heartbeat: true });
+    f.timers.advance(499);
+    f.timers.advance(1001);
+    await turn();
+    assert.equal(outcome, 'pending');
+    assert.equal(f.warnings.length, 2);
+    assert.equal(f.workers.length, 1);
+  } finally { await f.client.terminate(); }
+});

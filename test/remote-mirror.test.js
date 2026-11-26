@@ -785,3 +785,30 @@ test('an oversized file warns again only after its size or mtime changes (#1037)
     assert.equal(warned.length, 2, 'the changed file is remembered at its new size and mtime');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('an oversized file changed between tiers is reported at the next tier (#1037)', async () => {
+  const dir = tmp('mirror-oversized-between-tiers');
+  try {
+    const projectsDir = path.join(dir, 'projects');
+    const manifestPath = path.join(dir, 'manifest.json');
+    const huge = { rel: '-srv-a/huge.jsonl', size: 70 * 1024 * 1024, mtimeMs: 1 };
+    const transport = {
+      listFiles: async () => ({ files: [{ ...huge }], sessions: [] }),
+      fetchFiles: async () => ({ fetched: [], failed: [] }),
+    };
+    const warned = [];
+    const log = { warn: (m) => warned.push(m), info() {}, error() {} };
+    const cycle = () => syncMirror({ alias: 'vps', transport, projectsDir, manifestPath, log });
+
+    await cycle();
+    await cycle();
+    huge.mtimeMs = 2;
+    await cycle();
+    assert.equal(warned.length, 1, 'cycle 3 is not a tier');
+    await cycle();
+    assert.equal(warned.length, 2, 'the change is reported at the next tier');
+    assert.match(warned[1], /\(4x consecutive\)/);
+    for (let i = 0; i < 12; i++) await cycle();
+    assert.equal(warned.length, 2);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

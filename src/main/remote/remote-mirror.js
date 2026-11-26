@@ -14,7 +14,7 @@ const MAX_CYCLE_FILES = 500;
 const MAX_CYCLE_BYTES = 256 * 1024 * 1024;
 
 // see .ai/contexts/session-cache.md ("Remote hosts — incremental fetch")
-const cycleStreaks = new Map(); // manifestPath -> Map<rel, { count, size, mtimeMs }>
+const cycleStreaks = new Map(); // manifestPath -> Map<rel, { count, logged }>
 
 function isLogTier(count) {
   return count === 1 || (count & (count - 1)) === 0; // 1, 2, 4, 8, 16, ...
@@ -26,9 +26,11 @@ function bumpStreak(manifestPath, rel, meta) {
   if (!streaks) { streaks = new Map(); cycleStreaks.set(manifestPath, streaks); }
   const previous = streaks.get(rel);
   const count = (previous?.count || 0) + 1;
-  const unchanged = Boolean(meta && previous && previous.size === meta.size && previous.mtimeMs === meta.mtimeMs);
-  streaks.set(rel, { count, size: meta?.size, mtimeMs: meta?.mtimeMs });
-  return { count, shouldLog: !unchanged && isLogTier(count) };
+  const logged = previous?.logged;
+  const unchanged = Boolean(meta && logged && logged.size === meta.size && logged.mtimeMs === meta.mtimeMs);
+  const shouldLog = !unchanged && isLogTier(count);
+  streaks.set(rel, { count, logged: shouldLog && meta ? { size: meta.size, mtimeMs: meta.mtimeMs } : logged });
+  return { count, shouldLog };
 }
 
 function pruneStreaks(manifestPath, seenThisCycle) {
