@@ -2677,6 +2677,82 @@ Tests: `test/trigger-own-turn-proof-1284.test.js` (proof for `busy` and
 readiness for a single trigger, `open`, the quiet bound and the deadline
 reason; the classifier; a chain step through the real watcher).
 
+### The written byte sequence and the composer's input (issue #980)
+
+Field signature (2026-10-29 onwards, workstation, 100 % CPU): the resume step
+after `/compact` written, recovery Enter sent, `submitted: "assumed"`,
+`turn_observed: false`, the text left in the composer with a line break.
+
+**Mechanism, read from the bundle of CLI 2.1.302 (`claude.exe`, read only, never
+run).** The input tokenizer (`oe` behind `J0e`, created with `x10Mouse: true`)
+splits a control character below 32 out of a run of text as its own token
+only when the buffer it is fed is shorter than 64 characters
+(`r&&c<32&&(a.length<64||c===BS)`). In a longer read, `text\r` stays one text
+token; the key parser gives it `name: ""` and `sequence: "text\r"`, and the
+text input's default branch inserts it (`w.insert(k)`), carriage return
+included. Only a lone `\r` gets `name: "return"`, which submits (`nr(c)`).
+An escape sequence always ends a text run, so in `ESC[200~ text ESC[201~ \r`
+the CR after the paste end is a token of its own: the paste is dispatched
+(`dispatchPasteEvent`), React work is flushed between the two events of the
+batch (`Ot.flushSyncWork()`), then the `return` key submits. Short commands
+(`/compact`) never reached 64 characters, which is why only the long resume
+step failed.
+
+**Transport, measured on this machine (2026-11-26)** with a node child under
+node-pty ConPTY, bundled `conpty.dll` and inbox alike, the child blocking its
+event loop for 1.5 s before reading: our two writes (70 characters, 50 ms,
+`\r`) arrived as one 71-character read; with no block they arrived as two.
+The bracketed-paste markers passed through ConPTY unchanged, and under the
+same block arrived as one read ending `ESC[201~\r`. Combined with the
+tokenizer rule this reproduces the field symptom without the CLI; the CLI
+itself was not run.
+
+**The rule.** `submitToPty` writes the text as `ESC[200~ text ESC[201~` when
+the PTY's tracked input attach (`getInputAttachedAt`, see "Readiness of a
+freshly started CLI") is a number, that is when the CLI has bracketed paste
+on and would read the markers. The Enter stays a separate bare `\r`, 50 ms
+later; the recovery Enter stays a bare `\r`. Plain text as before when the
+attach is not tracked (`undefined`: fixtures, remote) or not attached
+(`null`), and for a command starting with `/`: the CLI submits a slash command
+through its completion menu, which a paste may not open (not measured).
+Commands never contain ESC (refused at parse), so a marker cannot end the
+paste early.
+
+**What the paste changes in the composer.** A paste longer than 800
+characters (`VY`) or of more than two lines is shown as `[Pasted text #N …]`.
+Submission expands it, and the transcript records the expanded text: of 92
+placeholder prompts in `~/.claude/history.jsonl`, none left a placeholder in a
+transcript, and the one checked has a 1429-character `user` entry against a
+26-character display. The strict own-entry match (#1284) therefore still
+sees the text. Not checked: the text of the `queue-operation` `enqueue` for a
+paste queued while busy.
+
+**Readiness before every chain step.** Compaction does not release raw mode:
+in the bundle, `handleSetRawMode(false)` reaches zero only on unmount, exit,
+suspend or a terminal handoff (external editor, `!` shell), so no
+`?2004l`/`?2004h` pair marks the end of a compaction, and requiring an attach
+newer than the compact's Enter would always wait out the bound. Chain steps
+(every step, not only the one after `/compact`) instead require the input to
+be attached now: `waitForCliIdleAfter(…, { input: true })` runs the same probe
+as the startup path with no lower bound on the stamp. Not attached: wait,
+bounded by `SWITCHBOARD_STARTUP_INPUT_WAIT_MS` from the start of the wait and
+by the step deadline. Past the bound the descriptor rule decides
+(`input: "unobserved"`, warning logged, text written plain since nothing is
+attached). At the deadline first: not written, `reason` "the CLI input was not
+attached (bracketed paste off) at the deadline; nothing was written". An
+untracked PTY does not wait.
+
+**Not covered.** A recovery Enter written while the CLI still has not read the
+first one lands in the same read as `\r\r`, one text token: two line breaks,
+no submit, as before. The early-input capture before the first attach turns
+any CR into a newline (#1261); the startup readiness still guards it. Not
+measured against a real CLI: the paste path end to end, and the slash
+command exclusion.
+
+Tests: `test/trigger-chain-input-attach-980.test.js` (the byte sequence with
+and without tracking, the slash exclusion, a detached input after `/compact`,
+the deadline reason, the bound fallback).
+
 ### Why `composerEmptyAfterWrite` cannot be made to prove submission, even by feeding it our own writes
 
 A proposal, considered and rejected 2026-09-04: since `submitToPty` writes

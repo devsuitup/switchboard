@@ -103,6 +103,7 @@ function reasonNoOwnEntry(ms) {
 }
 const REASON_IDLE_UNSETTLED = 'the CLI was idle only briefly before the deadline; it never held long enough to settle; nothing was written';
 const REASON_CLI_STARTING = 'the CLI had not finished starting (its input was not attached yet) at the deadline; nothing was written';
+const REASON_CLI_INPUT_DETACHED = 'the CLI input was not attached (bracketed paste off) at the deadline; nothing was written';
 const REASON_CLI_OWN_TURN = 'the transcript showed a queued item or a turn the CLI started on its own still running at the deadline; nothing was written';
 
 const ACCEPTED_WAITS = ['idle', 'none'];
@@ -280,13 +281,27 @@ function delayWithBusyPoll(ms, sessionId, ctx) {
 // this narrows.
 async function submitToPty(handle, command, sessionId, ctx) {
   if (ctx.delivery) await ctx.delivery.prepareText(ctx.delivery.deadline);
-  handle.write(command);
+  handle.write(pastesText(ctx, sessionId, command) ? PASTE_START + command + PASTE_END : command);
   const envMs = envNumber('SWITCHBOARD_SUBMIT_ENTER_DELAY_MS');
   const delayMs = envMs !== undefined ? envMs : DEFAULT_SUBMIT_ENTER_DELAY_MS;
   const midBusy = await delayWithBusyPoll(delayMs, sessionId, ctx);
   const enterAt = Date.now();
   handle.write('\r');
   return { midBusy, enterAt };
+}
+
+// see .ai/contexts/trigger-watcher.md, "The written byte sequence and the composer's input (issue #980)"
+const PASTE_START = '\x1b[200~';
+const PASTE_END = '\x1b[201~';
+function pastesText(ctx, sessionId, command) {
+  if (command.startsWith('/') || command.includes('\x1b')) return false;
+  let at;
+  try {
+    at = typeof ctx.getInputAttachedAt === 'function' ? ctx.getInputAttachedAt(sessionId) : undefined;
+  } catch {
+    return false;
+  }
+  return Number.isFinite(at);
 }
 
 // A variable set to the empty string is a launcher artefact, not a value:
@@ -700,7 +715,7 @@ function createInputAttachProbe(ctx, sessionId, afterMs, start) {
 }
 
 // see .ai/contexts/trigger-watcher.md, "Readiness before every step" (return shape, descriptor loss, deadline)
-function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, trustIdleStamp = false, transcript = null, { startup = false } = {}) {
+function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, trustIdleStamp = false, transcript = null, { startup = false, input: requireInput = false } = {}) {
   const start = Date.now();
   let idleSince = null;
   let idleStamp = null;
@@ -709,7 +724,7 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, 
   let everRead = false;
   let firstIdleRead = true;
   let ownTurnHeld = false;
-  const input = startup ? createInputAttachProbe(ctx, sessionId, afterMs, start) : null;
+  const input = startup || requireInput ? createInputAttachProbe(ctx, sessionId, startup ? afterMs : -Infinity, start) : null;
   return pollLoop((resolve, scheduleNext) => {
     const now = Date.now();
     const waited_ms = now - start;
@@ -1935,8 +1950,11 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     let readySource = null;
     {
       const ready = await waitForCliIdleAfter(sessionId, ctx, readyAfterMs === null ? -Infinity : readyAfterMs, stepDeadline,
-        getBusyFallSettleMs(), false, { transcriptAfterMs: previousEnterAtMs });
+        getBusyFallSettleMs(), false, { transcriptAfterMs: previousEnterAtMs }, { input: true });
       readyWaitedMs = ready.waited_ms;
+      if (ready.input === 'unobserved') {
+        ctx.log.warn(`[trigger-watcher] The CLI of ${sessionId} never showed its input attached within ${getStartupInputWaitMs()} ms before chain step ${i}; writing on the descriptor alone`);
+      }
       if (ready.ready) readySource = ready.source;
       totalWaitedMs += readyWaitedMs;
       if (ready.sessionExited) {
@@ -1950,7 +1968,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       if (ready.timedOut) {
         const dialog = ready.waitingSeen || ready.lastStatus === 'waiting';
         const reason = dialog ? REASON_DIALOG_OPEN : ready.lastStatus === 'busy' ? REASON_CLI_BUSY
-          : ready.ownTurnHeld ? REASON_CLI_OWN_TURN : REASON_CLI_NOT_IDLE;
+          : ready.inputPending ? REASON_CLI_INPUT_DETACHED : ready.ownTurnHeld ? REASON_CLI_OWN_TURN : REASON_CLI_NOT_IDLE;
         ctx.log.warn(`[trigger-watcher] CLI not ready (${ready.lastStatus}) after ${readyWaitedMs} ms, chain step ${i} not written:`, sessionId);
         steps.push({
           idx: i, command: step.command, sent_at: stepSentAt, waited_ms: polite.waited_ms + readyWaitedMs,

@@ -497,7 +497,10 @@ JSON file into `~/.switchboard/triggers/` (or `SWITCHBOARD_TRIGGERS_DIR`):
 - `key` — `"escape"` sends one Escape to a waiting local CLI tab; see below.
   It cannot be combined with `command`, `chain` or `wait`.
 - `command` — written to the terminal, followed by a separate Enter keypress. At
-  most 4 KB, and no CR, LF, NUL or ESC.
+  most 4 KB, and no CR, LF, NUL or ESC. When Claude Code has bracketed paste
+  on (it turns it on once it reads keystrokes), a command that does not start
+  with `/` is written as a bracketed paste, so a busy or slow CLI that reads
+  the text and its Enter together still takes the Enter as a submit.
 - `wait` — `"none"` (the default) writes now: it does not wait for the session
   to stop being busy, and a prompt written while the CLI is busy is queued by
   the CLI. It holds in two cases only, each up to `timeout_ms`: the prompt holds
@@ -610,6 +613,12 @@ each submitted and verified before the next:
 ```
 
 `command` and `chain` are mutually exclusive, and an empty chain is refused.
+
+Before each step, a chain also waits until Claude Code reads keystrokes again
+(bracketed paste back on), for at most `SWITCHBOARD_STARTUP_INPUT_WAIT_MS`
+(15 000 ms by default) and never past the step's deadline. Past that bound the
+step is written anyway, with a warning in the log; at the deadline it is not
+written and the `reason` says the CLI input was not attached.
 
 A chain may follow its own `/clear`, `/new` or `/reset` after both text and Enter
 were guarded and written on the same tab/PTY. This permission is local to that
