@@ -1207,6 +1207,84 @@ test('sandbox wrapper: refuses a symlinked state entry of ~/.claude whose target
     }
   });
 
+test('sandbox wrapper: a protected path reached through another state link\'s target is read-only there',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const todos = path.join(rig.root, 'store', 'todos');
+      const projects = path.join(rig.root, 'store', 'projects');
+      const own = path.join(projects, folderOf(rig.proj));
+      fs.mkdirSync(path.join(todos, 'hooks'), { recursive: true });
+      fs.mkdirSync(path.join(own, 'commands'), { recursive: true });
+      fs.symlinkSync(todos, path.join(dir, 'todos'));
+      fs.symlinkSync(path.join(todos, 'hooks'), path.join(dir, 'hooks'));
+      fs.symlinkSync(projects, path.join(dir, 'projects'));
+      fs.symlinkSync(path.join(own, 'commands'), path.join(dir, 'commands'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(accessAt(ops, todos), '--bind', 'the state target stays writable');
+      assert.equal(accessAt(ops, own), '--bind', 'the transcript folder stays writable');
+      for (const p of [path.join(todos, 'hooks', 'x.sh'), path.join(own, 'commands', 'x.md')]) {
+        assert.equal(accessAt(ops, p), '--ro-bind', `${p} must be read-only inside the writable state target`);
+      }
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a state link whose target is, or is inside, a path the sandbox keeps read-only',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const todos = path.join(rig.root, 'store', 'todos');
+      fs.mkdirSync(todos, { recursive: true });
+      fs.symlinkSync(todos, path.join(dir, 'todos'));
+      for (const protectedTarget of [todos, path.dirname(todos)]) {
+        fs.rmSync(path.join(dir, 'hooks'), { force: true });
+        fs.symlinkSync(protectedTarget, path.join(dir, 'hooks'));
+        const { status, stderr } = rig.run();
+        assert.equal(status, 125, `must fail closed with hooks -> ${protectedTarget}`);
+        assert.match(stderr, /binds read-write for a state entry of ~\/\.claude, is at or inside/);
+      }
+      assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), [], 'refused before bwrap');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: a protected path inside a private entry of ~/.claude gets no host mount over its tmpfs',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      for (const d of ['shell-snapshots/linked', 'session-env', 'backups', 'state']) {
+        fs.mkdirSync(path.join(dir, d), { recursive: true });
+      }
+      fs.writeFileSync(path.join(dir, 'shell-snapshots', 'linked', 'snapshot.sh'), '');
+      fs.symlinkSync(path.join(dir, 'shell-snapshots', 'linked'), path.join(dir, 'commands'));
+      git(rig.proj, 'init', '-q');
+      git(rig.proj, 'config', 'core.hooksPath', path.join(dir, 'session-env'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      for (const name of ['shell-snapshots', 'session-env', 'backups', 'state']) {
+        const priv = path.join(dir, name);
+        assert.equal(mountAt(ops, priv)?.op, '--tmpfs', `${name} stays a private tmpfs`);
+        assert.deepEqual(ops.filter(o => o.dest.startsWith(priv + '/')), [],
+          `nothing from the host is mounted inside ${name}`);
+      }
+      assert.equal(accessAt(ops, path.join(dir, 'shell-snapshots', 'linked', 'snapshot.sh')), '--tmpfs');
+      assert.equal(accessAt(ops, path.join(rig.proj, '.git', 'hooks')), '--ro-bind', 'the repository keeps its own protection');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
 test('sandbox wrapper: refuses a symlinked state entry whose target contains $HOME',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
