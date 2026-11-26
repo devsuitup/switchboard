@@ -1147,3 +1147,49 @@ test('1277 a poll waiting behind other restores makes no request past its 30 s d
   assert.match(logs[0], /outcome=refuse attempts=1 stateFile=transitional-state elapsedMs=4[56]000$/);
   for (const id of ['y', 'z']) assert.equal(vm.runInContext(`openSessions.get(${JSON.stringify(id)})?.attach`, h.ctx), true, id);
 });
+
+test('1277 a poll whose later reply is another transient kind makes no request past the deadline', async t => {
+  const savedSet = ['x', 'a', 'b'].map(sessionId => ({ sessionId, projectPath: '/p' + sessionId, bg: true, attachJobId: '1234abcd' }));
+  const h = setup({ savedSet, liveIds: [] });
+  t.after(() => h.dom.window.close());
+  const gates = { a: deferred1277(), b: deferred1277() }, pauses = [], calls = [], logs = [];
+  let attempts = 0;
+  h.ctx.clock1277 = { now: 0 };
+  vm.runInContext('Date.now = () => clock1277.now;', h.ctx);
+  const schedule = h.dom.window.setTimeout.bind(h.dom.window);
+  h.dom.window.setTimeout = (fn, ms) => {
+    if (ms === 1000) { pauses.push(fn); return -1; }
+    return schedule(fn, ms);
+  };
+  h.dom.window.console.warn = message => logs.push(message);
+  h.dom.window.api.restoreBackgroundJob = async id => {
+    calls.push([id, h.ctx.clock1277.now]);
+    if (id !== 'x') await gates[id].promise;
+    else {
+      attempts++;
+      if (attempts === 1) return TRANSITIONAL_1277;
+      if (attempts === 2) return { action: 'refuse', jobId: '1234abcd', reason: 'worker liveness unknown — not respawned' };
+    }
+    return { action: 'attach', sessionId: id, jobId: '1234abcd' };
+  };
+  h.dom.window.api.getSessionLiveElsewhere = async () => ({ kind: 'bg', jobId: '1234abcd', cwd: '/p' });
+  const pending = h.restore();
+  await drain1277();
+  h.ctx.clock1277.now = 1000;
+  assert.equal(pauses.length, 1);
+  pauses.shift()();
+  await drain1277();
+  h.ctx.clock1277.now = 29500;
+  gates.a.resolve();
+  await drain1277();
+  assert.deepEqual(calls.filter(call => call[0] === 'x').map(call => call[1]), [0, 29500]);
+  h.ctx.clock1277.now = 30500;
+  for (const fn of pauses.splice(0)) fn();
+  await drain1277();
+  gates.b.resolve();
+  await pending;
+  assert.deepEqual(calls.filter(call => call[0] === 'x').map(call => call[1]), [0, 29500], 'no request after the deadline once a poll has started');
+  assert.deepEqual(h.openTerminalCalls.filter(id => id === 'x'), [], 'no terminal opens for x');
+  assert.match(h.dom.window.document.querySelector('#app-notices').textContent, /worker liveness unknown/);
+  assert.equal(logs.filter(line => /session=x .*outcome=refuse attempts=2$/.test(line)).length, 1);
+});

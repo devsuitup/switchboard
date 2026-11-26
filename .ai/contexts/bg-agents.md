@@ -259,9 +259,11 @@ Every kind but `id-mismatch` is transient for `prepareBackgroundRestore`.
 the record each time (the snapshot never keeps it), until the job leaves that
 state or an absolute deadline 30 s after the first attempt
 (`RESTORE_BACKGROUND_TRANSITIONAL_STATE_MS`); the field refusals came 6 to
-10 s after the spawn, beyond two one-second retries. The deadline is checked
-before each new request, also when the pause or the wait for a slot ran past
-it, and once a poll has started the three-attempt minimum does not extend it.
+10 s after the spawn, beyond two one-second retries. Once a poll has started,
+the deadline is checked before each new request, also when the pause, the wait
+for a slot or an ordinary retry wait (a later reply of another transient kind)
+ran past it, and the three-attempt minimum does not extend it.
+
 The other kinds keep the three-attempt rule. Still unusable at the bound, the
 entry is refused as before. The `[restore-bg]` line adds `stateFile=<kind>` and `elapsedMs=` (from
 the first attempt) when the final refusal has a kind.

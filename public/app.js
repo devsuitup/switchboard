@@ -663,8 +663,13 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
       await pause(1000, deadline);
       if (abandoned()) { cancelled = true; break; }
       if (Date.now() >= deadline) break;
-    } else if (attempts) await new Promise(resolve => setTimeout(resolve, 1000));
+    } else if (attempts) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      if (pollStarted && abandoned()) { cancelled = true; break; }
+      if (pollStarted && Date.now() >= deadline) break;
+    }
     attempts++;
+
     let timer;
     try {
       result = await Promise.race([(async () => {
