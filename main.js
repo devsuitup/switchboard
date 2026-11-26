@@ -88,7 +88,7 @@ function spawnPty(file, args, opts) {
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell, claudeCommand, headlessClaudeLaunch, customArgsForLaunch } = require('./src/main/terminals/shell-profiles');
 const { startScheduler, scheduleLaunchRefusal, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled, listScheduleFiles } = require('./src/main/schedules/schedule-runner');
-const { createScheduleHistoryImport, MARKER: SCHEDULE_HISTORY_MARKER } = require('./src/main/schedules/schedule-history-import');
+const { createScheduleHistoryImport } = require('./src/main/schedules/schedule-history-import');
 const { buildScheduleList } = require('./src/main/schedules/schedule-list');
 const { migrateSchedulesTabWithinBound } = require('./src/main/schedules/schedules-tab-migration');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
@@ -1912,8 +1912,7 @@ function scheduleHistory() {
   scheduleHistoryImport = createScheduleHistoryImport({
     dataDir: path.dirname(DB_PATH), projectsDir: PROJECTS_DIR, scheduleProjects, getCachedByFolder,
     listSchedules: (projectPaths, options) => listScheduleFiles(projectPaths, { getSetting, defaultSandbox: SETTING_DEFAULTS.sandbox, ...options }),
-    isIndexReady: isInitialScanComplete, isMarked: () => getSetting('global')?.[SCHEDULE_HISTORY_MARKER] === true,
-    mark: () => writer.mergeGlobal({ [SCHEDULE_HISTORY_MARKER]: true }), onProgress: notify, onSettled: notify, log,
+    isIndexReady: isInitialScanComplete, onProgress: notify, onSettled: notify, log,
   });
   return scheduleHistoryImport;
 }

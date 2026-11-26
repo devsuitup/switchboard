@@ -358,8 +358,8 @@ test('unreadable state remains unknown rather than an unrecorded catch-up', asyn
 function historyImportWiring() {
   const runner = require('../src/main/schedules/schedule-runner');
   const historyImport = require('../src/main/schedules/schedule-history-import');
-  return { createScheduleHistoryImport: historyImport.createScheduleHistoryImport, SCHEDULE_HISTORY_MARKER: historyImport.MARKER,
-    listScheduleFiles: runner.listScheduleFiles, isInitialScanComplete: () => false, writer: { mergeGlobal: async () => {} },
+  return { createScheduleHistoryImport: historyImport.createScheduleHistoryImport,
+    listScheduleFiles: runner.listScheduleFiles, isInitialScanComplete: () => false,
     log: { info() {}, warn() {} }, mainWindow: null };
 }
 
