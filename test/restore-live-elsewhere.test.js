@@ -992,7 +992,8 @@ test('1277 a start-up state still there after 30 s is refused with the kind and 
   };
   await h.restore();
   assert.equal(calls.filter(([attachOnly]) => !attachOnly).length, 1);
-  assert.equal(calls.at(-1)[1], 30000, 'the last attempt is at the 30 s bound');
+  assert.equal(calls.at(-1)[1], 29000, 'no attempt starts at or after the 30 s bound');
+
   assert.equal(vm.runInContext('openSessions.has("x")', h.ctx), false, 'no foreground fallback');
   const notices = h.dom.window.document.querySelector('#app-notices');
   assert.equal(notices.children.length, 1);
@@ -1074,4 +1075,75 @@ test('1277 an unusable first state then a dead worker offers the checked Respawn
   for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(verbs, [['respawn', '1234abcd']], 'the action goes through the checked respawn verb');
   assert.equal(vm.runInContext('openSessions.get("x")?.attach', h.ctx), true);
+});
+
+function deferred1277() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
+const drain1277 = async () => { for (let i = 0; i < 12; i++) await new Promise(r => setImmediate(r)); };
+
+for (const stop of ['quit', 'released']) {
+  test(`1277 a poll that is ${stop} while its request is in flight does not attach the reply`, async t => {
+    const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true, attachJobId: '1234abcd' }], liveIds: [] });
+    t.after(() => h.dom.window.close());
+    const schedule = h.dom.window.setTimeout.bind(h.dom.window);
+    h.dom.window.setTimeout = (fn, ms) => schedule(fn, ms === 1000 ? 0 : ms);
+    const gate = deferred1277(), entered = deferred1277(), logs = [];
+    let attempts = 0;
+    h.dom.window.console.warn = message => logs.push(message);
+    h.dom.window.api.restoreBackgroundJob = async () => {
+      if (++attempts === 1) return TRANSITIONAL_1277;
+      entered.resolve();
+      return gate.promise;
+    };
+    h.dom.window.api.getSessionLiveElsewhere = async () => ({ kind: 'bg', jobId: '1234abcd', cwd: '/px' });
+    const pending = h.restore();
+    await entered.promise;
+    if (stop === 'quit') vm.runInContext('exitingApp = true;', h.ctx);
+    else vm.runInContext('skippedWorkingSetEntries.delete("x");', h.ctx);
+    gate.resolve({ action: 'attach', sessionId: 'x', jobId: '1234abcd' });
+    await pending;
+    assert.deepEqual(h.openTerminalCalls, [], 'a stopped poll must not reach openTerminal');
+    assert.equal(h.dom.window.document.querySelector('#app-notices').children.length, 0);
+    assert.equal(logs.filter(line => /outcome=cancelled/.test(line)).length, 1);
+  });
+}
+
+test('1277 a poll waiting behind other restores makes no request past its 30 s deadline', async t => {
+  const savedSet = ['x', 'y', 'z'].map(sessionId => ({ sessionId, projectPath: '/p' + sessionId, bg: true, attachJobId: '1234abcd' }));
+  const h = setup({ savedSet, liveIds: [] });
+  t.after(() => h.dom.window.close());
+  const gate = deferred1277(), pauses = [], calls = [], logs = [];
+  h.ctx.clock1277 = { now: 0 };
+  vm.runInContext('Date.now = () => clock1277.now;', h.ctx);
+  const schedule = h.dom.window.setTimeout.bind(h.dom.window);
+  h.dom.window.setTimeout = (fn, ms) => {
+    if (ms === 1000) { pauses.push(fn); return -1; }
+    return schedule(fn, ms);
+  };
+  h.dom.window.console.warn = message => logs.push(message);
+  h.dom.window.api.restoreBackgroundJob = async id => {
+    calls.push([id, h.ctx.clock1277.now]);
+    if (id === 'x') return TRANSITIONAL_1277;
+    await gate.promise;
+    return { action: 'attach', sessionId: id, jobId: '1234abcd' };
+  };
+  h.dom.window.api.getSessionLiveElsewhere = async () => ({ kind: 'bg', jobId: '1234abcd', cwd: '/p' });
+  const pending = h.restore();
+  await drain1277();
+  assert.deepEqual(calls.map(call => call[0]), ['x', 'y', 'z']);
+  h.ctx.clock1277.now = 1000;
+  assert.equal(pauses.length, 1);
+  pauses.shift()();
+  await drain1277();
+  h.ctx.clock1277.now = 45000;
+  gate.resolve();
+  await drain1277();
+  h.ctx.clock1277.now = 46000;
+  for (const fn of pauses.splice(0)) fn();
+  await pending;
+  assert.deepEqual(calls.filter(call => call[0] === 'x').map(call => call[1]), [0], 'no request after the deadline, and the three-attempt minimum does not extend it');
+  assert.equal(vm.runInContext('openSessions.has("x")', h.ctx), false);
+  assert.match(h.dom.window.document.querySelector('#app-notices').textContent, /unknown or unreadable state/, 'refused as before');
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /outcome=refuse attempts=1 stateFile=transitional-state elapsedMs=4[56]000$/);
+  for (const id of ['y', 'z']) assert.equal(vm.runInContext(`openSessions.get(${JSON.stringify(id)})?.attach`, h.ctx), true, id);
 });

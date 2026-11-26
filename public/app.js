@@ -436,6 +436,21 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       ? (backgroundSlots++, Promise.resolve())
       : new Promise(resolve => backgroundWaiters.push(resolve)).then(() => { backgroundSlots++; });
     const releaseBackgroundSlot = () => { backgroundSlots--; backgroundWaiters.shift()?.(); };
+    const acquireBackgroundSlotBefore = deadline => {
+      if (backgroundSlots < RESTORE_BACKGROUND_CONCURRENCY) { backgroundSlots++; return Promise.resolve(true); }
+      if (Date.now() >= deadline) return Promise.resolve(false);
+      return new Promise(resolve => {
+        let timer;
+        const waiter = () => { clearTimeout(timer); backgroundSlots++; resolve(true); };
+        backgroundWaiters.push(waiter);
+        timer = setTimeout(() => {
+          const index = backgroundWaiters.indexOf(waiter);
+          if (index !== -1) backgroundWaiters.splice(index, 1);
+          resolve(false);
+        }, Math.max(0, deadline - Date.now()));
+      });
+    };
+
     let harnessLabels = null;
     const harnessLabel = async runtime => {
       if (!harnessLabels) {
@@ -484,14 +499,16 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           const task = (async () => {
             try {
               await acquireBackgroundSlot();
+              let holding = true;
               try {
-                const background = await prepareBackgroundRestore(session, item, { pause: async ms => {
+                const background = await prepareBackgroundRestore(session, item, { pause: async (ms, deadline) => {
                   releaseBackgroundSlot();
-                  try { await new Promise(resolve => setTimeout(resolve, ms)); } finally { await acquireBackgroundSlot(); }
+                  holding = false;
+                  await new Promise(resolve => setTimeout(resolve, ms));
+                  holding = await acquireBackgroundSlotBefore(deadline);
                 } });
-
                 if (background && !window.isDeletedProjectRestoreTarget?.(item)) await openSession(session, undefined, { automatic: true, fromRestore: true, allowBgAttach: true, continuationResolved: true, ...showWhenOpened(item), ...background });
-              } finally { releaseBackgroundSlot(); }
+              } finally { if (holding) releaseBackgroundSlot(); }
               reorderRestoredTabs();
             } finally {
               restoreInFlight.delete(originalId);
@@ -632,6 +649,7 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
   let respawned = false;
   let unusableFirst = false;
   let polling = false;
+  let pollStarted = false;
   let cancelled = false;
   const polls = prepareBackgroundRestore.polls ||= new Map();
   const token = {};
@@ -639,10 +657,12 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
   const firstAt = Date.now();
   const abandoned = () => exitingApp || polls.get(item.sessionId) !== token || openSessions.has(item.sessionId)
     || !skippedWorkingSetEntries.has(item.sessionId) || !!window.isDeletedProjectRestoreTarget?.(item);
+  const deadline = firstAt + RESTORE_BACKGROUND_TRANSITIONAL_STATE_MS;
   for (; attempts < 3 || polling;) {
     if (polling) {
-      await pause(1000);
+      await pause(1000, deadline);
       if (abandoned()) { cancelled = true; break; }
+      if (Date.now() >= deadline) break;
     } else if (attempts) await new Promise(resolve => setTimeout(resolve, 1000));
     attempts++;
     let timer;
@@ -662,14 +682,16 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
       })(), new Promise(resolve => { timer = setTimeout(() => resolve({ action: 'refuse', reason: 'Background restore timed out — check the Agents view before retrying' }), RESTORE_BACKGROUND_VERB_RECONCILE_DESCRIPTOR_CHECK_TIMEOUT_MS); })]);
     } catch (err) { result = { action: 'refuse', reason: err.message || String(err) }; }
     finally { clearTimeout(timer); }
+    if (pollStarted && abandoned()) { cancelled = true; break; }
     live = result?.live;
     const transient = result?.action === 'respawned-not-attached'
       || result?.action === 'refuse' && (/worker liveness unknown|background descriptor is no longer available|live worker has no attachable background descriptor/i.test(result.reason || '')
         || recovery && /worker is not live/i.test(result.reason || '')
         || ['missing', 'unreadable', 'unparsable', 'no-state', 'transitional-state', 'unknown-state'].includes(result.stateFile));
     if (attempts === 1 && result?.stateFile) unusableFirst = true;
-    polling = result?.stateFile === 'transitional-state' && Date.now() - firstAt < RESTORE_BACKGROUND_TRANSITIONAL_STATE_MS;
-    if (!transient) break;
+    if (result?.stateFile === 'transitional-state') pollStarted = true;
+    polling = result?.stateFile === 'transitional-state' && Date.now() < deadline;
+    if (!transient || pollStarted && Date.now() >= deadline) break;
   }
   if (polls.get(item.sessionId) === token) polls.delete(item.sessionId);
   if (unusableFirst && !respawned && result?.action === 'refuse' && !result.recovery && typeof result.jobId === 'string' && result.jobId

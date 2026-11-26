@@ -28,10 +28,11 @@ function stateReadFault(error) {
 
 function stateFileFault(raw, job, id) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'unparsable';
+  if (raw.id && raw.id !== id) return 'id-mismatch';
   if (raw.state === undefined) return 'no-state';
   if (!job?.state) return TRANSITIONAL_JOB_STATES.has(raw.state) ? 'transitional-state' : 'unknown-state';
-  if (raw.id && raw.id !== id) return 'id-mismatch';
   return null;
+
 }
 
 let jobsDir = DEFAULT_JOBS_DIR;

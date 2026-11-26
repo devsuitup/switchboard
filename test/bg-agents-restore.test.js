@@ -470,3 +470,9 @@ for (const phase of ['lookup', 'conversation']) {
     assert.deepEqual(calls, []);
   });
 }
+
+test('1277 a mismatched id is classified before a start-up state', t => {
+  const write = fixture(t);
+  write('aaaaaaaa', { state: 'starting', id: 'bbbbbbbb' });
+  assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa').stateFile, 'id-mismatch');
+});

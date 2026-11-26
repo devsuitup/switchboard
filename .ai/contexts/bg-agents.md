@@ -241,24 +241,39 @@ window. Switchboard does not add them to `JOB_STATES`; it only retries.
 
 `findRestoreJob` and `conversationCheck` now return `stateFile` with the kind
 of fault, never content: `missing`, `unreadable` (another read error),
-`unparsable` (invalid JSON or not an object), `no-state`,
-`transitional-state` (one of the four CLI start-up states), `unknown-state`
-or `id-mismatch`. `restore-background-job` passes it through on a refusal.
+`unparsable` (invalid JSON or not an object), `id-mismatch` (checked before
+the state), `no-state`,
+`transitional-state` (one of the four CLI start-up states) or
+`unknown-state`. `restore-background-job` passes it through on a refusal.
+
+`crashed` is polled with the start-up states: in the CLI it is an
+intermediate state (the daemon rewrites it as `failed`, stripping a
+"; respawning" detail). A `crashed` that persists 30 s is refused with no
+Respawn action, and the manual `bg-agent-verb` 'respawn' also refuses it,
+because its checks go through `conversationCheck`, which only accepts
+`JOB_STATES`. Treating `crashed` as dead would mean adding it to the states
+the verb accepts; that was not done here.
+
 Every kind but `id-mismatch` is transient for `prepareBackgroundRestore`.
 `transitional-state` is polled: attach-only, about once a second, rereading
 the record each time (the snapshot never keeps it), until the job leaves that
-state or 30 s have passed since the first attempt
+state or an absolute deadline 30 s after the first attempt
 (`RESTORE_BACKGROUND_TRANSITIONAL_STATE_MS`); the field refusals came 6 to
-10 s after the spawn, beyond two one-second retries. The other kinds keep the
-three-attempt rule. Still unusable at the bound, the entry is refused as
-before. The `[restore-bg]` line adds `stateFile=<kind>` and `elapsedMs=` (from
+10 s after the spawn, beyond two one-second retries. The deadline is checked
+before each new request, also when the pause or the wait for a slot ran past
+it, and once a poll has started the three-attempt minimum does not extend it.
+The other kinds keep the three-attempt rule. Still unusable at the bound, the
+entry is refused as before. The `[restore-bg]` line adds `stateFile=<kind>` and `elapsedMs=` (from
 the first attempt) when the final refusal has a kind.
 
-While polling, the wait goes through the caller's `pause`: `runRestore`
-releases its background slot for the wait and takes one again before the next
-attempt, so a polling entry does not hold back the other saved entries. Before
-each poll attempt the loop stops, with no notice and one `outcome=cancelled`
-line, when the app is quitting (`exitingApp`), another
+While polling, the wait goes through the caller's `pause(ms, deadline)`:
+`runRestore` releases its background slot for the wait and queues for one
+again until the deadline (`acquireBackgroundSlotBefore`); a waiter still queued
+at the deadline leaves the queue and the task, holding no slot, releases none.
+So a polling entry does not hold back the other saved entries. After the pause
+and after every request of a started poll (its reply and descriptor check), the
+loop stops, with no notice and one `outcome=cancelled` line, before using the
+reply, when the app is quitting (`exitingApp`), another
 `prepareBackgroundRestore` call for the same id has started (a user open; the
 latest call's token is kept in `prepareBackgroundRestore.polls`), the session
 is open, its held entry was released, or its project is being deleted.
