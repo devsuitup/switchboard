@@ -652,12 +652,10 @@ test('readiness: without the transcript option the busy descriptor keeps the wai
 
 test('readiness: an idle descriptor keeps its own path and reports it', async (t) => {
   fakeClock(t);
-  let transcriptReads = 0;
-  const ctx = { ...fallbackCtx({ status: 'idle', statusUpdatedAt: 900_000 }, null), getTranscriptTurn: () => { transcriptReads += 1; return null; } };
+  const ctx = { ...fallbackCtx({ status: 'idle', statusUpdatedAt: 900_000 }, null), getTranscriptTurn: () => null };
   const r = await settleRun(t, waitForCliIdleAfter('sid', ctx, -Infinity, 1_000_000 + 1000, 50, false, T));
   assert.equal(r.ready, true);
   assert.equal(r.source, 'descriptor');
-  assert.equal(transcriptReads, 0);
 });
 
 test('readiness: a transcript reader that throws is not readiness', async (t) => {
@@ -916,7 +914,8 @@ test('chain: a closed turn older than the previous step\'s Enter does not releas
   const uuid = 'sess-tx-anchor-' + Date.now();
   let s;
   s = transcriptSession(uuid, {
-    onEnter: ({ desc }) => {
+    onEnter: ({ desc, append, command }) => {
+      append([ownPrompt(Date.now(), command)]);
       desc.statusUpdatedAt = Date.now();
       s.session._cliBusy = true;
       setTimeout(() => { s.session._cliBusy = false; }, 100);
@@ -1161,7 +1160,7 @@ test('chain: a pending step confirmed by the descriptor reacting later reports t
   s = transcriptSession(uuid, {
     onEnter: ({ desc, n, command, append }) => {
       if (n === 1) {
-        setTimeout(() => { desc.status = 'busy'; desc.statusUpdatedAt = Date.now(); }, 800);
+        setTimeout(() => { append([ownPrompt(Date.now(), command)]); desc.status = 'busy'; desc.statusUpdatedAt = Date.now(); }, 800);
         setTimeout(() => { desc.status = 'idle'; desc.statusUpdatedAt = Date.now(); }, 1000);
       } else {
         append([ownPrompt(Date.now(), command)]);
@@ -1343,9 +1342,9 @@ test('single trigger: the transcript reaction does not confirm it (chains only)'
 test('chain: an idle descriptor keeps the descriptor path, the transcript is not the source', async () => {
   const uuid = 'sess-tx-idle-' + Date.now();
   const s = transcriptSession(uuid, {
-    onEnter: ({ desc, append }) => {
+    onEnter: ({ desc, append, command }) => {
       desc.status = 'busy'; desc.statusUpdatedAt = Date.now();
-      append([userPrompt(Date.now())]);
+      append([ownPrompt(Date.now(), command)]);
       setTimeout(() => { desc.status = 'idle'; desc.statusUpdatedAt = Date.now(); }, 100);
     },
   });

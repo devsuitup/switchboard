@@ -140,6 +140,12 @@ test('background context: the live descriptor reader works without an active PTY
   assert.equal(await f.ctx.getLiveDescriptor('unknown'), null);
 });
 
+function ownEntry(f, text) {
+  fs.appendFileSync(f.transcript, JSON.stringify({
+    type: 'user', timestamp: new Date().toISOString(), sessionId, message: { role: 'user', content: text },
+  }) + '\n');
+}
+
 test('background attach: a single trigger waits for the bg descriptor then delivers through the attach PTY', async (t) => {
   const f = fixture(t, { attached: true });
   assert.equal(f.ctx.getPtyForSession(sessionId).ptyProcess, f.session.pty);
@@ -148,7 +154,7 @@ test('background attach: a single trigger waits for the bg descriptor then deliv
   });
   f.setOnWrite(data => {
     assert.equal(f.descriptor.status, 'idle', 'readiness must hold writes while the bg descriptor is busy');
-    if (data === '\r') f.later(10, () => f.writeDescriptor('busy'));
+    if (data === '\r') f.later(10, () => { ownEntry(f, 'hello'); f.writeDescriptor('busy'); });
   });
   f.later(150, () => {
     assert.deepEqual(f.written, [], 'a false OSC busy flag cannot override the bg descriptor');
@@ -179,6 +185,7 @@ test('background attach: a compact chain reads the bg transcript and holds the n
         f.writeDescriptor('idle');
       });
     } else {
+      ownEntry(f, f.written.at(-2));
       f.later(100, () => f.writeDescriptor('idle'));
     }
   });

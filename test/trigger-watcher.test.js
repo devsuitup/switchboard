@@ -184,7 +184,12 @@ async function runCompactEvidenceCase(t, { chain = false, evidence = 'none', des
         const command = written[written.length - 2];
         if (command === '/compact') compactsEntered += 1;
         if (busy) {
-          later(20, () => { session._cliBusy = true; status = { status: 'busy', statusUpdatedAt: Date.now() }; });
+          later(20, () => {
+            if (command !== '/compact' && fs.existsSync(transcript)) {
+              fs.appendFileSync(transcript, JSON.stringify({ type: 'user', timestamp: new Date(Date.now()).toISOString(), message: { role: 'user', content: command } }) + '\n');
+            }
+            session._cliBusy = true; status = { status: 'busy', statusUpdatedAt: Date.now() };
+          });
           later(busyFallDelay, () => { session._cliBusy = false; status = { status: 'idle', statusUpdatedAt: Date.now() }; });
         }
         if (command === '/compact' && !['none', 'old', 'missing', 'preexisting-future'].includes(evidence)
