@@ -2310,8 +2310,8 @@ test('control aliases: mutable links and writable state descendants refuse befor
     assert.match(res.stderr, /symbolic link.*sandbox can write/);
     const cache = path.join(rig.home, '.cache', 'claude');
     fs.mkdirSync(path.dirname(cache), { recursive: true });
-    fs.mkdirSync(path.join(control, 'descendant'));
-    fs.symlinkSync(path.join(control, 'descendant'), cache);
+    fs.mkdirSync(path.join(control, 'claude'));
+    fs.symlinkSync(path.join(control, 'claude'), cache);
     res = rig.run(['--version'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: control });
     assert.equal(res.status, 125, res.stderr);
     assert.match(res.stderr, /overlaps control path|reopens control path/);
