@@ -498,8 +498,8 @@ JSON file into `~/.switchboard/triggers/` (or `SWITCHBOARD_TRIGGERS_DIR`):
   It cannot be combined with `command`, `chain` or `wait`.
 - `command` — written to the terminal, followed by a separate Enter keypress. At
   most 4 KB, and no CR, LF, NUL or ESC. When Claude Code has bracketed paste
-  on (it turns it on once it reads keystrokes), a command that does not start
-  with `/` is written as a bracketed paste, so a busy or slow CLI that reads
+  on (it turns it on once it reads keystrokes), a command whose first non-blank
+  character is not `/` is written as a bracketed paste, so a busy or slow CLI that reads
   the text and its Enter together still takes the Enter as a submit.
 - `wait` — `"none"` (the default) writes now: it does not wait for the session
   to stop being busy, and a prompt written while the CLI is busy is queued by

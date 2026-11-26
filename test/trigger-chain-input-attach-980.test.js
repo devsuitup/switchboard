@@ -191,3 +191,45 @@ test('#980: input detached past the bound: the step falls back to the descriptor
     delete process.env.SWITCHBOARD_STARTUP_INPUT_WAIT_MS;
   }
 });
+
+for (const status of ['busy', 'shell', undefined]) {
+  test(`#980 r1: descriptor ${status}, input tracked and detached: nothing is written before the bound, the reason names the input`, async () => {
+    const saved = { ...process.env };
+    process.env.SWITCHBOARD_TRANSCRIPT_QUIET_MS = '1';
+    process.env.SWITCHBOARD_STARTUP_INPUT_WAIT_MS = '15000';
+    try {
+      const uuid = `sess-980-r1-${status}-${Date.now()}`;
+      const old = Date.now() - 10000;
+      const written = [];
+      const ctx = {
+        log: recordingLog(),
+        getPtyForSession: () => ({ ptyProcess: { pid: process.pid, write(data) { written.push(data); } } }),
+        isSessionBusy: () => status === 'busy',
+        isPtyAlive: () => true,
+        getComposerState: () => ({ pending: 0, lastInputAt: 0 }),
+        getInputAttachedAt: () => null,
+        getCliStatus: () => (status === undefined ? undefined : { status, statusUpdatedAt: old }),
+        getTranscriptTurn: () => ({ closed: true, closedAt: old, mtimeMs: old, prompts: [], compactBoundaries: [] }),
+      };
+
+      const result = await runChain([{ command: RESUME }], { ctx }, uuid, 450);
+
+      assert.deepEqual(written, []);
+      assert.equal(result.ok, false);
+      assert.match(result.reason, /input was not attached/);
+    } finally {
+      delete process.env.SWITCHBOARD_TRANSCRIPT_QUIET_MS;
+      delete process.env.SWITCHBOARD_STARTUP_INPUT_WAIT_MS;
+      Object.assign(process.env, saved);
+    }
+  });
+}
+
+test('#980 r1: a slash command with leading blanks is not wrapped in a paste', async () => {
+  const uuid = 'sess-980-r1-slash-' + Date.now();
+  const session = compactChainSession(uuid, { attach: true });
+
+  await runChain([{ command: '  /compact' }, { command: RESUME }], session, uuid);
+
+  assert.equal(session.written[0].data, '  /compact');
+});

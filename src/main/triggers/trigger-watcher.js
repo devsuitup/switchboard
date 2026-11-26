@@ -294,7 +294,7 @@ async function submitToPty(handle, command, sessionId, ctx) {
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
 function pastesText(ctx, sessionId, command) {
-  if (command.startsWith('/') || command.includes('\x1b')) return false;
+  if (command.trimStart().startsWith('/') || command.includes('\x1b')) return false;
   let at;
   try {
     at = typeof ctx.getInputAttachedAt === 'function' ? ctx.getInputAttachedAt(sessionId) : undefined;
@@ -735,8 +735,10 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, 
     }
     const s = dialog.sample(now);
     const startupEvidence = startup ? { fresh: !!s && Number.isInteger(s.statusUpdatedAt) && s.statusUpdatedAt >= afterMs } : {};
-    if (!s && !everRead && !startup) {
-      return resolve({ ready: false, available: false, timedOut: false, sessionExited: false, waited_ms, lastStatus, waitingSeen });
+    const inputHeld = !!inputState && !inputState.ready;
+    const inputEvidence = inputState?.source ? { input: inputState.source } : {};
+    if (!s && !everRead && !startup && !inputHeld) {
+      return resolve({ ready: false, available: false, timedOut: false, sessionExited: false, waited_ms, lastStatus, waitingSeen, ...inputEvidence });
     }
     let idleHeld = false;
     let source = 'descriptor';
@@ -758,19 +760,18 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, 
       } else {
         idleSince = null;
         ownTurnHeld = false;
-        if (transcript && transcriptShowsTurnOver(ctx, sessionId, s, transcript.transcriptAfterMs, now, dialog.seen(now))) {
+        if (!inputHeld && transcript && transcriptShowsTurnOver(ctx, sessionId, s, transcript.transcriptAfterMs, now, dialog.seen(now))) {
           idleHeld = true;
           source = 'transcript';
         }
       }
     }
-    const inputEvidence = inputState?.source ? { input: inputState.source } : {};
     if (idleHeld && now < deadlineMs) {
       return resolve({ ready: true, available: true, timedOut: false, sessionExited: false, waited_ms, lastStatus, waitingSeen, source, ...inputEvidence });
     }
     if (now >= deadlineMs) {
       return resolve({ ready: false, available: true, timedOut: true, sessionExited: false, waited_ms, lastStatus, waitingSeen: dialog.seen(now), ...startupEvidence,
-        ...(inputState && !inputState.ready ? { inputPending: true } : {}), ...(ownTurnHeld ? { ownTurnHeld: true } : {}) });
+        ...(inputHeld ? { inputPending: true } : {}), ...(ownTurnHeld ? { ownTurnHeld: true } : {}) });
     }
     scheduleNext();
   });
@@ -1967,8 +1968,8 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       }
       if (ready.timedOut) {
         const dialog = ready.waitingSeen || ready.lastStatus === 'waiting';
-        const reason = dialog ? REASON_DIALOG_OPEN : ready.lastStatus === 'busy' ? REASON_CLI_BUSY
-          : ready.inputPending ? REASON_CLI_INPUT_DETACHED : ready.ownTurnHeld ? REASON_CLI_OWN_TURN : REASON_CLI_NOT_IDLE;
+        const reason = dialog ? REASON_DIALOG_OPEN : ready.inputPending ? REASON_CLI_INPUT_DETACHED
+          : ready.lastStatus === 'busy' ? REASON_CLI_BUSY : ready.ownTurnHeld ? REASON_CLI_OWN_TURN : REASON_CLI_NOT_IDLE;
         ctx.log.warn(`[trigger-watcher] CLI not ready (${ready.lastStatus}) after ${readyWaitedMs} ms, chain step ${i} not written:`, sessionId);
         steps.push({
           idx: i, command: step.command, sent_at: stepSentAt, waited_ms: polite.waited_ms + readyWaitedMs,

@@ -2713,8 +2713,11 @@ freshly started CLI") is a number, that is when the CLI has bracketed paste
 on and would read the markers. The Enter stays a separate bare `\r`, 50 ms
 later; the recovery Enter stays a bare `\r`. Plain text as before when the
 attach is not tracked (`undefined`: fixtures, remote) or not attached
-(`null`), and for a command starting with `/`: the CLI submits a slash command
-through its completion menu, which a paste may not open (not measured).
+(`null`), and for a command whose first non-blank character is `/`: the CLI
+submits a slash command through its completion menu, which a paste may not
+open (not measured). Leading blanks do not make it prose: at submit the CLI
+tests `h.trim().startsWith("/")` and `trimStart().startsWith("/")` (bundle),
+and the watcher trims too (`isCompactCommand`).
 Commands never contain ESC (refused at parse), so a marker cannot end the
 paste early.
 
@@ -2740,7 +2743,12 @@ by the step deadline. Past the bound the descriptor rule decides
 (`input: "unobserved"`, warning logged, text written plain since nothing is
 attached). At the deadline first: not written, `reason` "the CLI input was not
 attached (bracketed paste off) at the deadline; nothing was written". An
-untracked PTY does not wait.
+untracked PTY does not wait. The hold applies to every exit of the wait, not
+only the idle-descriptor one (review r1 of #1291): a descriptor absent at the
+first read no longer releases the legacy write while a tracked input is
+detached, and the transcript fallback (descriptor `busy` or `shell` with a
+closed turn) does not count as ready either. At the deadline the input
+reason takes precedence over `busy`, since it is what holds the write.
 
 **Not covered.** A recovery Enter written while the CLI still has not read the
 first one lands in the same read as `\r\r`, one text token: two line breaks,
