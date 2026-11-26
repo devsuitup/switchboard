@@ -670,3 +670,45 @@ test('a seed judged once is not read again at later launches (#1262 r1)', async 
   assert.deepEqual([...third.importedRuns().keys()], [orphan], 'a stored orphan is imported once its schedule exists again');
   assert.deepEqual(third.status(), { state: 'done', unattributed: 1 });
 });
+
+test('an orphan seen by a parent goes to a nested project registered later (#1262 r2)', async t => {
+  const f = fixture(t);
+  const parent = f.addProject('alpha', {});
+  const nestedPath = path.join(parent.projectPath, 'nested');
+  const nestedFolder = f.addFolder(nestedPath);
+  fs.mkdirSync(nestedPath, { recursive: true });
+  const id = f.writeSession(nestedFolder, [seedV025(crypto.randomUUID(), { cwd: nestedPath, slug: 'restored', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const first = await pass(f);
+  assert.equal(first.status().unattributed, 1, 'the run of a missing schedule is counted for the parent');
+  const nested = f.addProject(path.join('alpha', 'nested'), { restored: '' });
+  fs.writeFileSync(path.join(parent.commands, 'schedule-restored.md'), '---\ncron: 0 7 * * *\n---\nRestored');
+  const next = await pass(f);
+  assert.equal(next.importedRuns().get(id)?.projectPath, nested.projectPath, 'ownership is decided against the current registry');
+});
+
+test('a seed a nested project owned goes to the parent once the nested project is removed (#1262 r2)', async t => {
+  const f = fixture(t);
+  const parent = f.addProject('alpha', {});
+  const nested = f.addProject(path.join('alpha', 'nested'), {});
+  const id = f.writeSession(nested, [seedV025(crypto.randomUUID(), { cwd: nested.projectPath, slug: 'restored', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const first = await pass(f);
+  assert.equal(first.importedRuns().size, 0);
+  f.projects.splice(f.projects.indexOf(nested.projectPath), 1);
+  fs.writeFileSync(path.join(parent.commands, 'schedule-restored.md'), '---\ncron: 0 7 * * *\n---\nRestored');
+  f.reads.length = 0;
+  const next = await pass(f);
+  assert.equal(next.importedRuns().get(id)?.projectPath, parent.projectPath);
+  assert.deepEqual(f.reads, [], 'the cached proof of the seed is reused, only ownership is decided again');
+});
+
+test('cached seed proofs of sessions gone from the index are dropped (#1262 r2)', async t => {
+  const f = fixture(t);
+  const p = f.addProject('alpha', { daily: '' });
+  for (let i = 0; i < 5; i++) f.writeSession(p, handStarted(crypto.randomUUID(), { cwd: p.projectPath, slug: 'daily', content: 'Scheduled Task: Write', timestamp: '2026-05-03T07:00:00.000Z' }));
+  await pass(f);
+  assert.equal(Object.keys(JSON.parse(fs.readFileSync(path.join(f.dataDir, 'schedule-history', 'imported.json'), 'utf8')).seeds || {}).length, 5);
+  f.rowsByFolder.get(p.folder).splice(0);
+  const next = await pass(f);
+  assert.deepEqual(next.status(), { state: 'done', unattributed: 0 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.dataDir, 'schedule-history', 'imported.json'), 'utf8')).seeds, {});
+});

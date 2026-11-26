@@ -1275,7 +1275,7 @@ leaves them as they are.
   every 32 candidates and after each project.
 - **Store.** `<dataDir>/schedule-history/imported.json`, `{ v: 2, projects:
   { <registry path>: { runs: { <sessionId>: { slug, folder, created, dueMs } },
-  orphans, rejected, unattributed, final } } }`, written atomically (temp + `renameWithRetry`)
+  unattributed, final } }, seeds: { <sessionId>: <proof> | 0 } }`, written atomically (temp + `renameWithRetry`)
   after each project whose entry changed. The in-memory store takes the
   project only after that write succeeds, so a failed publication leaves the
   project to the retry. Then `onProgress` sends `schedule-history-imported`
@@ -1283,13 +1283,22 @@ leaves them as they are.
   `final` is true only when the project's root was a readable directory, it
   owns at least one imported run and no attributed seed names a missing
   schedule; a candidate it does not own (a prefix neighbour's run, a
-  hand-started look-alike) never makes it final. `orphans` holds seeds that
-  passed but name no current schedule, imported without a read once a
-  schedule of that slug exists; `rejected` maps every other candidate it read
-  to 1 when counted in `unattributed`, 0 when not. Both are verdicts on line 1
-  and the project's path, so a head is read at most once per store: a reread
-  of a non-final project costs only its `getCachedByFolder` queries plus the
-  heads of candidates new since the last pass, and needs no global cap. A project missing from the store is read by the next pass,
+  hand-started look-alike) never makes it final. `seeds` caches, for every
+  candidate head read, only what line 1 proves and nothing about ownership:
+  `0` when line 1 is not Switchboard's record, otherwise `{ cwd, slug, folder,
+  created, dueMs }` from `seedAttribution` without a project. Ownership (cwd
+  equal to the project, or strictly inside it and not at or inside a nested
+  registry project) and whether the slug names a current schedule are decided
+  again on every pass against the current registry and schedules, so a nested
+  project registered or removed later moves the seed to its right owner. A
+  head is read at most once while its session stays in the index: a reread of
+  a non-final project costs its `getCachedByFolder` queries plus the heads of
+  candidates new since the last pass, and needs no global cap. The first
+  successful pass of a launch that reads projects drops the proofs of
+  sessions no scan saw, so deleted sessions do not accumulate. Already
+  imported `runs` are kept as they are. The unreleased `orphans`/`rejected`
+  fields of this branch's first round are ignored: their heads are read
+  again once. A project missing from the store is read by the next pass,
   whenever it joined the registry; a non-final one is read once per launch;
   a final one is never read again. A reread keeps the runs already stored
   for the project and only adds to them, so no run is listed twice. An

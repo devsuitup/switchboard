@@ -151,6 +151,7 @@ function createScheduleHistoryImport(deps) {
   let imported = null;
   let retryAt = 0;
   const readThisLaunch = new Set();
+  let pruned = false;
 
   function importedRuns() {
     if (imported) return imported;
@@ -176,9 +177,7 @@ function createScheduleHistoryImport(deps) {
   async function importProject(projectPath, pass) {
     const previous = store?.projects[projectPath];
     const runs = { ...(previous?.runs || {}) };
-    const orphans = { ...(previous?.orphans || {}) };
-    const rejected = { ...(previous?.rejected || {}) };
-    if (!isDirectory(projectPath)) return { runs, orphans, rejected, unattributed: previous?.unattributed || 0, final: false };
+    if (!isDirectory(projectPath)) return { runs, unattributed: previous?.unattributed || 0, final: false };
     let scanError = null;
     const schedules = listSchedules([projectPath], { onScanError: (_projectPath, error) => { scanError ||= error; } });
     const unreadable = scanError || schedules.find(schedule => schedule.readError)?.readError;
@@ -191,61 +190,66 @@ function createScheduleHistoryImport(deps) {
     const owners = pass.forms.get(projectPath);
     const nested = [...pass.forms].filter(([other, forms]) => other !== projectPath
       && forms.some(form => owners.some(owner => inside(form, owner)))).flatMap(([, forms]) => forms);
+    const owns = (cwd, worktree) => {
+      const forms = pathForms(cwd, realpaths);
+      if (!worktree) return forms.some(form => owners.some(owner => samePath(form, owner)));
+      return forms.some(form => owners.some(owner => inside(form, owner)))
+        && !forms.some(form => nested.some(owner => samePath(form, owner) || inside(form, owner)));
+    };
     const folders = projectFolders(projectPath, pass.folderNames, { realpath, nativeRealpath });
     const ownKeys = new Set([...folders].map(caseKey));
     const worktreeFolders = pass.folderNames.filter(name => !ownKeys.has(caseKey(name))
       && owners.some(owner => encodedFolderMayExtend(caseKey(name), caseKey(owner))));
     let unattributed = 0;
     let orphaned = 0;
-    let read = 0;
     const seen = new Set();
+    const proofOf = async (sessionId, folder) => {
+      if (Object.hasOwn(pass.seeds, sessionId)) return pass.seeds[sessionId];
+      if (++pass.read % BATCH === 0) await pause();
+      let line;
+      try { line = await readHead(path.join(projectsDir, folder, `${sessionId}.jsonl`)); }
+      catch (readError) {
+        if (readError.code === 'ENOENT') return undefined;
+        throw readError;
+      }
+      const seed = line === null ? null : seedAttribution(line, { sessionId, folder });
+      const proof = seed ? { cwd: seed.cwd, slug: seed.slug, folder, created: seed.created, dueMs: seed.dueMs } : 0;
+      pass.seeds[sessionId] = proof;
+      pass.seedsChanged = true;
+      return proof;
+    };
     const scan = async (folder, worktree) => {
       for (const row of await getCachedByFolder(folder)) {
         if (seen.has(row.sessionId) || claimed.has(row.sessionId) || row.scheduleSlug || row.parentSessionId || !UUID_RE.test(row.sessionId || '')) continue;
         const lookalike = LOOKALIKE_RE.test(row.firstPrompt || row.summary || '');
         if (!lookalike && !slugs.has(row.slug)) continue;
         seen.add(row.sessionId);
+        pass.seen.add(row.sessionId);
         if (runs[row.sessionId]) {
           if (!slugs.has(runs[row.sessionId].slug)) orphaned++;
           continue;
         }
-        if (orphans[row.sessionId]) {
-          if (slugs.has(orphans[row.sessionId].slug)) {
-            runs[row.sessionId] = orphans[row.sessionId];
-            delete orphans[row.sessionId];
-          } else orphaned++;
+        const proof = await proofOf(row.sessionId, folder);
+        if (proof === undefined) continue;
+        if (!proof) {
+          if (!worktree && lookalike) unattributed++;
           continue;
         }
-        if (Object.hasOwn(rejected, row.sessionId)) {
-          unattributed += rejected[row.sessionId];
-          continue;
-        }
-        if (++read % BATCH === 0) await pause();
-        let line;
-        try { line = await readHead(path.join(projectsDir, folder, `${row.sessionId}.jsonl`)); }
-        catch (readError) {
-          if (readError.code === 'ENOENT') continue;
-          throw readError;
-        }
-        let attribution = line === null ? null : seedAttribution(line, { sessionId: row.sessionId, folder, projectPath, realpath, nativeRealpath, worktree });
-        if (attribution && worktree && pathForms(attribution.cwd, realpaths).some(form => nested.some(owner => samePath(form, owner) || inside(form, owner)))) attribution = null;
-        if (attribution) {
-          const record = { slug: attribution.slug, folder, created: attribution.created, dueMs: attribution.dueMs };
-          if (slugs.has(attribution.slug)) runs[row.sessionId] = record;
-          else {
-            orphans[row.sessionId] = record;
-            orphaned++;
-          }
-        } else {
-          const counted = !worktree && lookalike && (line === null || !seedAttribution(line, { sessionId: row.sessionId, folder })) ? 1 : 0;
-          rejected[row.sessionId] = counted;
-          unattributed += counted;
-        }
+        if (proof.folder !== folder || !owns(proof.cwd, worktree)) continue;
+        if (slugs.has(proof.slug)) runs[row.sessionId] = { slug: proof.slug, folder, created: proof.created, dueMs: proof.dueMs };
+        else orphaned++;
       }
     };
     for (const folder of folders) await scan(folder, false);
     for (const folder of worktreeFolders) await scan(folder, true);
-    return { runs, orphans, rejected, unattributed: unattributed + orphaned, final: Object.keys(runs).length > 0 && orphaned === 0 };
+    return { runs, unattributed: unattributed + orphaned, final: Object.keys(runs).length > 0 && orphaned === 0 };
+  }
+
+  function publish(projects, seeds) {
+    const next = { v: STORE_VERSION, projects, seeds };
+    writeStore(file, next);
+    store = next;
+    imported = null;
   }
 
   async function run() {
@@ -257,26 +261,32 @@ function createScheduleHistoryImport(deps) {
       if (todo.length) {
         if (state !== 'done') state = 'running';
         error = null;
-        if (!store) store = { v: STORE_VERSION, projects: {} };
+        if (!store) store = { v: STORE_VERSION, projects: {}, seeds: {} };
         const forms = new Map(registry.map(projectPath => [projectPath, pathForms(projectPath, realpaths)]));
-        const pass = { forms, folderNames: readFolderNames(projectsDir) };
+        const pass = { forms, folderNames: readFolderNames(projectsDir), seeds: { ...(store.seeds || {}) }, seedsChanged: false, seen: new Set(), read: 0 };
         let firstFailure = null;
         for (const projectPath of todo) {
           try {
             const entry = await importProject(projectPath, pass);
-            if (store.v !== STORE_VERSION || JSON.stringify(entry) !== JSON.stringify(store.projects[projectPath])) {
-              const next = { v: STORE_VERSION, projects: { ...store.projects, [projectPath]: entry } };
-              writeStore(file, next);
-              store = next;
-              imported = null;
-              changed = true;
-              onProgress(projectPath);
+            const entryChanged = JSON.stringify(entry) !== JSON.stringify(store.projects[projectPath]);
+            if (store.v !== STORE_VERSION || entryChanged || pass.seedsChanged) {
+              publish({ ...store.projects, [projectPath]: entry }, { ...pass.seeds });
+              pass.seedsChanged = false;
+              if (entryChanged) {
+                changed = true;
+                onProgress(projectPath);
+              }
             }
             readThisLaunch.add(projectPath);
           } catch (failure) { firstFailure ||= failure; }
           await pause();
         }
         if (firstFailure) throw firstFailure;
+        if (!pruned) {
+          pruned = true;
+          const kept = Object.fromEntries(Object.entries(store.seeds || {}).filter(([sessionId]) => pass.seen.has(sessionId)));
+          if (Object.keys(kept).length !== Object.keys(store.seeds || {}).length) publish(store.projects, kept);
+        }
       }
       state = 'done';
       error = null;
