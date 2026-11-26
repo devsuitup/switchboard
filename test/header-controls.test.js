@@ -300,15 +300,9 @@ test('the header slot keeps room for shared glyphs and halos inside the clipping
   }
 });
 
-test('#515: the label never shrinks below the dot and its halo, so the id is clipped before the dot', () => {
+test('#515: the id wins over the dot: the label holding the dot shrinks to zero, the id never shrinks', () => {
   const label = ruleBodies(/^#terminal-header-label$/)[0].body;
-  const minWidth = Number((/min-width:\s*(\d+)px/.exec(label) || [, 0])[1]);
-  const icon = ruleBodies(/^\.session-icon$/)[0].body;
-  assert.match(icon, /flex-shrink:\s*0/, 'the dot itself never shrinks');
-  const iconWidth = Number(/width:\s*(\d+)px/.exec(icon)[1]);
-  const { left } = headerDotMargins();
-  const needed = left + iconWidth + largestSlotHalo();
-  assert.ok(minWidth >= needed, `#terminal-header-label min-width ${minWidth}px must keep the dot, its left margin and its right halo (${needed}px)`);
+  assert.match(label, /min-width:\s*0;/, 'the label, dot included, gives up its width first');
   const id = ruleBodies(/^#terminal-header-id$/)[0].body;
-  assert.match(id, /flex-shrink:\s*0/, 'the id does not shrink either: the info box clips it from its end');
+  assert.match(id, /flex-shrink:\s*0/, 'the id keeps its width');
 });

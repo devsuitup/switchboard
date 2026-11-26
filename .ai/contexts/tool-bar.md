@@ -9,9 +9,11 @@ unchanged. The info group uses `flex: 0 1 auto`, the header aligns from the
 left, and the name limit is `30vw`, keeping Refresh beside the id. Both titles
 can shrink to zero, and the PTY title yields first. The status and titles share
 the shrinkable `#terminal-header-label` container, which clips the titles'
-internal gaps and PTY separator too. The label never shrinks below 22 px, the
-dot's left margin, width and largest halo, so a header too narrow for both
-clips the id before the dot (#515). This leaves the fixed-width id inside
+internal gaps and PTY separator too. The status dot shrinks with that label,
+so a header too narrow for both keeps the id and clips the dot: the id wins,
+on purpose (#515). A 22 px floor on the label, enough for the dot and its
+halo, pushes the id out of the info group at 800 px with long titles, which
+E4 refuses. This leaves the fixed-width id inside
 the info group at 800 px with the 96 px Linux caption overlay; separate
 shrinking titles left a fixed floor wider than the group's available space.
 

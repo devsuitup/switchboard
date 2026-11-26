@@ -29,7 +29,7 @@ test('the live header can shrink its titles and sidebar tabs without hiding fixe
       assert.equal(dom.window.getComputedStyle(document.getElementById(id)).minWidth, '0px', id);
     }
     const label = document.getElementById('terminal-header-label');
-    assert.equal(dom.window.getComputedStyle(label).minWidth, '22px', 'the titles shrink to nothing, the status dot stays');
+    assert.equal(dom.window.getComputedStyle(label).minWidth, '0px');
     assert.equal(dom.window.getComputedStyle(label).overflow, 'hidden');
     const tab = document.querySelector('.sidebar-tab');
     assert.equal(dom.window.getComputedStyle(tab).minWidth, '0px');

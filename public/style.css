@@ -2188,7 +2188,7 @@ body { display: flex; flex-direction: column; }
   display: flex;
   align-items: center;
   gap: 10px;
-  min-width: 22px;
+  min-width: 0;
   flex: 0 1 auto;
   overflow: hidden;
 }
