@@ -523,7 +523,8 @@ function updateDiffSaveButton(tab) {
   const btn = diffToolbarEl && diffToolbarEl.querySelector('.fp-save-btn');
   if (!btn) return;
   btn.disabled = !!tab.resolved;
-  btn.title = tab.resolved ? 'This diff has been answered — Save is off until the session closes it' : 'Save changes';
+  btn.title = tab.cliStopped ? 'The CLI stopped — this diff can no longer be answered or saved'
+    : tab.resolved ? 'This diff has been answered — Save is off until the session closes it' : 'Save changes';
 }
 
 // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
@@ -548,6 +549,7 @@ async function saveDiffTab(tab) {
     let result = await window.api.saveFileForPanel(tab.filePath, content, tab.diskBaseline);
     while (result && result.reason === 'stale' && typeof result.disk === 'string'
       && await appConfirm({ title: 'Overwrite?', message: 'This file changed on disk since the diff opened. Overwrite it with your edits?', confirmLabel: 'Overwrite', danger: true })) {
+      if (tab.resolved || !tab.editorView) break;
       tab.diskBaseline = result.disk;
       result = await window.api.saveFileForPanel(tab.filePath, content, tab.diskBaseline);
     }
@@ -660,7 +662,18 @@ function setSessionMcpState(sessionId, mcpState, detail) {
   const state = getSessionState(sessionId);
   state.mcpState = mcpState || 'off';
   state.mcpDetail = detail || '';
-  if (state.mcpState === 'off') clearParkedDiffs(sessionId, state);
+  if (state.mcpState === 'off') {
+    clearParkedDiffs(sessionId, state);
+    const tab = state.currentTab;
+    if (tab?.type === 'diff' && !tab.resolved) {
+      tab.resolved = true;
+      tab.cliStopped = true;
+      if (currentPanelSessionId === sessionId && diffActionsEl) {
+        diffActionsEl.style.display = 'none';
+        updateDiffSaveButton(tab);
+      }
+    }
+  }
   if (currentPanelSessionId === sessionId) updateMcpIndicator();
 }
 
@@ -675,13 +688,16 @@ function rekeyFilePanelState(oldId, newId) {
 
 // ── Tab Operations ──────────────────────────────────────────────────
 
+let diffArrivals = 0;
+
 function openDiffTab(sessionId, diffId, data) {
   const state = getSessionState(sessionId);
+  const shown = state.currentTab;
+  const queue = shown?.type === 'diff' && !shown.resolved;
 
-  // Destroy previous
-  destroyCurrentTab(state);
+  if (!queue) destroyCurrentTab(state);
 
-  state.currentTab = {
+  const tab = {
     type: 'diff',
     label: data.tabName || basename(data.oldFilePath),
     filePath: data.oldFilePath,
@@ -691,8 +707,16 @@ function openDiffTab(sessionId, diffId, data) {
     diskBaseline: typeof data.oldContent === 'string' ? data.oldContent.replace(/\r\n?/g, '\n') : null,
     resolved: false,
     editorView: null,
+    arrival: ++diffArrivals,
   };
 
+  if (queue) {
+    state.parkedDiffs.set(diffId, tab);
+    if (currentPanelSessionId === sessionId && typeof syncToolBar === 'function') syncToolBar();
+    return;
+  }
+
+  state.currentTab = tab;
   state.panelVisible = true;
 
   if (currentPanelSessionId === sessionId) {
@@ -1056,7 +1080,9 @@ function destroyCurrentTab(state, { stash = true } = {}) {
 function leaveToolTab(state) {
   const tab = state.currentTab;
   if (tab?.type === 'diff' && !tab.resolved && state.mcpState !== 'off') {
-    state.parkedDiffs.set(tab.diffId, tab);
+    const parked = [...state.parkedDiffs.values(), tab].sort((a, b) => a.arrival - b.arrival);
+    state.parkedDiffs.clear();
+    for (const diff of parked) state.parkedDiffs.set(diff.diffId, diff);
     tab.editorView?.dom.remove();
     state.currentTab = null;
     return;
@@ -1268,7 +1294,7 @@ function renderDiffContent(sessionId, tab) {
 
   // Defer merge-viewer creation until codemirror-bundle.js is available.
   window.loadCodeMirrorBundle().then(() => {
-    if (tab.resolved || getSessionState(sessionId).currentTab !== tab || currentPanelSessionId !== sessionId) return;
+    if (getSessionState(sessionId).currentTab !== tab || currentPanelSessionId !== sessionId) return;
     if (!tab.editorView) {
       if (diffMode === 'inline') {
         tab.editorView = window.createUnifiedMergeViewer(

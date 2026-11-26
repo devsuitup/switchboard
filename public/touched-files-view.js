@@ -281,7 +281,7 @@ async function refreshTouched(sessionId) {
     if (tab.windowDays === windowDays && Number.isFinite(result.windowStart)) tab.windowStart = result.windowStart;
   }
   if (currentPanelSessionId === sessionId && (state.currentTab === tab || state.currentTab?.returnList === tab)) renderPanel(sessionId);
-  if (tab.refreshPending) {
+  if (tab.refreshPending || (tab.windowDays !== windowDays && touchedWindowPastLoaded(tab))) {
     tab.refreshPending = false;
     if (state.currentTab === tab || state.currentTab?.returnList === tab) return refreshTouched(sessionId);
   }
@@ -573,10 +573,15 @@ function extendTouchedWindow(sessionId, tab) {
     tab.windowStart = anchor - tab.windowDays * TOUCHED_DAY_MS;
   }
   if (tab.refreshing) {
-    tab.refreshPending = true;
+    if (touchedWindowPastLoaded(tab)) tab.refreshPending = true;
+    renderTouchedContent(sessionId, tab);
     return;
   }
-  const loaded = tab.data?.loadedWindowStart;
-  if (tab.data?.hasOlder && (loaded == null || tab.windowStart < loaded)) return refreshTouched(sessionId);
+  if (touchedWindowPastLoaded(tab)) return refreshTouched(sessionId);
   renderTouchedContent(sessionId, tab);
+}
+
+function touchedWindowPastLoaded(tab) {
+  const loaded = tab.data?.loadedWindowStart;
+  return !!tab.data?.hasOlder && (loaded == null || tab.windowStart < loaded);
 }

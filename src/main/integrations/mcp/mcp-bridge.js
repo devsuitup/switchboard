@@ -191,12 +191,14 @@ async function handleOpenDiff(entry, rpcId, args, log) {
 
   const diffId = crypto.randomUUID();
 
-  // Create a promise that will be resolved when the user acts on the diff
-  const diffPromise = new Promise((resolve) => {
+  const answered = new Promise((done) => {
+    const resolve = (result) => {
+      sendDiffAnswer(entry, rpcId, result);
+      done();
+    };
     entry.pendingDiffs.set(diffId, { resolve, rpcId, tabName: tab_name });
   });
 
-  // Send to renderer
   if (entry.mainWindow && !entry.mainWindow.isDestroyed()) {
     entry.mainWindow.webContents.send('mcp-open-diff', entry.sessionId, diffId, {
       oldFilePath: old_file_path,
@@ -206,12 +208,11 @@ async function handleOpenDiff(entry, rpcId, args, log) {
     });
   }
 
-  // Await user action
-  const result = await diffPromise;
+  await answered;
+}
 
-  // Send JSON-RPC response back to Claude CLI
+function sendDiffAnswer(entry, rpcId, result) {
   if (result.action === 'accept-edited') {
-    // User accepted with edits — return FILE_SAVED + new content
     sendResult(entry, rpcId, {
       content: [
         { type: 'text', text: 'FILE_SAVED' },
@@ -219,12 +220,10 @@ async function handleOpenDiff(entry, rpcId, args, log) {
       ],
     });
   } else if (result.action === 'accept') {
-    // User closed tab (accept as-is)
     sendResult(entry, rpcId, {
       content: [{ type: 'text', text: 'TAB_CLOSED' }],
     });
   } else {
-    // User rejected
     sendResult(entry, rpcId, {
       content: [{ type: 'text', text: 'DIFF_REJECTED' }],
     });

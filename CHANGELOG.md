@@ -5,6 +5,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
+- A second change Claude proposes while one is still waiting in the Diff tool no longer replaces it unanswered: it waits behind it, and the Diff icon shows that Claude is waiting. When the CLI stops, a proposal still on screen loses its Accept and Reject buttons, which could no longer reach it, and stays readable. Each proposal still waiting when a session's IDE connection shuts down now gets its answer before the connection closes. (#509)
+- In Touched, **Show 10 more days** redraws at once while a refresh is running, and reads the transcripts again only when the new window goes past what is already loaded. (#510)
 - After the computer wakes from sleep or Modern Standby, Switchboard no longer restarts its session index in the background as if it had stopped responding, which could fail a schedule listing or another request in progress at that moment. A transcript on a remote host too large to mirror is reported once in the log instead of again and again while it does not change. (#1037)
 - The Schedules tab no longer silently leaves out runs made before v0.0.90. A project whose folder could not be reached at the first import, or in which no run was found, is read again at the next launch; a project added after the import is imported the next time the tab lists it; runs started from a worktree of the project are imported; a project registered with a path whose letter case differs from its folder on Windows finds its runs; and runs of a renamed or deleted schedule are counted in the note at the top of the tab. Installs that already ran the import in a 0.1.0 beta read their projects again once, without listing any run twice. (#1262)
 - A trigger whose prompt stayed in the input box is no longer reported as submitted when Claude Code starts a turn of its own at the same moment, for a background task notification or a message from another session. Switchboard now requires the prompt's own entry in the transcript, and a trigger waits until such a turn has ended before it types. (#1284)
@@ -413,7 +415,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Remote sessions now have a Touched list and can open its files read-only, with their HEAD diff inside the session's repository. The list stays visible with unknown disk states when the host cannot be reached. Password databases and private keys on the host are refused. (#454)
 
 ### Changed
-- Changes, a pending Diff, Touched and Shell move to a vertical bar on the right, with rebindable Ctrl/Cmd+Shift+E/D/T/S shortcuts; Refresh and Stop sit beside the session id. Switching tools keeps your edits and an unanswered Diff while the CLI is connected, forking keeps Changes open, the shell stays below every tool, and narrow windows keep the bar and session id visible while restoring your chosen widths when there is room. (#506)
+- Changes, a pending Diff, Touched and Shell move to a vertical bar on the right, with rebindable Ctrl/Cmd+Shift+E/D/T/S shortcuts; Refresh and Stop sit beside the session id. Switching tools keeps your edits and an unanswered Diff until the CLI stops, forking keeps Changes open, the shell stays below every tool, and narrow windows keep the bar and session id visible while restoring your chosen widths when there is room. (#506)
 
 ## v0.0.90 — 2026-10-09
 

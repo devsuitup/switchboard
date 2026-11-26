@@ -298,6 +298,138 @@ test('R3 N3: switching a shown diff to Changes after MCP off leaves no parked pr
   } finally { ctx.destroy(); }
 });
 
+test('#509: a second openDiff over an unanswered diff queues it, and the CLI gets an answer for both', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    await flush();
+    const first = ctx.state().currentTab;
+    ctx.window.openDiffTab('s1', 'd2', { ...DIFF, oldFilePath: '/work/b.txt' });
+    await flush();
+    assert.equal(ctx.state().currentTab, first, 'the shown proposal keeps the slot');
+    assert.ok(first.editorView?.dom.isConnected, 'its editor is neither destroyed nor detached');
+    assert.equal(ctx.destroys(), 0);
+    assert.equal(ctx.state().parkedDiffs.get('d2')?.filePath, '/work/b.txt', 'the second proposal waits in the session state');
+    const btn = ctx.window.document.getElementById('diff-toggle-btn');
+    assert.equal(btn.dataset.badge, 'pending');
+    assert.deepEqual(ctx.responses, []);
+    ctx.window.document.querySelector('.file-panel-reject-btn').click();
+    btn.click();
+    await flush();
+    assert.equal(ctx.state().currentTab.diffId, 'd2');
+    assert.equal(ctx.state().parkedDiffs.size, 0);
+    ctx.window.document.querySelector('.file-panel-accept-btn').click();
+    assert.deepEqual(ctx.responses, [['s1', 'd1', 'reject', null], ['s1', 'd2', 'accept-edited', 'edited']]);
+  } finally { ctx.destroy(); }
+});
+
+test('#509 review: a tool switch keeps arrival order, so Diff returns the oldest of three proposals', async () => {
+  const ctx = setup();
+  try {
+    for (const id of ['d1', 'd2', 'd3']) ctx.window.openDiffTab('s1', id, DIFF);
+    await flush();
+    ctx.window.document.getElementById('changes-toggle-btn').click();
+    await flush();
+    assert.deepEqual([...ctx.state().parkedDiffs.keys()], ['d1', 'd2', 'd3']);
+    const btn = ctx.window.document.getElementById('diff-toggle-btn');
+    btn.click();
+    await flush();
+    assert.equal(ctx.state().currentTab.diffId, 'd1');
+    ctx.window.document.getElementById('changes-toggle-btn').click();
+    await flush();
+    assert.deepEqual([...ctx.state().parkedDiffs.keys()], ['d1', 'd2', 'd3'], 'parking d1 again puts it back first');
+  } finally { ctx.destroy(); }
+});
+
+test('#509 review: a proposal ended by MCP off stays readable after the session is shown again', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    await flush();
+    const tab = ctx.state().currentTab;
+    ctx.window.setSessionMcpState('s1', 'off');
+    ctx.window.switchPanel(null);
+    ctx.window.switchPanel('s1');
+    await flush();
+    assert.equal(tab.editorView?.dom.isConnected, true, 'the proposal is still on screen');
+    assert.equal(ctx.window.document.getElementById('file-panel-actions').style.display, 'none');
+  } finally { ctx.destroy(); }
+});
+
+test('#509: a second openDiff over an answered diff still replaces it', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    await flush();
+    ctx.window.document.querySelector('.file-panel-accept-btn').click();
+    ctx.window.openDiffTab('s1', 'd2', DIFF);
+    await flush();
+    assert.equal(ctx.state().currentTab.diffId, 'd2');
+    assert.equal(ctx.state().parkedDiffs.size, 0);
+    assert.equal(ctx.destroys(), 1);
+  } finally { ctx.destroy(); }
+});
+
+test('#509: close_tab of a queued second diff leaves the shown one answerable', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    await flush();
+    const first = ctx.state().currentTab;
+    ctx.window.openDiffTab('s1', 'd2', DIFF);
+    ctx.window.closeDiffByDiffId('s1', 'd2');
+    assert.equal(ctx.state().currentTab, first);
+    assert.equal(ctx.state().parkedDiffs.size, 0);
+    ctx.window.document.querySelector('.file-panel-accept-btn').click();
+    assert.deepEqual(ctx.responses, [['s1', 'd1', 'accept-edited', 'edited']]);
+  } finally { ctx.destroy(); }
+});
+
+test('#509: MCP off takes Accept and Reject off a shown unanswered diff', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    await flush();
+    const tab = ctx.state().currentTab;
+    const actions = ctx.window.document.getElementById('file-panel-actions');
+    assert.equal(actions.style.display, 'flex');
+    ctx.window.setSessionMcpState('s1', 'off');
+    assert.equal(ctx.state().currentTab, tab, 'the proposal stays readable');
+    assert.equal(actions.style.display, 'none', 'no button may send an answer nothing receives');
+    assert.equal(tab.resolved, true);
+    const save = ctx.window.document.querySelector('#file-panel-diff .fp-save-btn');
+    assert.equal(save.disabled, true);
+    assert.match(save.title, /CLI stopped/);
+    ctx.window.switchPanel('s1');
+    assert.equal(actions.style.display, 'none', 'a redraw does not bring them back');
+    ctx.window.document.querySelector('#file-panel-diff .fp-close-btn').click();
+    await flush();
+    assert.deepEqual(ctx.responses, [], 'closing it sends nothing to a stopped bridge');
+  } finally { ctx.destroy(); }
+});
+
+for (const mcpState of ['listening', 'failed']) {
+  test(`#515: a diff switched away while MCP is ${mcpState} is parked and still answered through Diff`, async () => {
+    const ctx = setup();
+    try {
+      ctx.window.openDiffTab('s1', 'd1', DIFF);
+      await flush();
+      const tab = ctx.state().currentTab;
+      ctx.window.setSessionMcpState('s1', mcpState);
+      ctx.window.document.getElementById('changes-toggle-btn').click();
+      await flush();
+      assert.equal(ctx.state().currentTab.type, 'changes');
+      assert.equal(ctx.state().parkedDiffs.get('d1'), tab, 'main can still answer the proposal after a WebSocket drop');
+      assert.equal(ctx.destroys(), 0);
+      ctx.window.document.getElementById('diff-toggle-btn').click();
+      await flush();
+      assert.equal(ctx.state().currentTab, tab);
+      ctx.window.document.querySelector('.file-panel-accept-btn').click();
+      assert.deepEqual(ctx.responses, [['s1', 'd1', 'accept-edited', 'edited']]);
+    } finally { ctx.destroy(); }
+  });
+}
+
 test('R3 N2: close_tab removes only its parked diff and leaves the other proposal answerable', async () => {
   const ctx = setup();
   try {
