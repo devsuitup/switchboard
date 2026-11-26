@@ -1295,7 +1295,7 @@ test('sandbox wrapper: refuses a state link whose target is inside an entry of ~
       fs.symlinkSync(path.join(dir, 'hooks', 'todos'), path.join(dir, 'todos'));
       const { status, stderr } = rig.run();
       assert.equal(status, 125, 'must fail closed');
-      assert.match(stderr, /binds read-write for a state entry of ~\/\.claude, is at or inside .*hooks/);
+      assert.match(stderr, /mounts read-write, is at or inside .*hooks, which it keeps read-only/);
       assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), [], 'refused before bwrap');
     } finally {
       rig.cleanup();

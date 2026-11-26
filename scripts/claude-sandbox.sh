@@ -620,6 +620,7 @@ bind_projects_dir() {
     fail "refusing to launch: $base/$PROJECT_FOLDER, this session's transcript folder, is a symbolic link"
   elif [ -d "$base/$PROJECT_FOLDER" ]; then
     mount_op --bind "$base/$PROJECT_FOLDER" "$base/$PROJECT_FOLDER"
+    RW_EXCEPTIONS[$((${#M_DEST[@]} - 1))]=1
   else
     MISSING_DIRS+=("$base/$PROJECT_FOLDER")
   fi
@@ -691,6 +692,7 @@ bind_project_claude_dir() {
         debug "state link $e left as is"
       else
         mount_op --bind "$e" "$e"
+        RW_EXCEPTIONS[$((${#M_DEST[@]} - 1))]=1
         in_list "$name" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"} && OPT_IN_BINDS+=("project:$((${#M_DEST[@]} - 1))")
       fi
     elif [ -L "$e" ]; then
@@ -908,15 +910,12 @@ check_opt_in_binds() {
 # A state link target bound read-write must not overlap a private entry, nor
 # lie at or inside a path the sandbox keeps read-only, transcripts aside.
 check_state_link_binds() {
-  local s r k i p
-  local -a privs=() ros=() reals=() targets=()
+  local s r k p
+  local -a privs=() targets=()
   for p in "${USER_PRIVATE_ENTRIES[@]}"; do
-    privs+=("$CLAUDE_DIR/$p" "$(readlink -m -- "$CLAUDE_DIR/$p")")
+    privs+=("$CLAUDE_DIR/$p")
+    IFS= read -r -d '' r < <(readlink -m -z -- "$CLAUDE_DIR/$p") && privs+=("$r")
   done
-  for i in "${!M_OP[@]}"; do
-    [ "${M_OP[i]}" = --ro-bind ] && ros+=("${M_SRC[i]}")
-  done
-  [ "${#ros[@]}" -gt 0 ] && mapfile -d '' reals < <(readlink -m -z -- "${ros[@]}")
   targets=(${STATE_LINK_ROOTS[@]+"${STATE_LINK_ROOTS[@]}"})
   [ -z "$PROJECTS_LINK_TARGET" ] || targets+=("$PROJECTS_LINK_TARGET")
   for s in ${targets[@]+"${targets[@]}"}; do
@@ -930,12 +929,79 @@ check_state_link_binds() {
     for r in "${!PROTECTED_SEEN[@]}"; do
       case "$s/" in "$r"/*) state_link_refuse "$s" "$r" ;; esac
     done
-    in_list "${STATE_LINK_NAMES[k]}" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"} && continue
-    for r in ${reals[@]+"${reals[@]}"}; do
-      [ "${STATE_LINK_NAMES[k]}" = projects ] && [ "$r" = "$PROJECTS_LINK_TARGET" ] && continue
-      case "$s/" in "$r"/*) state_link_refuse "$s" "$r" ;; esac
+  done
+}
+
+# Sets EFF to the operation that decides access at sandbox path $1 in the
+# finished plan: the nearest bind, read-only bind or tmpfs at or above it.
+effective_access() {
+  local p="$1"
+  EFF=""
+  while [ -n "$p" ]; do
+    case "${MOUNTED[$p]:-}" in --bind|--ro-bind|--tmpfs) EFF="${MOUNTED[$p]}"; return 0 ;; esac
+    p="${p%/*}"
+  done
+}
+
+# see docs/sandbox.md, "The finished mount plan"
+check_mount_plan() {
+  local i j k n h v src p
+  local -a idx=() srcs=() reals=() rw=() ph=() pd=() pk=()
+  for ((i = SYSTEM_MOUNTS; i < ${#M_OP[@]}; i++)); do
+    case "${M_OP[i]}" in --bind|--ro-bind) idx+=("$i"); srcs+=("${M_SRC[i]}") ;; esac
+  done
+  [ "${#srcs[@]}" -gt 0 ] && mapfile -d '' reals < <(readlink -m -z -- "${srcs[@]}")
+  for n in "${!idx[@]}"; do
+    i="${idx[n]}"
+    if [ "${M_OP[i]}" = --bind ]; then
+      rw+=("$n")
+    else
+      ph+=("${reals[n]}"); pd+=("${M_DEST[i]}"); pk+=(ro)
+    fi
+  done
+  for p in "${USER_PRIVATE_ENTRIES[@]}"; do
+    [ "${MOUNTED[$CLAUDE_DIR/$p]:-}" = --tmpfs ] || continue
+    IFS= read -r -d '' h < <(readlink -m -z -- "$CLAUDE_DIR/$p") || continue
+    ph+=("$h"); pd+=("$CLAUDE_DIR/$p"); pk+=(private)
+  done
+  if [ -L "$CLAUDE_JSON" ] && IFS= read -r -d '' h < <(readlink -m -z -- "$CLAUDE_JSON"); then
+    ph+=("$h"); pd+=("$CLAUDE_JSON"); pk+=(json)
+  fi
+  for n in ${rw[@]+"${rw[@]}"}; do
+    i="${idx[n]}"; src="${reals[n]}"
+    for k in "${!ph[@]}"; do
+      h="${ph[k]}"
+      case "$h/" in "$src"/*)
+        v="${M_DEST[i]}${h#"$src"}"
+        effective_access "$v"
+        case "${pk[k]}" in
+          ro) [ "$EFF" != --bind ] || plan_refuse_exposed "$h" "$v" "${M_DEST[i]}" ;;
+          json) [ "$EFF" != --bind ] || plan_refuse_private "$h" "${M_DEST[i]}" ;;
+          *) [ "$EFF" = --tmpfs ] || plan_refuse_private "$h" "${M_DEST[i]}" ;;
+        esac ;;
+      esac
+      case "$src/" in "$h"/*)
+        [ "${pk[k]}" = ro ] || plan_refuse_private "$h" "${M_DEST[i]}"
+        v="${pd[k]}${src#"$h"}"
+        opt_in_access_at "$v" "$i"
+        [ -n "$OA_IDX" ] && [ "$OA_IDX" != "$i" ] && [ "${M_OP[OA_IDX]}" = --bind ] && continue
+        [ -n "${RW_EXCEPTIONS[i]:-}" ] && [ "${M_DEST[i]}" = "$v" ] && continue
+        plan_refuse_inside "${M_DEST[i]}" "$h" "${pd[k]}" ;;
+      esac
     done
   done
+}
+
+plan_refuse_exposed() {
+  fail "refusing to launch: $1, which the sandbox keeps read-only, is also reached read-write at $2, through $3; the session could change it there. Give the entry or directory behind $3 a path of its own, or turn Sandbox off for this session."
+}
+
+plan_refuse_inside() {
+  fail "refusing to launch: $1, which the sandbox mounts read-write, is at or inside $2, which it keeps read-only at $3; the session could change part of it through $1. Give the entry or directory behind $1 a path of its own, or turn Sandbox off for this session."
+}
+
+plan_refuse_private() {
+  fail "refusing to launch: $1, which the sandbox replaces with a private copy, overlaps $2, which it mounts read-write; other sessions outside the sandbox use what is there, and the session could reach it through $2. Move it out of $2, or turn Sandbox off for this session."
 }
 
 state_link_refuse() {
@@ -987,6 +1053,7 @@ build_bwrap_args() {
   OPT_IN_BINDS=()
   PRIVATE_LINKS=()
   CONTROL_VIEWS=()
+  RW_EXCEPTIONS=()
   WRITABLE_ROOTS=("${BASE_WRITABLE_ROOTS[@]}")
   WRITABLE_REALS=()
   for d in "${WRITABLE_ROOTS[@]}"; do WRITABLE_REALS+=("$(readlink -m -- "$d" 2>/dev/null || true)"); done
@@ -1009,6 +1076,7 @@ build_bwrap_args() {
       debug "skip ro-bind $d (does not exist)"
     fi
   done
+  SYSTEM_MOUNTS="${#M_DEST[@]}"
   for d in "${RW_DIRS_BY_DEPTH[@]}"; do
     if [ -e "$d" ]; then
       bind_project_dir "$d"
@@ -1041,6 +1109,7 @@ build_bwrap_args() {
   verify_control_mounts
   check_opt_in_binds
   check_state_link_binds
+  check_mount_plan
 
   BWRAP_ARGS=(--unshare-all --share-net --die-with-parent)
   local order
@@ -1057,6 +1126,7 @@ build_bwrap_args() {
 }
 
 declare -A MOUNTED PROTECTED_SEEN GIT_DONE
+declare -a RW_EXCEPTIONS
 
 # The copy of ~/.claude.json the sandbox starts from. An empty object, not an
 # empty file, when there is none: claude parses this path as JSON.

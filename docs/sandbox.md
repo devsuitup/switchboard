@@ -294,6 +294,29 @@ wrapper builds the sandbox and mounted when bwrap starts it; a second sandboxed
 session on the same project that swaps a
 directory in between is not detected.
 
+### The finished mount plan
+
+Before bwrap starts, the wrapper checks the whole list of mounts once more, on
+resolved paths. Every path it keeps read-only (past `/usr`, `/etc` and the
+interpreter and `$NVM_DIR` mounts, which only make programs available), every
+private entry of `~/.claude` and the target of a `~/.claude.json` that is a
+symbolic link must stay that way wherever a read-write mount reaches it:
+
+- a read-write mount that contains a read-only path must show it read-only at
+  its own place too, so a project reached as `project-alias` whose real
+  directory is also the target of `~/.claude/todos` is refused: its `.claude`
+  would be writable under the real path;
+- a read-write mount that contains a private entry's target, or the file
+  `~/.claude.json` links to (`~/.claude/cache` linked to the directory that
+  holds it, say), is refused;
+- a read-write mount inside a read-only path is refused, unless the plan
+  already makes that place writable on its own: a project's `worktrees` and
+  `agent-memory`, an opted-in `skills` or `agents`, and the session's
+  transcript folder. A `~/.claude/agent-memory` linked to the project's own
+  `.claude/agent-memory` is accepted for that reason.
+
+The launch is refused with the paths concerned, before bwrap runs.
+
 ### Additional directories
 
 An Additional Directory, or a schedule's `add-dirs` entry, is bound
