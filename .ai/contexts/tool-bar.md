@@ -9,7 +9,9 @@ unchanged. The info group uses `flex: 0 1 auto`, the header aligns from the
 left, and the name limit is `30vw`, keeping Refresh beside the id. Both titles
 can shrink to zero, and the PTY title yields first. The status and titles share
 the shrinkable `#terminal-header-label` container, which clips the titles'
-internal gaps and PTY separator too. This leaves the fixed-width id inside
+internal gaps and PTY separator too. The label never shrinks below 22 px, the
+dot's left margin, width and largest halo, so a header too narrow for both
+clips the id before the dot (#515). This leaves the fixed-width id inside
 the info group at 800 px with the 96 px Linux caption overlay; separate
 shrinking titles left a fixed floor wider than the group's available space.
 
@@ -71,7 +73,15 @@ exit updates MCP only for an existing file panel state; it allocates no state.
 A deferred file open belongs to `tab.pendingTouchedOpen`, survives parking,
 and replays only when that tab ends in the slot. Ending another diff cannot
 replay or clear it; closing its parked tab drops only that tab's deferred open.
-A second MCP openDiff over an unanswered Diff remains outside this change.
+A second MCP openDiff over a shown unanswered Diff is parked the same way and
+the shown one keeps the slot (#509): the bridge holds every pending diff in
+`pendingDiffs` and answers each through its own `rpcId`, and the CLI can
+close any of them by `tab_name`, so a queue loses nothing, whereas rejecting
+the replaced one would tell the CLI the user refused an edit they never saw.
+An openDiff over an answered diff still replaces it. MCP off over a shown
+unanswered diff marks it resolved (`tab.cliStopped`): Accept and Reject are
+removed and Save is off, since the bridge has already answered it when it shut
+down; the proposal stays readable until a tool switch or close.
 
 Shell keeps its existing independent lifecycle. Its `data-badge` CSS hook
 is reserved for #505; #506 never sets a shell badge.

@@ -115,20 +115,24 @@ test('E4: Refresh stays beside the id with short and long session and PTY titles
     for (const name of ['Session', 'Session '.repeat(30)]) {
       for (const title of ['Shell', 'Program title '.repeat(30)]) {
         await expect(async () => {
-          const [id, info, refresh, stop, header] = await page.evaluate(({ name, title }) => {
+          const [id, info, refresh, stop, header, dot, label] = await page.evaluate(({ name, title }) => {
             document.getElementById('terminal-header-name').textContent = name;
             const el = document.getElementById('terminal-header-pty-title');
             el.textContent = title;
             el.style.display = '';
-            return ['terminal-header-id', 'terminal-header-info', 'terminal-refresh-btn', 'terminal-stop-btn', 'terminal-header']
+            return ['terminal-header-id', 'terminal-header-info', 'terminal-refresh-btn', 'terminal-stop-btn', 'terminal-header', 'terminal-header-status', 'terminal-header-label']
               .map(id => {
                 const { x, width, height } = document.getElementById(id).getBoundingClientRect();
                 return { x, width, height };
               });
           }, { name, title });
-          for (const rect of [id, info, refresh, stop, header]) {
+          for (const rect of [id, info, refresh, stop, header, dot]) {
             expect(rect.width).toBeGreaterThan(0);
             expect(rect.height).toBeGreaterThan(0);
+          }
+          for (const clip of [info, label]) {
+            expect(dot.x).toBeGreaterThanOrEqual(clip.x);
+            expect(dot.x + dot.width).toBeLessThanOrEqual(clip.x + clip.width + 1);
           }
           expect(id.x).toBeGreaterThanOrEqual(info.x);
           expect(id.x + id.width).toBeLessThanOrEqual(info.x + info.width + 1);

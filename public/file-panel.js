@@ -523,7 +523,8 @@ function updateDiffSaveButton(tab) {
   const btn = diffToolbarEl && diffToolbarEl.querySelector('.fp-save-btn');
   if (!btn) return;
   btn.disabled = !!tab.resolved;
-  btn.title = tab.resolved ? 'This diff has been answered — Save is off until the session closes it' : 'Save changes';
+  btn.title = tab.cliStopped ? 'The CLI stopped — this diff can no longer be answered or saved'
+    : tab.resolved ? 'This diff has been answered — Save is off until the session closes it' : 'Save changes';
 }
 
 // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
@@ -660,7 +661,18 @@ function setSessionMcpState(sessionId, mcpState, detail) {
   const state = getSessionState(sessionId);
   state.mcpState = mcpState || 'off';
   state.mcpDetail = detail || '';
-  if (state.mcpState === 'off') clearParkedDiffs(sessionId, state);
+  if (state.mcpState === 'off') {
+    clearParkedDiffs(sessionId, state);
+    const tab = state.currentTab;
+    if (tab?.type === 'diff' && !tab.resolved) {
+      tab.resolved = true;
+      tab.cliStopped = true;
+      if (currentPanelSessionId === sessionId && diffActionsEl) {
+        diffActionsEl.style.display = 'none';
+        updateDiffSaveButton(tab);
+      }
+    }
+  }
   if (currentPanelSessionId === sessionId) updateMcpIndicator();
 }
 
@@ -677,11 +689,12 @@ function rekeyFilePanelState(oldId, newId) {
 
 function openDiffTab(sessionId, diffId, data) {
   const state = getSessionState(sessionId);
+  const shown = state.currentTab;
+  const queue = shown?.type === 'diff' && !shown.resolved;
 
-  // Destroy previous
-  destroyCurrentTab(state);
+  if (!queue) destroyCurrentTab(state);
 
-  state.currentTab = {
+  const tab = {
     type: 'diff',
     label: data.tabName || basename(data.oldFilePath),
     filePath: data.oldFilePath,
@@ -693,6 +706,13 @@ function openDiffTab(sessionId, diffId, data) {
     editorView: null,
   };
 
+  if (queue) {
+    state.parkedDiffs.set(diffId, tab);
+    if (currentPanelSessionId === sessionId && typeof syncToolBar === 'function') syncToolBar();
+    return;
+  }
+
+  state.currentTab = tab;
   state.panelVisible = true;
 
   if (currentPanelSessionId === sessionId) {

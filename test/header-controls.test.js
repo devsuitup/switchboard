@@ -271,19 +271,44 @@ test('the header is exactly as tall as the strip: its buttons and padding fit in
     'one more pixel of padding and the header would outgrow the strip');
 });
 
-test('the header slot keeps room for shared glyphs and halos inside the clipping name container', () => {
-  const info = ruleBodies(/^#terminal-header-info$/)[0].body;
-  assert.match(info, /overflow:\s*hidden/, 'the container clips, for the name\'s ellipsis');
-  const dot = ruleBodies(/^#terminal-header-status$/)[0].body;
-  assert.doesNotMatch(dot, /background|box-shadow|border-radius|width|height/);
-  const [top, , bottom, left] = /margin:\s*(\d+)(?:px)? (\d+)(?:px)? (\d+)(?:px)? (\d+)(?:px)?;/.exec(dot).slice(1).map(Number);
+function largestSlotHalo() {
   const haloSizes = ruleBodies(/\.session-icon(?:--[\w-]+)?\b/).flatMap(({ body }) =>
     [...body.matchAll(/box-shadow:\s*([^;]+);/g)].flatMap(([, shadow]) =>
       [...shadow.replace(/(?:rgba?|var)\([^)]*\)/g, '').matchAll(/(?:^|,)\s*(-?[\d.]+)(?:px)?\s+(-?[\d.]+)(?:px)?(?:\s+(-?[\d.]+)(?:px)?)?(?:\s+(-?[\d.]+)(?:px)?)?/g)]
         .flatMap(match => [Number(match[3] || 0), Number(match[4] || 0)])));
   assert.ok(haloSizes.length, 'shared slot shadows were found in the stylesheet');
-  const largestHalo = Math.max(...haloSizes);
+  return Math.max(...haloSizes);
+}
+
+function headerDotMargins() {
+  const dot = ruleBodies(/^#terminal-header-status$/)[0].body;
+  const [top, , bottom, left] = /margin:\s*(\d+)(?:px)? (\d+)(?:px)? (\d+)(?:px)? (\d+)(?:px)?;/.exec(dot).slice(1).map(Number);
+  return { dot, top, bottom, left };
+}
+
+test('the header slot keeps room for shared glyphs and halos inside the clipping name container', () => {
+  const doc = new JSDOM(HTML).window.document;
+  const clipping = doc.getElementById('terminal-header-status').parentElement;
+  assert.equal(clipping.id, 'terminal-header-label', 'the dot\'s nearest container is the label');
+  const label = ruleBodies(/^#terminal-header-label$/)[0].body;
+  assert.match(label, /overflow:\s*hidden/, 'the container clips, for the name\'s ellipsis');
+  const { dot, top, bottom, left } = headerDotMargins();
+  assert.doesNotMatch(dot, /background|box-shadow|border-radius|width|height/);
+  const largestHalo = largestSlotHalo();
   for (const [side, room] of [['top', top], ['bottom', bottom], ['left', left]]) {
     assert.ok(room >= largestHalo, `${side} margin ${room}px must cover the largest shared blur or spread (${largestHalo}px)`);
   }
+});
+
+test('#515: the label never shrinks below the dot and its halo, so the id is clipped before the dot', () => {
+  const label = ruleBodies(/^#terminal-header-label$/)[0].body;
+  const minWidth = Number((/min-width:\s*(\d+)px/.exec(label) || [, 0])[1]);
+  const icon = ruleBodies(/^\.session-icon$/)[0].body;
+  assert.match(icon, /flex-shrink:\s*0/, 'the dot itself never shrinks');
+  const iconWidth = Number(/width:\s*(\d+)px/.exec(icon)[1]);
+  const { left } = headerDotMargins();
+  const needed = left + iconWidth + largestSlotHalo();
+  assert.ok(minWidth >= needed, `#terminal-header-label min-width ${minWidth}px must keep the dot, its left margin and its right halo (${needed}px)`);
+  const id = ruleBodies(/^#terminal-header-id$/)[0].body;
+  assert.match(id, /flex-shrink:\s*0/, 'the id does not shrink either: the info box clips it from its end');
 });
