@@ -205,6 +205,32 @@ test('a queued click is not sent once the session closed its diff and opened ano
   }
 });
 
+for (const [route, end] of [
+  ['MCP off', w => w.setSessionMcpState('s1', 'off')],
+  ['the session closing the diff', w => w.closeDiffByDiffId('s1', 'd1')],
+  ['Reject', w => w.document.querySelector('.file-panel-reject-btn').click()],
+]) {
+  test(`#509 review: an Overwrite confirmed after ${route} writes nothing`, async () => {
+    const ctx = setup({ saveImpl: () => ({ ok: false, reason: 'stale', disk: 'external change\n' }) });
+    try {
+      let confirm;
+      ctx.window.appConfirm = () => new Promise((resolve) => { confirm = resolve; });
+      ctx.window.switchPanel('s1');
+      ctx.window.setSessionMcpState('s1', 'connected');
+      ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\n', newContent: 'proposed\n' });
+      await flush();
+      ctx.window.document.querySelector('#file-panel-diff .fp-save-btn').click();
+      await flush();
+      assert.equal(typeof confirm, 'function', 'the stale save asks');
+      end(ctx.window);
+      confirm(true);
+      await flush();
+      await new Promise((r) => setTimeout(r, 10));
+      assert.equal(ctx.calls.saves.length, 1, 'no overwrite once the diff is no longer pending');
+    } finally { ctx.destroy(); }
+  });
+}
+
 test('a diff opened after an answered one has its Save enabled again', async () => {
   const ctx = setup();
   try {

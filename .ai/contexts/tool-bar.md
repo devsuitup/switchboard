@@ -83,7 +83,14 @@ the replaced one would tell the CLI the user refused an edit they never saw.
 An openDiff over an answered diff still replaces it. MCP off over a shown
 unanswered diff marks it resolved (`tab.cliStopped`): Accept and Reject are
 removed and Save is off, since the bridge has already answered it when it shut
-down; the proposal stays readable until a tool switch or close.
+down; the proposal stays readable, its editor reattached when the session is
+shown again, until a tool switch or close. A diff Save waiting on its
+Overwrite question writes nothing once the diff is answered, closed or ended
+by MCP off. Parked diffs keep their arrival order (`tab.arrival`): a shown
+diff parked by a tool switch goes back before proposals that arrived after
+it. The bridge sends each openDiff answer when its pending entry is resolved,
+not in a later continuation, so `shutdownMcpServer` answers every pending
+diff before it closes the WebSocket.
 
 Shell keeps its existing independent lifecycle. Its `data-badge` CSS hook
 is reserved for #505; #506 never sets a shell badge.

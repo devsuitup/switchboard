@@ -323,6 +323,39 @@ test('#509: a second openDiff over an unanswered diff queues it, and the CLI get
   } finally { ctx.destroy(); }
 });
 
+test('#509 review: a tool switch keeps arrival order, so Diff returns the oldest of three proposals', async () => {
+  const ctx = setup();
+  try {
+    for (const id of ['d1', 'd2', 'd3']) ctx.window.openDiffTab('s1', id, DIFF);
+    await flush();
+    ctx.window.document.getElementById('changes-toggle-btn').click();
+    await flush();
+    assert.deepEqual([...ctx.state().parkedDiffs.keys()], ['d1', 'd2', 'd3']);
+    const btn = ctx.window.document.getElementById('diff-toggle-btn');
+    btn.click();
+    await flush();
+    assert.equal(ctx.state().currentTab.diffId, 'd1');
+    ctx.window.document.getElementById('changes-toggle-btn').click();
+    await flush();
+    assert.deepEqual([...ctx.state().parkedDiffs.keys()], ['d1', 'd2', 'd3'], 'parking d1 again puts it back first');
+  } finally { ctx.destroy(); }
+});
+
+test('#509 review: a proposal ended by MCP off stays readable after the session is shown again', async () => {
+  const ctx = setup();
+  try {
+    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    await flush();
+    const tab = ctx.state().currentTab;
+    ctx.window.setSessionMcpState('s1', 'off');
+    ctx.window.switchPanel(null);
+    ctx.window.switchPanel('s1');
+    await flush();
+    assert.equal(tab.editorView?.dom.isConnected, true, 'the proposal is still on screen');
+    assert.equal(ctx.window.document.getElementById('file-panel-actions').style.display, 'none');
+  } finally { ctx.destroy(); }
+});
+
 test('#509: a second openDiff over an answered diff still replaces it', async () => {
   const ctx = setup();
   try {

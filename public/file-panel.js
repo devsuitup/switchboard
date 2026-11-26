@@ -549,6 +549,7 @@ async function saveDiffTab(tab) {
     let result = await window.api.saveFileForPanel(tab.filePath, content, tab.diskBaseline);
     while (result && result.reason === 'stale' && typeof result.disk === 'string'
       && await appConfirm({ title: 'Overwrite?', message: 'This file changed on disk since the diff opened. Overwrite it with your edits?', confirmLabel: 'Overwrite', danger: true })) {
+      if (tab.resolved || !tab.editorView) break;
       tab.diskBaseline = result.disk;
       result = await window.api.saveFileForPanel(tab.filePath, content, tab.diskBaseline);
     }
@@ -687,6 +688,8 @@ function rekeyFilePanelState(oldId, newId) {
 
 // ── Tab Operations ──────────────────────────────────────────────────
 
+let diffArrivals = 0;
+
 function openDiffTab(sessionId, diffId, data) {
   const state = getSessionState(sessionId);
   const shown = state.currentTab;
@@ -704,6 +707,7 @@ function openDiffTab(sessionId, diffId, data) {
     diskBaseline: typeof data.oldContent === 'string' ? data.oldContent.replace(/\r\n?/g, '\n') : null,
     resolved: false,
     editorView: null,
+    arrival: ++diffArrivals,
   };
 
   if (queue) {
@@ -1076,7 +1080,9 @@ function destroyCurrentTab(state, { stash = true } = {}) {
 function leaveToolTab(state) {
   const tab = state.currentTab;
   if (tab?.type === 'diff' && !tab.resolved && state.mcpState !== 'off') {
-    state.parkedDiffs.set(tab.diffId, tab);
+    const parked = [...state.parkedDiffs.values(), tab].sort((a, b) => a.arrival - b.arrival);
+    state.parkedDiffs.clear();
+    for (const diff of parked) state.parkedDiffs.set(diff.diffId, diff);
     tab.editorView?.dom.remove();
     state.currentTab = null;
     return;
@@ -1288,7 +1294,7 @@ function renderDiffContent(sessionId, tab) {
 
   // Defer merge-viewer creation until codemirror-bundle.js is available.
   window.loadCodeMirrorBundle().then(() => {
-    if (tab.resolved || getSessionState(sessionId).currentTab !== tab || currentPanelSessionId !== sessionId) return;
+    if (getSessionState(sessionId).currentTab !== tab || currentPanelSessionId !== sessionId) return;
     if (!tab.editorView) {
       if (diffMode === 'inline') {
         tab.editorView = window.createUnifiedMergeViewer(
