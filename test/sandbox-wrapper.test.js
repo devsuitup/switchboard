@@ -1302,6 +1302,85 @@ test('sandbox wrapper: refuses a state link whose target is inside an entry of ~
     }
   });
 
+test('sandbox wrapper: refuses a state link whose target exposes a read-only path under another spelling',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const todos = path.join(rig.root, 'store', 'todos');
+      fs.mkdirSync(path.join(todos, '.claude', 'hooks'), { recursive: true });
+      fs.writeFileSync(path.join(todos, '.claude', 'hooks', 'hook.sh'), '');
+      const alias = path.join(rig.root, 'project-alias');
+      fs.symlinkSync(todos, alias);
+      fs.symlinkSync(todos, path.join(dir, 'todos'));
+      const { status, stderr } = rig.run(['--version'], {}, alias);
+      assert.equal(status, 125, 'the hooks would be writable through the todos target');
+      assert.match(stderr, /keeps read-only, is also reached read-write/);
+      assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), [], 'refused before bwrap');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a state link whose target holds the file a linked ~/.claude.json points to',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const cache = path.join(rig.root, 'store', 'cache');
+      fs.mkdirSync(cache, { recursive: true });
+      fs.writeFileSync(path.join(cache, 'claude.json'), '{}\n');
+      fs.symlinkSync(cache, path.join(dir, 'cache'));
+      fs.symlinkSync(path.join(cache, 'claude.json'), path.join(rig.home, '.claude.json'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 125, 'the host ~/.claude.json would be writable through the cache target');
+      assert.match(stderr, /private copy/);
+      assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), [], 'refused before bwrap');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a state link inside a private entry\'s target whose name ends in a newline',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const priv = path.join(rig.root, 'cache') + '\n';
+      fs.mkdirSync(path.join(priv, 'todos'), { recursive: true });
+      fs.symlinkSync(priv, path.join(dir, 'shell-snapshots'));
+      fs.symlinkSync(path.join(priv, 'todos'), path.join(dir, 'todos'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 125, 'the host shell snapshots would be writable through the todos target');
+      assert.match(stderr, /keeps private|private copy/);
+      assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), [], 'refused before bwrap');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: a state link to a project\'s agent-memory, already writable there, is accepted',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const memory = path.join(rig.proj, '.claude', 'agent-memory');
+      fs.mkdirSync(memory, { recursive: true });
+      fs.symlinkSync(memory, path.join(dir, 'agent-memory'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(accessAt(ops, path.join(memory, 'notes.md')), '--bind');
+      assert.equal(accessAt(ops, path.join(rig.proj, '.claude', 'settings.json')), '--ro-bind');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
 test('sandbox wrapper: a protected path inside a private entry of ~/.claude gets no host mount over its tmpfs',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
