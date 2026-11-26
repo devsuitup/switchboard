@@ -8,6 +8,7 @@ const { parseFolderKey } = require('./src/main/remote/remote-hosts');
 const { validId, continuationRollup } = require('./session-continuations');
 const { isHostedJob, JOB_ID_RE, JOB_STATES } = require('./src/main/bg-agents/bg-agents-roster');
 const { conversationMeta } = require('./conversation-meta');
+const { lastConversationAt } = require('./src/main/session-index/message-count');
 const { projectHiddenMatcher } = require('./public/worktree-nesting');
 
 const REFUSED_JOB_STATES = new Set(['blocked', 'stopped']);
@@ -212,9 +213,9 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, options
     const pathIds = reachable.map(id => localRows.get(id)?.sessionId).filter(id => id && id !== root.sessionId);
     const ids = [...new Set([root.sessionId, ...root.mergedMemberIds.filter(id => !pathIds.includes(id)), current, ...pathIds])];
     const live = ids.filter(id => liveIds.has(key(id)));
-    const modified = id => localRows.get(key(id))?.modified || '';
-    return (live.length ? live : ids).reduce((head, id) => modified(id) > modified(head)
-      || modified(id) === modified(head) && (id === current || pathIds.includes(id)) ? id : head);
+    const activity = id => lastConversationAt(localRows.get(key(id)));
+    return (live.length ? live : ids).reduce((head, id) => activity(id) > activity(head)
+      || activity(id) === activity(head) && (id === current || pathIds.includes(id)) ? id : head);
   };
   const suppressedNames = new Set();
   for (const candidate of backgrounds) {

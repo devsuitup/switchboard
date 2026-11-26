@@ -335,10 +335,10 @@ for (const failing of ['getAllCached', 'getLocalDescriptors', 'getLocalJobs', 'g
 
 test('deduplicated option shows the opened head name date and own count from the sidebar payload', async t => {
   const h = setup(t, { old: ['x', 'b'], x: [], b: [], y: [], z: [] }, { choice: 'x' });
-  Object.assign(h.rows.get('old'), { modified: '2026-10-20T12:00:00Z' });
-  Object.assign(h.rows.get('x'), { mergedIntoSessionId: 'y', aiTitle: 'First candidate', modified: '2026-10-18T12:00:00Z', messageCount: 1 });
-  Object.assign(h.rows.get('y'), { aiTitle: 'Representative', modified: '2026-10-17T12:00:00Z', messageCount: 100 });
-  Object.assign(h.rows.get('z'), { mergedIntoSessionId: 'y', aiTitle: 'Opened head', modified: '2026-10-21T12:00:00Z', messageCount: 7 });
+  Object.assign(h.rows.get('old'), { modified: '2026-10-20T12:00:00Z', messageCountIndex: null });
+  Object.assign(h.rows.get('x'), { mergedIntoSessionId: 'y', aiTitle: 'First candidate', modified: '2026-10-18T12:00:00Z', messageCount: 1, messageCountIndex: null });
+  Object.assign(h.rows.get('y'), { aiTitle: 'Representative', modified: '2026-10-17T12:00:00Z', messageCount: 100, messageCountIndex: null });
+  Object.assign(h.rows.get('z'), { mergedIntoSessionId: 'y', aiTitle: 'Opened head', modified: '2026-10-21T12:00:00Z', messageCount: 7, messageCountIndex: null });
   const projects = cache.buildProjectsFromCache(false);
   h.ctx.sessionMap.clear();
   for (const project of projects) for (const row of project.sessions) h.ctx.sessionMap.set(row.sessionId, row);

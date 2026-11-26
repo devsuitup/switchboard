@@ -25,9 +25,10 @@ const FIXTURE_PATH = path.join(__dirname, 'fixtures', 'golden-session.jsonl');
 
 test('published content digest entries are append-only', () => {
   const { CONTENT_GOLDEN_DIGESTS } = require('../src/main/session-index/full-read-state');
-  assert.deepEqual(Object.fromEntries(Object.entries(CONTENT_GOLDEN_DIGESTS).filter(([version]) => Number(version) <= 2)),
+  assert.deepEqual(Object.fromEntries(Object.entries(CONTENT_GOLDEN_DIGESTS).filter(([version]) => Number(version) <= 3)),
     { 1: '068456510a189d17ee5b332c541ba439d26fbf4c1f2d30fbd90d3348b00e0fe3',
-      2: '4fc37c544e9b4349385c76087fc03db15cdd54240bc0dc233538e20aceb60af2' });
+      2: '4fc37c544e9b4349385c76087fc03db15cdd54240bc0dc233538e20aceb60af2',
+      3: '531749d96017f7d5d3e1f3c9476301376b95a0278cd0555b5f1bd16f5bce6d2c' });
 });
 
 test('parser output requires a content version bump for Claude, bridge and Codex derivation', t => {

@@ -136,13 +136,14 @@ process, or resumes the session with `claude --resume`. A subagent row opens its
 transcript instead — see [Subagents](subagents.md).
 
 A compacted conversation or a proven linear continuation can have several transcripts on one row. A continuation stays together only when its cached links prove a single local path; branching, remote and cross-project conversations remain separate. Once the initial scan has finished, a link to a missing part beside a single existing successor does not split the chain. `/clear` starts a new row. Clicking it
-first shows the open tab of its latest-modified part, then another open part
+first shows the open tab of its part with the latest message, then another open part
 from newest to oldest, then the original transcript's tab. If no part is open,
-it resumes the latest-modified part, including the original transcript if it
-was used again after compaction or continuation. Automatic restore instead follows a saved part to the terminal id.
+it resumes the part with the latest message, including the original transcript if it
+was used again after compaction or continuation. Bookkeeping written to an older
+part, such as a new title or a summary, does not make it the latest. Automatic restore instead follows a saved part to the terminal id.
 
 On a merged conversation, **Fork session**, **Resume with config** and
-**View messages** use that latest-modified part too. View messages shows
+**View messages** use that part too. View messages shows
 that part's transcript. The original part keeps the row identity; name, pin and archive follow the whole-conversation rule below.
 
 Such a row also shows **N parts** next to the short id. Its tooltip explains:
