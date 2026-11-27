@@ -108,10 +108,13 @@ enforces the merge method: `release-protection` (28112036) allows only
 procedure. A squashed port-back (#1293) made the next cut (#1312) conflict on
 the version and `CHANGELOG.md`. Ruleset 28267436 (`release-tags`,
 `refs/tags/v*`) restricts tag creation, update and deletion to admins.
-A release-provenance check in `release-tag` (a tag's commit on a `release/*`
-branch; every commit a PR brings into `release/*` already on `main` unless a
-merge commit, the bump, or a cherry-pick whose `-x` trailer names a commit on
-`main`) is enforced by `scripts/check-release-provenance.js` (job `release-provenance` on PRs into `release/*`, and the tag step of `release-tag`), run from `main`'s copy.
+`scripts/check-release-provenance.js`, run from `main`'s copy, enforces two
+rules: in tag mode, run by `build.yml`'s `release-tag` job on a tag push, a
+tag's commit is on a `release/*` branch; in PR mode, run by the
+`release-provenance` job of `release-provenance.yml` on PRs into `release/*`,
+every incoming commit is already on `main` unless it is a merge commit, the
+bump, or a cherry-pick whose `-x` trailer names a commit on `main`.
+`release-provenance` is not yet a required check, and `release/0.1` gets the workflow only at its next cut from `main` (#1318).
 
 The workflow side is the trigger list `[main, 'release/*']` in `test.yml`
 (PR and push), `build.yml` (PR) and `pr-title.yml` (PR); tag pushes are not
@@ -157,6 +160,12 @@ the check. The script requires only Node built-ins; no repository modules
 or npm resolution from the temporary directory are needed. Main must
 contain the checker before rollout; extraction errors fail the job.
 
+Not covered: the workflow files. `pull_request` takes the workflow from the
+PR's merge ref, so a PR into `release/*` can edit `release-provenance.yml` or
+`build.yml` to remove or replace the invocation; a tag push runs the tagged
+commit's `build.yml`. #1318 tracks moving the PR check to
+`pull_request_target` once `release/*` carries the workflow.
+
 The tag-push-only `release-tag` job also explicitly fetches the release refspec,
 then requires the peeled tag commit to be contained by an
 `origin/release/*` branch, before the existing version/beta check.
@@ -188,12 +197,12 @@ the base, a head merging that base tip, and subsequent version bumps. It
 accepts that history and rejects unported code brought by another head merge.
 Package script/dependency and lock dependency changes are rejected.
 The procedure and maintainer settings are documented in
-[The tag check](../../docs/releasing.md#the-tag-check); `docs/branching.md`
-does not exist on this base. Release branches use merge commits to preserve
-the checked ancestry and `-x` lines; `v*` tags are admin-only.
-Requiring the new check is a separate GitHub setting, and older release
-branches need a backport of the workflow. GitHub-side execution and settings
-remain unverified locally.
+[The tag check](../../docs/releasing.md#the-tag-check) and
+[branching.md](../../docs/branching.md#protection). Release branches use
+merge commits to preserve the checked ancestry and `-x` lines; `v*` tags are
+admin-only. Requiring the new check is a separate GitHub setting, and
+`release/0.1` gets the workflow only at its next cut from `main` (#1318).
+GitHub-side execution and settings remain unverified locally.
 
 ## Packaging and test workflows
 

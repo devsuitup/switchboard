@@ -78,7 +78,8 @@ from it.
   release branch first: every commit a PR brings into `release/*` must
   already be on `main`, unless it is a merge commit, the version and
   changelog bump, or a cherry-pick whose `-x` trailer names a commit on
-  `main`; this is enforced by the release-provenance check of `build.yml`'s `release-tag` job. The line's next beta is then a
+  `main`; this is enforced by the PR mode of `scripts/check-release-provenance.js`, run by the `release-provenance` job of `.github/workflows/release-provenance.yml` on every PR into `release/*` (not yet a required check, and
+  not yet on `release/0.1`, #1318). The line's next beta is then a
   maintenance beta:
 
   ```bash
@@ -207,7 +208,7 @@ commands, with the ancestry checks around them, are in
    admin can (ruleset 28267436 `release-tags` on `refs/tags/v*`: creation,
    update and deletion are restricted, so nobody else moves or deletes a
    release tag either). The tag is released only when its commit is on a
-   `release/*` branch, enforced by the release-provenance check of `build.yml`'s `release-tag` job:
+   `release/*` branch, enforced by the tag mode of `scripts/check-release-provenance.js`, run by `build.yml`'s `release-tag` job on the tag push:
 
    ```bash
    git fetch origin
@@ -220,7 +221,7 @@ commands, with the ancestry checks around them, are in
    Name the commit rather than a branch tip, which may have moved since.
 
 4. **Wait for the build.** The tag starts `.github/workflows/build.yml`. Its
-   `release-tag` job runs [the tag check](#the-tag-check) while the packages
+   `release-tag` job runs the provenance tag mode and [the tag check](#the-tag-check) while the packages
    build; publish needs both. The builds run on macOS
    (macos-15), Windows (windows-2022), and Linux x64 and arm64 on separate
    runners. Packaging-related pull requests and manual dispatches build only
@@ -423,6 +424,14 @@ repository working directory. The PR or tag cannot replace the checker
 through edits to its checked-out script. The checker must land on main
 before these workflows run; a missing main copy fails the job.
 
+The workflow files are the boundary that is not covered: `pull_request` reads
+`release-provenance.yml` and `build.yml` from the PR's merge ref, so a PR into
+`release/*` can edit either to remove or replace the invocation, and its run
+then checks nothing. A tag push likewise runs the `build.yml` of the tagged
+commit. Moving the PR check to `pull_request_target` once `release/*` carries
+the workflow is tracked in #1318; until then, review every change to these
+two files in a PR into `release/*`.
+
 - On every tag push, `release-tag` explicitly fetches `origin/release/*`
   and runs `node "$RUNNER_TEMP/check-release-provenance.js" tag "$GITHUB_REF_NAME"`
   before the version/beta check. The tag's peeled commit must be reachable
@@ -453,10 +462,10 @@ unreadable Git inputs. Both block the job.
 
 Release PRs use merge commits, preserving the checked commits and their
 `-x` lines. The maintainer configured `release/*` as merge-commit only and
-creation, update and deletion of `v*` tags as admin-only. Making the new
-`release-provenance` check required is a separate repository setting.
-The workflow must reach an older release branch through a backport before
-it can run there. Local tests do not verify these GitHub settings or runs.
+creation, update and deletion of `v*` tags as admin-only. `release-provenance` is not yet a required check, and `release/0.1` gets the workflow only at its next cut from `main` (#1318):
+making it required is a separate repository setting, and until that cut a PR
+into `release/0.1` runs it only if the PR itself carries the workflow (a cut
+from `main` does). Local tests do not verify these GitHub settings or runs.
 
 ## Update channels
 
