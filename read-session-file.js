@@ -5,7 +5,7 @@ const { bodyRead } = require('./src/main/session-index/read-counters');
 const { StringDecoder } = require('string_decoder');
 const { continuationId, continuationStamp, matchesContinuationStamp, continuationMtime } = require('./session-continuations');
 const { classifyTranscriptPath, isWorkflowRunId } = require('./subagent-attribution');
-const { isCountedMessage, messageCountIndex } = require('./src/main/session-index/message-count');
+const { isCountedMessage, laterConversation, messageCountIndex } = require('./src/main/session-index/message-count');
 const { collectEntryRefs, newestFirst } = require('./src/main/session-index/session-refs');
 
 /** Subagent transcripts land under <folder>/<parentSessionId>/subagents/agent-<agentId>.jsonl.
@@ -259,6 +259,8 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     // mtime without any actual activity, so mtime can't be the displayed time.
     let firstTimestamp = null;
     let lastTimestamp = null;
+    let conversationAt = null;
+    let sealedConversationAt = null;
     const onLine = (line, isTail = false) => {
       const continuationLine = Buffer.byteLength(line) <= 1024 * 1024;
       if (isTail) {
@@ -323,6 +325,8 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       if (isMessage) {
         messageCount++;
         if (isTail) tailMessageCount++;
+        else sealedConversationAt = laterConversation(sealedConversationAt, entry);
+        conversationAt = laterConversation(conversationAt, entry);
       }
       if (entry.type === 'assistant' || (entry.type === 'message' && entry.role === 'assistant')) {
         assistantSeen = true;
@@ -366,7 +370,8 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     const finalStat = fs.statSync(filePath, { bigint: true });
     const stable = matchesContinuationStamp(stamp, finalStat);
     const countIndex = stable
-      ? messageCountIndex({ ...witness, bytes: scan.consumed }, big, messageCount, tailMessageCount, !!(cutoff || excludedMessageUuids || excludedMessageSignatures)) : null;
+      ? messageCountIndex({ ...witness, bytes: scan.consumed }, big, messageCount, tailMessageCount, !!(cutoff || excludedMessageUuids || excludedMessageSignatures),
+        conversationAt, sealedConversationAt) : null;
 
     if (isSubagent) {
       const subagentType = meta.agentType || null;

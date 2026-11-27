@@ -171,7 +171,10 @@ the renderer jumps directly to that timestamp (or the newest cached older
 touch), rounding the age up to whole days. Exhausting the older history
 removes the button.
 The renderer extends locally with no IPC or parse when its cached range
-covers the new window. An uncached extension needs an incremental IPC and
+covers the new window. A click during a refresh redraws the list at once from
+the data already loaded and queues one follow-up refresh only when the new
+window goes past `loadedWindowStart`; a refresh whose result ends short of a
+window widened while it ran starts one for the wider window (#510). An uncached extension needs an incremental IPC and
 parse: prohibiting both would require reading all history on initial open,
 contradicting the backward-window requirement. The exact hidden-file count
 is available for cached history. While history is unread, the list says
@@ -259,7 +262,11 @@ also refuses `/etc/shadow`, `/etc/gshadow`, `/etc/ssh/ssh_host_*`, `*.pem`,
 `*.key` and SSH key basenames `id_(rsa|dsa|ecdsa|ed25519)([._-].*)?`,
 both literally and after host resolution. JS and shell derive those basenames
 from the same list. Ordinary source names such as `id_generator.py` and files
-inside an `id_utils` directory are allowed.
+inside an `id_utils` directory are allowed. A source file named after a key,
+such as `id_rsa.py` or `id_ed25519.go`, matches the key-name rule and is
+refused on purpose: the rule covers every name a key, its public half or a
+copy of it takes (`id_rsa`, `id_rsa.pub`, `id_rsa.bak`, `id_rsa-old`), and it
+does not guess from the suffix whether the file is source.
 There is an accepted residual check-then-read race: a process with write access
 as the same remote user can replace a directory with a symlink between
 `realpath -e`, the canonical-path guard and `head`. Reading the resolved path

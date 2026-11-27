@@ -102,7 +102,7 @@ function fixture(t, platform = 'linux', key = 'direct', options = {}) {
   f.deferTable = () => { let resolve; tableReader = () => new Promise(r => { resolve = r; }); return () => resolve?.(table()); };
   f.failTable = () => { tableReader = async () => { throw new Error('process table unavailable'); }; };
   f.ctx = createTriggerContext({ activeSessions, log, isPtyAlive: () => true, projectsDir,
-    getCliStatus: () => visible ? { ...currentStatus } : undefined,
+    getCliStatus: id => visible && id === writer ? { ...currentStatus } : undefined,
     getLiveDescriptor: id => cli.findLiveProcess(id),
     resolveSessionId: id => f.aliases?.get(id.toLowerCase()) || id,
     observeTabWriter: (...args) => f.observation ? f.observation(...args) : cli.observeTabWriter(...args),

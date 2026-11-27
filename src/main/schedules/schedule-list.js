@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
-const { encodeProjectPath } = require('../../../encode-project-path');
+const { readFolderNames, projectFolders } = require('./schedule-history-import');
 const { readScheduleRunResults } = require('./schedule-run-results');
 const { listScheduleFiles, nextCronMatch, describeCron, readScheduleStateOnly, latestCronMatch, scheduleStateKey, resolveScheduleSandbox } = require('./schedule-runner');
 const MINUTE_MS = 60000;
@@ -37,19 +37,27 @@ async function buildScheduleList(deps) {
     try { state = readScheduleStateOnly(stateDir); } catch { state = null; }
   }
   const projects = [];
+  let folderNames = [];
+  if (process.platform === 'win32') {
+    try { folderNames = readFolderNames(projectsDir); } catch {}
+  }
+  const importedFolders = new Map();
+  for (const run of imported.values()) {
+    if (!importedFolders.has(run.projectPath)) importedFolders.set(run.projectPath, new Set());
+    importedFolders.get(run.projectPath).add(run.folder);
+  }
   for (const projectPath of projectPaths) {
     const archived = isArchived(projectPath);
-    const folders = new Set([encodeProjectPath(projectPath)]);
-    try { folders.add(encodeProjectPath(fs.realpathSync(projectPath))); } catch {}
+    const folders = projectFolders(projectPath, folderNames);
     const cached = new Map();
-    for (const folder of folders) {
+    for (const folder of new Set([...folders, ...(importedFolders.get(projectPath) || [])])) {
       for (const row of await getCachedByFolder(folder)) {
-        if (!cached.has(row.sessionId)) cached.set(row.sessionId, { row, folder });
+        if (!cached.has(row.sessionId)) cached.set(row.sessionId, { row, folder, own: folders.has(folder) });
       }
     }
     const schedules = [];
     for (const schedule of files.filter(s => s.projectPath === projectPath)) {
-      const rows = [...cached.values()].filter(({ row, folder }) => schedule.slug !== null && (row.scheduleSlug === schedule.slug
+      const rows = [...cached.values()].filter(({ row, folder, own }) => schedule.slug !== null && (own && row.scheduleSlug === schedule.slug
         || !row.scheduleSlug && imported.get(row.sessionId)?.slug === schedule.slug && imported.get(row.sessionId).folder === folder
           && imported.get(row.sessionId).projectPath === projectPath))
         .sort((a, b) => Date.parse(b.row.created) - Date.parse(a.row.created)).slice(0, 20);

@@ -60,7 +60,7 @@ for (const initialScanComplete of [true, false]) {
     h.rows.get('old').bridgeSessionId = 'bridge';
     Object.assign(h.rows.get('mirror'), { bridgeSessionId: 'bridge', mergedIntoSessionId: 'old' });
     for (const [i, id] of ['old', 'mirror', 'b', 'c'].entries()) {
-      h.rows.get(id).modified = `2026-10-19T10:00:0${i}.000Z`;
+      Object.assign(h.rows.get(id), { modified: `2026-10-19T10:00:0${i}.000Z`, messageCountIndex: null });
     }
     const rows = cache.buildProjectsFromCache(false).flatMap(project => project.sessions);
     if (!initialScanComplete) {

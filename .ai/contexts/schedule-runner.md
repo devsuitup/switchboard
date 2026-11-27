@@ -1214,16 +1214,19 @@ and rotated. Results exist only from v0.0.104.
 **Reliable attribution** (`seedAttribution` in
 `src/main/schedules/schedule-history-import.js`): line 1 parses to an object
 with exactly E1's eight keys, `type: 'user'`, `parentUuid: null`, UUID `uuid`,
-`sessionId` equal to the file name, a nonempty `slug` naming a current schedule
-of the project, an ISO `timestamp` that round-trips, `message` with exactly
+`sessionId` equal to the file name, a nonempty `slug`, an ISO `timestamp` that round-trips, `message` with exactly
 `role: 'user'` and a string content starting with an E1 or E2 heading (for E2
 the `started` time must equal `timestamp` and `due` must not be later), and an
 absolute `cwd` that encodes to the transcript's folder (case-insensitive on
 Windows) and equals the registry project's path, literally or after `realpath`
-on either side. The folder encoding is lossy (`/work/project-a` and
+on either side (`fs.realpathSync` and `fs.realpathSync.native`). In a worktree
+folder (below) the `cwd` must instead lie strictly inside the project's path,
+and not inside or at another registry project nested in it. The folder encoding is lossy (`/work/project-a` and
 `/work/project/a` share one folder), so the folder check alone would hand one
 seed to two projects. A seed already stored for another project is skipped, so
-each seed has one owner. Anything else is not imported. E3 and later rows
+each seed has one owner. A seed that passes and whose slug names a current
+schedule is imported; one whose slug names none (schedule renamed or deleted)
+is counted in `unattributed`. Anything else is not imported. E3 and later rows
 already have `scheduleSlug` and are skipped.
 
 ### What hid runs before the import
@@ -1242,42 +1245,88 @@ leaves them as they are.
 - **Trigger.** `list-schedules` in `main.js` creates the importer once
   (`scheduleHistory()`) and calls `ensureStarted()` before building the list.
   It returns at once; the listing never awaits the import. Startup does not
-  start it. It waits (`state: 'waiting'`) until `isInitialScanComplete()`, so
-  a half-built index cannot mark an incomplete import as done.
+  start it. It waits until `isInitialScanComplete()`, so a half-built index
+  cannot store a project as final. Each call runs a pass over the registry
+  projects that still need reading (see **Store**); a pass with none does
+  nothing and notifies nothing.
 - **Schedules first.** A project's schedules are listed with `onScanError`. A
   commands-folder read error, or a schedule file with `readError`, fails that
   project; an unreadable inventory is never stored as an empty one.
+- **Folders.** `projectFolders`: the encoded registry path, its `realpathSync`
+  and its `realpathSync.native` (on-disk case, long names for 8.3 ones); on
+  win32 also every name of `projectsDir` equal to one of them ignoring case,
+  because `getCachedByFolder` matches the folder exactly (`WHERE folder = ?`,
+  no `COLLATE`) and `encodeProjectPath` keeps case. Worktree folders are the
+  names of `projectsDir` that `encodedFolderMayExtend` one of the project's
+  path forms (compared ignoring case on win32) and are not one of the
+  project's own folders. A worktree folder may also be a nested registry
+  project's folder (`/work/alpha/worktrees/feature` and the registered
+  `/work/alpha/worktrees-feature` encode alike), so no encoded folder is
+  excluded wholesale: each seed goes by its validated `cwd`. There, only seeds
+  that pass with the worktree rule are imported or counted, so a neighbour
+  such as `/work/alpha-beta` is never judged as a worktree of `/work/alpha`.
 - **Candidates from the index.** Per registry project, `getCachedByFolder` for
-  both folders; rows without `scheduleSlug` or `parentSessionId` whose `slug`
+  each folder; rows without `scheduleSlug` or `parentSessionId` whose `slug`
   names a current schedule of the project or whose `firstPrompt` starts with
   `Scheduled Task`. Other rows are never opened, so the cost scales with
   candidates, not with the size of the history.
 - **Bounded reads.** `readSeedLine` reads 8 KiB, then at most 64 KiB in total,
   and returns line 1 or null. One read at a time, a `pause()` (setImmediate)
   every 32 candidates and after each project.
-- **Store.** `<dataDir>/schedule-history/imported.json`, `{ v: 1, projects:
+- **Store.** `<dataDir>/schedule-history/imported.json`, `{ v: 2, projects:
   { <registry path>: { runs: { <sessionId>: { slug, folder, created, dueMs } },
-  unattributed } } }`, written atomically (temp + `renameWithRetry`) after each
-  project. The in-memory store takes the project only after that write
-  succeeds, so a failed publication leaves the project to the retry. Then
-  `onProgress` sends `schedule-history-imported` (preload
-  `onScheduleHistoryImported`); the tab queues its debounced reload. A project
-  present in the store is not read again.
-- **Marker.** When every registry project is stored, `writer.mergeGlobal({
-  scheduleHistoryImported: true })`. Marker and readable store: nothing runs.
-  A missing or unreadable store reruns the import, which is idempotent (same
-  attributions, same JSON). Projects added to the registry after the marker
-  are not imported.
+  unattributed, final } }, seeds: { <sessionId>: <proof> | 0 } }`, written atomically (temp + `renameWithRetry`)
+  after each project whose entry changed. The in-memory store takes the
+  project only after that write succeeds, so a failed publication leaves the
+  project to the retry. Then `onProgress` sends `schedule-history-imported`
+  (preload `onScheduleHistoryImported`); the tab queues its debounced reload.
+  `final` is true only when the project's root was a readable directory, it
+  owns at least one imported run and no attributed seed names a missing
+  schedule; a candidate it does not own (a prefix neighbour's run, a
+  hand-started look-alike) never makes it final. `seeds` caches, for every
+  candidate head read, only what line 1 proves and nothing about ownership:
+  `0` when line 1 is not Switchboard's record, otherwise `{ cwd, slug, folder,
+  created, dueMs }` from `seedAttribution` without a project. Ownership (cwd
+  equal to the project, or strictly inside it and not at or inside a nested
+  registry project) and whether the slug names a current schedule are decided
+  again on every pass against the current registry and schedules, so a nested
+  project registered or removed later moves the seed to its right owner. A
+  head is read at most once while its session stays in the index: a reread of
+  a non-final project costs its `getCachedByFolder` queries plus the heads of
+  candidates new since the last pass, and needs no global cap. The first
+  successful pass of a launch that reads projects drops the proofs of
+  sessions no scan saw, so deleted sessions do not accumulate. Already
+  imported `runs` are kept as they are. The unreleased `orphans`/`rejected`
+  fields of this branch's first round are ignored: their heads are read
+  again once. A project missing from the store is read by the next pass,
+  whenever it joined the registry; a non-final one is read once per launch;
+  a final one is never read again. A reread keeps the runs already stored
+  for the project and only adds to them, so no run is listed twice. An
+  unreachable root (`statSync` fails or is not a directory) keeps the previous
+  entry's runs and count without listing its schedules, so no seed is judged
+  against an empty inventory.
+- **No marker (#1262).** The 0.1.0 betas wrote `scheduleHistoryImported` in
+  the global settings and ran nothing once it was set, which stored an
+  unreachable or late project as empty for good. It is no longer read or
+  written. A `v: 1` store is still read; its entries carry no `final`, so each
+  project is read again once and the store is rewritten as `v: 2`. A missing
+  or unreadable store reruns the import, which is idempotent (same
+  attributions, same JSON).
 - **Failure and retry.** A failing project (transcript read error other than
   ENOENT, unreadable schedules, failed store write) does not stop the others.
-  The pass ends `failed` with the first error, writes no marker and keeps the
-  projects it stored. `onSettled` still reloads the tab so the note shows the
+  The pass ends `failed` with the first error and keeps the projects it
+  stored. `onSettled` still reloads the tab so the note shows the
   failure, but `ensureStarted` refuses to retry before `RETRY_MS` (5 min): the
   reload its own notification causes cannot restart the pass. The tab's minute
-  refresh retries after that; a new launch retries at its first listing.
-- **Listing.** `buildScheduleList({ historyImport })` also takes rows whose
-  session ID the store attributes to this schedule, in the same folder and the
-  same registry project, adds `imported: true` and `dueMs`, and returns
+  refresh retries after that; a new launch retries at its first listing. With a store
+  present at launch the state stays `done` while the pass reads, waits for the
+  index or rereads, so the note does not flash at every launch; `pending`,
+  `waiting` and `running` show only for the first import.
+- **Listing.** `buildScheduleList` reads the folders of `projectFolders`
+  (marked runs come from these only) plus the worktree folders of the
+  project's imported runs, and `buildScheduleList({ historyImport })` also
+  takes rows whose session ID the store attributes to this schedule, in the
+  same folder and the same registry project, adds `imported: true` and `dueMs`, and returns
   `history: { state, unattributed, error? }`, with `unattributed` summed over
   the projects listed now. Results are still read by session ID; none exists
   for these.
@@ -1292,8 +1341,14 @@ Regressions: `test/schedule-history-import.test.js` (era fixtures written in
 each version's seed shape and indexed through `readSessionDisplayHeader`,
 hand-started and forged look-alikes, idempotence, resume after a failed
 project, non-blocking listing, index wait, 4 000 rows with 300 candidates, byte
-cap, and the review regressions of #1253: a failed store publication, an
+cap, the review regressions of #1253: a failed store publication, an
 unreadable commands folder or schedule file, two projects sharing an encoded
-folder, and the failure-reload loop), `test/dom-schedules-tab.test.js` (outcome
+folder, and the failure-reload loop; and those of #1262: an unreachable
+project read again at the next launch, a project with no candidate read
+again, a renamed schedule counted then imported, a project registered after
+the import, a `v: 1` beta store, a quiet note with a store present, worktree
+runs with a nested project and a prefix neighbour, a worktree sharing a nested
+project's folder, a neighbour that must not make a project final, verdicts
+reused across launches, and a lower-cased registry path on win32), `test/dom-schedules-tab.test.js` (outcome
 text, note only on gaps, reload on progress) and `test/schedule-list.test.js`
 (main wiring).

@@ -9,7 +9,11 @@ unchanged. The info group uses `flex: 0 1 auto`, the header aligns from the
 left, and the name limit is `30vw`, keeping Refresh beside the id. Both titles
 can shrink to zero, and the PTY title yields first. The status and titles share
 the shrinkable `#terminal-header-label` container, which clips the titles'
-internal gaps and PTY separator too. This leaves the fixed-width id inside
+internal gaps and PTY separator too. The status dot shrinks with that label,
+so a header too narrow for both keeps the id and clips the dot: the id wins,
+on purpose (#515). A 22 px floor on the label, enough for the dot and its
+halo, pushes the id out of the info group at 800 px with long titles, which
+E4 refuses. This leaves the fixed-width id inside
 the info group at 800 px with the 96 px Linux caption overlay; separate
 shrinking titles left a fixed floor wider than the group's available space.
 
@@ -71,7 +75,22 @@ exit updates MCP only for an existing file panel state; it allocates no state.
 A deferred file open belongs to `tab.pendingTouchedOpen`, survives parking,
 and replays only when that tab ends in the slot. Ending another diff cannot
 replay or clear it; closing its parked tab drops only that tab's deferred open.
-A second MCP openDiff over an unanswered Diff remains outside this change.
+A second MCP openDiff over a shown unanswered Diff is parked the same way and
+the shown one keeps the slot (#509): the bridge holds every pending diff in
+`pendingDiffs` and answers each through its own `rpcId`, and the CLI can
+close any of them by `tab_name`, so a queue loses nothing, whereas rejecting
+the replaced one would tell the CLI the user refused an edit they never saw.
+An openDiff over an answered diff still replaces it. MCP off over a shown
+unanswered diff marks it resolved (`tab.cliStopped`): Accept and Reject are
+removed and Save is off, since the bridge has already answered it when it shut
+down; the proposal stays readable, its editor reattached when the session is
+shown again, until a tool switch or close. A diff Save waiting on its
+Overwrite question writes nothing once the diff is answered, closed or ended
+by MCP off. Parked diffs keep their arrival order (`tab.arrival`): a shown
+diff parked by a tool switch goes back before proposals that arrived after
+it. The bridge sends each openDiff answer when its pending entry is resolved,
+not in a later continuation, so `shutdownMcpServer` answers every pending
+diff before it closes the WebSocket.
 
 Shell keeps its existing independent lifecycle. Its `data-badge` CSS hook
 is reserved for #505; #506 never sets a shell badge.

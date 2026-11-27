@@ -24,7 +24,7 @@ function fixture(t, state = 'stopped') {
   fs.writeFileSync(path.join(root, 'daemon', 'roster.json'), line({ proto: 1, updatedAt: '2000-01-01T00:00:00Z', workers: {} }));
   const writeJob = (id, sessionId, jobState) => {
     fs.mkdirSync(path.join(jobsDir, id), { recursive: true });
-    fs.writeFileSync(path.join(jobsDir, id, 'state.json'), line({ state: jobState, sessionId, resumeSessionId: sessionId, linkScanPath: path.join(root, sessionId + '.jsonl') }));
+    fs.writeFileSync(path.join(jobsDir, id, 'state.json'), line({ state: jobState, sessionId, resumeSessionId: sessionId, cwd: root, linkScanPath: path.join(root, sessionId + '.jsonl') }));
   };
   writeJob('aaaaaaaa', SID, state);
   const descriptors = [], descriptorListeners = new Set();

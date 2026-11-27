@@ -57,15 +57,21 @@ at its source.
 ## Runs made before v0.0.90
 
 Runs made before v0.0.90 carry no schedule marker. The first time the tab
-lists your schedules, Switchboard imports them once, in the background, one
+lists your schedules, Switchboard imports them in the background, one
 project at a time: the list appears at once and the imported runs join it as
 each project is read. A session counts as a run of a schedule only if its
 transcript still begins with the exact record Switchboard wrote to start that
-run, with the schedule's slug and the project's own path; a session you started
-yourself never matches, even with the same title. Imported runs say
+run, with the schedule's slug and the project's path or the path of one of its
+worktrees; a session you started yourself never matches, even with the same
+title. A project added later is imported the next time the tab lists it. A
+project whose folder could not be reached, or in which no such session was
+found, is read again at the next launch, so a drive plugged back in or a share
+back online gets its runs. Imported runs say
 **Result unknown (imported)**: Switchboard kept no result for them and does not
 invent one. Sessions that start like a scheduled run but fail this check are
-counted in the note at the top of the tab and stay in Sessions. Each schedule
+counted in the note at the top of the tab and stay in Sessions, and so are
+runs of a schedule that was since renamed or deleted; they are listed again if
+a schedule of that name comes back. Each schedule
 lists its 20 newest runs, marked or imported. The note at the top of the tab
 appears only while the import runs, when it failed (Switchboard retries
 a few minutes later while the tab is open, and at the next launch), when some sessions could not be attributed, or when

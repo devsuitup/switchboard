@@ -29,7 +29,7 @@ function fixture(t, { state = 'stopped', live = true, own = false, ownDescriptor
   fs.mkdirSync(path.join(jobs, JOB), { recursive: true });
   fs.mkdirSync(sessions);
   fs.writeFileSync(path.join(jobs, JOB, 'state.json'), JSON.stringify({
-    state, linkScanPath: transcript, tokens: 42, bridgeSessionId: bridge ? BRIDGE : undefined,
+    state, cwd: dir, linkScanPath: transcript, tokens: 42, bridgeSessionId: bridge ? BRIDGE : undefined,
   }));
   const descriptor = path.join(sessions, PID + '.json');
   const writeDescriptor = () => fs.writeFileSync(descriptor, unknown ? '{' : JSON.stringify({

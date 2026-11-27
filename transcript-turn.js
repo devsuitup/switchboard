@@ -130,9 +130,34 @@ function promptMatches(text, command, { strict = false } = {}) {
   return (args ? args[1].trim() : '') === want.slice(want.split(/\s/)[0].length).trim();
 }
 
+function isNotificationOrAutoSummary(entry, previous) {
+  return entry.type === 'user' && (entryText(entry).trim().startsWith('<task-notification>')
+    || entry.isCompactSummary === true && !isManualCompactBoundary(previous));
+}
+
+// see .ai/contexts/trigger-watcher.md, "A turn the CLI starts on its own (issue #1284)"
+function queueActivityOf(entries) {
+  let pending = 0;
+  let dequeuedSinceClose = false;
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i];
+    if (entry.type === 'queue-operation') {
+      if (entry.operation === 'enqueue') pending += 1;
+      else if (['dequeue', 'remove', 'popAll'].includes(entry.operation)) pending = Math.max(0, pending - 1);
+      if (entry.operation === 'dequeue') dequeuedSinceClose = true;
+      continue;
+    }
+    if (entry.type !== 'user' && entry.type !== 'assistant') continue;
+    if (isNotificationOrAutoSummary(entry, entries[i - 1])) continue;
+    if (endsTurn(entry, true, entries[i - 1])) dequeuedSinceClose = false;
+  }
+  return pending > 0 || dequeuedSinceClose;
+}
+
 function classifyTranscriptTail(text) {
   const entries = parseMainThread(text);
   const prompts = collectPrompts(entries);
+  const queueActivity = queueActivityOf(entries);
   const compactBoundaries = entries.filter(isManualCompactBoundary)
     .map((entry) => ({ at: stampOf(entry), uuid: entry.uuid || null }))
     .filter((entry) => entry.at !== null);
@@ -154,13 +179,12 @@ function classifyTranscriptTail(text) {
     }
     if (entry.type === 'system' && entry.subtype === 'turn_duration') turnDurationAfter = true;
     if (entry.type !== 'user' && entry.type !== 'assistant') continue;
-    if (entry.type === 'user' && (entryText(entry).trim().startsWith('<task-notification>')
-      || entry.isCompactSummary === true && !isManualCompactBoundary(entries[i - 1]))) continue;
+    if (isNotificationOrAutoSummary(entry, entries[i - 1])) continue;
     const queueIdle = enqueued <= removed && dequeued === 0;
     const closed = endsTurn(entry, turnDurationAfter, entries[i - 1]) && queueIdle && at !== null;
-    return { state: at === null ? 'unknown' : (closed ? 'closed' : 'open'), closed, closedAt: closed ? at : null, lastEntryAt, prompts, compactBoundaries };
+    return { state: at === null ? 'unknown' : (closed ? 'closed' : 'open'), closed, closedAt: closed ? at : null, lastEntryAt, prompts, compactBoundaries, queueActivity };
   }
-  return { state: 'unknown', closed: false, closedAt: null, lastEntryAt, prompts, compactBoundaries };
+  return { state: 'unknown', closed: false, closedAt: null, lastEntryAt, prompts, compactBoundaries, queueActivity };
 }
 
 // see .ai/contexts/trigger-watcher.md, "Compaction evidence"

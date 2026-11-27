@@ -4,6 +4,7 @@
 const { deleteSessionRefusal } = require('../../../delete-session-guard');
 const { JOB_ID_RE } = require('./bg-agents-roster');
 const { liveWorkerDescriptor } = require('./bg-worker-liveness');
+const { resolveWorktreePath } = require('../../../derive-project-path');
 const DESCRIPTOR_WAIT_MS = 15000;
 
 function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessionState, sessionHasPty, ptyPids, getSetting,
@@ -205,10 +206,15 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       const item = global?.openWorkingSet?.find(item => item.bg === true && (item.attachJobId
         ? item.attachJobId === id : bgAgents.findRestoreJob(item.sessionId)?.job?.id === id));
       const { projectOperationGate, PROJECT_OPERATION_ERROR } = require('../shared/project-operation-gate');
-      const admission = item ? projectOperationGate.tryAdmit(item.projectPath) : null;
-      if (item && !admission) return { ok: false, error: PROJECT_OPERATION_ERROR };
+      const key = String(id).toLowerCase();
+      const cwds = [bgAgents.jobCwd?.(key), bgAgents.getSnapshot?.()?.roster?.find(entry => String(entry.id).toLowerCase() === key)?.cwd]
+        .filter(cwd => typeof cwd === 'string' && cwd);
+      const projects = [item?.projectPath, ...cwds, ...cwds.map(resolveWorktreePath)].filter(project => typeof project === 'string' && project);
+      if (!projects.length) return { ok: false, error: 'the project of this background session is unknown — not respawned. Check the Agents view, then retry.' };
+      const admission = projectOperationGate.tryAdmitAll(projects);
+      if (!admission) return { ok: false, error: PROJECT_OPERATION_ERROR };
       try { return (await runRespawn(id)).result; }
-      finally { admission?.release(); }
+      finally { admission.release(); }
     }
     const check = await checkVerb(verb, id);
     if (!check.ok) return check;
@@ -261,11 +267,15 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
         restoreScan = { records: new Map(), expiresAt: Date.now() + 1000 };
       }
       const lookup = bgAgents.findRestoreJob(sessionId, item.attachJobId, { findNewer: true, restoreScan });
-      if (!lookup.known || !lookup.job) return { ...refuse(lookup.reason || 'background job record unavailable'), ...(lookup.missing ? { missing: true } : {}) };
+      if (!lookup.known || !lookup.job) {
+        return { ...refuse(lookup.reason || 'background job record unavailable'), ...(lookup.missing ? { missing: true } : {}),
+          ...(lookup.stateFile ? { stateFile: lookup.stateFile } : {}) };
+      }
       job = lookup.job;
       const tasks = job.taskEvidence;
       const check = await bgAgents.conversationCheck(job.id, { workerLiveness: 'all' });
-      if (!check.known) return refuse(check.reason || 'conversation liveness unknown');
+      if (!check.known) return { ...refuse(check.reason || 'conversation liveness unknown'), ...(check.stateFile ? { stateFile: check.stateFile } : {}) };
+
       job.state = check.state;
       if (lookup.supersededBy && ['dead', 'unknown'].includes(check.workerLiveness)
         || job.state === 'done' && check.workerLiveness === 'unknown' && tasks?.valid && tasks.terminal

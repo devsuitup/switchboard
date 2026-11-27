@@ -2050,8 +2050,14 @@ session, which has no local descriptor). No new watcher: it reuses the cache
 - **Proof of submission by edge.** When a descriptor with an integer
   `statusUpdatedAt` is available, a submission counts when the descriptor
   shows a `busy` or `waiting` write with a `statusUpdatedAt` at or after the
-  moment of our Enter (`cliReactionTiedToEnter`, `confirm_source`
-  `descriptor`): a turn started, or our Enter opened a dialog. An `idle`
+  moment of our Enter and the transcript holds the command's own entry
+  stamped at or after the Enter, matched strictly as below
+  (`cliReactionTiedToEnter`, `confirm_source` `descriptor`): a turn started
+  on our prompt, or our prompt opened a dialog. A `busy` or `waiting` alone
+  proves nothing when the transcript is readable (#1284, see "A turn the CLI
+  starts on its own"); it still counts alone when the transcript reader
+  returns nothing or no prompt list (no `ctx.getTranscriptTurn`, no file yet
+  for a new session). An `idle`
   write at or after the Enter counts only when the transcript holds the
   command's own entry stamped at or after the Enter, matched as below but
   strictly (`promptMatches(…, { strict: true })`: a structured slash entry
@@ -2584,6 +2590,176 @@ Tests: `test/trigger-startup-v1.test.js` (readiness, fallback, deadline,
 edge proof on the startup path), `test/trigger-lifecycle-v1.test.js` (`open`
 resume and new through the real watcher, actions and context),
 `test/input-attach.test.js` (the output scan and the context accessor).
+
+### A turn the CLI starts on its own (issue #1284)
+
+Field case (2026-11-26, 0.1.0-beta.2, reported by jbr-sekoia): of about thirty
+morning `open` triggers, four reported `submitted: "confirmed"`,
+`submit_confirmed: true` and `turn_observed: true` while their prompt stayed
+in the input box, its Enter shown as a newline. In each, the first user entry
+after the Enter was not the prompt: a `<task-notification>` (a background
+task of the previous run, or `__orphan_summary__` after the resume) or a
+message from another session. In the transcript of the detailed case, a
+`queue-operation` `enqueue` of the notification came 0.9 s before our Enter,
+its `dequeue` 0.2 s after, then the notification's `user` entry. The CLI went
+`busy` for that turn, and the edge proof read that `busy` as our reaction.
+Why the CLI turned our Enter into a newline rather than queueing the prompt
+is not established.
+
+**How the transcript encodes it** (measured on the local transcripts of
+2026-11, 12 files): every prompt, including one typed at an idle CLI, is
+written as an `enqueue` carrying its text in `content`, then a `dequeue`
+(about 80 ms later when idle), then the `user` entry. Each `enqueue` is
+consumed by exactly one `dequeue`, `remove` or `popAll` (11775 against
+8249 + 3519 + 4). Task notifications go through the same queue and their
+`user` entry starts with `<task-notification>`; a message from another
+session is a `user` entry with `isMeta`, which `collectPrompts` skips. A
+slash command's `user` entry is the structured `<command-name>` form. So
+`turn.prompts` lists a queued notification too, and only a strict text match
+tells our prompt from it.
+
+**Proof.** `busy` and `waiting` now need the command's own entry, as `idle`
+already did (#1261): a `user` entry or an `enqueue` whose text matches the
+command under `promptMatches(…, { strict: true })`, stamped at or after the
+Enter. Without it the probe keeps polling within the verify window; still
+nothing, `confirmed: false`, `turn_observed: false`, and the recovery rules
+are unchanged: no recovery Enter while the descriptor reads `busy` or
+`waiting`, at most one otherwise. A chain step pending while the CLI stays
+busy goes through the same function in `waitForPendingConfirmation`.
+
+**Readiness.** `classifyTranscriptTail` returns `queueActivity`, true in
+two cases. (1) An `enqueue` not yet consumed: the queue is balanced over the
+whole tail, each `dequeue`, `remove` or `popAll` consuming one item, never
+below zero (a consumption whose `enqueue` lies before the tail is ignored).
+A turn's close never consumes anything: a notification queued while the
+previous turn ran and still pending when it closes keeps the hold (review r1
+of #1285). (2) A `dequeue` after the last entry that closes a turn: a queued
+item started a turn that has not closed (`endsTurn`, with an `end_turn`
+closing even without a `turn_duration` after it: requiring one held 279 of
+the 6916 prompts the measured files show typed at an idle CLI, an `enqueue`
+followed by its `dequeue` within 300 ms; without it, 63, counting only from
+the last close). Notification and
+automatic-summary `user` entries do not close, as in the closed rule. The
+tail is bounded (256 KiB, `transcript-tail`): an `enqueue` older than the
+tail is invisible and does not hold; the descriptor alone decides then. `waitForCliIdleAfter` treats a descriptor `idle` as not ready while
+`queueActivity` holds and the transcript was written less than
+`SWITCHBOARD_TRANSCRIPT_QUIET_MS` (default 3000 ms) ago, and restarts the
+settle when it stops holding. The quiet window is the bound for what the
+balance cannot settle: an `enqueue` left by a process that died (seen in the
+measured files, never consumed after the resume), or a dequeued notification
+that produced no reply. Balanced over whole files, 1309 of the 6926 idle
+prompts measured see such a leftover count; the hold then costs at most the
+quiet window after the last transcript write, and nothing once the
+transcript is quiet. A turn that keeps writing keeps the hold; a turn the
+descriptor reads as `busy` is held by the descriptor anyway. It applies to
+every `wait: "idle"` readiness: single triggers, `open`/`create` prompts
+(startup path) and chain steps; `wait: "none"` does not wait for it. The read
+is the cached tail reader (`createTranscriptTurnReader`, a stat per poll, a
+re-read only when the file changed), never the whole file.
+
+**Bound and result.** The hold never extends the trigger or step deadline.
+Still held at the deadline: nothing written, `readiness.ownTurnHeld`, and
+`reason` "the transcript showed a queued item or a turn the CLI started on
+its own still running at the deadline; nothing was written" (after the
+dialog, busy and starting reasons, which take precedence).
+
+**Not covered.** An Enter that reaches the CLI between our readiness and its
+own `dequeue` with no `enqueue` in the transcript yet is still lost, and is
+now reported unconfirmed rather than confirmed. A prompt whose own entry the
+CLI writes later than the verify window after its `busy` is reported
+unconfirmed. A slash command that opens a dialog without writing a
+transcript entry first now reports unconfirmed (no recovery Enter, the
+descriptor reads `waiting`). Not measured against a real CLI: the order in
+which the descriptor and the transcript are written for one prompt.
+
+Tests: `test/trigger-own-turn-proof-1284.test.js` (proof for `busy` and
+`waiting`, own `user` entry and own `enqueue`, strict slash match;
+readiness for a single trigger, `open`, the quiet bound and the deadline
+reason; the classifier; a chain step through the real watcher).
+
+### The written byte sequence and the composer's input (issue #980)
+
+Field signature (2026-10-29 onwards, workstation, 100 % CPU): the resume step
+after `/compact` written, recovery Enter sent, `submitted: "assumed"`,
+`turn_observed: false`, the text left in the composer with a line break.
+
+**Mechanism, read from the bundle of CLI 2.1.302 (`claude.exe`, read only, never
+run).** The input tokenizer (`oe` behind `J0e`, created with `x10Mouse: true`)
+splits a control character below 32 out of a run of text as its own token
+only when the buffer it is fed is shorter than 64 characters
+(`r&&c<32&&(a.length<64||c===BS)`). In a longer read, `text\r` stays one text
+token; the key parser gives it `name: ""` and `sequence: "text\r"`, and the
+text input's default branch inserts it (`w.insert(k)`), carriage return
+included. Only a lone `\r` gets `name: "return"`, which submits (`nr(c)`).
+An escape sequence always ends a text run, so in `ESC[200~ text ESC[201~ \r`
+the CR after the paste end is a token of its own: the paste is dispatched
+(`dispatchPasteEvent`), React work is flushed between the two events of the
+batch (`Ot.flushSyncWork()`), then the `return` key submits. Short commands
+(`/compact`) never reached 64 characters, which is why only the long resume
+step failed.
+
+**Transport, measured on this machine (2026-11-26)** with a node child under
+node-pty ConPTY, bundled `conpty.dll` and inbox alike, the child blocking its
+event loop for 1.5 s before reading: our two writes (70 characters, 50 ms,
+`\r`) arrived as one 71-character read; with no block they arrived as two.
+The bracketed-paste markers passed through ConPTY unchanged, and under the
+same block arrived as one read ending `ESC[201~\r`. Combined with the
+tokenizer rule this reproduces the field symptom without the CLI; the CLI
+itself was not run.
+
+**The rule.** `submitToPty` writes the text as `ESC[200~ text ESC[201~` when
+the PTY's tracked input attach (`getInputAttachedAt`, see "Readiness of a
+freshly started CLI") is a number, that is when the CLI has bracketed paste
+on and would read the markers. The Enter stays a separate bare `\r`, 50 ms
+later; the recovery Enter stays a bare `\r`. Plain text as before when the
+attach is not tracked (`undefined`: fixtures, remote) or not attached
+(`null`), and for a command whose first non-blank character is `/`: the CLI
+submits a slash command through its completion menu, which a paste may not
+open (not measured). Leading blanks do not make it prose: at submit the CLI
+tests `h.trim().startsWith("/")` and `trimStart().startsWith("/")` (bundle),
+and the watcher trims too (`isCompactCommand`).
+Commands never contain ESC (refused at parse), so a marker cannot end the
+paste early.
+
+**What the paste changes in the composer.** A paste longer than 800
+characters (`VY`) or of more than two lines is shown as `[Pasted text #N …]`.
+Submission expands it, and the transcript records the expanded text: of 92
+placeholder prompts in `~/.claude/history.jsonl`, none left a placeholder in a
+transcript, and the one checked has a 1429-character `user` entry against a
+26-character display. The strict own-entry match (#1284) therefore still
+sees the text. Not checked: the text of the `queue-operation` `enqueue` for a
+paste queued while busy.
+
+**Readiness before every chain step.** Compaction does not release raw mode:
+in the bundle, `handleSetRawMode(false)` reaches zero only on unmount, exit,
+suspend or a terminal handoff (external editor, `!` shell), so no
+`?2004l`/`?2004h` pair marks the end of a compaction, and requiring an attach
+newer than the compact's Enter would always wait out the bound. Chain steps
+(every step, not only the one after `/compact`) instead require the input to
+be attached now: `waitForCliIdleAfter(…, { input: true })` runs the same probe
+as the startup path with no lower bound on the stamp. Not attached: wait,
+bounded by `SWITCHBOARD_STARTUP_INPUT_WAIT_MS` from the start of the wait and
+by the step deadline. Past the bound the descriptor rule decides
+(`input: "unobserved"`, warning logged, text written plain since nothing is
+attached). At the deadline first: not written, `reason` "the CLI input was not
+attached (bracketed paste off) at the deadline; nothing was written". An
+untracked PTY does not wait. The hold applies to every exit of the wait, not
+only the idle-descriptor one (review r1 of #1291): a descriptor absent at the
+first read no longer releases the legacy write while a tracked input is
+detached, and the transcript fallback (descriptor `busy` or `shell` with a
+closed turn) does not count as ready either. At the deadline the input
+reason takes precedence over `busy`, since it is what holds the write.
+
+**Not covered.** A recovery Enter written while the CLI still has not read the
+first one lands in the same read as `\r\r`, one text token: two line breaks,
+no submit, as before. The early-input capture before the first attach turns
+any CR into a newline (#1261); the startup readiness still guards it. Not
+measured against a real CLI: the paste path end to end, and the slash
+command exclusion.
+
+Tests: `test/trigger-chain-input-attach-980.test.js` (the byte sequence with
+and without tracking, the slash exclusion, a detached input after `/compact`,
+the deadline reason, the bound fallback).
 
 ### Why `composerEmptyAfterWrite` cannot be made to prove submission, even by feeding it our own writes
 

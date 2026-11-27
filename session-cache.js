@@ -35,7 +35,7 @@ const { setRemappedProjectReader } = require('./encode-project-path');
 const { deriveProjectPath, storedProjectPathMatchesFolder, resolveWorktreePath } = require('./derive-project-path');
 const { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkEntrypoint, enumerateSessionFiles, resolveJsonlPath, mergeBridgeGroups, isCanonicalWorkflowPath } = require('./read-session-file');
 const { classifyTranscriptPath, isWorkflowRunId } = require('./subagent-attribution');
-const { readMessageCount } = require('./src/main/session-index/message-count');
+const { readMessageCount, lastConversationAt } = require('./src/main/session-index/message-count');
 const { encodeProjectPath, decodeProjectFolderBestEffort } = require('./encode-project-path');
 const { parseFolderKey, joinFolderKey } = require('./src/main/remote/remote-hosts');
 const { isPanelShellSession } = require('./src/main/terminals/panel-terminal-target');
@@ -1206,8 +1206,9 @@ function buildProjectsFromCache(showArchived) {
     const orderedChildren = [...children].sort((a, b) =>
       (b.modified || '').localeCompare(a.modified || '') || a.sessionId.localeCompare(b.sessionId)
     );
-    const head = orderedChildren[0];
-    const headSessionId = head && (head.modified || '') >= (row.modified || '') ? head.sessionId : row.sessionId;
+    const head = [...children].sort((a, b) =>
+      lastConversationAt(b).localeCompare(lastConversationAt(a)) || a.sessionId.localeCompare(b.sessionId))[0];
+    const headSessionId = head && lastConversationAt(head) >= lastConversationAt(row) ? head.sessionId : row.sessionId;
     let messageCount = row.messageCount;
     let modified = row.modified;
     for (const child of children) {
@@ -1353,7 +1354,7 @@ function buildProjectsFromCache(showArchived) {
   }
 
   const projects = mergeLocalBackgroundSessions([...projectMap.values()], cachedRows, localDescriptors, {
-    hiddenMatcher: hidden, metaMap, showArchived, jobs: localJobs, conversations,
+    hiddenMatcher: hidden, metaMap, showArchived, jobs: localJobs, conversations, activeSessions,
   });
   for (const proj of projects) {
     for (const session of proj.sessions) {

@@ -71,6 +71,12 @@ function fixture(t) {
     if (!rowsByFolder.has(folder)) rowsByFolder.set(folder, []);
     return { projectPath, folder, commands };
   };
+  const addFolder = dirPath => {
+    const folder = encodeProjectPath(dirPath);
+    fs.mkdirSync(path.join(projectsDir, folder), { recursive: true });
+    if (!rowsByFolder.has(folder)) rowsByFolder.set(folder, []);
+    return { projectPath: dirPath, folder };
+  };
   const writeSession = (project, records, { sessionId = records.find(r => r.sessionId)?.sessionId, index = true } = {}) => {
     const file = path.join(projectsDir, project.folder, `${sessionId}.jsonl`);
     fs.writeFileSync(file, records.map(record => JSON.stringify(record)).join('\n') + '\n');
@@ -84,8 +90,6 @@ function fixture(t) {
     }
     return sessionId;
   };
-  const settings = {};
-  const marks = [];
   const progress = [];
   const reads = [];
   const make = (extra = {}) => {
@@ -99,8 +103,6 @@ function fixture(t) {
       listSchedules: (projectPaths, options) => listScheduleFiles(projectPaths, { home: home.home, platform: 'linux', ...options }),
       getCachedByFolder: async folder => rowsByFolder.get(folder) || [],
       isIndexReady: () => true,
-      isMarked: () => settings.scheduleHistoryImported === true,
-      mark: async () => { marks.push(Date.now()); settings.scheduleHistoryImported = true; },
       onProgress: projectPath => progress.push(projectPath),
       readHead: async file => { reads.push(path.basename(file, '.jsonl')); return readSeedLine(file); },
       log: { info() {}, warn() {} },
@@ -115,7 +117,7 @@ function fixture(t) {
       isScheduleRunLive: () => false, isArchived: () => false, isKnownProject: () => true, catchUpActive: false,
       historyImport, now: () => Date.parse('2026-11-24T12:00Z'), ...extra });
   };
-  return { home, root, projectsDir, dataDir, addProject, writeSession, make, list, settings, marks, progress, reads, rowsByFolder };
+  return { home, root, projectsDir, dataDir, addProject, addFolder, writeSession, make, list, progress, reads, rowsByFolder, projects };
 }
 
 function schedulesOf(listing, slug) {
@@ -143,7 +145,6 @@ test('imports runs of each pre-v0.0.90 era from the seed shape and lists them as
   historyImport.ensureStarted();
   await historyImport.whenIdle();
   assert.equal(historyImport.status().state, 'done');
-  assert.equal(f.marks.length, 1, 'the marker is written once the registry is imported');
   assert.deepEqual(f.reads.sort(), [v025, v087].sort(), 'only unmarked candidates have their head read');
 
   const listing = await f.list(historyImport);
@@ -158,7 +159,7 @@ test('imports runs of each pre-v0.0.90 era from the seed shape and lists them as
   assert.equal(runs.find(run => run.sessionId === v025).replied, true);
   assert.deepEqual(listing.history, { state: 'done', unattributed: 0 });
   const store = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'schedule-history', 'imported.json'), 'utf8'));
-  assert.equal(store.v, 1);
+  assert.equal(store.v, 2);
   assert.deepEqual(Object.keys(store.projects), [p.projectPath]);
 });
 
@@ -186,11 +187,11 @@ test('a hand-started session titled like a scheduled run is never imported', asy
   await historyImport.whenIdle();
   const listing = await f.list(historyImport);
   assert.deepEqual(schedulesOf(listing, 'journal').runs, [], 'none of the look-alikes is attributed');
-  assert.deepEqual(listing.history, { state: 'done', unattributed: 5 },
-    'look-alikes that fail the seed check are counted as gaps; a valid seed of a schedule that no longer exists is not');
+  assert.deepEqual(listing.history, { state: 'done', unattributed: 6 },
+    'look-alikes that fail the seed check and a valid seed of a schedule that no longer exists are counted as gaps');
 });
 
-test('the import is idempotent: a marked import reads nothing and a fresh rerun stores the same runs', async t => {
+test('the import is idempotent: a finished import reads nothing and a fresh rerun stores the same runs', async t => {
   const f = fixture(t);
   const p = f.addProject('notes', { journal: '' });
   const id = crypto.randomUUID();
@@ -205,12 +206,10 @@ test('the import is idempotent: a marked import reads nothing and a fresh rerun 
   const again = f.make();
   again.ensureStarted();
   await again.whenIdle();
-  assert.deepEqual(f.reads, [], 'with the marker and its store present nothing is read again');
+  assert.deepEqual(f.reads, [], 'with every project stored as final nothing is read again');
   assert.equal(again.status().state, 'done');
   assert.deepEqual([...again.importedRuns().keys()], [id]);
-  assert.equal(f.marks.length, 1);
 
-  delete f.settings.scheduleHistoryImported;
   fs.rmSync(storeFile);
   const rerun = f.make();
   rerun.ensureStarted();
@@ -238,7 +237,6 @@ test('an interrupted import resumes with the projects it had not finished', asyn
   await broken.whenIdle();
   assert.equal(broken.status().state, 'failed');
   assert.match(broken.status().error, /EIO/);
-  assert.equal(f.marks.length, 0, 'an unfinished import does not write the marker');
   assert.deepEqual([...broken.importedRuns().keys()], [ida], 'the finished project is kept');
   f.reads.length = 0;
 
@@ -248,7 +246,6 @@ test('an interrupted import resumes with the projects it had not finished', asyn
   assert.deepEqual(f.reads, [idb], 'the finished project is not read again');
   assert.equal(resumed.status().state, 'done');
   assert.deepEqual([...resumed.importedRuns().keys()].sort(), [ida, idb].sort());
-  assert.equal(f.marks.length, 1);
 });
 
 test('the import never blocks the listing: runs appear once a project is done', async t => {
@@ -282,7 +279,6 @@ test('the import waits for the session index before reading anything', async t =
   await historyImport.whenIdle();
   assert.equal(historyImport.status().state, 'waiting');
   assert.deepEqual(f.reads, []);
-  assert.equal(f.marks.length, 0);
   ready = true;
   historyImport.ensureStarted();
   await historyImport.whenIdle();
@@ -327,7 +323,7 @@ test('the seed reader reads a bounded head and refuses a first line past its cap
   assert.ok(SEED_MAX_BYTES <= 64 * 1024);
 });
 
-test('a failed store publication leaves its project to the retry and the marker waits for it (R1)', async t => {
+test('a failed store publication leaves its project to the retry and the pass stays failed (R1)', async t => {
   const f = fixture(t);
   const a = f.addProject('a', { journal: '' });
   const b = f.addProject('b', { journal: '' });
@@ -346,7 +342,6 @@ test('a failed store publication leaves its project to the retry and the marker 
   importer.ensureStarted();
   await importer.whenIdle();
   assert.equal(importer.status().state, 'failed');
-  assert.equal(f.marks.length, 0);
   assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).projects), [a.projectPath]);
   assert.deepEqual([...importer.importedRuns().keys()], [ida], 'an unpublished project is not committed in memory');
   mocked.mock.restore();
@@ -354,7 +349,6 @@ test('a failed store publication leaves its project to the retry and the marker 
   importer.ensureStarted();
   await importer.whenIdle();
   assert.equal(importer.status().state, 'done');
-  assert.equal(f.marks.length, 1);
   const restarted = f.make();
   restarted.ensureStarted();
   await restarted.whenIdle();
@@ -387,7 +381,6 @@ for (const [name, inject] of [
     await first.whenIdle();
     assert.equal(first.status().state, 'failed');
     assert.match(first.status().error, /EACCES/);
-    assert.equal(f.marks.length, 0);
     mocked.mock.restore();
     const recovered = f.make();
     recovered.ensureStarted();
@@ -455,4 +448,267 @@ test('a failed import is not restarted by the reload its own notification causes
   importer.ensureStarted();
   await importer.whenIdle();
   assert.equal(attempts, 2, 'the import is retried once the back-off has passed');
+});
+
+async function pass(f, extra) {
+  const historyImport = f.make(extra);
+  historyImport.ensureStarted();
+  await historyImport.whenIdle();
+  return historyImport;
+}
+
+function storedProjects(f) {
+  return JSON.parse(fs.readFileSync(path.join(f.dataDir, 'schedule-history', 'imported.json'), 'utf8')).projects;
+}
+
+test('a project unreachable at the first pass is imported at the next launch once its folder is back (#1262)', async t => {
+  const f = fixture(t);
+  const p = f.addProject('bravo', { nightly: '' });
+  const id = f.writeSession(p, [seedV025(crypto.randomUUID(), { cwd: p.projectPath, slug: 'nightly', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const parked = path.join(f.home.home, 'parked');
+  fs.renameSync(p.projectPath, parked);
+  const first = await pass(f);
+  assert.equal(first.status().state, 'done');
+  assert.equal(first.importedRuns().size, 0);
+  assert.deepEqual(f.reads, [], 'no seed is judged against the schedules of a project that cannot be read');
+  fs.renameSync(parked, p.projectPath);
+  const next = await pass(f);
+  assert.deepEqual([...next.importedRuns().keys()], [id], 'the next launch reads the project again');
+  assert.deepEqual(schedulesOf(await f.list(next), 'nightly').runs.map(run => run.sessionId), [id]);
+});
+
+test('a project with no candidate row at all is read again at the next launch, and a found run is final (#1262)', async t => {
+  const f = fixture(t);
+  const p = f.addProject('notes', { journal: '' });
+  const id = f.writeSession(p, [seedV025(crypto.randomUUID(), { cwd: p.projectPath, slug: 'journal', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const indexed = f.rowsByFolder.get(p.folder).splice(0);
+  const first = await pass(f);
+  assert.equal(first.importedRuns().size, 0);
+  f.rowsByFolder.get(p.folder).push(...indexed);
+  const second = await pass(f);
+  assert.deepEqual([...second.importedRuns().keys()], [id]);
+  f.reads.length = 0;
+  const third = await pass(f);
+  assert.deepEqual(f.reads, [], 'a project whose run was found is not read again');
+  assert.deepEqual([...third.importedRuns().keys()], [id]);
+});
+
+test('runs of a renamed schedule are counted, and imported once a schedule of that slug exists again (#1262)', async t => {
+  const f = fixture(t);
+  const p = f.addProject('notes', { 'new-name': '' });
+  const id = f.writeSession(p, [seedV025(crypto.randomUUID(), { cwd: p.projectPath, slug: 'old-name', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const first = await pass(f);
+  assert.equal(first.importedRuns().size, 0);
+  assert.deepEqual(first.status(), { state: 'done', unattributed: 1 }, 'the dropped run shows in the gap note');
+  fs.renameSync(path.join(p.commands, 'schedule-new-name.md'), path.join(p.commands, 'schedule-old-name.md'));
+  const next = await pass(f);
+  assert.deepEqual([...next.importedRuns().keys()], [id]);
+  assert.deepEqual(next.status(), { state: 'done', unattributed: 0 });
+});
+
+test('a project registered after the import finished is imported without a new launch, and nothing loops (#1262)', async t => {
+  const f = fixture(t);
+  const a = f.addProject('alpha', { daily: '' });
+  const ida = f.writeSession(a, [seedV025(crypto.randomUUID(), { cwd: a.projectPath, slug: 'daily', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  let settled = 0;
+  const historyImport = await pass(f, { onSettled: () => { settled++; } });
+  assert.equal(historyImport.status().state, 'done');
+  assert.equal(settled, 1);
+  const d = f.addProject('delta', { daily: '' });
+  const idd = f.writeSession(d, [seedV025(crypto.randomUUID(), { cwd: d.projectPath, slug: 'daily', prompt: 'Write', timestamp: '2026-05-03T07:00:00.000Z' })]);
+  historyImport.ensureStarted();
+  await historyImport.whenIdle();
+  assert.deepEqual([...historyImport.importedRuns().keys()].sort(), [ida, idd].sort());
+  assert.ok(Object.hasOwn(storedProjects(f), d.projectPath));
+  const notified = settled;
+  f.reads.length = 0;
+  f.progress.length = 0;
+  for (let i = 0; i < 3; i++) {
+    historyImport.ensureStarted();
+    await historyImport.whenIdle();
+  }
+  assert.deepEqual(f.reads, [], 'later listings read nothing');
+  assert.deepEqual(f.progress, []);
+  assert.equal(settled, notified, 'a pass with nothing to do does not reload the tab');
+  assert.equal(historyImport.status().state, 'done');
+});
+
+test('a store written by a 0.1.0 beta is read again: missed runs are added, imported ones are kept once (#1262)', async t => {
+  const f = fixture(t);
+  const a = f.addProject('alpha', { daily: '' });
+  const b = f.addProject('bravo', { nightly: '' });
+  const ida = f.writeSession(a, [seedV025(crypto.randomUUID(), { cwd: a.projectPath, slug: 'daily', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const idb = f.writeSession(b, [seedV025(crypto.randomUUID(), { cwd: b.projectPath, slug: 'nightly', prompt: 'Write', timestamp: '2026-05-03T07:00:00.000Z' })]);
+  const file = path.join(f.dataDir, 'schedule-history', 'imported.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ v: 1, projects: {
+    [a.projectPath]: { runs: { [ida]: { slug: 'daily', folder: a.folder, created: '2026-05-02T07:00:00.000Z', dueMs: null } }, unattributed: 0 },
+    [b.projectPath]: { runs: {}, unattributed: 0 },
+  } }) + '\n');
+  let settled = 0;
+  const historyImport = await pass(f, { onSettled: () => { settled++; } });
+  assert.equal(historyImport.status().state, 'done');
+  assert.deepEqual([...historyImport.importedRuns().keys()].sort(), [ida, idb].sort());
+  assert.ok(settled >= 1, 'the tab reloads to show the added runs');
+  const listing = await f.list(historyImport);
+  assert.deepEqual(schedulesOf(listing, 'daily').runs.map(run => run.sessionId), [ida], 'the run imported by the beta is listed once');
+  assert.deepEqual(schedulesOf(listing, 'nightly').runs.map(run => run.sessionId), [idb]);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).v, 2);
+});
+
+test('a store present at launch keeps the note quiet while it is read again (#1262)', async t => {
+  const f = fixture(t);
+  const p = f.addProject('notes', { journal: '' });
+  f.writeSession(p, [seedV025(crypto.randomUUID(), { cwd: p.projectPath, slug: 'journal', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const file = path.join(f.dataDir, 'schedule-history', 'imported.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ v: 1, projects: { [p.projectPath]: { runs: {}, unattributed: 0 } } }) + '\n');
+  let ready = false;
+  const { readSeedLine } = require('../src/main/schedules/schedule-history-import');
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const historyImport = f.make({ isIndexReady: () => ready, readHead: async file => { await gate; return readSeedLine(file); } });
+  historyImport.ensureStarted();
+  assert.equal(historyImport.status().state, 'done', 'no import note while the index is still scanned');
+  ready = true;
+  historyImport.ensureStarted();
+  assert.equal(historyImport.status().state, 'done', 'no import note while a stored project is read again');
+  release();
+  await historyImport.whenIdle();
+  assert.equal(historyImport.importedRuns().size, 1);
+});
+
+test('a run started from a worktree of the project is imported and listed; neighbours are not claimed (#1262)', async t => {
+  const f = fixture(t);
+  const a = f.addProject('alpha', { daily: '' });
+  const sub = f.addProject(path.join('alpha', 'sub'), { daily: '' });
+  const wt = f.addFolder(path.join(a.projectPath, '.work-files', 'worktrees', 'wt1'));
+  fs.mkdirSync(wt.projectPath, { recursive: true });
+  const idwt = f.writeSession(wt, [seedV025(crypto.randomUUID(), { cwd: wt.projectPath, slug: 'daily', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const subWt = f.addFolder(path.join(sub.projectPath, '.claude', 'worktrees', 'x'));
+  fs.mkdirSync(subWt.projectPath, { recursive: true });
+  const idsub = f.writeSession(subWt, [seedV025(crypto.randomUUID(), { cwd: subWt.projectPath, slug: 'daily', prompt: 'Write', timestamp: '2026-05-03T07:00:00.000Z' })]);
+  const sibling = f.addFolder(path.join(f.root, 'alpha-beta'));
+  fs.mkdirSync(sibling.projectPath, { recursive: true });
+  const idsib = f.writeSession(sibling, [seedV025(crypto.randomUUID(), { cwd: sibling.projectPath, slug: 'daily', prompt: 'Write', timestamp: '2026-05-04T07:00:00.000Z' })]);
+  const forged = f.addFolder(path.join(a.projectPath, '.work-files', 'worktrees', 'wt2'));
+  f.writeSession(forged, handStarted(crypto.randomUUID(), { cwd: forged.projectPath, slug: 'daily', content: 'Scheduled Task: Write', timestamp: '2026-05-05T07:00:00.000Z' }));
+  const historyImport = await pass(f);
+  const runs = historyImport.importedRuns();
+  assert.equal(runs.get(idwt)?.projectPath, a.projectPath, 'the worktree run belongs to its project');
+  assert.equal(runs.get(idsub)?.projectPath, sub.projectPath, 'a nested registry project keeps the runs of its own worktrees');
+  assert.equal(runs.has(idsib), false, 'a folder that only shares the encoded prefix is not a worktree');
+  assert.equal(runs.size, 2, 'the hand-started look-alike in a worktree is not imported');
+  const listing = await f.list(historyImport);
+  const runsOf = projectPath => listing.projects.find(project => project.projectPath === projectPath).schedules[0].runs.map(run => run.sessionId);
+  assert.deepEqual(runsOf(a.projectPath), [idwt]);
+  assert.deepEqual(runsOf(sub.projectPath), [idsub]);
+  assert.equal(listing.history.unattributed, 0, 'sessions in neighbouring folders are not gaps of this project');
+});
+
+test('a registry path whose case differs from the transcript folder imports and lists its runs (#1262, win32)', { skip: process.platform !== 'win32' }, async t => {
+  const f = fixture(t);
+  const p = f.addProject('Notes', { journal: '' });
+  const id = f.writeSession(p, [seedV025(crypto.randomUUID(), { cwd: p.projectPath, slug: 'journal', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const marked = crypto.randomUUID();
+  f.writeSession(p, [seedV090(marked, { cwd: p.projectPath, slug: 'journal', prompt: 'Write', timestamp: '2026-10-20T07:00:00.000Z' })]);
+  const lower = p.projectPath.toLowerCase();
+  assert.notEqual(encodeProjectPath(lower), p.folder);
+  f.projects.splice(0, f.projects.length, lower);
+  const historyImport = await pass(f);
+  assert.deepEqual([...historyImport.importedRuns().keys()], [id]);
+  const listing = await f.list(historyImport);
+  assert.deepEqual(schedulesOf(listing, 'journal').runs.map(run => run.sessionId), [marked, id]);
+});
+
+test('a worktree whose encoded folder is also a nested registry project\'s folder is still imported (#1262 r1)', async t => {
+  const f = fixture(t);
+  const owner = f.addProject('alpha', { daily: '' });
+  const neighbour = f.addProject(path.join('alpha', 'worktrees-feature'), { daily: '' });
+  const wt = f.addFolder(path.join(owner.projectPath, 'worktrees', 'feature'));
+  fs.mkdirSync(wt.projectPath, { recursive: true });
+  assert.equal(wt.folder, neighbour.folder, 'the worktree and the nested project share one transcript folder');
+  const id = f.writeSession(wt, [seedV025(crypto.randomUUID(), { cwd: wt.projectPath, slug: 'daily', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const own = f.writeSession(neighbour, [seedV025(crypto.randomUUID(), { cwd: neighbour.projectPath, slug: 'daily', prompt: 'Write', timestamp: '2026-05-03T07:00:00.000Z' })]);
+  const historyImport = await pass(f);
+  assert.equal(historyImport.importedRuns().get(id)?.projectPath, owner.projectPath, 'the seed goes to the project its cwd lies in');
+  assert.equal(historyImport.importedRuns().get(own)?.projectPath, neighbour.projectPath, 'the nested project keeps its own run');
+  assert.equal(historyImport.status().unattributed, 0);
+});
+
+test('a run of an unregistered prefix neighbour does not make a project final (#1262 r1)', async t => {
+  const f = fixture(t);
+  const owner = f.addProject('alpha', { daily: '' });
+  const sibling = f.addFolder(path.join(f.root, 'alpha-beta'));
+  fs.mkdirSync(sibling.projectPath, { recursive: true });
+  f.writeSession(sibling, [seedV025(crypto.randomUUID(), { cwd: sibling.projectPath, slug: 'daily', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const first = await pass(f);
+  assert.equal(first.importedRuns().size, 0);
+  const id = f.writeSession(owner, [seedV025(crypto.randomUUID(), { cwd: owner.projectPath, slug: 'daily', prompt: 'Write', timestamp: '2026-05-03T07:00:00.000Z' })]);
+  const next = await pass(f);
+  assert.deepEqual([...next.importedRuns().keys()], [id], 'the project stays retryable until it owns a run');
+});
+
+test('a seed judged once is not read again at later launches (#1262 r1)', async t => {
+  const f = fixture(t);
+  const p = f.addProject('alpha', { daily: '' });
+  const orphan = f.writeSession(p, [seedV025(crypto.randomUUID(), { cwd: p.projectPath, slug: 'deleted', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  f.writeSession(p, handStarted(crypto.randomUUID(), { cwd: p.projectPath, slug: 'daily', content: 'Scheduled Task: Write', timestamp: '2026-05-03T07:00:00.000Z' }));
+  const sibling = f.addFolder(path.join(f.root, 'alpha-beta'));
+  fs.mkdirSync(sibling.projectPath, { recursive: true });
+  f.writeSession(sibling, [seedV025(crypto.randomUUID(), { cwd: sibling.projectPath, slug: 'daily', prompt: 'Write', timestamp: '2026-05-04T07:00:00.000Z' })]);
+  const first = await pass(f);
+  assert.equal(f.reads.length, 3);
+  assert.deepEqual(first.status(), { state: 'done', unattributed: 2 });
+  f.reads.length = 0;
+  const second = await pass(f);
+  assert.deepEqual(f.reads, [], 'the next launch reuses the verdicts instead of reading the heads again');
+  assert.deepEqual(second.status(), { state: 'done', unattributed: 2 });
+  fs.writeFileSync(path.join(p.commands, 'schedule-deleted.md'), '---\ncron: 0 7 * * *\n---\nWrite');
+  const third = await pass(f);
+  assert.deepEqual(f.reads, []);
+  assert.deepEqual([...third.importedRuns().keys()], [orphan], 'a stored orphan is imported once its schedule exists again');
+  assert.deepEqual(third.status(), { state: 'done', unattributed: 1 });
+});
+
+test('an orphan seen by a parent goes to a nested project registered later (#1262 r2)', async t => {
+  const f = fixture(t);
+  const parent = f.addProject('alpha', {});
+  const nestedPath = path.join(parent.projectPath, 'nested');
+  const nestedFolder = f.addFolder(nestedPath);
+  fs.mkdirSync(nestedPath, { recursive: true });
+  const id = f.writeSession(nestedFolder, [seedV025(crypto.randomUUID(), { cwd: nestedPath, slug: 'restored', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const first = await pass(f);
+  assert.equal(first.status().unattributed, 1, 'the run of a missing schedule is counted for the parent');
+  const nested = f.addProject(path.join('alpha', 'nested'), { restored: '' });
+  fs.writeFileSync(path.join(parent.commands, 'schedule-restored.md'), '---\ncron: 0 7 * * *\n---\nRestored');
+  const next = await pass(f);
+  assert.equal(next.importedRuns().get(id)?.projectPath, nested.projectPath, 'ownership is decided against the current registry');
+});
+
+test('a seed a nested project owned goes to the parent once the nested project is removed (#1262 r2)', async t => {
+  const f = fixture(t);
+  const parent = f.addProject('alpha', {});
+  const nested = f.addProject(path.join('alpha', 'nested'), {});
+  const id = f.writeSession(nested, [seedV025(crypto.randomUUID(), { cwd: nested.projectPath, slug: 'restored', prompt: 'Write', timestamp: '2026-05-02T07:00:00.000Z' })]);
+  const first = await pass(f);
+  assert.equal(first.importedRuns().size, 0);
+  f.projects.splice(f.projects.indexOf(nested.projectPath), 1);
+  fs.writeFileSync(path.join(parent.commands, 'schedule-restored.md'), '---\ncron: 0 7 * * *\n---\nRestored');
+  f.reads.length = 0;
+  const next = await pass(f);
+  assert.equal(next.importedRuns().get(id)?.projectPath, parent.projectPath);
+  assert.deepEqual(f.reads, [], 'the cached proof of the seed is reused, only ownership is decided again');
+});
+
+test('cached seed proofs of sessions gone from the index are dropped (#1262 r2)', async t => {
+  const f = fixture(t);
+  const p = f.addProject('alpha', { daily: '' });
+  for (let i = 0; i < 5; i++) f.writeSession(p, handStarted(crypto.randomUUID(), { cwd: p.projectPath, slug: 'daily', content: 'Scheduled Task: Write', timestamp: '2026-05-03T07:00:00.000Z' }));
+  await pass(f);
+  assert.equal(Object.keys(JSON.parse(fs.readFileSync(path.join(f.dataDir, 'schedule-history', 'imported.json'), 'utf8')).seeds || {}).length, 5);
+  f.rowsByFolder.get(p.folder).splice(0);
+  const next = await pass(f);
+  assert.deepEqual(next.status(), { state: 'done', unattributed: 0 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.dataDir, 'schedule-history', 'imported.json'), 'utf8')).seeds, {});
 });

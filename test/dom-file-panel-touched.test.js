@@ -155,7 +155,7 @@ for (const [label, pair] of [
   }
 }
 
-test('round 4 s1: quit Save after replacing a dirty remote tab never sends a local panel save', async () => {
+test('round 4 s1: quit Save over a dirty remote tab still current never sends a local panel save', async () => {
   const ctx = setupDom({ touchedImpl: () => result({ kind: 'remote' }),
     readImpl: () => ({ ok: true, kind: 'remote', readOnly: true, git: true, original: 'base', current: 'text' }) });
   try {
@@ -165,14 +165,19 @@ test('round 4 s1: quit Save after replacing a dirty remote tab never sends a loc
     ctx.editors.at(-1).setText('unexpected dirty text');
     await ctx.window.handleChangesSave('s1');
     assert.equal(ctx.calls.save.length, 0, 'the active read-only editor refuses Save');
-    ctx.window.openDiffTab('s1', 'd1', DIFF);
+    assert.equal(ctx.stateOf('s1').currentTab.remote, true, 'the dirty remote tab is still the current one');
     const quitting = ctx.window.askAboutUnsavedEdits();
+    for (let i = 0; i < 20 && !ctx.document.getElementById('unsaved-save'); i++) await new Promise(resolve => setTimeout(resolve, 5));
     const save = ctx.document.getElementById('unsaved-save');
-    if (save) save.click();
-    assert.equal(await quitting, true);
+    assert.ok(save, 'the dirty read-only current tab is counted, so the quit question opens');
+    save.click();
+    await flush();
     assert.equal(ctx.calls.save.some(call => !call.options?.sessionId), false,
       'a remote buffer must never reach saveFileForPanel without its sessionId');
     assert.equal(ctx.calls.save.length, 0);
+    assert.match(ctx.document.querySelector('#unsaved-edits-dialog .add-project-error').textContent, /not saved/);
+    ctx.document.getElementById('unsaved-discard').click();
+    assert.equal(await quitting, true);
   } finally { ctx.destroy(); }
 });
 
@@ -709,6 +714,56 @@ for (const destination of ['file', 'session']) {
     } finally { release(result()); ctx.destroy(); }
   });
 }
+
+test('#510: Show more during a refresh redraws at once and queues nothing when the loaded data covers the window', async () => {
+  const now = Date.now();
+  const day = 86400000;
+  const files = [row({ path: '/work/new.txt', lastTouched: now }), row({ path: '/work/old.txt', lastTouched: now - 5 * day })];
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const ctx = setupDom({ touchedImpl: () => ctx.calls.touched.length === 2 ? pending : result({ files, hasOlder: false }) });
+  let refreshing;
+  try {
+    await openTab(ctx);
+    assert.deepEqual(rows(ctx).map(r => r.dataset.path), ['/work/new.txt']);
+    refreshing = ctx.window.refreshTouched('s1');
+    await flush();
+    assert.equal(ctx.stateOf('s1').currentTab.refreshing, true);
+    ctx.document.getElementById('touched-more-btn').click();
+    assert.deepEqual(rows(ctx).map(r => r.dataset.path), ['/work/new.txt', '/work/old.txt'], 'the click shows the wider window before the refresh ends');
+    assert.notEqual(ctx.stateOf('s1').currentTab.refreshPending, true);
+    release(result({ files, hasOlder: false }));
+    await refreshing;
+    await flush();
+    assert.equal(ctx.calls.touched.length, 2, 'no second pass over data already loaded');
+    assert.deepEqual(rows(ctx).map(r => r.dataset.path), ['/work/new.txt', '/work/old.txt']);
+  } finally { release(result()); await refreshing; ctx.destroy(); }
+});
+
+test('#510: a refresh that ends short of a window widened during it reads the wider window', async () => {
+  const now = Date.now();
+  const day = 86400000;
+  const requests = [];
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const ctx = setupDom({ touchedImpl: (_id, options) => {
+    requests.push(options.windowDays);
+    if (requests.length === 1) return result({ files: [row({ lastTouched: now }), row({ path: '/work/old.txt', lastTouched: now - 5 * day })], hasOlder: false });
+    if (requests.length === 2) return pending;
+    return result({ files: [row({ lastTouched: now })], hasOlder: false });
+  } });
+  let refreshing;
+  try {
+    await openTab(ctx);
+    refreshing = ctx.window.refreshTouched('s1');
+    await flush();
+    ctx.document.getElementById('touched-more-btn').click();
+    release(result({ files: [row({ lastTouched: now })], hasOlder: true, loadedWindowStart: now - day, windowStart: now - day }));
+    await refreshing;
+    await flush();
+    assert.deepEqual(requests, [1, 1, 11], 'the window the user asked for is read once the short result is in');
+  } finally { release(result()); await refreshing; ctx.destroy(); }
+});
 
 test('one extension jumps to a sixty-day mtime and removes the older button', async () => {
   const now = Date.now();
