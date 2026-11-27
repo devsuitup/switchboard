@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- A transcript that grows without its modification time changing and cannot be fully read no longer triggers repeated full reads on every session refresh, avoiding needless disk and CPU work. (#868)
+
 ## v0.1.0-beta.3 — 2026-11-27
 
 ### Fixed

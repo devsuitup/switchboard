@@ -942,8 +942,15 @@ while display fields refresh. Subagents retain their existing filesystem
 timestamp semantics. The same cap applies to a size change downward; ordinary
 advancing-mtime writes keep the bounded header path and its existing count/body
 trade-off. Linked continuations retain
-their stamp validation, preparation budget and race deferral. A failed exceptional
-full read keeps the previous row/size so a later refresh can retry.
+their stamp validation, preparation budget and race deferral. A pinned full read
+returning null falls back to the existing header/count path without attempting
+another full read in that walk (#868). The fallback records the observed size,
+clears the obsolete continuation index and full-content certificate, and retains
+cached display fields when the header has no usable signal. An unchanged next
+walk skips that row, leaving its continuation budget available to other files.
+Size-only adoption is insufficient here: the old continuation stamp could still
+force a scan on the next walk. Content unavailable to the bounded fallback
+remains cached until a later source change or full scan.
 
 The writer store adds nullable `fileSize INTEGER` through its existing
 version-independent schema reconciliation, without wiping cached rows. Existing
