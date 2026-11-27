@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
+- Toggling **Group by project** in the terminal grid avoids an extra redraw of visible terminals and leaves offscreen terminals untouched until they come into view. (#864)
 - The shell shown in a session's header no longer stays on the previous session's shell when you fork or `/clear` the session you are viewing just as it opens. (#858)
 - When a session is forked or cleared while it is being archived, from its own row or with its folder, the **Archive** button of the original conversation no longer stays disabled in the sidebar. (#858)
 - A transcript that grows without its modification time changing and cannot be fully read no longer triggers repeated full reads on every session refresh, avoiding needless disk and CPU work. (#868)

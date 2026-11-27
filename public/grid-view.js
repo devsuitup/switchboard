@@ -383,10 +383,7 @@ function setGridGroupByProject(on) {
   unwrapGridCards();
   const sessionIds = layoutGridCards(openGridSessionIds());
   if (typeof syncToolBar === 'function') syncToolBar();
-  for (const sid of sessionIds) {
-    const entry = openSessions.get(sid);
-    if (entry) fitAndScroll(entry);
-  }
+  refitOpenTerminals();
   const toFocus = sessionIds.includes(restoreId) ? restoreId : sessionIds[0];
   if (toFocus) focusGridCard(toFocus);
 }
