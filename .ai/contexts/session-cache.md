@@ -131,15 +131,20 @@ Claude full reads use `jsonl-scan.scanLines` with 256 KiB chunks through the
 observed EOF. Daily metrics accumulate as lines arrive. The reader captures
 64-byte head/tail witnesses and the unterminated tail for both existing indexes.
 Startup, refreshFolder and bridge rereads use the same parser. Lazy bridge
-signature evidence also streams, bounded to the original read's byte length;
-an unreadable or truncated source yields empty signature evidence, so deleting
-a bridge source between reading and merging cannot fail its folder. Neither
+signature evidence also streams, bounded to the original read's byte length.
+An unreadable or truncated source yields unknown (`null`) signature evidence,
+never an empty list, so deleting or locking a bridge source between reading and
+merging cannot fail its folder and cannot certify an over-count (#1189, see
+"Bridge history divergence"). Neither
 path materializes a whole-file UTF-8 string or an array of every line. For
 ordinary-sized records, output semantics and the version-1 golden ledger stay
 unchanged. The shared scanner caps each line at 64 MiB before
 UTF-8 conversion, discards oversized records through the next newline, and
 marks an oversized unterminated continuation as skipped. Claude, Codex, bridge
-signatures and refresh message recounts share this rule. Metric buckets and
+signatures and refresh message recounts share this rule. The cap shipped without
+a content-version bump: a transcript with a line over 64 MiB that was indexed
+before #1184 keeps its old count until its file changes or a forced rebuild
+(accepted, negligible exposure, #1189). Metric buckets and
 bridge identity evidence still depend on transcript content. The regression
 injects a lower line cap. The whole-string regression uses 2 MiB locally with
 an injected readFileSync limit; CI or SWITCHBOARD_TEST_LARGE_TRANSCRIPT runs
@@ -154,8 +159,15 @@ text. It is not a successful `session_cache.fullReadStamp`. Prior rows survive
 with null content stamps; new failed transcripts do not create display rows.
 Matching witnesses suppress startup retries across reopen; changed or removed
 sources, forced rebuilds, content-version changes and configuration changes
-invalidate them. An explicit folder refresh retries witnessed sources and
-removes the witness after a successful read. Claude sidecars and Codex
+invalidate them. `refreshFolder` (Claude and harness folders) retries a
+witnessed source only when the refresh is targeted at it (`opts.files` names
+it) or when the witness stamp no longer matches the file (`matchesFullRead`,
+with the Codex title snapshot as dependency); it removes the witness after a
+successful read. An untargeted refresh (folder-level watcher event, reconcile,
+project add/unarchive) leaves an unchanged witnessed source unread: without a
+cached row it is skipped, with one it takes the ordinary unchanged/header path
+(#1189; before, every untargeted refresh fully reread every witnessed file).
+Claude sidecars and Codex
 effective titles remain dependencies. Transient I/O errors (including EBUSY,
 EACCES, EPERM, EMFILE, ENFILE, EIO, EAGAIN), short reads and raced failures have
 no durable negative witness. Only deferrals with read error codes enter the
@@ -191,6 +203,8 @@ each source once after replan checks, even if the writer subsequently fails, at 
 Missing stamps use `changed-during-read`; main-side races use
 `raced-before-publication`. Sources withheld only by bridge-group expansion use
 `bridge-sibling`, at either stage, without claiming that their files changed.
+Members of a group whose bridge signature evidence could not be re-read use
+`bridge-evidence-unknown`; it is a read error, so it arms the in-run retry queue.
 Subagent names include their parent session ID:
 `file=<parentSessionId>/agent-<id>.jsonl`. The size is the pre-read observation
 (or the checked stamp for a publication race, zero if unavailable); no absolute source
@@ -1338,6 +1352,18 @@ independent repeated turn from a copy; timestamp fallback on wholly UUID-less
 histories can also omit distinct older turns. This is a disclosed legacy
 limitation, not an exact identity guarantee. An unreadable predecessor does not
 establish overlap; a readable member with its own contribution stays independent.
+
+Signature evidence is read lazily, after the row read. When that bounded re-read
+fails (the file was locked or deleted in between), `messageSignatures` is
+`null`, meaning unknown, not empty (#1189). If a predecessor's evidence is
+unknown, or the member's own evidence is unknown and no own UUID decides, the
+member is not re-derived: it keeps its fresh or cached row and the whole group
+is deferred. `mergeBridgeGroups` returns the group's session IDs in `deferred`
+and clears `fullReadStamp` on every group row it upserts, so the next startup
+selects them again instead of trusting a recovery computed without exclusions.
+The startup worker also records each member as a deferred source
+(`bridge-evidence-unknown`), and `deferStartupSources` then withholds the existing
+rows of the group as for any other deferred bridge source.
 
 At database open, `bridge_uuid_index_version = 1` records a one-time transaction
 that removes only bridged top-level cache rows, their metrics and their FTS

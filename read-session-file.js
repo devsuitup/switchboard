@@ -75,7 +75,7 @@ function attachMessageSignatures(row, filePath, byteLength) {
   Object.defineProperty(row, 'messageSignatures', {
     configurable: true,
     get() {
-      const signatures = [];
+      let signatures = [];
       const add = line => {
         let entry;
         try { entry = JSON.parse(line); } catch { return; }
@@ -86,7 +86,7 @@ function attachMessageSignatures(row, filePath, byteLength) {
       try {
         const scan = bodyRead(filePath, () => scanLines(filePath, 0, add, byteLength));
         if (scan.tail) add(scan.tail);
-      } catch { signatures.length = 0; }
+      } catch { signatures = null; }
       Object.defineProperty(row, 'messageSignatures', { value: signatures, configurable: true });
       return signatures;
     },
@@ -471,6 +471,7 @@ function mergeBridgeGroups(existingRows, freshRows, reread) {
   }
 
   const replacements = new Map();
+  const deferredGroups = new Set();
 
   for (const members of groups.values()) {
     members.sort((a, b) => {
@@ -518,12 +519,18 @@ function mergeBridgeGroups(existingRows, freshRows, reread) {
         }
         if (!legacy && fullMember) {
           const excluded = new Set(previousRows.flatMap(row => row?.messageUuids || []));
-          const previousSignatures = previousRows.flatMap(row => row?.messageSignatures || []);
+          const previousEvidence = previousRows.map(row => row?.messageSignatures === undefined ? [] : row.messageSignatures);
+          const ownUuid = fullMember.messageUuids?.some(uuid => !excluded.has(uuid));
+          if (previousEvidence.includes(null) || (!ownUuid && fullMember.messageSignatures === null)) {
+            deferredGroups.add(member.bridgeSessionId);
+            continue;
+          }
+          const previousSignatures = previousEvidence.flat();
           const signatures = {
             withUuid: new Set(previousSignatures.filter(record => !record.uuid).map(record => record.signature)),
             withoutUuid: new Set(previousSignatures.map(record => record.signature)),
           };
-          const hasOwnMessages = fullMember.messageUuids?.some(uuid => !excluded.has(uuid)) ||
+          const hasOwnMessages = ownUuid ||
             fullMember.messageSignatures?.some(record => !(record.uuid ? signatures.withUuid : signatures.withoutUuid).has(record.signature));
           if (hasOwnMessages || previousRows.some(row => !row)) {
             const recovered = reread(member.sessionId, null, excluded, signatures);
@@ -563,7 +570,9 @@ function mergeBridgeGroups(existingRows, freshRows, reread) {
     else toDelete.push(row.sessionId);
   }
 
-  return { toUpsert, toDelete };
+  for (const row of toUpsert) if (!row.parentSessionId && deferredGroups.has(row.bridgeSessionId)) row.fullReadStamp = null;
+  const deferred = [...deferredGroups].flatMap(bridgeSessionId => groups.get(bridgeSessionId).map(member => member.sessionId));
+  return { toUpsert, toDelete, deferred };
 }
 
 /** Enumerate every jsonl in a project folder: top-level sessions plus any

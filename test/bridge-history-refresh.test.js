@@ -351,6 +351,36 @@ test('mixed coverage still compares a complete predecessor with a legacy copied 
   assert.ok(!b.textContent.includes('Copied payload'));
 });
 
+test('a predecessor whose signatures cannot be re-read leaves the merged member uncertified (#1189)', { timeout: 9000 }, async t => {
+  const f = fixture(t);
+  f.write('a', [f.msg('known', '01', 'Copied payload')]);
+  await cache.scanFoldersViaWorker({ projectsDir: f.root, folders: [f.folder] });
+  f.write('b', [f.msg(undefined, '01', 'Copied payload'), f.msg('own', '02')]);
+  const predecessor = path.join(f.dir, 'a.jsonl');
+  const original = fs.openSync;
+  let injected = 0;
+  fs.openSync = (file, ...args) => {
+    if (file === predecessor && /at Object\.get \([^)]*read-session-file\.js/.test(new Error().stack)) { injected++; throw Object.assign(new Error('synthetic lock'), { code: 'EBUSY' }); }
+    return original(file, ...args);
+  };
+  try { cache.refreshFolder(f.folder, { files: new Set(['b.jsonl']) }); }
+  finally { fs.openSync = original; }
+  assert.ok(injected > 0, 'the failure reaches the lazy signature read');
+  assert.ok(f.rows.has('b'));
+  assert.equal(f.rows.get('b').fullReadStamp, null, 'unknown signature evidence must not certify the member');
+});
+
+test('mergeBridgeGroups defers a group whose signature evidence is unknown', { timeout: 9000 }, t => {
+  const f = fixture(t);
+  f.write('a', [f.msg('known', '01', 'Copied payload')]);
+  f.write('b', [f.msg(undefined, '01', 'Copied payload'), f.msg('own', '02')]);
+  const rows = ['a', 'b'].map(id => f.reread(id));
+  fs.unlinkSync(path.join(f.dir, 'a.jsonl'));
+  const merged = mergeBridgeGroups([], rows, f.reread);
+  assert.deepEqual([...merged.deferred].sort(), ['a', 'b']);
+  assert.ok(merged.toUpsert.every(row => row.fullReadStamp === null), 'every published member of the group is uncertified');
+});
+
 test('reconcile keeps a running row whose transcript vanished and skips unchanged transcript bodies', { timeout: 9000 }, async t => {
   const f = fixture(t);
   f.write('a', [f.msg('a-own', '01')]);

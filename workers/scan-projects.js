@@ -84,8 +84,21 @@ function readFolderFromFilesystem(folder) {
       return readForScan(path.join(folderPath, sessionId + '.jsonl'), key, projectPath, { dedupeSinceTimestamp: cutoff, excludedMessageUuids, excludedMessageSignatures });
     } catch (error) { if (startupRead) throw error; return null; }
   };
-  const { toUpsert } = mergeBridgeGroups([], sessions, reread);
+  const { toUpsert, deferred } = mergeBridgeGroups([], sessions, reread);
+  deferUnknownBridgeEvidence(folderPath, deferred);
   return { folder: key, projectPath, sessions: toUpsert, indexMtimeMs };
+}
+
+// see .ai/contexts/session-cache.md ("Bridge history divergence")
+function deferUnknownBridgeEvidence(folderPath, sessionIds) {
+  if (!startupRead) return;
+  for (const sessionId of sessionIds || []) {
+    const relativePath = sessionId + '.jsonl';
+    if (!safeRelativePath(relativePath)) continue;
+    startupRead.failed.add(relativePath);
+    if (!startupRead.errors.has(relativePath)) startupRead.errors.set(relativePath,
+      { size: observation(path.join(folderPath, relativePath))?.size || '0', error: 'bridge-evidence-unknown' });
+  }
 }
 
 // rel is POSIX-separated (remote inventory, not the local fs) -- see
@@ -152,8 +165,9 @@ function readFolderFileSubsetFromFilesystem(folder, files, existingRows, derived
     const full = reread(row.sessionId, null);
     if (full) freshRows.push(full);
   }
-  const { toUpsert, toDelete } = startupRead && !freshRows.length && !goneIds.length ? { toUpsert: [], toDelete: [] }
+  const { toUpsert, toDelete, deferred } = startupRead && !freshRows.length && !goneIds.length ? { toUpsert: [], toDelete: [] }
     : mergeBridgeGroups((existingRows || []).filter(row => !goneIds.includes(row.sessionId)), freshRows, reread);
+  deferUnknownBridgeEvidence(folderPath, deferred);
   return { folder: key, projectPath, sessions: toUpsert,
     toDelete: [...new Set([...goneIds, ...toDelete])].filter(id => !startupRead || !toUpsert.some(row => row.sessionId === id)), indexMtimeMs, partial: true };
 }

@@ -71,6 +71,24 @@ for (const runtime of ['claude', 'codex']) {
       await base.assertRebuildOracle(t, f);
     });
   }
+  test(`${runtime}: an untargeted refresh leaves an unchanged witnessed source unread, a changed one is retried (#1189)`, options, async t => {
+    const { f, folder, file, id } = await failedRead(t, runtime, 'TypeError');
+    const open = fs.openSync;
+    let bodyReads = 0;
+    const patch = t.mock.method(fs, 'openSync', function (target, ...args) {
+      if (target === file && /at (?:Object\.)?readSessionFile /.test(new Error().stack)) { bodyReads++; throw new TypeError('synthetic derivation error'); }
+      return open.call(this, target, ...args);
+    });
+    await f.writer.refreshFolder(folder);
+    await f.writer.refreshFolder(folder);
+    patch.mock.restore();
+    assert.equal(bodyReads, 0, 'an unchanged deterministic witness is not reread by untargeted refreshes');
+    assert.equal(JSON.parse(f.db.getFolderMeta(folder).readFailures || '[]').length, 1, 'the witness survives');
+    if (runtime === 'codex') f.codexWrite(0, 'changed'); else f.write('old', 'changed');
+    await f.writer.refreshFolder(folder);
+    assert.equal(f.db.getCachedSession(id).summary, 'changed', 'a changed witnessed source is retried');
+    assert.equal(JSON.parse(f.db.getFolderMeta(folder).readFailures || '[]').length, 0);
+  });
   test(`${runtime}: unchanged deterministic witness retains folder mtime and unique checks`, options, async t => {
     const { f, folder, result } = await failedRead(t, runtime, 'TypeError');
     assert.ok(result.indexMtimeMs > 0, 'deterministic witnesses retain the real folder index mtime');
