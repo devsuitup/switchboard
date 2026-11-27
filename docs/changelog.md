@@ -46,9 +46,10 @@ Older versions: see [GitHub Releases](…).
   an entry that section contains leaves `main`'s `## Unreleased`: an entry
   that shipped from a release branch never stays there, or the next beta would
   announce it again. Before each cut, the older dated sections of the bump
-  branch and the release branch must be identical: an entry merged on `main`
-  after a cut can land under that cut's heading
-  ([Branches](branching.md#pitfalls)).
+  branch and the release branch must be identical, except the beta sections
+  a final folds: an entry merged on `main` after a cut can land under that
+  cut's heading ([Branches](branching.md#pitfalls)). A port-back adds the
+  release's section to `main` and keeps `main`'s own, newer ones.
 - Up to three groups per version, in this order: `### New`, `### Changed`,
   `### Fixed`. A group with no entry is left out.
 - The `---` line closes the last section: the pointer to GitHub Releases below
@@ -100,7 +101,7 @@ counts and changes merged in from its base branch (`main` or `release/X.Y`) do n
 A PR whose app change users do not see (a refactor, a log line) takes the
 `no-changelog` label instead. The script reads the labels through `gh api`
 when it runs, not from the event that started the job: after adding the label,
-re-run the failed job (`gh run rerun <run-id> --failed`, or **Re-run failed
+re-run the failed job (`gh run rerun <run-id> --repo devsuitup/switchboard --failed`, or **Re-run failed
 jobs** on the checks page).
 
 The YAML only invokes `scripts/check-changelog.js`:

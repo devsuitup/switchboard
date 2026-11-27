@@ -39,19 +39,27 @@ line. Betas, finals and hotfixes (`vX.Y.1-beta.1`, then `vX.Y.1`) are tagged
 from it.
 
 - **Create.** `release/X.Y` is created at a release tag, not at the tip of
-  `main`. `release/0.1` was created at `v0.1.0-beta.2`. A new minor line
-  enters through its first beta: its bump PR lands on `main`, the merged
-  commit is tagged, and the branch is created at that tag:
+  `main`, and only by an admin (the `creation` rule of `release-protection`).
+  `release/0.1` was created at `v0.1.0-beta.2`. A new minor line enters
+  through its first beta: its bump PR lands on `main`, the merged commit is
+  tagged, and the branch is created at that tag:
 
   ```bash
   git push origin 'v0.2.0-beta.1^{commit}:refs/heads/release/0.2'
   ```
 
-- **Cut a beta from `main`.** Every later beta of the line brings the whole of
-  `main` onto the release branch: `bump/vX.Y.Z-beta.N` from `origin/main`,
-  PR to `release/X.Y`, **merged with a merge commit, never a squash**, so
-  `main` stays an ancestor of `release/X.Y` (#1292, #1312). This is how fixes
+- **Cut a beta from `main`.** While the line has not diverged from `main`,
+  each later beta brings the whole of `main` onto the release branch:
+  `bump/vX.Y.Z-beta.N` from `origin/main`, PR to `release/X.Y`, **merged with
+  a merge commit** (the only method `release-protection` allows), so `main`
+  stays an ancestor of `release/X.Y` (#1292, #1312). This is how fixes
   normally reach a release line.
+- **Cut a maintenance beta from the release branch.** Once `main` carries code
+  the line must not ship (a `vX.Y.1` once `main` is on the next minor), the
+  line takes only backports, and its beta's bump branch starts at
+  `origin/release/X.Y`, like the final
+  ([Branches](branching.md#maintenance-beta)). Never cut a beta of a diverged
+  line from `main`: it would bring that code in.
 - **Cut the final from the release branch.** `bump/vX.Y.Z` starts at
   `origin/release/X.Y`, since the final may differ from the last beta only by
   its version and changelog ([The tag check](#the-tag-check)). Same PR and
@@ -61,24 +69,29 @@ from it.
   `release/X.Y` stays an ancestor of `main` and the next cut merges cleanly.
   #1293 was squashed instead, and the next cut, #1312, came up conflicting
   ([Branches](branching.md#pitfalls)).
-- **Backport.** For a fix that must ship on a line while `main` carries
-  something that line must not (a `vX.Y.1` once `main` is on the next minor),
-  the fix lands in `main` first, then is cherry-picked with `-x` onto a
+- **Backport.** For a fix that must ship on a diverged line, the fix lands in
+  `main` first, then its squash commit is cherry-picked with `-x` onto a
   branch cut from the release branch, and opened as a PR whose base is the
-  release branch:
+  release branch, merged with a merge commit. Never write a fix on the
+  release branch first: every commit a PR brings into `release/*` must
+  already be on `main`, unless it is a merge commit, the version and
+  changelog bump, or a cherry-pick whose `-x` trailer names a commit on
+  `main`; this is enforced by the release-provenance check of `build.yml`'s `release-tag` job (pending its own PR; remove this sentence if it does not land). The line's next beta is then a
+  maintenance beta:
 
   ```bash
   git fetch origin
   git checkout -b backport/1300-to-0.1 origin/release/0.1
   git cherry-pick -x <squash commit on main>
   git push origin backport/1300-to-0.1
-  gh pr create --repo devsuitup/switchboard --base release/0.1 --title "fix(area): subject (#1300)" --fill
+  gh pr create --repo devsuitup/switchboard --base release/0.1 --head backport/1300-to-0.1 --title "fix(area): subject (#1300)" --body-file <file>
+  gh pr merge <PR> --repo devsuitup/switchboard --merge --match-head-commit <headRefOid>
   ```
 
   The cherry-pick brings the fix's changelog entry: keep it under the release
-  branch's `## Unreleased`, and only that entry when the hunk conflicts.
-  Squash keeps the `cherry picked from commit` line, since the squash message
-  is the commit messages.
+  branch's `## Unreleased`, and only that entry when the hunk conflicts. The
+  merge commit keeps the cherry-pick and its `cherry picked from commit`
+  trailer as they are.
 - **Every code change on the branch ships in a new beta before the final.**
   From the last beta tag until the final tag, `release/X.Y` takes **only the
   release PR**; anything else merged in between makes the final differ from
@@ -113,7 +126,8 @@ commands, with the ancestry checks around them, are in
 [Branches](branching.md#cutting-a-beta).
 
 1. **Bump the version and date the changelog** on a bump branch, and open the
-   PR to `release/0.1`. A beta's branch starts at `origin/main`, the final's at
+   PR to `release/0.1`. A beta's branch starts at `origin/main`; a maintenance
+   beta's, on a line diverged from `main`, and the final's at
    `origin/release/0.1`. In [`CHANGELOG.md`](../CHANGELOG.md) (see
    [Changelog](changelog.md)):
    - for a **beta**, rename `## Unreleased` to
@@ -129,8 +143,10 @@ commands, with the ancestry checks around them, are in
    Read the section once more: it becomes the release notes as it stands.
    Then compare it with the release branch: every older dated section must be
    identical on both sides (`git diff origin/release/0.1 -- CHANGELOG.md`),
-   because an entry merged on `main` after the previous cut can sit under that
-   cut's heading although the release does not contain it.
+   except, for a final, the `## v0.1.0-beta.N` sections it folds, which the
+   tag check requires gone. An entry merged on `main` after the previous cut
+   can sit under that cut's heading although the release does not contain
+   it.
 
    ```bash
    git fetch origin
@@ -185,7 +201,11 @@ commands, with the ancestry checks around them, are in
    [Testing a PR live](testing-a-pr.md) and
    [Live testing with a throwaway HOME](live-testing.md).
 
-3. **Tag the merge commit** on `release/0.1` and push only the tag:
+3. **Tag the merge commit** on `release/0.1` and push only the tag. Only an
+   admin can (ruleset 28267436 `release-tags` on `refs/tags/v*`: creation,
+   update and deletion are restricted, so nobody else moves or deletes a
+   release tag either). The tag is released only when its commit is on a
+   `release/*` branch, enforced by the release-provenance check of `build.yml`'s `release-tag` job (pending its own PR; remove this sentence if it does not land):
 
    ```bash
    git fetch origin
@@ -274,9 +294,11 @@ commands, with the ancestry checks around them, are in
      without its heading (`scripts/changelog-section.js`), then a **Full
      changelog** link comparing the previous tag with this one (for a final,
      the previous final, skipping its betas). The previous tag is looked up
-     on the tag's own history: the first beta of a new minor line and that
-     line's `X.Y.0` final do not see the tags made on an older release branch,
-     so correct their compare link in the draft by hand. It fails
+     on the tag's own history. Once an older line's releases are ported back
+     with a merge commit, its tags are in `main`'s history and a new line
+     sees them; when a port-back was squashed or skipped, the first beta of a
+     new minor line and that line's `X.Y.0` final do not, so check their
+     compare link in the draft and correct it by hand. It fails
      rather than publish an empty body when the section is missing or empty.
      The fix is then in `CHANGELOG.md`, through a PR to the release branch; `gh release edit
      --repo devsuitup/switchboard --notes-file` can fill in the draft by hand meanwhile.
@@ -435,7 +457,8 @@ through the same gate. Beta installs can still receive a withdrawn release, now 
   (`doctly/switchboard`) sends a bare `git push` there, which fails on
   permissions. `git push origin …` always targets the fork.
 - **Direct pushes to `main` and `release/*` are rejected** by the rulesets: the
-  bump goes through a PR.
+  bump goes through a PR. Release branches and `v*` tags are created by an
+  admin only, and a release tag is never moved or deleted.
 - **Tag the merge commit, never the local bump commit.** The merge makes a new
   commit on the release branch, which is what the branch ships. A tag on the
   bump branch's own commit is not the release branch's tip, names a different
