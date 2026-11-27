@@ -64,7 +64,7 @@ there is procedure, not a setting; on `release/*` only `merge` is. When the
 test matrix changes, `main-protection`, `release-protection` and the classic
 protection are updated together ([Releasing](releasing.md#steps)).
 
-Two more rules are enforced by the release-provenance check of `build.yml`'s `release-tag` job (pending its own PR; remove this sentence if it does not land):
+Two more rules are enforced by the release-provenance check of `build.yml`'s `release-tag` job:
 
 1. a tag is released only when its commit is on a `release/*` branch;
 2. every commit a PR brings into `release/*` is already on `main`, unless it
@@ -271,7 +271,7 @@ The rule: a backport is a `git cherry-pick -x` of a commit already merged on
 `main`, never a fix written on the release branch first. The fix PR goes to
 `main`, is squashed there, and only that squash commit is cherry-picked; the
 `-x` trailer names it, so every backport is also on `main` and nothing ships
-from a release branch that `main` lacks. This is enforced by the release-provenance check of `build.yml`'s `release-tag` job (pending its own PR; remove this sentence if it does not land).
+from a release branch that `main` lacks. This is enforced by the release-provenance check of `build.yml`'s `release-tag` job.
 
 ```bash
 git fetch origin

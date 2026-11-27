@@ -111,7 +111,7 @@ the version and `CHANGELOG.md`. Ruleset 28267436 (`release-tags`,
 A release-provenance check in `release-tag` (a tag's commit on a `release/*`
 branch; every commit a PR brings into `release/*` already on `main` unless a
 merge commit, the bump, or a cherry-pick whose `-x` trailer names a commit on
-`main`) is pending its own PR; remove this sentence if it does not land.
+`main`) is enforced by `scripts/check-release-provenance.js` (job `release-provenance` on PRs into `release/*`, and the tag step of `release-tag`), run from `main`'s copy.
 
 The workflow side is the trigger list `[main, 'release/*']` in `test.yml`
 (PR and push), `build.yml` (PR) and `pr-title.yml` (PR); tag pushes are not

@@ -78,7 +78,7 @@ from it.
   release branch first: every commit a PR brings into `release/*` must
   already be on `main`, unless it is a merge commit, the version and
   changelog bump, or a cherry-pick whose `-x` trailer names a commit on
-  `main`; this is enforced by the release-provenance check of `build.yml`'s `release-tag` job (pending its own PR; remove this sentence if it does not land). The line's next beta is then a
+  `main`; this is enforced by the release-provenance check of `build.yml`'s `release-tag` job. The line's next beta is then a
   maintenance beta:
 
   ```bash
@@ -91,16 +91,9 @@ from it.
   ```
 
   The cherry-pick brings the fix's changelog entry: keep it under the release
-<<<<<<< HEAD
-  branch's `## Unreleased`, and only that entry when the hunk conflicts.
-  Merge the release PR with a merge commit, preserving the checked commits
-  and their `cherry picked from commit` lines. Squash/rebase merges are disabled
-  on `release/*`.
-=======
   branch's `## Unreleased`, and only that entry when the hunk conflicts. The
   merge commit keeps the cherry-pick and its `cherry picked from commit`
   trailer as they are.
->>>>>>> origin/main
 - **Every code change on the branch ships in a new beta before the final.**
   From the last beta tag until the final tag, `release/X.Y` takes **only the
   release PR**; anything else merged in between makes the final differ from
@@ -178,16 +171,9 @@ commands, with the ancestry checks around them, are in
    so a bump without its section does not pass CI.
 
    Commit subjects and PR titles use `type(area): subject`; the release title
-<<<<<<< HEAD
-   is `chore(release): v0.1.0` (`chore(release): v0.1.0-beta.3` for a beta).
-   Release PRs use merge commits; `PR_TITLE` selects squash titles on main.
-   The separate `pr-title` check is advisory during rollout and
-   is not a required release check.
-=======
    is `chore(release): v0.1.0` (`chore(release): v0.1.0-beta.4` for a beta).
    The separate `pr-title` check is advisory during rollout and is not a
    required release check.
->>>>>>> origin/main
 
    The required PR checks for this workflow are `lint`,
    `test (20, ubuntu-latest)`, `test (22, ubuntu-latest)`,
@@ -200,11 +186,6 @@ commands, with the ancestry checks around them, are in
    Required checks and review requirements are GitHub repository settings,
    separate from these workflow definitions: keep both rulesets and the branch
    protection aligned whenever the test matrix changes. No approving review is
-<<<<<<< HEAD
-   required. Release PRs use
-   `gh pr merge --repo devsuitup/switchboard --auto --merge` once the required
-   checks run; main PRs use `--squash`.
-=======
    required. Merge the bump PR **with a merge commit**, naming the head you
    checked, never with a squash:
 
@@ -213,7 +194,6 @@ commands, with the ancestry checks around them, are in
    gh pr merge <bump PR> --repo devsuitup/switchboard --merge --match-head-commit <headRefOid>
    ```
 
->>>>>>> origin/main
    CI-only PRs use the `no-changelog` label.
 
 2. **Run the app before tagging.** The tag is what publishes, and nothing
@@ -227,7 +207,7 @@ commands, with the ancestry checks around them, are in
    admin can (ruleset 28267436 `release-tags` on `refs/tags/v*`: creation,
    update and deletion are restricted, so nobody else moves or deletes a
    release tag either). The tag is released only when its commit is on a
-   `release/*` branch, enforced by the release-provenance check of `build.yml`'s `release-tag` job (pending its own PR; remove this sentence if it does not land):
+   `release/*` branch, enforced by the release-provenance check of `build.yml`'s `release-tag` job:
 
    ```bash
    git fetch origin
