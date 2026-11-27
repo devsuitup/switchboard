@@ -731,10 +731,15 @@ from alternating the sidebar verdict. A successful fresh table recomputes
 the set; an unchanged set is silent, while a newly valid writer can return and
 notify projects. A writer the fresh table rejects after that read, such as one
 reseeded by `ensureWatching()` after a watcher error, joins the set silently,
-since the caller already excludes it (#695). A retained pair whose descriptor
-mtime is later than the last successful read's `observedAt` leaves the set: a
-restart under the same session and PID is unknown, not stale, until the next
-successful read decides again. The fallback is scoped to sidebar exclusion, leaving delivery
+since the caller already excludes it (#695). Each retained entry also holds
+the rejected descriptor's `procStart`. While reads fail, a writer whose
+`procStart` differs from the retained one, or whose descriptor mtime is later
+than the last successful read's `observedAt`, is not excluded: a restart under
+the same session and PID is unknown, not stale. The mtime is only a secondary
+signal, since a clock step back can leave a real restart's mtime at or before
+that read. Releasing does not remove the entry, so the next successful read
+still sees the set change and notifies projects once, even when the restart
+kept every displayed field. The fallback is scoped to sidebar exclusion, leaving delivery
 and ownership checks to report their existing unknown result without fresh proof.
 
 The Agents view (`.ai/contexts/bg-agents.md`) reads the same

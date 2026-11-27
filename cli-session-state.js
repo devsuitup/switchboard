@@ -305,7 +305,7 @@ function refreshProcessTable({ force = false, deadline = Infinity } = {}) {
         for (const pid of rosterOwnership.keys()) if (!map.has(pid)) rosterOwnership.delete(pid);
         const previous = staleSidebarIdentity;
         const stale = JSON.stringify([...known.values()].filter(entry => sidebarDescriptorIsStale(statusKey(entry.sessionId), entry))
-          .map(entry => [statusKey(entry.sessionId), entry.pid]).sort());
+          .map(entry => [statusKey(entry.sessionId), entry.pid, entry.procStart ?? null]).sort());
         const sidebarChanged = stale !== previous;
         staleSidebarIdentity = stale;
         staleSidebarObservedAt = observedAt;
@@ -904,17 +904,14 @@ function sidebarDescriptorIsStale(id, entry) {
   const writer = [...known.values()].find(s => s.pid === entry.pid && statusKey(s.sessionId) === id);
   if (!writer) return true;
   const retained = JSON.parse(staleSidebarIdentity);
-  const index = retained.findIndex(([sessionId, pid]) => sessionId === id && pid === entry.pid);
+  const procStart = writer.procStart ?? null;
+  const held = retained.some(([sessionId, pid, start]) => sessionId === id && pid === entry.pid && start === procStart);
   if (processTableEnabled && (!processTableFresh() || !processTable.map)) {
-    if (index < 0) return false;
-    if (!(writer.descriptorMtimeMs > staleSidebarObservedAt)) return true;
-    retained.splice(index, 1);
-    staleSidebarIdentity = JSON.stringify(retained);
-    return false;
+    return held && !(writer.descriptorMtimeMs > staleSidebarObservedAt);
   }
   const stale = deliveryProcessIdentity(writer) === 'stale';
-  if (stale && processTableEnabled && index < 0) {
-    retained.push([id, entry.pid]);
+  if (stale && processTableEnabled && !held) {
+    retained.push([id, entry.pid, procStart]);
     staleSidebarIdentity = JSON.stringify(retained.sort());
   }
   return stale;
