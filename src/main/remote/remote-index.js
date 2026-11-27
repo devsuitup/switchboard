@@ -24,6 +24,8 @@ const MAX_BACKOFF_MS = 30 * 60 * 1000;
 // see .ai/contexts/session-cache.md ("Remote hosts — capability tiers", the probe)
 const PROBE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const PROBE_RETRY_MS = 30 * 60 * 1000;
+const REPAIR_RETRY_BASE_MS = 5 * 60 * 1000;
+const REPAIR_RETRY_MAX_MS = 6 * 60 * 60 * 1000;
 
 // see .ai/contexts/session-cache.md ("Remote hosts backoff")
 function backoffDelayMs(failures, intervalMs) {
@@ -119,6 +121,22 @@ function createRemoteIndexer(ctx) {
   const hostTools = new Map(); // alias -> { tools: { tmux, inotifywait } | null, nextProbeAt }
   const headTurnErrors = new Map();
   const checkedGhostFolders = new Set();
+  const repairAttempts = new Map();
+
+  // see .ai/contexts/session-cache.md ("Bridge history divergence")
+  function dueRepairFolders(alias) {
+    const marked = new Set((ctx.listRepairFolderKeys ? ctx.listRepairFolderKeys() : [])
+      .filter(key => parseFolderKey(key).alias === alias));
+    for (const key of repairAttempts.keys()) if (parseFolderKey(key).alias === alias && !marked.has(key)) repairAttempts.delete(key);
+    const due = new Set();
+    for (const key of marked) {
+      const attempt = repairAttempts.get(key) || { count: 0, at: -Infinity };
+      if (now() - attempt.at < Math.min(REPAIR_RETRY_BASE_MS * 2 ** Math.max(0, attempt.count - 1), REPAIR_RETRY_MAX_MS) && attempt.count) continue;
+      repairAttempts.set(key, { count: attempt.count + 1, at: now() });
+      due.add(parseFolderKey(key).folder);
+    }
+    return due;
+  }
   const pendingDrops = new Set();
 
   function backoffState(alias) {
@@ -315,8 +333,7 @@ function createRemoteIndexer(ctx) {
           if (parsed.alias === host.alias) indexed.add(parsed.folder);
         }
         const present = mirrorFolders(projectsDir);
-        const repairs = new Set((ctx.listRepairFolderKeys ? ctx.listRepairFolderKeys() : [])
-          .map(parseFolderKey).filter(parsed => parsed.alias === host.alias).map(parsed => parsed.folder));
+        const repairs = dueRepairFolders(host.alias);
         for (const folder of present) {
           if (!indexed.has(folder)) toScan.add(folder);
           if (repairs.has(folder)) {

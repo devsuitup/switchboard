@@ -1376,13 +1376,29 @@ only rescans folders its sync reports as changed or that are missing from the
 cache, so a null stamp alone would never bring them back. A non-startup scan
 therefore returns the group's IDs as `bridgeDeferred`. `writeScannedFolder` and
 `writeScannedFolderPartial` add a remote folder key (`<alias>::<folder>`) with
-such a result to `bridge_uuid_reindex_folders`, and a remote full scan without
-`bridgeDeferred` clears it as before. The remote indexer reads that setting
-(`listRepairFolderKeys`) and gives each marked folder of its host a full rescan
-on every cycle, even when the mirror did not change, until a scan converges. The
-marker is durable, so a restart in between does not lose the rescan. Local
-non-startup scans do not set the marker; local startup already selects their
-null-stamped rows.
+such a result to `bridge_uuid_reindex_folders` (`repairFoldersAfterScan`). The
+add travels as its own writer effect: `cache-effects.js` turns a write of that
+setting into `completeRepairFolders` for removed keys and `addRepairFolders` for
+added ones, and the writer worker runs `commands.addRepairFolders`. A plain
+`setSetting` would persist nothing, because the setting is never copied
+wholesale from main. A non-startup full scan clears a folder's marker only
+when it read every file (`counters.filesFailed` is 0) and produced no
+`bridgeDeferred`: a member unreadable at its first read is left out before the
+merge, so the absence of a deferral alone does not prove convergence. This rule
+applies to every marked folder, local repairs included. Startup publication
+keeps its own completion rule.
+
+The remote indexer reads that setting (`listRepairFolderKeys`) and gives a
+marked folder of its host a full rescan even when the mirror did not change,
+with an exponential backoff per folder key: the first rescan is due at once,
+the next 5 minutes after it, then 10, 20, … capped at 6 hours
+(`REPAIR_RETRY_BASE_MS`, `REPAIR_RETRY_MAX_MS` in `remote-index.js`). A permanent
+failure therefore costs at most one full-folder rescan every 6 hours, not one per
+cycle. The attempt count is in memory: it resets when the marker is cleared and
+when the app restarts, so the first cycle after a launch retries at once. The
+marker itself is durable, so a restart in between does not lose the rescan.
+Local non-startup scans do not set the marker; local startup already selects
+their null-stamped rows.
 
 At database open, `bridge_uuid_index_version = 1` records a one-time transaction
 that removes only bridged top-level cache rows, their metrics and their FTS

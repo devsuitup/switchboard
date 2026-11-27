@@ -508,6 +508,7 @@ receipts and status/replay recovery are deliberately not added in step 1.
 | beginOffer / completeOffer / dismissReenableOffer | Current offer selection; completion compares the selected offer before changing it and reports conflicts explicitly |
 | cleanupWorktree | Worker selects current matching rows, deletes in bounded units, then merges visibility/archive cleanup |
 | dropRemoteFolder / completeRepairFolders | Bounded folder/cache/metrics/FTS deletion and current repair-list subtraction |
+| addRepairFolders | Repair-list union (a remote folder whose bridge evidence was unknown), emitted by cache-effects for an added `bridge_uuid_reindex_folders` key |
 | scheduleRegistry(list/add/remove) | Bootstrap/normalization and current registry merge in one transaction |
 | recordRemap / completeRemap | Merge folder remap, external atomic JSONL rewrite, explicit completion ACK |
 | whatsNewStartup / patchGlobal(lastSeenVersion) | Current last-seen decision and field merge; changelog read outside SQL |

@@ -74,6 +74,20 @@ test('claude: a witnessed source grown under a preserved mtime is not pinned-rer
   assert.equal(bodyReads, 0, 'the size-pinned full read must not retry an unchanged witness');
 });
 
+test('claude: a filtered recount of a witnessed source does not fall back to a full read (#1189)', options, async t => {
+  const { f, folder, file } = await failedRead(t, 'claude', 'TypeError');
+  f.db.connection.prepare("UPDATE session_cache SET bridgeSessionId = 'cse_recount', messageCountIndex = NULL WHERE sessionId = 'old'").run();
+  const open = fs.openSync;
+  let bodyReads = 0;
+  const patch = t.mock.method(fs, 'openSync', function (target, ...args) {
+    if (target === file && /at (?:Object\.)?readSessionFile /.test(new Error().stack)) { bodyReads++; throw new TypeError('synthetic derivation error'); }
+    return open.call(this, target, ...args);
+  });
+  await f.writer.refreshFolder(folder);
+  patch.mock.restore();
+  assert.equal(bodyReads, 0, 'the recount needing a full read must not retry an unchanged witness');
+});
+
 for (const runtime of ['claude', 'codex']) {
   for (const code of ['EBUSY', 'EACCES', 'EPERM', 'EMFILE', 'ENFILE', 'EIO', 'EAGAIN', 'short']) {
     test(`${runtime}: transient ${code} recovers on next start`, options, async t => {

@@ -70,8 +70,11 @@ function createCacheEffects(read) {
   for (const [name, write] of Object.entries(writes)) adapter[name] = (...args) => {
     if (!active) throw new Error('cache mutation outside writer command');
     if (name === 'setSetting' && args[0] === 'bridge_uuid_reindex_folders') {
-      const removed = (adapter.getSetting(args[0]) || []).filter(key => !args[1].includes(key));
+      const previous = adapter.getSetting(args[0]) || [];
+      const removed = previous.filter(key => !args[1].includes(key));
+      const added = args[1].filter(key => !previous.includes(key));
       effects.push({ name: 'completeRepairFolders', args: [removed] });
+      if (added.length) effects.push({ name: 'addRepairFolders', args: [added] });
     } else effects.push({ name, args: structuredClone(args) });
     return write(...args);
   };

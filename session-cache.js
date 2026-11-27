@@ -1572,17 +1572,18 @@ function writeScannedFolder(r, unverifiedLocalFolder = null) {
     }));
   }
   setFolderMeta(folder, projectPath, indexMtimeMs, r.readFailures);
-  if (!rememberRemoteBridgeDeferral(r) && !r.startup && setSetting && pendingRepairFolders().includes(folder)) {
-    setSetting('bridge_uuid_reindex_folders', pendingRepairFolders().filter(key => key !== folder));
-  }
+  const repairs = repairFoldersAfterScan(r, true);
+  if (repairs && setSetting) setSetting('bridge_uuid_reindex_folders', repairs);
   return sessions.length;
 }
 
 // see .ai/contexts/session-cache.md ("Bridge history divergence")
-function rememberRemoteBridgeDeferral(r) {
-  if (r.startup || !r.bridgeDeferred?.length || parseFolderKey(r.folder).alias === null || !setSetting) return false;
-  if (!pendingRepairFolders().includes(r.folder)) setSetting('bridge_uuid_reindex_folders', [...pendingRepairFolders(), r.folder]);
-  return true;
+function repairFoldersAfterScan(r, fullScan) {
+  if (r.startup) return null;
+  const pending = pendingRepairFolders();
+  if (r.bridgeDeferred?.length && parseFolderKey(r.folder).alias !== null) return pending.includes(r.folder) ? null : [...pending, r.folder];
+  if (!fullScan || !pending.includes(r.folder) || r.counters?.filesFailed > 0) return null;
+  return pending.filter(key => key !== r.folder);
 }
 
 /** Persist one `{type:'folder', result:{partial:true}}` file-subset scan
@@ -1614,7 +1615,8 @@ function writeScannedFolderPartial(r) {
     deleteSearchSession(sessionId);
   }
   setFolderMeta(folder, projectPath, indexMtimeMs, r.readFailures);
-  rememberRemoteBridgeDeferral(r);
+  const repairs = repairFoldersAfterScan(r, false);
+  if (repairs && setSetting) setSetting('bridge_uuid_reindex_folders', repairs);
   return sessions.length;
 }
 

@@ -361,6 +361,12 @@ function createWriterCommands(db) {
       const pending = db.getSetting('bridge_uuid_reindex_folders');
       if (Array.isArray(pending)) db.setSetting('bridge_uuid_reindex_folders', pending.filter(key => !folders.includes(key)));
     },
+    addRepairFolders(folders) {
+      const pending = db.getSetting('bridge_uuid_reindex_folders');
+      const current = Array.isArray(pending) ? pending : [];
+      const added = folders.filter(key => typeof key === 'string' && !current.includes(key));
+      if (added.length) db.setSetting('bridge_uuid_reindex_folders', [...current, ...added]);
+    },
     completeRemap() {},
     recordRemap(folder, newPath) {
       const stored = db.getSetting('projectRemaps');
