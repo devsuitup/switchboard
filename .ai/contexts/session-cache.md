@@ -244,6 +244,38 @@ configuration/version changes, explicit rebuilds, bridge dependencies and unknow
 writer outcomes retain their existing broader-validation rules. A true ambiguous
 layout therefore cannot promise a single-file reread without weakening safety.
 
+## Codex exclusions across warm starts (#1195)
+
+A rollout yielding no session used to have no persisted freshness evidence:
+empty files, malformed-only JSONL, missing cwd/metadata or user prompt, and
+subagents were selected as changed again on every startup. The Codex worker
+now stores a tagged negative observation `{ stamp, excluded: true }` in the
+existing `cache_meta.readFailures` envelope. The exclusion has no error code,
+is not a failed read or a session content certificate, and creates no display,
+search or metrics row. Only Codex callers accept these tagged observations;
+Claude's failure selection is unchanged. No schema/content version changes.
+
+Completed null parses reuse their stable observation. Header-only subagent
+exclusions compare the worker's initial observation with the source after the
+header read, retaining the 256 KiB read bound. Both enter the ordinary source
+checks and writer publication boundary. Filesystem identity, size, nanosecond
+mtime/ctime and effective title must match before an exclusion can skip a
+subsequent read. A changed file is reclassified, even with a pinned mtime; a
+removed file loses its marker. Force, content-version and configuration changes
+invalidate these observations along with other negative observations. A retained
+existing session row still requires reading/deletion rather than being silently
+kept behind an exclusion marker. Explicit folder refresh retries excluded files
+and preserves their markers until a session is produced; startup validates any
+remaining markers against the current source.
+
+The SQLite reopen regression `test/codex-warm-exclusions-1195.test.js` reproduces
+two consecutive unchanged warm starts for five exclusion shapes, subsequent
+conversion to a real session, invalidation, removal and prior-row deletion.
+Controls establish that exec rollouts already persist hidden-but-certified rows,
+deterministic parser exceptions already persist error witnesses, and an append
+during a read defers once then settles after a stable retry. These synthetic
+fixtures do not identify the maintainer's unavailable real rollouts.
+
 ## Local warm startup (#1144 A2, #1152 Codex)
 
 `populateCacheViaWorker` remains the single-flight coordinator for startup,
@@ -297,7 +329,8 @@ Every Codex result has projectPath null and the full reader's index watermark,
 including the title index mtime. Startup reads finish intentionally excluded
 rollouts only when a prior row might need deletion. Unindexed subagents stop
 after the metadata header (at most one 256 KiB chunk per scan), without creating
-a certificate or a deferral. Deferrals use filename UUIDs, leave the watermark zero and retain pending
+a content certificate or a deferral. Stable exclusions now persist the source
+observation as described above (#1195). Deferrals use filename UUIDs, leave the watermark zero and retain pending
 state. Exec sessions remain indexed and certified; hiding remains a projection.
 Warm completion says "Indexed session changes" rather than reporting replaced
 rows as the total history size. The full-population flag, including a forced

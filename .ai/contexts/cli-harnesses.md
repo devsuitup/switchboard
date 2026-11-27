@@ -60,8 +60,11 @@ entries and blank-to-null semantics are unchanged.
 
 `readSessionFile(file, folder, { startup: true, outcome, titleSnapshot })`
 finishes the selected rollout and supplies an outcome of row, excluded,
-deferred, absent or failed. Stable exclusions carry a complete-read witness
-without a persisted negative row. Non-startup parser output is unchanged.
+deferred, absent or failed. Stable exclusions are persisted as Codex-only
+negative observations in folder metadata (#1195), without a session row.
+Unindexed subagents retain their bounded header read; the worker validates
+the source observation before recording that exclusion. Non-startup parser
+output is unchanged.
 Startup body selection does not restrict watcher/adoption candidates or change
 launch tags, fork ownership or resume UUIDs. See session-cache.md for the
 day selector, metadata-only name repair and root relocation contracts.

@@ -426,7 +426,7 @@ function refreshHarnessFolder(harness, folder) {
   const dir = harness.folderPath(folder);
   if (!dir || !fs.existsSync(dir)) return dropFolderRows(folder, { search: true });
   const cached = new Map(getCachedByFolder(folder).map(row => [row.sessionId, row]));
-  const failures = readFailures(getFolderMeta?.(folder));
+  const failures = readFailures(getFolderMeta?.(folder), harness.id);
   const titles = harness.readSessionTitles ? harness.readSessionTitles() : null;
   const files = harness.listTranscripts(dir);
   const current = new Set();

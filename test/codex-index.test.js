@@ -17,7 +17,7 @@ test('Codex headless marking survives selection and visibility changes',
     f.codexWrite(3, 'excludedword', { meta: { thread_source: 'subagent' } });
     assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
     assert.equal((await f.restart()).ok, true);
-    assert.equal(f.codexScans()[0].filesRead, 1, 'only uncertified excluded subagent is reread');
+    assert.equal(f.codexScans()[0].filesRead, 0, 'unchanged excluded subagent is remembered');
     assert.equal(f.db.getCachedSession(f.ids[1])?.entrypoint, 'sdk-codex-exec', 'hidden exec remains indexed');
     assert.ok(f.db.getCachedSession(f.ids[1]).fullReadStamp);
     assert.equal(f.db.getCachedSession(f.ids[3]), null);
@@ -31,7 +31,7 @@ test('Codex headless marking survives selection and visibility changes',
     assert.ok((await visible()).includes(f.ids[1]), 'live exec remains visible');
     assert.equal((await f.restart()).ok, true);
     assert.equal(f.db.getCachedSession(f.ids[1]).fullReadStamp, stamp);
-    assert.equal(f.codexScans()[0].filesRead, 1);
+    assert.equal(f.codexScans()[0].filesRead, 0);
   });
 
 const ID_A = '01a03f6c-fdf9-7c83-86e3-c388f81d765c';

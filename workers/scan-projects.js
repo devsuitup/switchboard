@@ -279,15 +279,16 @@ function readStartupCodexFolder(harness, folder, state) {
     if (!relativePath || byPath.has(relativePath)) { reason ||= 'ambiguous-source'; continue; }
     byPath.set(relativePath, row);
   }
-  const failures = workerData.startup.force || meta?.fullIndexVersion !== SESSION_CONTENT_INDEX_VERSION || meta?.fullIndexConfig !== scanConfig() ? new Map() : readFailures(meta);
-  const failedSources = new Set();
+  const failures = workerData.startup.force || meta?.fullIndexVersion !== SESSION_CONTENT_INDEX_VERSION || meta?.fullIndexConfig !== scanConfig() ? new Map() : readFailures(meta, 'codex');
+  const failedSources = new Set(), excludedSources = new Set();
   const selected = new Set(entry.deferred || []), checks = new Map();
   const present = new Set(files.map(file => path.basename(file)));
   for (const file of files) {
     const relativePath = path.basename(file), row = byPath.get(relativePath);
-    if (matchesFullRead(file, failures.get(relativePath)?.stamp, 'codex', relativePath, titleSnapshot)) {
+    const previous = failures.get(relativePath);
+    if (matchesFullRead(file, previous?.stamp, 'codex', relativePath, titleSnapshot) && (!previous.excluded || !row)) {
       selected.delete(relativePath);
-      failedSources.add(relativePath);
+      (previous.excluded ? excludedSources : failedSources).add(relativePath);
       checks.set(relativePath, failures.get(relativePath).stamp);
       continue;
     }
@@ -315,10 +316,13 @@ function readStartupCodexFolder(harness, folder, state) {
       checks.set(relativePath, null);
       continue;
     }
-    if (failedSources.has(relativePath)) continue;
+    if (failedSources.has(relativePath) || excludedSources.has(relativePath)) continue;
     const outcome = {};
     const row = harness.readSessionFile(file, folder, { startup: true, outcome, titleSnapshot, allowSubagentEarlyStop: !byPath.has(relativePath) });
-    if (outcome.status === 'excluded-early') continue;
+    if (outcome.status === 'excluded-early') {
+      outcome.stamp = failureStamp(file, 'codex', relativePath, before, { title: titleSnapshot.titles.get(harness.sessionIdFromPath(file)) || null });
+      outcome.status = outcome.stamp ? 'excluded' : 'deferred';
+    }
     if (outcome.status === 'failed') {
       readErrors.push([relativePath, { size: before.size, error: outcome.error }]);
       const stamp = deterministicReadFailure(outcome.error) && failureStamp(file, 'codex', relativePath, before, { title: titleSnapshot.titles.get(harness.sessionIdFromPath(file)) || null });
@@ -335,6 +339,7 @@ function readStartupCodexFolder(harness, folder, state) {
     }
     else {
       checks.set(relativePath, outcome.stamp);
+      if (!row && outcome.status === 'excluded') failures.set(relativePath, { stamp: outcome.stamp, excluded: true });
       if (!row && byPath.has(relativePath)) toDelete.push(byPath.get(relativePath).sessionId);
     }
     if (row) sessions.push(row);
