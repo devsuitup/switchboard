@@ -122,7 +122,11 @@ function applyDeletionUnit(db, { category, target }) {
     db.deleteSearchSession(target.id);
     db.deleteCachedSession(target.id);
     db.deleteSetting('continuationChoice:' + target.id);
-  } else if (category === 'folderMeta') db.projectDeletion.deleteFolderMeta(target);
+  } else if (category === 'folderMeta') {
+    db.projectDeletion.deleteFolderMeta(target);
+    const repairs = db.getSetting('bridge_uuid_reindex_folders');
+    if (Array.isArray(repairs) && repairs.includes(target)) db.setSetting('bridge_uuid_reindex_folders', repairs.filter(key => key !== target));
+  }
   else if (category === 'settings') db.deleteSetting(target);
   else if (category === 'finalize') {
     const { project, entry } = target, current = db.getSetting('global') || {};

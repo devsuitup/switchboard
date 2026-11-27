@@ -1145,3 +1145,16 @@ test('A4c1 provenance pages seek a stable key without sorting the entire metadat
   assert.ok(plans.length >= 2, 'inspect the actual SQLite plans for both pages');
   assert.ok(plans.every(row => !/USE TEMP B-TREE/i.test(row.detail)), 'bounded provenance page must not sort the full table');
 });
+
+test('COMPLETE purges the deleted folders from the bridge repair list so later repair writes stay admissible (#1189)', supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  h.db.setSetting('bridge_uuid_reindex_folders', ['selected-b', 'host::remote']);
+  const input = h.manifest(false, true);
+  assert.equal((await worker.post('completeProjectDeletion', input)).result.state, 'committed');
+  const pending = [...(h.db.getSetting('bridge_uuid_reindex_folders') || [])];
+  assert.ok(!pending.includes('selected-b'), 'the deleted folder leaves the repair list with its metadata');
+  assert.ok(pending.includes('host::remote'), 'unrelated repair keys are kept');
+  const completed = await worker.post('completeRepairFolders', pending);
+  assert.equal(completed.error?.code, undefined, 'completing the remaining repair keys is not fenced by the deletion');
+  deep([...(h.db.getSetting('bridge_uuid_reindex_folders') || [])], []);
+});

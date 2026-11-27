@@ -1400,6 +1400,15 @@ marker itself is durable, so a restart in between does not lose the rescan.
 Local non-startup scans do not set the marker; local startup already selects
 their null-stamped rows.
 
+Project deletion removes each exclusive folder's key from the list in the same
+`folderMeta` unit that deletes its `cache_meta` row
+(`project-delete-writer.js`, `applyDeletionUnit`). A leftover key would make any
+later `completeRepairFolders` naming it (repair convergence, `main.js` pruning
+of undeclared hosts) bind to the deleted project and fail with
+`PROJECT_EPOCH_STALE`. This applied on main to the #534 migration keys as well.
+A folder shared with another project keeps its key: the deletion keeps its
+metadata, and the writer's ownership rules for such a folder are unchanged.
+
 At database open, `bridge_uuid_index_version = 1` records a one-time transaction
 that removes only bridged top-level cache rows, their metrics and their FTS
 entries, and clears the affected folder gates. Subagents, unrelated rows,
