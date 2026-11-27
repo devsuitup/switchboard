@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.1.0-beta.3 — 2026-11-27
+
 ### Fixed
 - A second change Claude proposes while one is still waiting in the Diff tool no longer replaces it unanswered: it waits behind it, and the Diff icon shows that Claude is waiting. When the CLI stops, a proposal still on screen loses its Accept and Reject buttons, which could no longer reach it, and stays readable. Each proposal still waiting when a session's IDE connection shuts down now gets its answer before the connection closes. (#509)
 - In Touched, **Show 10 more days** redraws at once while a refresh is running, and reads the transcripts again only when the new window goes past what is already loaded. (#510)
