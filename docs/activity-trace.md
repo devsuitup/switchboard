@@ -394,7 +394,8 @@ or by hand) is dropped from the queue.
 Writes go through an append-only stream and are never read back. The stream
 buffers, so a slow disk delays the trace without blocking the main thread; the
 last few lines can be lost on a hard crash. A clean quit flushes and closes the
-file (`app.quit` is its last line).
+file. `app.quit` marks the start of its last steps; `pty.exit` and a final
+`session-index-writer.busy` line can still follow it.
 
 ## Cost when off
 

@@ -5,7 +5,9 @@ Electron instance, **next to** the Switchboard you use every day, without
 quitting it and without touching its database or triggers.
 
 Use `task test-pr PR=<number> ISOLATED=1` for an instance with synthetic
-sessions under a throwaway HOME, suitable for driving with a script.
+sessions under a throwaway HOME, suitable for driving with a script. It does
+not isolate Codex history when `CODEX_HOME` is set in your environment: see
+[`CODEX_HOME` is inherited](#codex_home-is-inherited).
 The default mode keeps your real HOME and transcript history. `ISOLATED` takes
 `1` for fixture mode or `0` for the default mode; unset or empty also selects
 the default. Other values produce a usage error before any git command.
@@ -75,8 +77,9 @@ unread code safe. Read the diff first.
 ## The four isolation concerns
 
 The default mode handles the first two. Check the other two yourself.
-`ISOLATED=1` also isolates sessions and projects, so real schedules are not
-discovered.
+`ISOLATED=1` also isolates Claude sessions and projects, so real schedules are
+not discovered. Codex sessions are isolated only when `CODEX_HOME` is unset:
+see [`CODEX_HOME` is inherited](#codex_home-is-inherited).
 
 ### 1. Database (`SWITCHBOARD_DATA_DIR`)
 
@@ -208,7 +211,18 @@ PowerShell forms. Opening a synthetic session cannot start the real command
 through normal PATH lookup; it prints `claude is disabled in isolated test-pr
 mode` and exits. The rest of PATH remains available for git and shells.
 This guard belongs to test-pr; it does not change the end-to-end fixtures'
-environment handling (issue #438).
+environment handling (issue #438). There is no such stub for `codex`.
+
+#### `CODEX_HOME` is inherited
+
+Isolated mode replaces `HOME`, `USERPROFILE` and the XDG and `AppData`
+directories, but passes `CODEX_HOME` through unchanged (`scripts/test-pr.js`).
+Switchboard reads Codex rollouts from `CODEX_HOME` before the home directory,
+and the Codex integration is on by default. When your environment sets
+`CODEX_HOME`, the fixture instance therefore lists your real Codex sessions and
+the projects they ran in, next to the synthetic ones.
+Unset `CODEX_HOME` in the shell that runs `task test-pr … ISOLATED=1`; with it
+unset, Codex history is read from the temporary HOME, which holds none.
 
 Set `ALLOW_CLAUDE=1` with `ISOLATED=1` to omit the stub and use the real
 `claude` from the original PATH. The temporary HOME, fixtures and environment

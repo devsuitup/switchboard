@@ -41,6 +41,15 @@ app was not run. The patterns these bricks serve are in
 
 ## B1. State mark
 
+> **Current state (#563).** The grid card dot and the terminal header status
+> now render through the shared icon path (`renderSessionIcon` and
+> `writeIconSlot`, `public/session-activity-dom.js`). The lifecycle words from
+> B2 are in the header's tooltip and accessible name, and in the card's
+> footer. The maintained description of the mark is
+> [UI-PATTERNS.md §1.1](UI-PATTERNS.md#11-the-session-state). The anatomy,
+> duplicates, divergences and convergence below are the v0.0.94 audit, kept as
+> history; they are not current component guidance.
+
 - **Job.** Show one session's state at a glance.
 - **Anatomy.** A 6 px slot; one rung per `ICON_BY_RUNG`
   (`public/session-state.js:7-16`); `title` = the rung's title.
@@ -70,6 +79,12 @@ cue (shape or B2 text) for every rung that asks for action; static marks
 under reduced motion.
 
 ## B2. State label (missing)
+
+> **Current state (#563).** One activity vocabulary (the rung titles of
+> `public/session-state.js`) and one ranked lifecycle vocabulary
+> (`lifecycleLabel`, `public/process-exit.js`) now feed the row and header
+> tooltips and the card footer; see [UI-PATTERNS.md §1.1](UI-PATTERNS.md#11-the-session-state).
+> The "four vocabularies" below are the v0.0.94 audit, kept as history.
 
 - **Job.** The same state in words, one vocabulary.
 - **Today, four vocabularies.** Rung titles (`session-state.js:8-15`); raw

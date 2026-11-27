@@ -391,6 +391,11 @@ this harness's C2 remains the unsandboxed worktree/name measurement.
 
 ### Consolidation and validation (no CLI execution)
 
+> Superseded in part: the test, lint and consolidation-baseline instructions in
+> [Test suites and live-run requirements (380p0p)](#test-suites-and-live-run-requirements-380p0p)
+> replace their equivalents in this section. Where they differ, follow that
+> section.
+
 After the live records are reviewed, include every historical and new run
 directory explicitly (PowerShell example):
 
@@ -401,8 +406,8 @@ $canaryRunDirs = Get-ChildItem docs/evidence/session-capabilities -Directory | W
 & $canaryNode -e "console.log(require('./scripts/canary-cli-capabilities').readCapabilities('resources/session-capabilities.json'))"
 ```
 
-The root baselineHead is the local origin/main revision at consolidation time;
-refresh that ref before the publication step. Each run's baselineHead remains on
+The root baselineHead is `git merge-base HEAD origin/main` at consolidation
+time; refresh `origin/main` before the publication step. Each run's baselineHead remains on
 its records. Consolidation copies statuses and booleans verbatim, adds missing
 record baselineHead and legacy capabilityStatus[k]=record.status, and only
 renumbers sequence by measuredAt (ties by evidencePath). It never derives a
