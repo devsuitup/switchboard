@@ -322,6 +322,36 @@ test('A-T6 numeric timestamps also receive the delayed supervisor confirmation',
   } finally { rmTmp(dir); }
 });
 
+test('A-T6 a confirmation timer firing 999 ms after the first probe by Date.now still confirms death (#837)', { timeout: 10000 }, async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const dir = mkTmp();
+  try {
+    const updatedAt = Date.now();
+    writeJob(dir, 'aaaaaaaa', { state: 'running', updatedAt,
+      sessionId: '11111111-1111-4111-8111-111111111111' });
+    fs.mkdirSync(path.join(dir, 'daemon'));
+    fs.writeFileSync(path.join(dir, 'daemon', 'roster.json'), JSON.stringify({ proto: 1,
+      updatedAt: updatedAt + 1, supervisorPid: 43, workers: {} }));
+    const sessionState = fakeSessionState();
+    let reads = 0;
+    sessionState.readWorkerProcessEvidence = () => {
+      reads++;
+      return { processTableFresh: true, observedAt: Date.now() + (reads === 1 ? 1 : 0), tableEntry: () => undefined };
+    };
+    boot(dir, { sessionState });
+    let settled = null;
+    const checking = bgAgents.conversationCheck('aaaaaaaa').then(check => { settled = check; return check; });
+    await new Promise(resolve => setImmediate(resolve));
+    t.mock.timers.tick(1000);
+    for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled?.workerLiveness ?? null, null, 'a 999 ms Date difference must not settle the check');
+    assert.equal(reads, 1, 'confirmation waits until Date.now is a full second past the first probe');
+    t.mock.timers.tick(1);
+    assert.equal((await checking).workerLiveness, 'dead');
+    assert.equal(reads, 2);
+  } finally { rmTmp(dir); }
+});
+
 test('job and descriptor churn keeps the job cache current without rebuilding an unsubscribed roster', async () => {
   const dir = mkTmp();
   try {

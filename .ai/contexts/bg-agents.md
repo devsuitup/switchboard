@@ -908,6 +908,10 @@ The confirming read requests a forced process probe despite the shared three-sec
 cache. Worker evidence exposes the probe's start time as `observedAt`; `sampledAt`
 records when the caller took its first sample. The second probe must start
 strictly after that sample and at least one second after the first probe.
+`workerEvidence` measures that second on `Date.now()` against the first probe's
+`observedAt`, not on the timer alone: the timer runs on libuv's cached loop time and
+can fire with a 999 ms `Date.now()` difference, so a short remainder (at most one
+more wait, capped at one second) is waited before the confirming probe (#837).
 An older in-flight probe therefore cannot confirm death. A changed job record
 or service generation invalidates pending death evidence instead of authorizing
 a verb against its replacement.
