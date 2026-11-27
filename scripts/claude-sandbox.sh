@@ -698,9 +698,13 @@ bind_user_claude_dir() {
 # way: the CLI saves its top-level state files through a temporary file
 # created next to them.
 bind_project_claude_dir() {
-  local dir="$1" e name restore_glob
-  if inside_ro_area "$dir"; then RO_REQUIRED+=("$dir"); return 0; fi
-  mount_op --ro-bind "$dir" "$dir"
+  local dir="$1" e name restore_glob covered=""
+  # see docs/sandbox.md, "~/.claude and each bound directory's .claude"
+  if inside_ro_area "$dir"; then
+    RO_REQUIRED+=("$dir"); covered=1
+  else
+    mount_op --ro-bind "$dir" "$dir"
+  fi
   restore_glob="$(shopt -p nullglob dotglob)"
   shopt -s nullglob dotglob
   for e in "$dir"/*; do
@@ -708,7 +712,7 @@ bind_project_claude_dir() {
     if in_list "$name" "${PROJECT_STATE_ENTRIES[@]}"; then
       if [ -L "$e" ]; then
         debug "state link $e left as is"
-      else
+      elif [ -z "$covered" ]; then
         mount_op --bind "$e" "$e"
         RW_EXCEPTIONS[$((${#M_DEST[@]} - 1))]=1
         in_list "$name" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"} && OPT_IN_BINDS+=("project:$((${#M_DEST[@]} - 1))")
@@ -821,7 +825,10 @@ protect_tree() {
   local d="$1" create="$2" n
   protect_repo_root "$d" "$create"
   while IFS= read -r -d '' n; do
-    if inside_ro_area "$n"; then RO_REQUIRED+=("$n"); continue; fi
+    if inside_ro_area "$n"; then
+      if [ "${n##*/}" = .claude ] && [ -d "$n" ]; then bind_project_claude_dir "$n"; else RO_REQUIRED+=("$n"); fi
+      continue
+    fi
     case "${n##*/}" in
       .claude) protect_claude_dir "$n" "$create" ;;
       .git) protect_repo_root "$(dirname "$n")" "$create" ;;

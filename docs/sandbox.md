@@ -182,6 +182,14 @@ A `.claude` that is itself a symbolic link is refused: the link lives in a
 writable directory, and the session could replace it with a directory of its
 own.
 
+A `.claude` that already lies under a read-only mount of its own, such as one
+inside `$NVM_DIR` below the project, gets no mount of its own and none of its
+state bound back, but its links are followed as in any project's `.claude`:
+each target the sandbox could otherwise write is mounted read-only, and a
+linked state entry of `~/.claude` whose target is, or lies inside, one of
+those targets is refused (`sample/.claude/hooks` and `~/.claude/todos` linked
+to the same directory, say).
+
 ### Writable skills and agents
 
 Skills and agents are read-only by default: an unsandboxed `claude` started

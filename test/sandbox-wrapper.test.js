@@ -1403,6 +1403,31 @@ test('sandbox wrapper: a .claude under a read-only tool directory stays protecte
     }
   });
 
+test('sandbox wrapper: a link inside a .claude under a read-only tool directory keeps its target protected against a state link to it',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const tools = path.join(rig.proj, 'tools');
+      const config = path.join(tools, 'sample', '.claude');
+      const store = path.join(rig.root, 'store', 'todos');
+      fs.mkdirSync(config, { recursive: true });
+      fs.mkdirSync(store, { recursive: true });
+      fs.writeFileSync(path.join(store, 'hook.sh'), '');
+      fs.symlinkSync(store, path.join(config, 'hooks'));
+      let res = rig.run(['--version'], { NVM_DIR: tools });
+      assert.equal(res.status, 0, `a linked hooks under the tool directory alone launches\n${res.stderr}`);
+      fs.rmSync(path.join(dir, 'todos'), { recursive: true, force: true });
+      fs.symlinkSync(store, path.join(dir, 'todos'));
+      res = rig.run(['--version'], { NVM_DIR: tools });
+      assert.equal(res.status, 125, 'the hooks target would be writable through the todos target');
+      assert.match(res.stderr, /store\/todos, which the sandbox binds read-write for a state entry of ~\/\.claude, is at or inside .*store\/todos, which it keeps read-only/);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
 test('sandbox wrapper: a linked state directory outside ~/.claude is followed only to a directory named claude, never to / or a parent of $HOME',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
