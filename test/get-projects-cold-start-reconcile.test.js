@@ -35,7 +35,7 @@ function makeHandler(mocks) {
     projectsClient: { request: options => {
       if (options.reconcile) mocks.reconcileCacheFromFilesystem();
       return Promise.resolve({ defaultProjects: mocks.buildProjectsFromCache(), allProjects: [], rows: 0 });
-    } }, writer: { applyAndPersistArchived, completeRepairFolders: async folders => {
+    } }, writer: { applyAndPersistArchived, pruneUndeclaredRepairFolders: async folders => {
       const current = mocks.getSetting('bridge_uuid_reindex_folders');
       mocks.setSetting('bridge_uuid_reindex_folders', current.filter(key => !folders.includes(key)));
     } },
@@ -221,4 +221,31 @@ test('get-projects clears disabled remote repairs without folder metadata and pr
   await handler();
   assert.deepEqual(settings.get('bridge_uuid_reindex_folders'), [], 'the final disabled repair is removed');
   assert.deepEqual(calls, ['populate', 'build'], 'remote repair cleanup cannot block empty-cache population');
+});
+
+test('a refused repair cleanup for an undeclared host never fails get-projects and is retried later (#1189)', async () => {
+  const settings = new Map([
+    ['global', { remoteHosts: [] }],
+    ['bridge_uuid_reindex_folders', ['gone::-srv-shared']],
+  ]);
+  const refused = () => Promise.reject(Object.assign(new Error('Ambiguous producer session identity'), { code: 'DELETION_OWNERSHIP' }));
+  let attempts = 0;
+  const warnings = [];
+  const handler = loadGetProjectsHandler({
+    annotateRemoteAttachable: projects => projects, mergePlaceholderSessions: projects => projects, normalizeHosts, parseFolderKey,
+    getSetting: key => settings.get(key), setSetting: (key, value) => settings.set(key, value),
+    backfillEntrypoints() {}, backfillCustomTitles() {}, TRACE: { on: false }, projectsReconciledAt: 0,
+    isCachePopulated: () => true, isSearchIndexPopulated: () => true, isInitialScanComplete: () => true,
+    populateCacheViaWorker() {}, log: { warn: message => warnings.push(message), info() {}, error() {} },
+    projectsClient: { request: () => Promise.resolve({ defaultProjects: [{ projectPath: '/kept', sessions: [] }], allProjects: [], rows: 1 }) },
+    writer: { applyAndPersistArchived: projects => projects,
+      completeRepairFolders: () => { attempts++; return refused(); },
+      pruneUndeclaredRepairFolders: () => { attempts++; return refused(); } },
+  });
+  const first = await handler(null, false);
+  assert.deepEqual(first.map(project => project.projectPath), ['/kept'], 'the other projects are still listed');
+  assert.equal(attempts, 1);
+  assert.ok(warnings.some(message => /repair/i.test(message)), 'the refused cleanup is logged');
+  await handler(null, false);
+  assert.equal(attempts, 2, 'the cleanup is retried on a later snapshot');
 });

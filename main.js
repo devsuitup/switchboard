@@ -1542,7 +1542,11 @@ async function getProjectsSnapshot(showArchived, retry = false, { logConflict = 
         if (alias === null) { repairPending = true; return true; }
         return aliases.has(alias);
       });
-      if (declared.length !== repairFolders.length) await writer.completeRepairFolders(repairFolders.filter(folder => !declared.includes(folder)));
+      // see .ai/contexts/session-cache.md ("Bridge history divergence")
+      if (declared.length !== repairFolders.length) {
+        try { await writer.pruneUndeclaredRepairFolders(repairFolders.filter(folder => !declared.includes(folder))); }
+        catch (error) { log.warn(`[projects] repair cleanup for undeclared hosts deferred: ${error.code || error.message}`); }
+      }
     }
     const needsPopulate = !isInitialScanComplete() || (!repairPending && (!isCachePopulated() || !isSearchIndexPopulated()));
 

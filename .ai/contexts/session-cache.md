@@ -1411,6 +1411,23 @@ of undeclared hosts) bind to the deleted project and fail with
 `PROJECT_EPOCH_STALE`. This applied on main to the #534 migration keys as well.
 A folder shared with another project keeps its key: the deletion keeps its
 metadata, and the writer's ownership rules for such a folder are unchanged.
+Ordinary completion of such a key (`completeRepairFolders`) stays bound to the
+folder owners and is refused (`DELETION_OWNERSHIP` or `PROJECT_EPOCH_STALE`)
+while the deletion fences them. That binding is kept on purpose: a remove-only
+command could still erase a repair that is needed, for example when the scan
+that would clear it had its other effects refused by the same fence.
+
+The undeclared-host prune in `getProjectsSnapshot` (#1308) therefore uses its
+own writer command, `pruneUndeclaredRepairFolders`. It is not a folder producer,
+so deletion ownership does not bind it. Instead, the worker validates each key
+against its own settings: it removes only keys with a non-null alias that is
+not an enabled host in `global.remoteHosts` (`enabledHosts`). A local key, or a
+key of a host that is declared again by the time the command runs, is never
+removed. Main also wraps the call: a failure is logged at warn
+(`[projects] repair cleanup for undeclared hosts deferred`) and never fails the
+project listing. The keys stay in the setting, so the next snapshot retries.
+Before this change, origin/main awaited `completeRepairFolders` there, and a
+refusal failed the whole `get-projects` reply.
 
 At database open, `bridge_uuid_index_version = 1` records a one-time transaction
 that removes only bridged top-level cache rows, their metrics and their FTS

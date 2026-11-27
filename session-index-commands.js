@@ -8,7 +8,7 @@ const { isProjectHidden, visibilityPath } = require('./public/worktree-nesting')
 const { createHash } = require('node:crypto');
 const path = require('node:path');
 const { archiveProjectIdentity: projectIdentity } = require('./src/main/projects/project-archive-workflow');
-const { parseFolderKey } = require('./src/main/remote/remote-hosts');
+const { parseFolderKey, enabledHosts } = require('./src/main/remote/remote-hosts');
 const { assertHarnessSettings } = require('./harnesses');
 
 const requestError = (code, message) => Object.assign(new Error(message), { code });
@@ -360,6 +360,17 @@ function createWriterCommands(db) {
     completeRepairFolders(folders) {
       const pending = db.getSetting('bridge_uuid_reindex_folders');
       if (Array.isArray(pending)) db.setSetting('bridge_uuid_reindex_folders', pending.filter(key => !folders.includes(key)));
+    },
+    pruneUndeclaredRepairFolders(folders) {
+      const enabled = new Set(enabledHosts((db.getSetting('global') || {}).remoteHosts).map(host => host.alias));
+      const removable = new Set((Array.isArray(folders) ? folders : []).filter(key => {
+        if (typeof key !== 'string') return false;
+        const { alias } = parseFolderKey(key);
+        return alias !== null && !enabled.has(alias);
+      }));
+      const pending = db.getSetting('bridge_uuid_reindex_folders');
+      if (Array.isArray(pending) && pending.some(key => removable.has(key))) db.setSetting('bridge_uuid_reindex_folders', pending.filter(key => !removable.has(key)));
+      return [...removable];
     },
     addRepairFolders(folders) {
       const pending = db.getSetting('bridge_uuid_reindex_folders');

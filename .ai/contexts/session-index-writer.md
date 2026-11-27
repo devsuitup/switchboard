@@ -509,6 +509,7 @@ receipts and status/replay recovery are deliberately not added in step 1.
 | cleanupWorktree | Worker selects current matching rows, deletes in bounded units, then merges visibility/archive cleanup |
 | dropRemoteFolder / completeRepairFolders | Bounded folder/cache/metrics/FTS deletion and current repair-list subtraction |
 | addRepairFolders | Repair-list union (a remote folder whose bridge evidence was unknown), emitted by cache-effects for an added `bridge_uuid_reindex_folders` key |
+| pruneUndeclaredRepairFolders | Repair-list subtraction limited to keys whose alias is not an enabled host in the worker's own `global.remoteHosts`; not a folder producer, so deletion ownership does not bind it |
 | scheduleRegistry(list/add/remove) | Bootstrap/normalization and current registry merge in one transaction |
 | recordRemap / completeRemap | Merge folder remap, external atomic JSONL rewrite, explicit completion ACK |
 | whatsNewStartup / patchGlobal(lastSeenVersion) | Current last-seen decision and field merge; changelog read outside SQL |

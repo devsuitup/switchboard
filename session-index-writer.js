@@ -304,6 +304,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     async renameSession(id, name) { return request('renameSession', id, name); },
     async rekeySessionMeta(from, to) { return request('rekeySessionMeta', from, to); },
     async completeRepairFolders(folders) { return request('completeRepairFolders', folders); },
+    async pruneUndeclaredRepairFolders(folders) { return request('pruneUndeclaredRepairFolders', folders); },
     async invalidateFullIndex(folder) { return request('invalidateFullIndex', folder); },
     async deriveCachedName(...args) {
       const result = await request('deriveCachedName', ...args);
