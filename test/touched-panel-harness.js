@@ -8,7 +8,7 @@ const { JSDOM } = require('jsdom');
 const { registerPanelTerminals } = require('./terminal-manager-harness');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
-const NODE_MODULES = path.join(__dirname, '..', 'node_modules');
+const NODE_MODULES = path.dirname(path.dirname(require.resolve('marked/package.json')));
 
 const INDEX_HTML = `<!DOCTYPE html>
 <html>

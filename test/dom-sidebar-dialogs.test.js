@@ -72,7 +72,9 @@ for (const agree of [false, true]) {
       answer(agree);
       await pending;
       assert.deepEqual(remapped, agree ? [['/missing', '/replacement']] : []);
-      assert.deepEqual(alerts, agree ? ['Failed to remap: busy'] : []);
+      assert.deepEqual(alerts, []);
+      const notice = ctx.document.querySelector('#app-notices .app-notice-message');
+      assert.equal(notice?.textContent, agree ? 'Could not change the project path — fix the cause below, then try Change path again.\nbusy' : undefined);
     } finally { ctx.destroy(); }
   });
 }

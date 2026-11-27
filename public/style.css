@@ -6508,6 +6508,12 @@ body { display: flex; flex-direction: column; }
   margin-top: 2px;
 }
 
+.activity-trace-file-error {
+  font-size: 11px;
+  color: var(--danger);
+  margin-top: 2px;
+}
+
 .activity-trace-current {
   margin-left: 8px;
   font-family: inherit;

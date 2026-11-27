@@ -2276,10 +2276,19 @@ function rebindSidebarEvents(projects) {
           if (!newPath) return;
           const projectShortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
           if (!await appConfirm({ title: 'Remap?', message: `Remap ${projectShortName} to:\n${newPath}?`, confirmLabel: 'Remap', danger: true })) return;
-          const result = await window.api.remapProject(project.projectPath, newPath);
-          if (result.error) {
-            await appAlert({ title: 'Switchboard', message: 'Failed to remap: ' + result.error });
+          let failure;
+          try {
+            const result = await window.api.remapProject(project.projectPath, newPath);
+            failure = result && !result.error ? null : result?.error || 'The remap backend returned no result';
+          } catch (error) {
+            failure = error?.message || String(error);
+          }
+          const noticeId = sessionActionNoticeId('Change path', project);
+          if (failure) {
+            showAppNotice({ id: noticeId, kind: 'error', sessions: [project],
+              message: 'Could not change the project path — fix the cause below, then try Change path again.\n' + failure });
           } else {
+            clearAppNotice(noticeId);
             Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
           }
         } finally {

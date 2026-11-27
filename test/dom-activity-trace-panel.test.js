@@ -302,17 +302,25 @@ test('an IPC rejection is reported instead of leaving a dead button', async () =
     await settle();
 
     assert.equal(btn.disabled, false, 'the button is usable again');
-    assert.equal(ctx.alerts.length, 1, 'the failure was surfaced');
-    assert.match(ctx.alerts[0], /handler exploded/);
+    assert.deepEqual(ctx.alerts, [], 'no appAlert');
+    const failure = ctx.body().querySelectorAll('.activity-trace-file')[1].querySelector('.activity-trace-file-error');
+    assert.equal(failure.hidden, false, 'the failure was surfaced in its row');
+    assert.match(failure.textContent, /^Could not delete this file — try Delete again/);
+    assert.equal(failure.title, 'handler exploded');
   } finally { ctx.destroy(); }
 });
 
-test('a failed trace read reports its message through appAlert and opens no content', async () => {
+test('a failed trace read reports its message in the row and opens no content', async () => {
   const ctx = setup({ files: SAMPLE_FILES, readResult: { ok: false, error: 'gone' } });
   try {
+    await ctx.window.openSettingsViewer('global');
+    await settle();
     await ctx.window.openActivityTraceFile(SAMPLE_FILES[0]);
     assert.equal(ctx.opened.length, 0);
-    assert.equal(ctx.alerts.length, 1);
-    assert.match(ctx.alerts[0], /Could not read.*gone/);
+    assert.deepEqual(ctx.alerts, [], 'no appAlert');
+    const failure = ctx.body().querySelectorAll('.activity-trace-file')[0].querySelector('.activity-trace-file-error');
+    assert.equal(failure.hidden, false);
+    assert.match(failure.textContent, /^Could not open this trace — try Open again/);
+    assert.equal(failure.title, 'gone');
   } finally { ctx.destroy(); }
 });

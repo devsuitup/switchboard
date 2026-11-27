@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Changed
+- A failed **Save** in the Diff tool, a trace that cannot be opened or deleted in **Settings → Diagnostics**, a failed **Delete** in the Memory viewer and a failed **Change path** on a missing project no longer stop you with a dialog. The failure now shows next to the button you used, or as a notice for **Change path**, and says what to do next; the reason is in its tooltip, or on the notice's second line. Your unsaved edits in the Diff tool are kept, and the message goes away once the action succeeds. (#709)
+
 ### Fixed
 - Toggling **Group by project** in the terminal grid no longer redraws visible terminals twice. (#864)
 - The shell shown in a session's header no longer stays on the previous session's shell when you fork or `/clear` the session you are viewing just as it opens. (#858)
