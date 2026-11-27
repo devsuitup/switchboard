@@ -271,10 +271,13 @@ and `fixtures/browser-mode.cjs` simulate schedule data without loading a writer.
 
 | File | LOC | Role |
 |---|---|---|
-| `src/main/schedules/schedule-runner.js` | ~900 | The cron loop, cron parser, file scanner and lister, catch-up record, session pre-seeder, command builder, schedule file creation and enable/disable rewrite. |
+| `src/main/schedules/schedule-runner.js` | ~1000 | The cron loop, cron parser, file scanner and lister, catch-up record, session pre-seeder, command builder, schedule file creation and enable/disable rewrite. |
 | `src/main/schedules/schedule-ipc.js` | ~265 | IPC handlers + the inline `SCHEDULE_CREATOR_TEMPLATE` (an embedded Claude command that teaches Claude how to write schedule files). |
-| `src/main/schedules/schedule-run-results.js` | ~130 | Run-result persistence, read-only lookup, pruning and the shared exit classifier. |
-| `src/main/schedules/schedule-list.js` | ~80 | `buildScheduleList`, the Electron-free backend of `list-schedules`. |
+| `src/main/schedules/schedule-run-results.js` | ~210 | Run-result persistence, read-only lookup, pruning and the shared exit classifier. |
+| `src/main/schedules/schedule-background.js` | ~360 | Opt-in background runs: `launchBackgroundSchedule`, `resumeBackgroundRuns`/`discoverBackgroundRuns`, `backgroundRefusal` (see "Opt-in background runs (#611)"). |
+| `src/main/schedules/schedule-history-import.js` | ~315 | `createScheduleHistoryImport`: runs of earlier versions found in transcripts, stored and listed as imported history (see "Imported history (#1252)"). |
+| `src/main/schedules/schedules-tab-migration.js` | ~45 | `migrateSchedulesTabDefault` and its bounded startup wait (see "Schedules tab (#792, slice A2)"). |
+| `src/main/schedules/schedule-list.js` | ~90 | `buildScheduleList`, the Electron-free backend of `list-schedules`. |
 | `src/main/schedules/schedule-delete-file.js` | ~35 | `deleteScheduleFile` / `deleteListedScheduleFile`, behind `delete-schedule-file`. |
 | `src/main/schedules/run-schedule-now-target.js` | ~60 | `resolveRunNowTarget`, the Run now file/cwd resolution. |
 
@@ -282,7 +285,7 @@ and `fixtures/browser-mode.cjs` simulate schedule data without loading a writer.
 
 From `schedule-runner.js`:
 
-- `startScheduler(log, runCommand, { resumeSource, stateDir, projects })` — start the in-process cron. Called from `main.js` at app boot with `resumeSource: powerMonitor`, whose `resume` event triggers a catch-up check, and `stateDir: <dirname(DB_PATH)>/schedule-state`. Without `stateDir`, reading the record fails and catch-up schedules fall back to plain cron. With `SWITCHBOARD_DATA_DIR` set, catch-up is off altogether (see [Catch-up](#catch-up), "Isolated instances").
+- `startScheduler(log, runCommand, { resumeSource, stateDir, projects, resumeBackgroundRuns, onHealthChange })` — start the in-process cron. Called from `main.js` at app boot with `resumeSource: powerMonitor`, whose `resume` event triggers a catch-up check, `stateDir: <dirname(DB_PATH)>/schedule-state`, `resumeBackgroundRuns` (the background-run resume of `schedule-background.js`, see "Opt-in background runs (#611)") and `onHealthChange: notifyScheduleHealth` (called on each scheduler state change; a throw is logged). Without `stateDir`, reading the record fails and catch-up schedules fall back to plain cron. With `SWITCHBOARD_DATA_DIR` set, catch-up is off altogether (see [Catch-up](#catch-up), "Isolated instances").
 - `claimScheduleMinute(stateDir, key, minuteMs, info)` — exclusive-create one record file; `false` when it already exists. Exported for tests.
 - `scanSchedules(log, projectPaths)` — scan the given projects for `<project>/.claude/commands/schedule-*.md`, parse frontmatter, return `Schedule[]`. Without `projectPaths` it scans nothing. `startScheduler` passes its `projects()` option, which `main.js` fills from the registry below.
 - `scheduleRegistry(getSetting, setSetting, seed)` — the `scheduleProjects` setting: `list()`, `add(path)`, `remove(path)`. `main.js` reaches it through the session index writer (`scheduleProjects()` → `writer.scheduleRegistry(seed)` in `session-index-writer.js`), so its three methods are asynchronous there. `main.js` adds a project when it spawns a Claude session in it and on `add-project`, removes it on `remove-project`. Transcripts never add one: their `cwd`, and a folder name derived from it, are written by whoever ran claude, a sandboxed session included (see [docs/sandbox.md](../../docs/sandbox.md), "Schedules").
@@ -315,9 +318,12 @@ a cmd.exe or PowerShell profile is not started at all (see "Windows launches").
 This acknowledgement confirms only shell creation. The shared launcher's `exit`
 handler also calls `schedule-ipc.js`'s `reportRunExit(window, result)` for both
 manual and cron runs. Any non-zero exit, regardless of elapsed time, sends
-`schedule-run-exit` while the window and its web contents exist. Exit 0 is silent;
-signal terminations include the signal. The payload carries `name`, `projectPath`,
-`sessionId`, `manual`, `code`, `signal` and `failure`. The launcher receives the
+`schedule-run-exit` while the window and its web contents exist, and so does an
+exit 0 that carries `backgroundFallback` or `persistenceError`. Any other exit 0
+is silent; signal terminations include the signal. The payload carries `name`,
+`projectPath`, `sessionId`, `manual`, `code`, `signal` and `failure`, plus
+`backgroundFallback` and `persistenceError` when set, and `outcome` with
+`error` when the outcome is not `exited`. The launcher receives the
 plain schedule name and a fifth argument with filePath, slug and dueMs, plus
 `manual: true` from Run now; cron defaults to `manual: false`. `failure` is `claude-path` for code 127
 or a shell lookup diagnostic naming exactly `claude` (bash/sh command-not-found,
@@ -407,12 +413,23 @@ catch-up: true
 cli:
   permission-mode: acceptEdits
   allowed-tools: Bash,Read,Write
+  model: sonnet
+  max-budget-usd: 2.50
+  append-system-prompt: Answer in English.
+  add-dirs: /srv/shared,/srv/logs
 ---
 
 <Full self-contained prompt that Claude will execute>
 ```
 
-`enabled: false` disables without deleting. `catch-up: true` (`true` in any case, optionally quoted; the key spelled exactly so) opts in to [catch-up](#catch-up). `cron` is standard 5-field (minute, hour, day-of-month, month, day-of-week).
+`enabled: false` disables without deleting. `catch-up: true` (`true` in any case, optionally quoted; the key spelled exactly so) opts in to [catch-up](#catch-up). `run-as-background: true`, read the same way, opts in to a [background run](#opt-in-background-runs-611). `cron` is standard 5-field (minute, hour, day-of-month, month, day-of-week).
+
+The `cli:` block feeds `buildScheduleCommand`: `permission-mode` (default
+`auto`), `allowed-tools` (default `Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch`),
+`model` (`--model`), `max-budget-usd` (a non-negative decimal, `--max-budget-usd`),
+`append-system-prompt` (`--append-system-prompt`, no control characters other
+than tab, CR and LF) and `add-dirs` (comma-separated, one `--add-dir` each; a
+sandboxed run also checks them against `refusedScheduleBinds`).
 
 ## Disabling a schedule file
 
@@ -963,13 +980,23 @@ cause is allowed. Hiding the tab cancels both
 reload timers, invalidates pending requests and clears the requested project
 focus. A pending toggle completed while hidden waits for reopening to reload.
 The clock tab follows
-Agent Files. Search is hidden. Rows show cron, local
-next-run and relative time, disabled/archive/validation reasons, shared-slug
-diagnostics, catch-up status and the newest 20 runs from the main-side list.
+Agent Files. Search is hidden. Each registry project with a schedule or a
+scan error is a `.schedule-project` section under its collapsible project
+header. A row's summary shows the schedule name (a `bg` badge for a background
+schedule that can run as one), with the name and full file path as its tooltip.
+Its meta line shows the next-run state, the cadence (`cronText`, or the raw
+cron when there is none, with the raw cron as tooltip; `Schedule unknown` on a
+read error), badges (`linked` for a linked file, catch-up state, background
+ignored or unavailable) and the last run. Problems are listed in the row, a Never runs
+reason not repeated in them. The run history, opened from the last run, ends
+with the file path relative to the project (full path as tooltip; a path
+outside the project stays absolute) and Show in Sessions; it lists the newest
+20 runs from the main-side list.
 Run now retains `RunSchedule:<filePath>` and the persistent error contract;
-exit notices still subscribe once from memory-workfiles-view.js. Every scheduled-run
-exit, including success, queues the same visible-tab reload before displaying any
-failure notice. Open checks a
+exit notices still subscribe once from memory-workfiles-view.js. Each
+`schedule-run-exit` event received queues the same visible-tab reload before
+displaying its failure notice. An ordinary exit 0 sends no event (see "Public
+surface"), so its row refreshes only through the other reload triggers above. Open checks a
 nonempty read-memory response before opening memoryPanel.
 
 Load states (#1237): before the first successful listing the tab shows
@@ -1076,9 +1103,11 @@ Records live under `<dirname(DB_PATH)>/schedule-runs`, isolated per instance.
 Both launcher and listing use `scheduleRunsDir(dataDir)` from the results module.
 Names are `<scheduleStateKey>-<startedAtMs>-<sessionId>.json`. Payloads are one
 JSON line plus LF: `{ v: 1, sessionId, file, name, slug, manual, dueMs,
-startedAt, endedAt, outcome, exitCode, signal, failure, error }`. Times are ISO
-strings; exitCode is an integer or null; outcome is exited, signal, spawn-error
-or refused. Stderr stays only in the log. Failure is exit, claude-path, sandbox
+startedAt, endedAt, outcome, exitCode, signal, failure, error }`, plus the
+optional strings `jobId`, `cleanup` and `warning` that background runs write.
+Times are ISO strings; exitCode is an integer or null; outcome is exited,
+signal, spawn-error, refused, or one of the background outcomes timed-out,
+stopped and job-missing. Stderr stays only in the log. Failure is exit, claude-path, sandbox
 or null. Refusal/spawn error text is the launcher's returned recovery text.
 Preparation exceptions retain their original message. Signal outcomes require
 a non-empty signal string, refused/spawn-error require string error text, and
@@ -1105,10 +1134,18 @@ Lookup uses session ID, so cron/Run now paths through aliases still find results
 
 Running uses the live map. Otherwise the renderer shows Exit 0, Failed: exit
 code with the existing PATH/sandbox/log recovery hint, Stopped: signal,
-Refused: error, Failed to start: error, or Unknown: result record unreadable.
+Refused: error, Failed to start: error, Timed out, Stopped before it finished,
+Background job disappeared, or Unknown: result record unreadable. A record's
+`cleanup` and `warning` texts follow Exit 0, Failed: exit and the three
+background texts after ` — `, and any record carrying one adds a warning mark
+to the run's glyph (`scheduleOutcomeLook`). An imported run
+reads Result unknown (imported), with replied or no reply recorded when known.
 Without a record it keeps No result recorded and the assistant/seed/started/
-unknown transcript hint. It never infers Exit 0. Runs alive when Switchboard
-quits, older runs and runs from another instance have no result here.
+unknown transcript hint. It never infers Exit 0. A headless run alive when
+Switchboard quits has no result afterwards. A background run whose monitor
+record was written (identity known) is rediscovered at the next start, its
+monitoring resumes, and it publishes its result then (see "Opt-in background
+runs (#611)"). Older runs and runs from another instance have no result here.
 `scheduleRunFailureHint(failure)` is a classic-script global defined in
 memory-workfiles-view.js, loaded before schedules-view.js in index.html. Both
 exit notices and persistent history use it for the same recovery wording.

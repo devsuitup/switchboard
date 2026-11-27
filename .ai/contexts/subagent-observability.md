@@ -14,7 +14,8 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
 | `db.js` (read side of `session-index-store.js`) | `session_cache` row has `parentSessionId`, `agentId`, `subagentType`, `workflowRunId` columns. `getCachedByParent(parentSessionId)` (`session-index-store.js`) returns all children. Writes go through the writer worker (`session-index-writer.js`, `workers/session-index-writer.js`; see [session-index-writer.md](session-index-writer.md)), not the reader. |
 | `read-session-file.js` | `readSessionDisplayHeader()` extracts `agentId` + `isSidechain` flags from the first 256 KB. |
 | `subagent-attribution.js` | `classifyTranscriptPath`, `agentIdFromBasename`, `subagentParentFromParts`, `isWorkflowRunId`: which project-relative path is a root, ordinary/legacy subagent or workflow agent transcript (see "Workflow agent transcripts (#875)"). |
-| `workers/task-records.js` | Worker (driven by `task-records-client.js`) that reads task records and parent head turns from transcripts into a main-side `createTaskRegistry` (see "CLI task lifecycle and shared registry (issue #624)"). |
+| `workers/task-records.js` | Worker that owns the task registry (`createTaskRegistry`, created inside the worker) and reads task records and parent head turns from transcripts into it (see "CLI task lifecycle and shared registry (issue #624)"). |
+| `task-records-client.js` | Main-side client of that worker: keeps the per-parent snapshots the worker posts (capped), answers `hasRecord`/`snapshots`, and relays re-keys. Main holds no registry of its own. |
 
 ### Lifecycle (main)
 
@@ -27,7 +28,7 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
 | IPC | What it does |
 |---|---|
 | `read-subagent-jsonl(parentSessionId, agentId)` | Returns parsed JSONL entries for the transcript view |
-| `list-subagents(parentSessionId)` | Returns all subagent rows for a parent (used by the sidebar nesting) |
+| `list-subagents(parentSessionId)` | Returns all subagent rows for a parent. Its only consumer is the transcript viewer's Agent-block expansion (`public/jsonl-viewer.js`); sidebar nesting is built from the projects payload (`buildSubagentIndex` in `public/sidebar.js`), not from this IPC |
 | `start-subagent-watch(parentSessionId, agentId)` | Begin tailing the subagent's JSONL; emits `subagent-watch-event` per change |
 | `stop-subagent-watch(watchId)` | Tear down the watch |
 | Events (main → renderer): `subagent-watch-event` (from the `start-subagent-watch` handler in `main.js`); `subagent-spawned`, `subagent-completed` (from `session-transitions.js`, not `main.js` handlers) | Live status changes |
@@ -291,7 +292,9 @@ retain their state checks and assert the new presentation.
   `subagent-spawned` / `subagent-completed` IPC pair emitted by
   `session-transitions.js:detectSubagentTransitions()` (also consumed by
   `jsonl-viewer.js`). The grid only projects the canonical registry.
-- **State**: `activeSubagentsByParent` in `public/sidebar.js` —
+- **State**: `activeSubagentsByParent` in `public/sidebar.js`, which is
+  `window.taskRegistry?.agentView` (the shared registry's agent view; a plain
+  `Map` only when no registry is loaded) —
   `parentSessionId → Map<agentId, Map<source, lastSeenAt(ms)>>` of live source contributions
   subagents. Registry activity survives a full sidebar rebuild and selects
   active children for the capped preview. `reflectSubagentRunningState`
@@ -488,7 +491,7 @@ cutoffs remain authoritative and are still propagated when advanced.
 `test/task-registry-storm-667.test.js` covers these notification shapes,
 worker-to-renderer completion, parent projection and polling idempotence.
 
-`bg-agents-roster.js` normalizes task evidence through `task-records.js`, retaining
+`src/main/bg-agents/bg-agents-roster.js` normalizes task evidence through `task-records.js`, retaining
 the roster's existing short-job-id to session-UUID mapping. Valid job fan entries
 and in-flight evidence feed the same worker; missing/invalid evidence preserves
 unresolved tasks. A validated terminal job state or owned PTY exit ends its
@@ -722,7 +725,10 @@ also consult the adapters' own snapshots directly
 `localTranscriptStates.get(id).snapshot().agentsBusy`, guarded by
 `typeof ... !== 'undefined'` for harnesses that don't load those adapter
 files) — reading the source of truth instead of adding a third duplicate
-map. Both new identifiers are declared in `eslint.config.js`'s
+map. The adapters are consulted only when the registry does not know the
+parent: once `window.taskRegistry.known(parentSessionId)` is true and its agent
+view holds no active child, `parentHasActiveSubagent()` returns false without
+reading `agentsBusy`. Both new identifiers are declared in `eslint.config.js`'s
 `rendererCrossFileGlobals`. Pinned by
 `test/dom-sidebar-remote-subagent-attribution.test.js` (re-render survival for
 both kinds) and the acceptance test in `test/remote-session-adapter.test.js`
@@ -1036,7 +1042,7 @@ completion removes overlapping fallback evidence on both surfaces.
   the ungrouped/top-level render path (`buildSessionsList`) called that
   helper. Any session rendered inside a slug group (i.e. any second-or-later
   rerun of a schedule sharing a slug — the only real producer, see
-  `schedule-runner.js:createScheduleSession()`) silently lost its subagent
+  `src/main/schedules/schedule-runner.js:createScheduleSession()`) silently lost its subagent
   caret/children.
 - **The fix**: `appendSubagentChildren()` was hoisted from a closure inside
   `renderProjects()` to module scope (it never captured any of that
@@ -1081,7 +1087,7 @@ Every consumer must therefore drop `s.parentSessionId` rows itself before
 treating the array as "the project's sessions". `processProjectSessions`
 (`public/sidebar.js`) does exactly that (`allSessions.filter(s => !s.parentSessionId)`)
 after handing the full list to `buildSubagentIndex`; the DB side does the same
-in `getTotalCounts` (`db.js`), which counts `WHERE parentSessionId IS NULL`.
+in `getTotalCounts` (`session-index-store.js`, exposed through `db.js`), which counts `WHERE parentSessionId IS NULL`.
 
 Two consumers had missed it and were fixed together:
 
@@ -1239,6 +1245,29 @@ click opens a read-only transcript, fork PR #9), so no other indicator can be
 capped out of view — but that is a property of the current wiring, not an
 invariant enforced anywhere.
 
+## Live tail of an expanded Agent block
+
+The transcript viewer renders a parent's `Agent` tool use as a collapsible
+block. Expanding it calls `list-subagents` for the parent, picks the child whose
+description and type match the block (by position among equal matches), reads
+it with `read-subagent-jsonl` and renders it nested. If the child is live in
+the viewer's own `liveSubagents` set (fed by `subagent-spawned`, emptied by
+`subagent-completed`), the block also calls `start-subagent-watch`: main seeks
+to the end of the file, watches it with `fs.watch` (a 10 s poll only if the
+watch cannot attach), coalesces appends for 300 ms, and sends only the new lines
+as `subagent-watch-event`. The viewer routes them by `data-subagent-watch-key`
+and shows a "live" mark. Collapsing the block, the child's completion and
+`drainViewerWatches()` call `stop-subagent-watch`.
+
+## Subagent groups during a search (#1255)
+
+While a search is active, a subagent group opens on its own when one of its
+children is a hit. A caret click during that search is remembered per group
+for that search only, and is not written to the persisted expanded set; a new
+search clears those choices. Search-open carets and containers carry
+`data-search-open`, which makes the sidebar's morph skip keeping their previous
+open state.
+
 ## If you change this, also check
 
 - `eslint.config.js` `rendererCrossFileGlobals` — must list any new renderer-global functions (e.g. `showSubagentTranscript`, `drainViewerWatches`) or lint fails on `no-undef`
@@ -1254,7 +1283,7 @@ invariant enforced anywhere.
 - `test/dom-grid-subagent-pills.test.js` — pins the canonical IPC handler arity
   (`preload.js` passes the payload as the callback's only argument)
 - `public/sidebar.js`, the routing branch in `rebindSidebarEvents`'s `item.onclick` (`item.dataset.subagent && session.parentSessionId`) — the one-line decision that makes the whole feature work
-- IPC handler security: `read-subagent-jsonl` MUST validate that `agentId` and `parentSessionId` are filename-safe (see `resolveJsonlPath` calls in main.js — fixed in PR #8 hardening)
+- IPC handler security: `read-subagent-jsonl` and `start-subagent-watch` do not validate `agentId` or `parentSessionId` as filenames. The guarantee is that neither argument ever becomes a path: the handler looks up the cached row `sub:<parentSessionId>:<agentId>` and opens only the path `resolveSessionJsonlPath(row)` derives from that row, refusing when there is no row or its host is no longer declared. Keep any new subagent file handler on that lookup; building a path from the IPC arguments would need its own validation
 
 ## History
 
