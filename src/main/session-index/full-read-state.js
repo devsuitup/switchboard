@@ -29,8 +29,11 @@ function fullReadStamp(file, runtime, relativePath, before, bytes, dependencies 
   return JSON.stringify({ format: 1, runtime, relativePath, ...before, dependencies });
 }
 
-function readFailures(meta) {
-  try { return new Map(JSON.parse(meta?.readFailures || '[]').filter(([, failure]) => deterministicReadFailure(failure.error))); } catch { return new Map(); }
+function readFailures(meta, runtime = 'claude') {
+  try {
+    return new Map(JSON.parse(meta?.readFailures || '[]').filter(([, failure]) => deterministicReadFailure(failure.error)
+      || (runtime === 'codex' && failure.excluded === true && JSON.parse(failure.stamp)?.runtime === 'codex')));
+  } catch { return new Map(); }
 }
 
 function deterministicReadFailure(error) {
