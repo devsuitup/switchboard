@@ -61,6 +61,7 @@ const lastRescanAt = new Map();
 // sessionId -> { status, statusUpdatedAt, pid } for live pids only -- see .ai/contexts/cli-session-state.md
 const statusBySession = new Map();
 let staleSidebarIdentity = '[]';
+let staleSidebarObservedAt = -Infinity;
 const lastProbeAt = new Map();
 const statusKey = (sessionId) => String(sessionId).toLowerCase();
 const MAX_DESCRIPTOR_SCAN = 1000;
@@ -302,10 +303,12 @@ function refreshProcessTable({ force = false, deadline = Infinity } = {}) {
       processTableInFlight = null;
       if (map) {
         for (const pid of rosterOwnership.keys()) if (!map.has(pid)) rosterOwnership.delete(pid);
+        const previous = staleSidebarIdentity;
         const stale = JSON.stringify([...known.values()].filter(entry => sidebarDescriptorIsStale(statusKey(entry.sessionId), entry))
-          .map(entry => [statusKey(entry.sessionId), entry.pid]).sort());
-        const sidebarChanged = stale !== staleSidebarIdentity;
+          .map(entry => [statusKey(entry.sessionId), entry.pid, entry.procStart ?? null]).sort());
+        const sidebarChanged = stale !== previous;
         staleSidebarIdentity = stale;
+        staleSidebarObservedAt = observedAt;
         if (sidebarChanged) notifyStatusesChanged();
         notifyDescriptorsChanged();
       }
@@ -487,6 +490,7 @@ function init(ctx) {
   processTableEpoch++;
   processTable = null;
   staleSidebarIdentity = '[]';
+  staleSidebarObservedAt = -Infinity;
   processTableInFlight = null;
   stop();
   processTableFailureLoggedAt = -Infinity;
@@ -899,10 +903,18 @@ function getSidebarDescriptors({ allWriters = false } = {}) {
 function sidebarDescriptorIsStale(id, entry) {
   const writer = [...known.values()].find(s => s.pid === entry.pid && statusKey(s.sessionId) === id);
   if (!writer) return true;
+  const retained = JSON.parse(staleSidebarIdentity);
+  const procStart = writer.procStart ?? null;
+  const held = retained.some(([sessionId, pid, start]) => sessionId === id && pid === entry.pid && start === procStart);
   if (processTableEnabled && (!processTableFresh() || !processTable.map)) {
-    return JSON.parse(staleSidebarIdentity).some(([sessionId, pid]) => sessionId === id && pid === entry.pid);
+    return held && !(writer.descriptorMtimeMs > staleSidebarObservedAt);
   }
-  return deliveryProcessIdentity(writer) === 'stale';
+  const stale = deliveryProcessIdentity(writer) === 'stale';
+  if (stale && processTableEnabled && !held) {
+    retained.push([id, entry.pid, procStart]);
+    staleSidebarIdentity = JSON.stringify(retained.sort());
+  }
+  return stale;
 }
 
 function canCompareProcStart(raw) {
