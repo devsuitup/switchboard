@@ -3070,10 +3070,13 @@ matcher. Working-set fallback uses the persisted local project identity.
 File-list worker policy/version, archive retirement snapshots and sidebar
 invalidation include scopes. Writer hide accepts an optional third `{ alias }`
 argument; unhide/re-add remove the matching entry's scope. Re-add removes every
-entry the visibility matcher matches for the added path, with its kind, scope
-and archive time, not only an entry spelled exactly like it: deletion stores
-the canonical spelling (lowercase on Windows), and an exact-string removal left
-a re-added Windows project hidden (#1188). Worktree cleanup
+local entry whose `visibilityPath` equals the added path's and whose scope
+admits the local host, with its kind, scope and archive time under the stored
+key, not only an entry spelled exactly like it: deletion stores the canonical
+spelling (lowercase on Windows), and an exact-string removal left a re-added
+Windows project hidden (#1188). Only equality counts: a hidden worktree group
+that hides the added path as a descendant stays, so adding one child does not
+reveal its siblings or the group. Worktree cleanup
 keeps its existing path-wide cache deletion and removes the stored path mark
 and its scope. Global Settings already rereads and spreads the latest global
 record on Save, preserving scopes alongside archive state without a new form

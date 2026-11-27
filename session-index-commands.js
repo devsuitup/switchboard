@@ -4,7 +4,7 @@ const archive = require('./archived-projects');
 const { scheduleRegistry } = require('./src/main/schedules/schedule-runner');
 const { whatsNewOnStartup } = require('./src/main/app/changelog');
 const { migrateSchedulesTabDefault } = require('./src/main/schedules/schedules-tab-migration');
-const { isProjectHidden } = require('./public/worktree-nesting');
+const { isProjectHidden, visibilityPath } = require('./public/worktree-nesting');
 const { createHash } = require('node:crypto');
 const path = require('node:path');
 const { archiveProjectIdentity: projectIdentity } = require('./src/main/projects/project-archive-workflow');
@@ -271,7 +271,9 @@ function createWriterCommands(db) {
     revealAddedProject(projectPath, proof) {
       reopen([{ alias: null, projectPath }], proof);
       const global = db.getSetting('global') || {};
-      const matched = (global.hiddenProjects || []).filter(entry => isProjectHidden([entry], null, projectPath, global.hiddenProjectScopes));
+      const target = visibilityPath(projectPath);
+      const matched = (global.hiddenProjects || []).filter(entry => typeof entry === 'string' && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}::/.test(entry)
+        && visibilityPath(entry) === target && isProjectHidden([entry], null, projectPath, global.hiddenProjectScopes));
       if (matched.length) {
         const kinds = { ...global.hiddenProjectKinds };
         const fields = { hiddenProjects: global.hiddenProjects.filter(p => !matched.includes(p)), hiddenProjectKinds: kinds };
