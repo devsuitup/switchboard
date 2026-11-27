@@ -556,7 +556,8 @@ From `derive-project-path.js`: `deriveProjectPath(folderPath, folderName, opts)`
 The local projects watcher awaits `writer.refreshFolder` for existing dirty
 folders and `writer.dropFolderRows` for vanished folders. `refreshFolder`
 returns true for structural changes, `'activity'` for activity-only changes,
-and false for pending bridge repairs or unchanged rows. Every folder is
+and false for unchanged rows. Pending bridge repairs invalidate the full-index
+seal but still allow incremental discovery. Every folder is
 processed even after an earlier one changed. Structural changes take priority
 over activity when a flush includes both classes. Added/deleted rows,
 changed folder project paths and removal of cached empty projects return true;
@@ -828,7 +829,7 @@ Issue #616 slice 1 routes get-projects through projects-worker-client.js to work
 
 Async reconciliation logs a missing projects directory and resolves, matching the synchronous entry point. Each folder has its own error boundary so a failed refresh does not prevent later folders from reconciling. Deleted deferred transcripts are accounted for even in full refreshes; vanished folders and folders without a project path clear deferred work after the writer acknowledges the effects. The final synchronous refresh checks filesystem stamps before applying its batch; no intervening await or cache-index write can change the cached continuation index there.
 
-The projects worker never writes: main relays its effects to the writer worker ([session-index-writer.md](session-index-writer.md)). Before applying effects without an intervening await, the relay checks the request token against SQLite total_changes/data_version, the writer's `_writer_revision` and the current projected activeSessions/remoteRoots. The worker sends ordered effects after each completed folder only when effects exist or retained live rows changed; unchanged folders send no progress message. Main validates the version before each batch and refreshes the token after its own writes; a watcher/scan/settings/live-session change stops further writes from that snapshot and retries with a fresh snapshot. Worker reconciles bypass the synchronous helper's throttle because main owns their five-second throttle. A read-only reply with no retained-row changes and no reconciliation may publish its partial snapshot during cold-scan writes, so first paint never waits for the background scan to settle. Retained live rows are copied back for releaseLiveSession on exit. The worker skips reconciliation while the completeness marker is absent and excludes pending repair folders. An accepted reconciliation advances main's five-second throttle, and so does a completed cold scan whose completeness marker is set (#1125): the scan just read every file, so the first post-scan load is a plain build rather than a full stat sweep that could outlive the caller's deadline. Cold-start population stays fire-and-forget; the existing entrypoint backfill, archive state persistence, remote placeholders and attachability annotation stay on main.
+The projects worker never writes: main relays its effects to the writer worker ([session-index-writer.md](session-index-writer.md)). Before applying effects without an intervening await, the relay checks the request token against SQLite total_changes/data_version, the writer's `_writer_revision` and the current projected activeSessions/remoteRoots. The worker sends ordered effects after each completed folder only when effects exist or retained live rows changed; unchanged folders send no progress message. Main validates the version before each batch and refreshes the token after its own writes; a watcher/scan/settings/live-session change stops further writes from that snapshot and retries with a fresh snapshot. Worker reconciles bypass the synchronous helper's throttle because main owns their five-second throttle. A read-only reply with no retained-row changes and no reconciliation may publish its partial snapshot during cold-scan writes, so first paint never waits for the background scan to settle. Retained live rows are copied back for releaseLiveSession on exit. The worker skips reconciliation while the completeness marker is absent. Pending repair markers survive incremental reconciliation; they do not exclude folders from discovery. An accepted reconciliation advances main's five-second throttle, and so does a completed cold scan whose completeness marker is set (#1125): the scan just read every file, so the first post-scan load is a plain build rather than a full stat sweep that could outlive the caller's deadline. Cold-start population stays fire-and-forget; the existing entrypoint backfill, archive state persistence, remote placeholders and attachability annotation stay on main.
 
 There is one in-flight job and at most one pending job. Each dispatch owns its
 callers; pending options retain reconcile and byte-measurement requests with
@@ -1075,9 +1076,9 @@ A kept row is recorded with its folder. On PTY exit, `main.js` calls `releaseLiv
   - **Copied tails often retain timestamps, but time order does not establish identity.** An independent member can have thousands of its own messages before another member's `modified`. Complete conversation UUID coverage permits an exact union: exclude the UUIDs already present in preceding members. Timestamp cutoffs remain a compatibility fallback for legacy transcripts, with the limitations below.
   - **Detection is full-read-only.** `readSessionFile()` extracts `bridgeSessionId` from the first `bridge-session` record it sees; `readSessionDisplayHeader()` (the incremental/header-only refresh path, capped at 256 KB / 500 lines) never attempts it, because the record is not reliably near the head of the file — on the real mirror fixture it sat at byte ~3.08 MB of a 3.08 MB file, past the cap. A `readSessionFile()` full read still happens once per file, the first time it's seen (the "NEW file" branch of `refreshFolder`), so the value is captured and then persisted in `session_cache.bridgeSessionId`, carried forward unchanged by every later header-only merge.
   - **Members with a contribution keep their own `session_cache` rows.** `mergeBridgeGroups` groups top-level rows by `bridgeSessionId` and orders them by `created`, then `sessionId`. With complete UUID coverage, each contribution excludes preceding UUIDs, even when its own messages have older timestamps. A continuation attaches to the predecessor with the most shared UUIDs, breaking ties by the latest shared position in its message sequence and then predecessor `modified`; a merged predecessor resolves to its visible root. If that predecessor has later activity, or there is no shared UUID, the contribution remains independent. Pure duplicates contribute no row.
-  - **Cached merge labels do not prove that a group is still correctly derived.** Top-level changes, new members and deletions in a cached bridge folder queue a file-subset worker scan including all its cached bridge members and the changed files. The worker re-evaluates their current full histories, removes gone predecessors before merging, and rewrites contributions, metrics and search entries together through the existing scan-result path. This also restores shared UUIDs when an independent member is promoted after the earlier owner disappears. Concurrent watcher requests for the same folder are combined into subsequent batches; an unchanged group is stat-only and does not run another worker.
+  - **Cached merge labels do not prove that a group is still correctly derived.** Ordinary cached-file refreshes retain their merge labels. New-member discovery and deletion-driven promotion re-read histories in `refreshFolder`, on the calling thread: main for watcher refreshes, the Projects query worker for reconciliation. Startup and remote subsets use the scan worker. Each merge excludes gone predecessors and derives contributions, metrics and search entries from the surviving histories. An unchanged watcher group stays stat-only. See "Issue #534 follow-up triage" below.
   - **`mergedIntoSessionId` rows are excluded from sidebar/session-count listings, but their contributions count in message/token aggregates.** `buildProjectsFromCache` rolls the contributions and activity onto their visible root; `getTotalCounts().totalSessions` excludes merged rows. Complete UUID coverage makes the contributions disjoint by message identity, not by timestamp: their date ranges can overlap. A plain `SUM` of `session_metrics` therefore remains correct.
-  - **Residual gaps, named rather than hidden**: (1) the transcript viewer (`read-session-jsonl`) still resolves a sessionId to exactly one physical file, so opening the *merged* (winner) session shows only its own pre-compaction content — post-compaction content is visible only by separately finding the mirror's own row/search hit, not through a stitched view. (2) FTS search body for the winner is built from its own `textContent` only (pre-compaction text); the mirror keeps its own, separate search entry (its post-compaction `textContent`), so post-compaction text is findable but surfaces as a second, unlabelled-in-the-sidebar search hit rather than under the visible session's own entry. Both are scoped follow-ups, not silently-accepted data loss — nothing here drops tokens, messages, or the ability to eventually find the content, only the "one unified view" polish.
+  - **Residual gaps, named rather than hidden**: (1) the transcript viewer (`read-session-jsonl`) still resolves a sessionId to exactly one physical file, so opening a grouped session shows the selected physical part only. The Parts menu and search can open other parts separately; there is no stitched view. (2) FTS search body for the winner is built from its own `textContent` only (pre-compaction text); the mirror keeps its own, separate search entry (its post-compaction `textContent`), so post-compaction text is findable but surfaces as a second, unlabelled-in-the-sidebar search hit rather than under the visible session's own entry. Both are scoped follow-ups, not silently-accepted data loss — nothing here drops tokens, messages, or the ability to eventually find the content, only the "one unified view" polish.
   - **Winner tie-break is `created`, then `sessionId` string order, and can be picked "wrong" in a narrow case**: if a session is short enough that the mirror's recopied context window covers its *entire* history, the mirror's own unfiltered `created` can tie the true parent's. The sessionId string tie-break is then arbitrary. This does not affect correctness of totals (the group still partitions all activity with no double-count either way) — only which of the two sessionIds ends up as the visible "primary" one. Not fixed here; flagged for whoever hits it.
   - **Open question #1 (absence)**: a transcript with no `bridgeSessionId` is never grouped with anything — `mergeBridgeGroups` only builds a group when the field is a non-empty string, so old-format transcripts and any layout that never emits the field simply keep their own row, exactly like today.
   - **Open question #2 (which file keeps being written)**: established by measurement above — the mirror, not the parent. That is exactly why the mirror is never discarded: dropping it would silently erase every message written after the compaction, for as long as the session keeps being used. The union design keeps both files' rows, forever, each independently refreshed.
@@ -1310,8 +1311,9 @@ The arrays are removed before worker `postMessage` and database upserts.
 Ordinary watcher flushes retain the incremental strategy: unchanged files are
 skipped, changed cached files use the bounded display header and the existing
 shared continuation-index budget. Neither refresh nor warm reconciliation queues
-a full scan of unchanged bridge members. Both functions return synchronously;
-folder freshness is stamped before they return. Counts, FTS bodies and bridge
+a full scan of unchanged bridge members. `refreshFolder` computes synchronously
+on its caller's thread. The watcher awaits the main-side writer facade and its
+write ACK; Projects reconciliation calls the same core inside its query worker. Counts, FTS bodies and bridge
 labels stay cached until members are fully read anyway, just as other live
 transcripts do. Full scans and new-member merges attach continuations to the
 UUID-sharing predecessor's visible root rather than the earliest unrelated member.
@@ -1323,8 +1325,9 @@ and increase main-thread memory. Moving this one-off discovery merge to a worker
 is follow-up work, not part of ordinary flushes. Deleting a predecessor similarly
 re-reads surviving members once, restoring UUIDs and metrics removed by the old
 winner, including an independent promoted member. Remote deletion-only subsets
-perform this restoration in their existing worker; ordinary subsets no longer
-expand to all cached bridged files.
+perform this restoration in their existing worker. Subset enumeration is limited
+to the requested files, but `mergeBridgeGroups` can still read cached siblings
+and unrelated unsettled groups; it is not a bound on total transcript I/O.
 
 Legacy transcripts with no known UUID evidence retain the timestamp fallback
 when it contributes messages. When the fallback is empty, or any UUID evidence is
@@ -1348,21 +1351,54 @@ and the next database open retries. Successful subsequent opens are no-ops.
 
 The repair transaction also saves exactly the affected folder keys in
 `bridge_uuid_reindex_folders`. Population adopts those local folders and forces
-their full read, sharing the startup/rebuild retry coordinator. Pending folders
-are excluded from synchronous reconciliation and watcher refresh until their
-accepted worker publication, so a flush cannot recreate invalidated rows through
-a main-thread full read. A failed repair retains its marker and follows bounded
-population retries; successful sealed publication clears it. There is no
-independent initialization repair worker.
+their full read, sharing the startup/rebuild retry coordinator. A failed repair
+retains its marker and follows population retries after 30 seconds, 2 minutes
+and 10 minutes, then waits for an explicit forced population or restart.
+Successful sealed publication clears the marker. There is no independent
+initialization repair worker or failure-finally release of local repair gates.
+Watcher refresh and reconciliation can discover sessions while a repair remains
+pending, but cannot seal that repair. The watcher can still fully read missing
+rows on main; `get-projects` reconciliation now runs in the Projects query worker.
 
 Repaired remote folder gates remain absent until the remote indexer's existing
 full-folder worker scans the mirror, even if SSH reports no changed files. That
 write clears the remote pending key. Dropping a cached remote folder clears its
-key, and `get-projects` removes pending keys of aliases no longer declared, even
-without folder metadata. Remote pending keys never block local cache/search
+key, and `get-projects` removes pending keys of removed or disabled aliases, even
+without folder metadata. Enabled aliases (including the default enabled state)
+and local repair keys remain pending. Pruning uses the writer's existing
+`completeRepairFolders` command; it neither certifies nor recreates folder rows. Remote pending keys never block local cache/search
 population. Merely listing on-disk projects never stamps
 remote `cache_meta`. Worker full-folder replacement and subset deletions honour
 `keepIfRunning`, preserving active PTY rows, metrics and search until release.
+
+### Issue #534 follow-up triage
+
+Checked against origin/main bcf32919145c77bd34ee22a4af061c878601fe7c.
+The historical multi-second timings in #534 were not remeasured.
+
+| Item | Status | Current execution path |
+|---|---|---|
+| 1. New-member predecessor reads | STILL APPLIES on the watcher path | Main's watcher awaits `writer.refreshFolder`; the writer facade calls `cache.refreshFolder` on main. Its `mergeBridgeGroups` callback reads predecessors in full. Projects reconciliation performs that same computation in `workers/projects-query.js`. |
+| 2. Deletion-driven sibling reads | STILL APPLIES on the watcher path | `refreshFolder`'s `deletedBridges` loop reads surviving members on its caller's thread. Remote deletion subsets perform their equivalent loop in `workers/scan-projects.js`. |
+| 3. Repeated remote subset derivation | STILL APPLIES | `readFolderFileSubsetFromFilesystem` passes all cached rows to `mergeBridgeGroups`. Fresh members trigger predecessor reads and filtered rereads; an unrelated cached group with unsettled labels can also be rederived. All of this runs in the scan worker, including on later changed-file cycles. |
+| 4. Failed repair followed by synchronous main reconciliation | NO LONGER APPLIES as reported | `reindexRepairedFolders` joins `populateCacheViaWorker`. Failure retains the marker and schedules bounded retries. `getProjectsSnapshot` relays reconciliation to the Projects query worker and suppresses it while indexing is unfinished. Watcher discovery still has the main-thread costs described above. |
+| 5. Disabled host repair entries | STILL APPLIES at the base; fixed here | `getProjectsSnapshot` now filters normalized hosts by `enabled` before subtracting abandoned repair keys through the writer. |
+| 6. Stitched transcript view | STILL APPLIES | `read-session-jsonl` chooses one cached row and one physical transcript path; follow/next use that same path. Parts can be opened separately. |
+
+For items 1 and 2, move full bridge computation off main with a folder-scoped
+queue, fresh row/file witnesses and the existing writer publication fences.
+Preserve deletion promotion, live-row retention, watcher notification results,
+continuation deferral and full-read certificates. A bare asynchronous call or
+posting the existing readonly SQLite adapter to the writer is insufficient.
+
+For item 3, cache source-stamped UUID/signature evidence and derived dependency
+witnesses, invalidate the affected group on source/member changes, and preserve
+the legacy fallback and deletion promotion. Skipping a cached label alone is
+not sound. These changes exceed the small safe production patch allowed here.
+
+Item 6 needs a conversation-level reader with ordered parts, message identity
+deduplication, provenance and a checkpoint spanning all followed files. It is
+outside this patch. No renderer change is made.
 
 Payload signatures are lazy, non-enumerable transient evidence: fully identified
 UUID histories retain no transcript lines and build no signatures. Their getter
