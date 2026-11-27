@@ -316,7 +316,7 @@ function fitAndScroll(entry, tr, wantedGen = 0, shouldFit = null, restoreGridWeb
       safeFit(entry);
       if (t) revealLap(t, 'fitMs');
       const previousWebgl = entry.webglAddon;
-      if (restoreGridWebgl) restoreTerminalWebgl(entry.session.sessionId);
+      if (restoreGridWebgl) loadTerminalWebgl(entry);
       const created = loadWantedWebgl(entry, wantedGen) || (!!entry.webglAddon && entry.webglAddon !== previousWebgl);
       if (t) { revealLap(t, 'webglMs'); t.webglCreated = created; }
       forceRepaint(entry, created);
