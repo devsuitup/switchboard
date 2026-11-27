@@ -2,6 +2,16 @@
 
 **Purpose**: index every Claude session JSONL on disk into a queryable SQLite cache so the sidebar renders without re-scanning `~/.claude/projects/` and so search is full-text. Watches the projects directory for changes and refreshes incrementally.
 
+## Column-reconcile CI coverage gap (#869)
+
+CI does not exercise the column reconcile (including `runtime` and
+`sessionFile`) against `better-sqlite3`: dependency installation builds the
+native module for Electron's ABI, so the real-store cases in
+`hide-sdk-sessions.test.js` and `harness-schema.test.js` skip on Node 20 and
+use the `conversation-store.cjs` fixture's `node:sqlite` fallback on Node 22.
+Those runs cover the reconcile SQL through the fallback, but do not verify the
+`better-sqlite3` driver path. CI workflows are unchanged.
+
 ## Pin storage and diagnostics (#1207)
 
 Pins live in `session_meta.starred`, keyed by the full session UUID, independently

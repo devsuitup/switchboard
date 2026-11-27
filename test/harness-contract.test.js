@@ -64,16 +64,26 @@ test('the contract requires project grouping metadata and accepts an ungrouped s
   assert.equal(ungrouped.folderForProject('/project'), null);
 });
 
-test('Claude exposes upstream grouping, filename identity and launch detection semantics', () => {
+test('Claude exposes project grouping, parent identity and launch detection semantics', () => {
   const claude = require('../harnesses/claude');
   assert.equal(claude.groupsByProject, true);
   assert.equal(claude.sessionIdFromPath(path.join('project', 'parent.jsonl')), 'parent');
-  assert.equal(claude.sessionIdFromPath(path.join('project', 'parent', 'subagents', 'agent-child.jsonl')), 'agent-child');
   assert.equal(claude.needsIdDetection({ isNew: true }), false);
   assert.equal(claude.needsIdDetection({ isNew: false }), false);
   assert.equal(claude.needsIdDetection({ isNew: true, options: { forkFrom: 'parent' } }), true);
   assert.equal(claude.needsIdDetection({ isNew: false, options: { forkFrom: 'parent' } }), true);
 });
+
+for (const [layout, file] of [
+  ['preferred', path.join('project', 'parent', 'subagents', 'agent-child.jsonl')],
+  ['legacy', path.join('project', 'parent', 'agent-child.jsonl')],
+]) {
+  test(`Claude maps ${layout} subagent paths to cached session identity`, () => {
+    const { createClaudeHarness } = require('../harnesses/claude');
+    const claude = createClaudeHarness({ projectsDir: path.resolve('.') });
+    assert.equal(claude.sessionIdFromPath(file), 'sub:parent:child');
+  });
+}
 
 test('Claude delegates fork transcript, continuation, state, job and binary contracts', () => {
   const claude = require('../harnesses/claude');
@@ -116,7 +126,7 @@ test('Claude store enumerates parent, preferred and legacy subagents under an is
   fs.mkdirSync(path.join(root, '.git'));
   fs.writeFileSync(path.join(root, 'not-a-folder'), '');
   const files = ['parent.jsonl', 'parent/subagents/agent-child.jsonl', 'legacy/agent-old.jsonl'].map(file => path.join(dir, file));
-  for (const file of files) fs.writeFileSync(file, JSON.stringify({ type: 'user', cwd: root, timestamp: '2026-10-01T00:00:00.000Z', message: { content: 'hello' } }) + '\n');
+  for (const file of files) fs.writeFileSync(file, JSON.stringify({ type: 'user', isSidechain: path.basename(file).startsWith('agent-'), cwd: root, timestamp: '2026-10-01T00:00:00.000Z', message: { content: 'hello' } }) + '\n');
   fs.writeFileSync(path.join(dir, 'ignored.txt'), '');
   assert.equal(claude.sessionsRoot(), root);
   assert.equal(claude.available(), true);
@@ -125,6 +135,11 @@ test('Claude store enumerates parent, preferred and legacy subagents under an is
   assert.equal(claude.transcriptPath({ folder, sessionId: 'parent' }), path.join(dir, 'parent.jsonl'));
   assert.equal(claude.transcriptPath({ folder, sessionId: 'sub:parent:child', parentSessionId: 'parent', agentId: 'child' }), path.join(dir, 'parent/subagents/agent-child.jsonl'));
   assert.equal(claude.transcriptPath({ sessionFile: files[2] }), files[2]);
+  for (const { filePath, parentSessionId } of claude.enumerateSessionFiles(dir)) {
+    const row = claude.readSessionFile(filePath, folder, root, { parentSessionId });
+    assert.ok(row, filePath);
+    assert.equal(claude.sessionIdFromPath(filePath), row.sessionId);
+  }
   const parsed = claude.readSessionFile(path.join(dir, 'parent.jsonl'), folder, root);
   assert.equal(parsed.summary, 'hello');
   assert.equal(parsed.projectPath, root);
