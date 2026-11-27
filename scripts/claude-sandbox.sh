@@ -419,7 +419,8 @@ in_private_area() {
 
 # Mounts the resolved host path $1 read-only at every place the sandbox sees
 # it, under each writable root that contains it, and remembers each for the
-# pins below.
+# pins below. With $3 set to "ro", a place already inside a read-only mount
+# gets no mount of its own and is left to the finished plan's check instead.
 protect_resolved() {
   local real="$1" i root view found=1
   [ -n "${PROTECTED_SEEN[$real]:-}" ] && return 1
@@ -435,6 +436,7 @@ protect_resolved() {
     esac
     in_private_area "$view" && continue
     found=0
+    if [ "${3:-}" = ro ] && inside_ro_area "$view"; then RO_REQUIRED+=("$view"); continue; fi
     mount_op --ro-bind "$real" "$view"
     PIN_VIEWS+=("$view"); PIN_IDX+=("$i")
   done
@@ -745,8 +747,8 @@ protect_path() {
   check_chain "$p"
   read_path0 real readlink -m -z -- "$p"
   if [ -e "$real" ]; then
-    protect_resolved "$real" || true
-  elif [ "${2:-}" = dir ] && sandbox_view "$real"; then
+    protect_resolved "$real" 0 ro || true
+  elif [ "${2:-}" = dir ] && sandbox_view "$real" && ! inside_ro_area "$SV_VIEW"; then
     MISSING_DIRS+=("$real")
   fi
 }
