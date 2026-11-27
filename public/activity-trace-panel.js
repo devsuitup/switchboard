@@ -36,8 +36,9 @@ function getActivityTracePanel() {
       if (result && result.ok) {
         container.style.display = 'none';
         refreshActivityTraceList();
+        return result;
       }
-      return result;
+      return { ...result, ok: false, message: traceDeleteFailureMessage(result) };
     },
     onClose: () => { container.style.display = 'none'; },
   });
@@ -81,6 +82,13 @@ async function openActivityTraceFile(file) {
     ? `${file.name} — last ${formatTraceSize(result.shown)} of ${formatTraceSize(result.size)}`
     : file.name;
   panel.open(title, file.filePath, result.content);
+}
+
+function traceDeleteFailureMessage(result) {
+  const code = result && result.code;
+  if (code === 'recording') return 'Could not delete this trace — debug mode is still writing to it; turn debug mode off, then Delete again.';
+  if (code === 'not-trace' || code === 'ENOENT') return 'Could not delete this file — it is no longer there; reopen Diagnostics to refresh the list.';
+  return 'Could not delete this file — try Delete again, or close any program that has it open.';
 }
 
 function setTraceRowFailure(file, message, reason) {
@@ -149,7 +157,7 @@ function buildActivityTraceRow(file, listEl) {
     if (result && result.ok) {
       renderActivityTraceFiles(listEl);
     } else {
-      setTraceRowFailure(file, 'Could not delete this file — try Delete again, or close any program that has it open.', (result && result.error) || 'unknown error');
+      setTraceRowFailure(file, traceDeleteFailureMessage(result), (result && result.error) || 'unknown error');
     }
   });
 

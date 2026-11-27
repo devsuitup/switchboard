@@ -131,15 +131,19 @@ function traceList(t, api) {
   const { window } = dom;
   const alerts = [];
   const opened = [];
+  const panelOpts = [];
   window.api = api;
   window.appAlert = async ({ message }) => { alerts.push(message); };
   window.appConfirm = async () => true;
   Object.defineProperty(window, 'ViewerPanel', {
-    value: class { open(title, filePath, content) { opened.push({ title, filePath, content }); } },
+    value: class {
+      constructor(_container, opts) { panelOpts.push(opts); }
+      open(title, filePath, content) { opened.push({ title, filePath, content }); }
+    },
     writable: true, configurable: true,
   });
   load(dom, ['activity-trace-panel.js']);
-  return { window, list: window.document.getElementById('list'), alerts, opened };
+  return { window, list: window.document.getElementById('list'), alerts, opened, panelOpts };
 }
 
 const TRACE = { name: 'activity-trace-20261127-101500.jsonl', filePath: '/home/dev/.switchboard/activity-trace-20261127-101500.jsonl', size: 10, modified: '2026-11-27T10:15:00.000Z' };
@@ -263,4 +267,89 @@ test('GIVEN a missing project WHEN Change path fails THEN an app notice says wha
   remap = { ok: true };
   await click();
   assert.equal(ctx.document.querySelector('#app-notices .app-notice'), null, 'a successful Change path clears the notice');
+});
+
+const RECORDING_MESSAGE = 'Could not delete this trace — debug mode is still writing to it; turn debug mode off, then Delete again.';
+const GONE_MESSAGE = 'Could not delete this file — it is no longer there; reopen Diagnostics to refresh the list.';
+
+test('GIVEN a trace row WHEN main refuses Delete for a reason a retry cannot fix THEN the row says what will', async t => {
+  let remove;
+  const ctx = traceList(t, {
+    listActivityTraceFiles: async () => [TRACE],
+    deleteActivityTraceFile: async () => remove,
+  });
+  await ctx.window.renderActivityTraceFiles(ctx.list);
+  const row = ctx.list.querySelector('.activity-trace-file');
+  for (const [refusal, message] of [
+    [{ ok: false, code: 'recording', error: 'the trace is writing to this file — turn debug mode off first' }, RECORDING_MESSAGE],
+    [{ ok: false, code: 'not-trace', error: 'not an activity-trace file' }, GONE_MESSAGE],
+    [{ ok: false, code: 'ENOENT', error: 'ENOENT: no such file' }, GONE_MESSAGE],
+    [{ ok: false, code: 'EBUSY', error: 'EBUSY: resource busy' }, DELETE_MESSAGE],
+  ]) {
+    remove = refusal;
+    row.querySelector('.activity-trace-delete-btn').click();
+    await flush();
+    const failure = row.querySelector('.activity-trace-file-error');
+    assert.equal(failure.textContent, message, refusal.code);
+    assert.equal(failure.title, refusal.error);
+  }
+  assert.deepEqual(ctx.alerts, []);
+});
+
+test('GIVEN the trace viewer WHEN main refuses Delete because debug mode writes the trace THEN its Delete handler hands the viewer the recording message', async t => {
+  const ctx = traceList(t, {
+    listActivityTraceFiles: async () => [TRACE],
+    readActivityTraceFile: async () => ({ ok: true, content: 'trace' }),
+    deleteActivityTraceFile: async () => ({ ok: false, code: 'recording', error: 'the trace is writing to this file — turn debug mode off first' }),
+  });
+  await ctx.window.openActivityTraceFile(TRACE);
+  const result = await ctx.panelOpts[0].onDelete(TRACE.filePath);
+  assert.equal(result.ok, false);
+  assert.equal(result.message, RECORDING_MESSAGE);
+});
+
+test('GIVEN a viewer WHEN its Delete handler refuses with its own message THEN the notice shows that message', async t => {
+  const ctx = memoryViewer(t, async () => ({ ok: false, error: REASON, message: RECORDING_MESSAGE }));
+  ctx.panel.open('Trace', '/traces/now.jsonl', 'trace');
+  ctx.panel.toolbar.deleteBtn.click();
+  await flush();
+  assertInlineFailure(ctx.panel.noticeEl, RECORDING_MESSAGE);
+});
+
+test('GIVEN a missing project WHEN main refuses Change path THEN the notice says what is true for that refusal', async t => {
+  const ctx = setupSidebarDom();
+  t.after(() => ctx.destroy());
+  let answer;
+  let reloads = 0;
+  ctx.window.api = {
+    checkRemapProject: async () => ({ ok: true }),
+    browseFolder: async () => '/replacement',
+    remapProject: async () => answer,
+  };
+  ctx.window.loadProjects = () => { reloads++; };
+  ctx.window.appConfirm = async () => true;
+  ctx.sidebar.renderProjects([makeSampleProject({ projectPath: '/home/dev/gone', missing: true })], true);
+  const click = () => ctx.document.querySelector('.project-remap-btn').onclick(new ctx.window.MouseEvent('click'));
+  const refresh = 'No change needed — the project\'s original folder is back; refresh the project list.';
+  for (const [code, first, action] of [
+    ['path-back', refresh, 'Refresh'],
+    ['no-session-data', 'Could not change the project path — no sessions are recorded for it any more; refresh the project list.', 'Refresh'],
+    ['active-sessions', 'Could not change the project path — stop this project\'s running sessions, then try Change path again.', undefined],
+    ['target-missing', 'Could not change the project path — choose an existing folder, then try Change path again.', undefined],
+    ['target-not-directory', 'Could not change the project path — choose an existing folder, then try Change path again.', undefined],
+    ['failed', REMAP_MESSAGE, undefined],
+    ['invalid-arguments', REMAP_MESSAGE, undefined],
+  ]) {
+    answer = { error: 'reason for ' + code, code };
+    await click();
+    const notice = ctx.document.querySelector('#app-notices .app-notice');
+    assert.equal(notice.querySelector('.app-notice-message').textContent, first + '\nreason for ' + code, code);
+    assert.equal(notice.querySelector('.app-notice-action')?.textContent, action, code);
+  }
+  answer = { error: 'reason for path-back', code: 'path-back' };
+  await click();
+  const before = reloads;
+  ctx.document.querySelector('#app-notices .app-notice-action').click();
+  assert.equal(reloads, before + 1, 'Refresh reloads the project list');
+  assert.equal(ctx.document.querySelector('#app-notices .app-notice'), null, 'Refresh clears the notice');
 });

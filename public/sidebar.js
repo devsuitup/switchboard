@@ -35,6 +35,14 @@ const archivingSessionIds = new Set();
 const archivingGroupIds = new Set();
 const remappingProjectPaths = new Set();
 const deletingWorktreePaths = new Set();
+
+function remapFailureMessage(code) {
+  if (code === 'path-back') return 'No change needed — the project\'s original folder is back; refresh the project list.';
+  if (code === 'no-session-data') return 'Could not change the project path — no sessions are recorded for it any more; refresh the project list.';
+  if (code === 'active-sessions') return 'Could not change the project path — stop this project\'s running sessions, then try Change path again.';
+  if (code === 'target-missing' || code === 'target-not-directory') return 'Could not change the project path — choose an existing folder, then try Change path again.';
+  return 'Could not change the project path — fix the cause below, then try Change path again.';
+}
 const ARCHIVE_CHECKING_TITLE = 'Checking the host before archiving…';
 const unreadButtonTemplate = document.createElement('button');
 unreadButtonTemplate.className = 'session-unread-btn';
@@ -2277,16 +2285,21 @@ function rebindSidebarEvents(projects) {
           const projectShortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
           if (!await appConfirm({ title: 'Remap?', message: `Remap ${projectShortName} to:\n${newPath}?`, confirmLabel: 'Remap', danger: true })) return;
           let failure;
+          let code;
           try {
             const result = await window.api.remapProject(project.projectPath, newPath);
             failure = result && !result.error ? null : result?.error || 'The remap backend returned no result';
+            code = result?.code;
           } catch (error) {
             failure = error?.message || String(error);
           }
           const noticeId = sessionActionNoticeId('Change path', project);
           if (failure) {
-            showAppNotice({ id: noticeId, kind: 'error', sessions: [project],
-              message: 'Could not change the project path — fix the cause below, then try Change path again.\n' + failure });
+            const refresh = code === 'path-back' || code === 'no-session-data';
+            showAppNotice({ id: noticeId, kind: code === 'path-back' ? 'info' : 'error', sessions: [project],
+              message: remapFailureMessage(code) + '\n' + failure,
+              actionLabel: refresh ? 'Refresh' : undefined,
+              onAction: refresh ? () => Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); }) : undefined });
           } else {
             clearAppNotice(noticeId);
             Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });

@@ -322,7 +322,7 @@ function initFilePanel() {
   diffContainer.appendChild(diffToolbarEl);
 
   diffSaveFailureEl = document.createElement('div');
-  diffSaveFailureEl.className = 'viewer-panel-notice changes-error diff-save-failure';
+  diffSaveFailureEl.className = 'viewer-panel-notice diff-save-failure';
   diffSaveFailureEl.setAttribute('role', 'alert');
   diffSaveFailureEl.style.display = 'none';
   diffContainer.appendChild(diffSaveFailureEl);

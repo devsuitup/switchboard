@@ -199,13 +199,35 @@ window and gives no next step.
     redraws the list.
   - `ViewerPanel` Delete (`public/viewer-panel.js`, Memory and trace
     viewers): the `delete-failed` state of the existing `.viewer-panel-notice`
-    under the toolbar. The viewer stays open with its document; a successful
-    Delete clears it before `onClose`.
+    under the toolbar. An `onDelete` refusal may carry its own `message`,
+    shown instead of the default sentence. The viewer stays open with its
+    document; a successful Delete clears it before `onClose`.
 - **No panel: an app notice** (`showAppNotice`, `public/app-notices.js`).
   Sidebar **Change path** uses the `sessionActionNoticeId('Change path',
   project)` id, which its pre-check failure shares, with the sentence on the
   first line and the reason on the second (`.app-notice-message` keeps
   newlines). A successful remap clears it with `clearAppNotice`.
+
+**The "what to do" must be true for the refusal.** A retry that cannot
+succeed is not an instruction, so main tags each refusal with a `code` and
+the renderer picks the sentence from it:
+
+| Refusal (main.js) | `code` | What the user is told |
+|---|---|---|
+| `deleteActivityTraceFile`: the file debug mode is writing | `recording` | turn debug mode off, then Delete again |
+| `deleteActivityTraceFile`: outside the trace folder, or already gone | `not-trace`, `ENOENT` | reopen Diagnostics to refresh the list |
+| `deleteActivityTraceFile`: any other unlink error | the fs `code` | try Delete again, or close the program holding it |
+| `remapMissingProject`: the original folder is back | `path-back` | nothing to change; **Refresh** the project list (info notice with a Refresh action) |
+| `remapMissingProject`: no session folder for the project | `no-session-data` | **Refresh** the project list |
+| `remapMissingProject`: a session of the project still runs | `active-sessions` | stop those sessions, then Change path again |
+| `remapMissingProject`: target missing or not a folder | `target-missing`, `target-not-directory` | choose an existing folder, then Change path again |
+| `remapMissingProject`: bad arguments or a failed rewrite | `invalid-arguments`, `failed` | fix the cause shown below, then Change path again |
+
+The recording trace keeps its Delete button: the list's `current` flag and
+the viewer cannot tell for sure which file main is writing at the moment of
+the click, and main's refusal is the authority, so the message follows it.
+`test/failure-refusal-codes.test.js` loads both main functions with
+`loadAppFunctions` and pins every code.
 
 Tests: `test/dom-failure-recovery.test.js`, one case per site, asserts that no
 `appAlert` is called, the sentence, the reason, and the clearing.

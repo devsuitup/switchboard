@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Changed
-- A failed **Save** in the Diff tool, a trace that cannot be opened or deleted in **Settings → Diagnostics**, a failed **Delete** in the Memory viewer and a failed **Change path** on a missing project no longer stop you with a dialog. The failure now shows next to the button you used, or as a notice for **Change path**, and says what to do next; the reason is in its tooltip, or on the notice's second line. Your unsaved edits in the Diff tool are kept, and the message goes away once the action succeeds. (#709)
+- A failed **Save** in the Diff tool, a trace that cannot be opened or deleted in **Settings → Diagnostics**, a failed **Delete** in the Memory viewer and a failed **Change path** on a missing project no longer stop you with a dialog. The failure now shows next to the button you used, or as a notice for **Change path**, and says what to do next; the reason is in its tooltip, or on the notice's second line. Your unsaved edits in the Diff tool are kept, and the message goes away once the action succeeds. Deleting the trace debug mode is still writing tells you to turn debug mode off first, and a **Change path** that is no longer needed because the project's folder is back offers **Refresh** instead of another remap. (#709)
 
 ### Fixed
 - Toggling **Group by project** in the terminal grid no longer redraws visible terminals twice. (#864)

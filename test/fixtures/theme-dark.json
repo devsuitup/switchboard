@@ -23,9 +23,9 @@
     "--strip-inset-left": "0px",
     "--strip-inset-right": "calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw))"
   },
-  "cssHash": "ba965683cbd5baac3b280bc31a9f69bf8de3d1f1d5b472ff1e72a56f9b83341b",
+  "cssHash": "0fbfb87d8f65de2e4904b2a08be80c385a7349135cbebc3daf69212cb9fd959f",
   "inline": {
-    "sidebar.js": "5843d2f0edd985c04683a2fbba5b267126f840d99cf982d5d92e81f9194506c2",
+    "sidebar.js": "a806a1199a4bb3f452599e21d56ffaa79c2fb49ca4d3ac78c893af708ed32471",
     "jsonl-viewer.js": "d74bf42a3c33ba87b8f4cf9441df0814380890a6ca0c239f3479207f36c73e2a",
     "viewer-toolbar.js": "a8a83a1c55716a17a5b53defbdb7b28344e0796096b5e738b9d1cdea1113cca6"
   }

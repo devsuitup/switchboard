@@ -147,7 +147,7 @@ class ViewerPanel {
     this.container.insertBefore(this.noticeEl, this.toolbar.el.nextSibling);
   }
 
-  _setNotice(state, detail) {
+  _setNotice(state, detail, message) {
     this._noticeState = state;
     let text = '';
     if (state === 'changed') {
@@ -163,7 +163,7 @@ class ViewerPanel {
     } else if (state === 'save-failed') {
       text = `Save failed: ${detail}`;
     } else if (state === 'delete-failed') {
-      text = 'Could not delete this file — try Delete again, or close any program that has it open.';
+      text = message || 'Could not delete this file — try Delete again, or close any program that has it open.';
     }
     this.noticeTextEl.textContent = text;
     this.noticeEl.title = state === 'delete-failed' ? detail : '';
@@ -274,6 +274,7 @@ class ViewerPanel {
     const name = filePath.split('/').pop();
     if (!await appConfirm({ title: 'Delete?', message: `Delete "${name}"?\n\nThis cannot be undone.`, confirmLabel: 'Delete', danger: true }) || this._openGen !== myGen) return;
     let failure = null;
+    let message;
     try {
       const result = await this.opts.onDelete(filePath);
       if (result && result.ok !== false) {
@@ -283,10 +284,11 @@ class ViewerPanel {
         return;
       }
       failure = result?.error || 'unknown error';
+      message = result?.message;
     } catch (err) {
       failure = (err && err.message) || 'unknown error';
     }
-    if (this._openGen === myGen) this._setNotice('delete-failed', failure);
+    if (this._openGen === myGen) this._setNotice('delete-failed', failure, message);
   }
 
   /**
