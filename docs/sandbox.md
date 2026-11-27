@@ -102,7 +102,7 @@ terminal.
 | In each of the above: `.claude`, `.git/config`, `.git/hooks` | see [What the sandbox protects](#what-the-sandbox-protects) |
 | `~/.claude` | its state read-write, its configuration read-only, `projects` read-only except the session's own folder — see [What the sandbox protects](#what-the-sandbox-protects) |
 | `~/.claude.json` | a private copy, dropped when the session ends |
-| `~/.config/claude`, `~/.cache/claude`, `~/.local/share/claude` | read-write |
+| `~/.config/claude`, `~/.cache/claude`, `~/.local/share/claude` | read-write. One that is a symbolic link is followed only to a directory named `claude`, and never to `/` or a parent of `$HOME`; any other target is refused |
 | `/usr`, `/etc` | read-only |
 | What `/etc/resolv.conf`, `/etc/hosts`, `/etc/nsswitch.conf`, `/etc/host.conf` or `/etc/gai.conf` links to, when outside `/etc` and `/usr`: the directory under `/run` (with systemd-resolved, `/run/systemd/resolve`), since the resolver replaces the file by a rename; the file itself elsewhere | read-only |
 | `/bin`, `/sbin`, `/lib`, `/lib64` | symbolic links into `/usr` |
@@ -145,11 +145,11 @@ writable on request: see [Writable skills and agents](#writable-skills-and-agent
 |---|---|
 | In `~/.claude`: `todos`, `statsig`, `file-history`, `sessions`, `plans`, `tasks`, `cache`, `paste-cache`, `image-cache`, `downloads`, `feedback`, `debug`, `telemetry`, `jobs`, `usage-data`, `agent-memory`, `.credentials.json`, `history.jsonl`, `.last-cleanup`, `.last-update-result.json`, `mcp-needs-auth-cache.json`, `policy-limits.json`, `policy-limits.json.stamp.json`, `stats-cache.json` | read-write |
 | In `~/.claude`: `projects` | read-only, except the session's own transcript folder, `projects/<the working directory, every character but letters and digits replaced by ->`, which is read-write; see [Schedules](#schedules) |
-| In `~/.claude`: `shell-snapshots`, `session-env`, `backups`, `state` | an empty private tmpfs. Other sessions source the shell snapshots and session hooks kept there before each Bash command, and the CLI offers the backups there as what to copy back over a broken `~/.claude.json`; the session gets its own |
+| In `~/.claude`: `shell-snapshots`, `session-env`, `backups`, `state` | an empty private tmpfs. Other sessions source the shell snapshots and session hooks kept there before each Bash command, and the CLI offers the backups there as what to copy back over a broken `~/.claude.json`; the session gets its own. Nothing from the host is mounted in it, not even a protected path that lies there (a `core.hooksPath` set to `~/.claude/shell-snapshots`, say) |
 | In a project's `.claude`: `worktrees`, `agent-memory`, `agent-memory-local` | read-write |
 | `skills` in `~/.claude` and in a project's `.claude`, only with `SWITCHBOARD_SANDBOX_RW_SKILLS=1`; `agents` likewise, only with `SWITCHBOARD_SANDBOX_RW_AGENTS=1` | read-write; see [Writable skills and agents](#writable-skills-and-agents) |
 | Any other file or directory | read-only |
-| A symbolic link to one of the read-write entries of `~/.claude` (`todos` kept on another disk, say) | recreated as the same link on the tmpfs, and its target bound read-write at its own path so the link resolves — only when the target is a directory (a file, for `*.json`, `*.jsonl` and `.last-*`) of the same name, and neither `$HOME` nor a parent of it. Any other target is refused |
+| A symbolic link to one of the read-write entries of `~/.claude` (`todos` kept on another disk, say) | recreated as the same link on the tmpfs, and its target bound read-write at its own path so the link resolves — only when the target is a directory (a file, for `*.json`, `*.jsonl` and `.last-*`) of the same name, and neither `$HOME` nor a parent of it. Any other target is refused. A protected path inside that target, or inside the session's transcript folder of a linked `projects`, is mounted read-only there; a target that is, or lies inside, a protected path or an entry mounted read-only (`todos` linked to `~/.claude/hooks/todos`, say) is refused, since its read-write mount would leave that path writable, and so is a target that is, lies inside or contains a private entry or its target (below) |
 | A symbolic link to one of the read-write entries of a project's `.claude` | left as it is and not followed: a repository can carry such a link, so it resolves only to what the sandbox sees anyway |
 | Any other symbolic link | kept as the same link (in `~/.claude`, recreated on the tmpfs). When its target lies in a directory the sandbox can write (the project, say), the target is mounted read-only too; a target the sandbox cannot see stays invisible |
 | A symbolic link at any depth inside a read-only directory, or inside a linked directory mounted read-only (`skills/<name>/…` linked from elsewhere, say) | its target is mounted read-only when the sandbox could otherwise write it, and the links below that target are followed in turn |
@@ -181,6 +181,15 @@ writing the file in place (it does so on `EBUSY`, `EXDEV`, `EPERM` and
 A `.claude` that is itself a symbolic link is refused: the link lives in a
 writable directory, and the session could replace it with a directory of its
 own.
+
+A `.claude` that already lies under a read-only mount of its own, such as one
+inside `$NVM_DIR` below the project, gets no mount of its own and none of its
+state bound back, but its links are followed as in any project's `.claude`:
+each target the sandbox could otherwise write is mounted read-only, and a
+linked state entry of `~/.claude` whose target is, or lies inside, one of
+those targets is refused (`sample/.claude/hooks` and `~/.claude/todos` linked
+to the same directory, say). Such a `.claude` that is a symbolic link is
+refused like any other: what it points to is not followed.
 
 ### Writable skills and agents
 
@@ -274,6 +283,11 @@ the sandbox sees it: a repository reached both through an Additional Directory
 that is a symbolic link and through its real path, or through an opted-in
 `skills`, is protected at each.
 
+A repository that already lies under a read-only mount of its own (inside
+`$NVM_DIR` below the project, say) gets no mount of its own for its `.git`,
+but its paths are still read from git as above, so a `core.hooksPath` outside
+it is protected too, and a `.git` there that is a symbolic link is refused.
+
 The search below a bound directory does not enter `node_modules`, and does not
 cross into another filesystem (`find -xdev`): a `.git` or `.claude` inside a
 `node_modules`, or on a mount or a bind inside the project, is not protected.
@@ -293,6 +307,32 @@ The paths, and the Additional Directories (below), are resolved when the
 wrapper builds the sandbox and mounted when bwrap starts it; a second sandboxed
 session on the same project that swaps a
 directory in between is not detected.
+
+### The finished mount plan
+
+Before bwrap starts, the wrapper checks the whole list of mounts once more, on
+resolved paths. Every path it keeps read-only (past `/usr`, `/etc` and the
+interpreter and `$NVM_DIR` mounts, which only make programs available), every
+`.claude` or `.git` found below a bound directory but left to one of those
+mounts, every private entry of `~/.claude` and the target of a `~/.claude.json`
+that is a symbolic link must stay that way wherever a read-write mount reaches
+it. A read-write mount whose source resolves to `/` or to a parent of `$HOME`
+is refused outright. Beyond that:
+
+- a read-write mount that contains a read-only path must show it read-only at
+  its own place too, so a project reached as `project-alias` whose real
+  directory is also the target of `~/.claude/todos` is refused: its `.claude`
+  would be writable under the real path;
+- a read-write mount that contains a private entry's target, or the file
+  `~/.claude.json` links to (`~/.claude/cache` linked to the directory that
+  holds it, say), is refused;
+- a read-write mount inside a read-only path is refused, unless the plan
+  already makes that place writable on its own: a project's `worktrees` and
+  `agent-memory`, an opted-in `skills` or `agents`, and the session's
+  transcript folder. A `~/.claude/agent-memory` linked to the project's own
+  `.claude/agent-memory` is accepted for that reason.
+
+The launch is refused with the paths concerned, before bwrap runs.
 
 ### Additional directories
 
