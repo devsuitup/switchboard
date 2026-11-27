@@ -51,8 +51,9 @@ Node 22, full-history checkout without credentials, 10 minutes) running
 it, so a refused tag costs a build but adds no latency to an accepted one;
 `publish` needs `[build, release-tag]`. The beta comparison (diff, package
 and lock comparison, fold check) applies only when a `vX.Y.Z-beta.N` tag of
-the final's own version exists; without one the final passes on tag shape and
-`package.json` version and the log says no beta was compared. This keeps the
+the final's own version exists; without one the final passes on release-branch
+provenance, tag shape and `package.json` version and the log says no beta was
+compared. This keeps the
 plain `v0.0.N` path releasable: an unconditional "final needs a beta" rule
 blocked the next plain release (review F1 of #1231). `readFileAt` verifies the
 ref as a commit first, so an unknown tag exits 2 rather than reporting a null
@@ -98,7 +99,7 @@ filtered by branch. `*` does not cross `/`, so `release/*` matches
 `release/0.1` and not `release/0.1/x`; the ruleset `release-protection` uses
 the same pattern, and a working branch named `release/vX` falls under both.
 
-No job names `main`: `changelog` and `docs` receive the PR's base and head
+The changelog and documentation jobs receive the PR's base and head
 SHAs and diff through the merge base, patch coverage compares with
 `origin/${{ github.base_ref }}` after fetching it (a base with a slash is an
 ordinary ref name), and `check-release-tag.js` compares trees and tags,
@@ -118,6 +119,43 @@ corrected by hand in the draft.
 The triggers are pinned by `test/build-workflow.test.js` and
 `test/lint-pr-title.test.js`. Not covered: GitHub starting the runs, which the
 first PR to a release branch shows.
+
+## Release provenance (2026-11-27)
+
+`scripts/check-release-provenance.js` exports `checkTagProvenance`,
+`checkReleaseProvenance` and `createGitReaders`. The checks take injected
+readers; the CLI exits 0/1/2 for success/rule failure/input or Git failure.
+No SQLite, Electron or npm dependencies are involved; the PR job uses Node 20.
+
+The tag-push-only `release-tag` job explicitly fetches the release refspec,
+then requires the peeled tag commit to be contained by an
+`origin/release/*` branch, before the existing version/beta check.
+`publish` still needs both `build` and `release-tag`.
+
+`.github/workflows/release-provenance.yml` runs only on PRs to `release/*`,
+with read-only contents permission and a full-history checkout. It fetches
+main and all release branches and passes the actual PR head SHA via an
+environment variable, not the synthetic merge SHA. The range is
+`origin/<base>..<head>`, not first-parent history or a tree diff.
+Each commit must be on main, a merge, a nonempty bump touching only the
+three root release files, or an `-x` backport with its full source SHA on
+main. NUL-delimited paths and disabled rename detection retain deletions
+when code is renamed into an allowed file. Missing refs fail closed.
+The check validates recorded provenance, not patch equivalence; merge
+resolutions and the contents of the three bump files are exempt by policy.
+
+`test/check-release-provenance.test.js` requires production code directly,
+uses real temporary Git histories, parses both workflows and executes the
+CLI in a VM with a filename and no source wrapping. It covers annotated
+ancestor tags, off-release tags, valid backports, missing source/main refs,
+merge-parent offenders, disguised renames, CLI errors and workflow wiring.
+The procedure and maintainer settings are documented in
+[The tag check](../../docs/releasing.md#the-tag-check); `docs/branching.md`
+does not exist on this base. Release branches use merge commits to preserve
+the checked ancestry and `-x` lines; `v*` tags are admin-only.
+Requiring the new check is a separate GitHub setting, and older release
+branches need a backport of the workflow. GitHub-side execution and settings
+remain unverified locally.
 
 ## Packaging and test workflows
 
