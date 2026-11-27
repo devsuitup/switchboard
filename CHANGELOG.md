@@ -5,6 +5,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
+- The shell shown in a session's header no longer stays on the previous session's shell when you fork or `/clear` the session you are viewing just as it opens. (#858)
+- When a session is forked or cleared while it is being archived, from its own row or with its folder, the **Archive** button of the original conversation no longer stays disabled in the sidebar. (#858)
 - A transcript that grows without its modification time changing and cannot be fully read no longer triggers repeated full reads on every session refresh, avoiding needless disk and CPU work. (#868)
 - On Windows and macOS, a session whose Claude process ended no longer reappears in the Agents view or the sidebar after its process number is reused, while Switchboard cannot read the process list; a session started again under the same process number is no longer hidden until the list can be read. (#695)
 - On Windows, **Respawn** and **Delete** of a background session whose daemon has stopped are no longer refused with "cannot tell" now and then when the computer is under load: Switchboard waits the full second it needs before looking at the processes again. (#837)

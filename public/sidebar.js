@@ -2127,13 +2127,14 @@ async function archiveProjectFolder(project, button) {
       const notStopped = [];
       const groupKey = 'ph-' + folderId(project.projectPath, project.remoteAlias);
       const own = sessions.filter(s => !archivingSessionIds.has(s.sessionId));
+      const ownIds = new Map(own.map(s => [s, s.sessionId]));
       setGroupArchiveBusy(groupKey, true);
-      for (const s of own) setArchiveBusy(s.sessionId, true);
+      for (const id of ownIds.values()) setArchiveBusy(id, true);
       const unreachable = new Map();
       try {
         for (const { session: s, plan: sessionPlan } of confirmed.prepared.plans.filter(({ session }) => own.includes(session))) {
           let stopResult;
-          try { stopResult = await stopForArchive(s, unreachable, sessionPlan); } finally { setArchiveBusy(s.sessionId, false); }
+          try { stopResult = await stopForArchive(s, unreachable, sessionPlan); } finally { setArchiveBusy(ownIds.get(s), false); }
           didStop ||= !!stopResult.didStop;
           if (!stopResult.ok) {
             refused = true;
@@ -2144,7 +2145,7 @@ async function archiveProjectFolder(project, button) {
           }
         }
       } finally {
-        for (const s of own) if (archivingSessionIds.has(s.sessionId)) setArchiveBusy(s.sessionId, false);
+        for (const id of ownIds.values()) if (archivingSessionIds.has(id)) setArchiveBusy(id, false);
         setGroupArchiveBusy(groupKey, false);
       }
       if (refused) {
@@ -2642,12 +2643,13 @@ function rebindSidebarEvents(projects) {
         e.stopPropagation();
         const newVal = session.archived ? 0 : 1;
         if (newVal) {
-          if (archivingSessionIds.has(session.sessionId)) return;
-          setArchiveBusy(session.sessionId, true);
+          const sessionId = session.sessionId;
+          if (archivingSessionIds.has(sessionId)) return;
+          setArchiveBusy(sessionId, true);
           try {
             await archiveSessionRows([session]);
           } finally {
-            setArchiveBusy(session.sessionId, false);
+            setArchiveBusy(sessionId, false);
           }
           return;
         }
