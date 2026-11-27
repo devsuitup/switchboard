@@ -1915,10 +1915,12 @@ overrides the running fill and halo. Idle has no override; stale (dim
 background, full opacity, dash scale) and reserved archived (opacity) do not
 use `!important`.
 
-**`has-busy-agents` is the one exception, and it stays row-level on purpose**
-(point 1 of the original brief: "`.has-busy-agents` stays a row-level class
-— a tint — but its glyph rung lives in the slot when nothing higher is
-active"). A busy session with live subagents needs the busy spinner tinted
+**`has-busy-agents` is the one exception** (point 1 of the original brief:
+"`.has-busy-agents` stays a row-level class — a tint — but its glyph rung lives
+in the slot when nothing higher is active"). It is a row class on sidebar rows
+and grid cards; the terminal header has no row, so `paintTerminalHeaderStatus`
+sets it on the `#terminal-header-status` icon itself (`setHasBusyAgents`), which
+the `.session-icon--busy.has-busy-agents::before` selector below covers. A busy session with live subagents needs the busy spinner tinted
 violet instead of its default blue; since `agentsBusy` never wins the JS
 priority race while `busy` is active, there is no `session-icon--agents-busy`
 class to key on in that case — so the tint is a **plain compound selector**,

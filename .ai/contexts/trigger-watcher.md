@@ -682,12 +682,17 @@ age checks and produces `refused`, `interrupted by restart`, `uncertain:true`;
 it preserves the normalized ID and recorded boolean lifecycle/write evidence,
 submission rank and step count. The recovery record uses `version`, `action`,
 `mode` (`new`/`resume`/`stop`), `sessionId`, `deadline` and confirmed evidence
-fields. The open/new and stop executions in `trigger-actions.js` save a marker
-through `execution.saveMarker` before each effect phase (stop: `claimed`,
-`prompt-attempted`, `note-delivered`, `note-finished`, `stop-requested`;
-open/new: phase `claimed` before the spawn, `spawned` once the tab opened, and
-again after prompt delivery, `submitted` once Enter was written). The recovery reader alone does not
-provide exactly-once execution or a power-loss guarantee.
+fields. The open/new and stop executions in `trigger-actions.js` save markers
+through `execution.saveMarker`; only some precede the effect they name. Stop
+saves `claimed` and `prompt-attempted` before the final note is delivered,
+`note-delivered` after that delivery returns, `note-finished` (or `claimed`
+without a note) before the stop request, and `stop-requested` after `deps.stop`
+returned. Open/new saves `claimed` before the spawn, `spawned` once the tab has
+opened, the same phase again once the opened session is accepted, and the
+submission evidence (`submitted` once Enter was written) after prompt delivery.
+A marker that follows its effect records evidence of it; it does not reserve
+it. The recovery reader alone does not provide exactly-once execution or a
+power-loss guarantee.
 
 `resolveLocalTarget(id, deps)` is a read-only closed-transcript resolver. It
 accepts injected filesystem, clocks/deadline, cache readers, verified-cwd parser,

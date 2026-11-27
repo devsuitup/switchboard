@@ -981,18 +981,22 @@ reload timers, invalidates pending requests and clears the requested project
 focus. A pending toggle completed while hidden waits for reopening to reload.
 The clock tab follows
 Agent Files. Search is hidden. Each registry project with a schedule or a
-scan error is a `.schedule-project` section under its project header. A row shows its file
-path relative to the project (the full path as its title; a path outside the
-project stays absolute), the cron text once when it equals the expression and
-`<text> · <cron>` otherwise, local
-next-run and relative time, disabled/archive/validation reasons, shared-slug
-diagnostics (a Never runs reason is not repeated in the problem list, and a
-linked file's note is a `schedule-note`), catch-up status and the newest 20
-runs from the main-side list.
+scan error is a `.schedule-project` section under its collapsible project
+header. A row's summary shows the schedule name (a `bg` badge for a background
+schedule that can run as one), with the name and full file path as its tooltip.
+Its meta line shows the next-run state, the cadence (`cronText`, or the raw
+cron when there is none, with the raw cron as tooltip; `Schedule unknown` on a
+read error), badges (`linked` for a linked file, catch-up state, background
+ignored or unavailable) and the last run. Problems are listed in the row, a Never runs
+reason not repeated in them. The run history, opened from the last run, ends
+with the file path relative to the project (full path as tooltip; a path
+outside the project stays absolute) and Show in Sessions; it lists the newest
+20 runs from the main-side list.
 Run now retains `RunSchedule:<filePath>` and the persistent error contract;
-exit notices still subscribe once from memory-workfiles-view.js. Every scheduled-run
-exit, including success, queues the same visible-tab reload before displaying any
-failure notice. Open checks a
+exit notices still subscribe once from memory-workfiles-view.js. Each
+`schedule-run-exit` event received queues the same visible-tab reload before
+displaying its failure notice. An ordinary exit 0 sends no event (see "Public
+surface"), so its row refreshes only through the other reload triggers above. Open checks a
 nonempty read-memory response before opening memoryPanel.
 
 Load states (#1237): before the first successful listing the tab shows
@@ -1137,8 +1141,11 @@ background texts after ` — `, and any record carrying one adds a warning mark
 to the run's glyph (`scheduleOutcomeLook`). An imported run
 reads Result unknown (imported), with replied or no reply recorded when known.
 Without a record it keeps No result recorded and the assistant/seed/started/
-unknown transcript hint. It never infers Exit 0. Runs alive when Switchboard
-quits, older runs and runs from another instance have no result here.
+unknown transcript hint. It never infers Exit 0. A headless run alive when
+Switchboard quits has no result afterwards. A background run whose monitor
+record was written (identity known) is rediscovered at the next start, its
+monitoring resumes, and it publishes its result then (see "Opt-in background
+runs (#611)"). Older runs and runs from another instance have no result here.
 `scheduleRunFailureHint(failure)` is a classic-script global defined in
 memory-workfiles-view.js, loaded before schedules-view.js in index.html. Both
 exit notices and persistent history use it for the same recovery wording.
