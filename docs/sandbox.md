@@ -188,7 +188,8 @@ state bound back, but its links are followed as in any project's `.claude`:
 each target the sandbox could otherwise write is mounted read-only, and a
 linked state entry of `~/.claude` whose target is, or lies inside, one of
 those targets is refused (`sample/.claude/hooks` and `~/.claude/todos` linked
-to the same directory, say).
+to the same directory, say). Such a `.claude` that is a symbolic link is
+refused like any other: what it points to is not followed.
 
 ### Writable skills and agents
 

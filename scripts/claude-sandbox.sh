@@ -826,7 +826,7 @@ protect_tree() {
   protect_repo_root "$d" "$create"
   while IFS= read -r -d '' n; do
     if inside_ro_area "$n"; then
-      if [ "${n##*/}" = .claude ] && [ -d "$n" ]; then bind_project_claude_dir "$n"; else RO_REQUIRED+=("$n"); fi
+      if [ "${n##*/}" = .claude ] && { [ -L "$n" ] || [ -d "$n" ]; }; then protect_claude_dir "$n" nocreate; else RO_REQUIRED+=("$n"); fi
       continue
     fi
     case "${n##*/}" in

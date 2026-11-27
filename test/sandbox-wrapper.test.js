@@ -1428,6 +1428,43 @@ test('sandbox wrapper: a link inside a .claude under a read-only tool directory 
     }
   });
 
+test('sandbox wrapper: refuses a .claude under a read-only tool directory that is a symbolic link',
+  { skip: !LINUX && 'linux only' }, () => {
+    for (const layout of ['through a project link', 'with a linked hooks below it']) {
+      const rig = makeRig({ recordArgs: true });
+      try {
+        const dir = path.join(rig.home, '.claude');
+        fs.mkdirSync(dir);
+        const tools = path.join(rig.proj, 'tools');
+        const sample = path.join(tools, 'sample');
+        const external = path.join(rig.root, 'dotfiles', 'config');
+        fs.mkdirSync(sample, { recursive: true });
+        fs.mkdirSync(external, { recursive: true });
+        if (layout === 'through a project link') {
+          const redirect = path.join(rig.proj, 'config-link');
+          fs.writeFileSync(path.join(external, 'settings.json'), '{}');
+          fs.symlinkSync(external, redirect);
+          fs.symlinkSync(redirect, path.join(sample, '.claude'));
+        } else {
+          const inner = path.join(external, 'worktrees', 'repo', '.claude');
+          const store = path.join(rig.root, 'store', 'todos');
+          fs.mkdirSync(inner, { recursive: true });
+          fs.mkdirSync(store, { recursive: true });
+          fs.writeFileSync(path.join(store, 'hook.sh'), '');
+          fs.symlinkSync(external, path.join(sample, '.claude'));
+          fs.symlinkSync(store, path.join(inner, 'hooks'));
+          fs.rmSync(path.join(dir, 'todos'), { recursive: true, force: true });
+          fs.symlinkSync(store, path.join(dir, 'todos'));
+        }
+        const res = rig.run(['--version'], { NVM_DIR: tools });
+        assert.equal(res.status, 125, `a linked .claude under the tool directory is refused, ${layout}\n${res.stderr}`);
+        assert.match(res.stderr, /tools\/sample\/\.claude is a symbolic link/);
+      } finally {
+        rig.cleanup();
+      }
+    }
+  });
+
 test('sandbox wrapper: a linked state directory outside ~/.claude is followed only to a directory named claude, never to / or a parent of $HOME',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
