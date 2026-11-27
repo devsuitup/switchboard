@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const transcripts = require('../read-session-file');
+const { classifyTranscriptPath } = require('../subagent-attribution');
 const projects = require('../derive-project-path');
 const { encodeProjectPath } = require('../encode-project-path');
 const { resolveContinuations, resolveContinuationsSync } = require('../session-continuations');
@@ -63,7 +64,13 @@ function createClaudeHarness({ projectsDir = path.join(os.homedir(), '.claude', 
     folderPath,
     folderForProject: encodeProjectPath,
     listTranscripts: dir => transcripts.enumerateSessionFiles(dir).map(entry => entry.filePath),
-    sessionIdFromPath: filePath => path.basename(filePath, '.jsonl'),
+    sessionIdFromPath(filePath) {
+      const relative = path.relative(projectsDir, filePath).split(path.sep).slice(1).join('/');
+      const layout = classifyTranscriptPath(relative);
+      return layout?.parentSessionId && layout.agentId
+        ? transcripts.subagentSessionId(layout.parentSessionId, layout.agentId)
+        : path.basename(filePath, '.jsonl');
+    },
     transcriptPath: row => row.sessionFile || transcripts.resolveJsonlPath(projectsDir, row),
     readSessionFile: transcripts.readSessionFile,
     deriveProjectPath: projects.deriveProjectPath,
