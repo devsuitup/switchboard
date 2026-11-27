@@ -1145,3 +1145,32 @@ test('A4c1 provenance pages seek a stable key without sorting the entire metadat
   assert.ok(plans.length >= 2, 'inspect the actual SQLite plans for both pages');
   assert.ok(plans.every(row => !/USE TEMP B-TREE/i.test(row.detail)), 'bounded provenance page must not sort the full table');
 });
+
+test('COMPLETE purges the deleted folders from the bridge repair list so later repair writes stay admissible (#1189)', supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  h.db.setSetting('bridge_uuid_reindex_folders', ['selected-b', 'host::remote']);
+  const input = h.manifest(false, true);
+  assert.equal((await worker.post('completeProjectDeletion', input)).result.state, 'committed');
+  const pending = [...(h.db.getSetting('bridge_uuid_reindex_folders') || [])];
+  assert.ok(!pending.includes('selected-b'), 'the deleted folder leaves the repair list with its metadata');
+  assert.ok(pending.includes('host::remote'), 'unrelated repair keys are kept');
+  const completed = await worker.post('completeRepairFolders', pending);
+  assert.equal(completed.error?.code, undefined, 'completing the remaining repair keys is not fenced by the deletion');
+  deep([...(h.db.getSetting('bridge_uuid_reindex_folders') || [])], []);
+});
+
+test('an undeclared host repair key is pruned despite a deletion fence, a declared one is kept (#1189)', supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  h.db.projectDeletion.setFence(shared.identity({ alias: 'host', projectPath: h.kept[1].projectPath }).key, 1, null, 1);
+  h.db.setSetting('bridge_uuid_reindex_folders', ['host::remote', 'selected-b']);
+  const fenced = await worker.post('completeRepairFolders', ['host::remote']);
+  assert.ok(fenced.error?.code, 'ordinary repair completion keeps its deletion fence');
+  h.db.setSetting('global', { remoteHosts: [{ alias: 'host', enabled: true }] });
+  const declared = await worker.post('pruneUndeclaredRepairFolders', ['host::remote', 'selected-b']);
+  assert.equal(declared.error, undefined);
+  deep([...h.db.getSetting('bridge_uuid_reindex_folders')], ['host::remote', 'selected-b'], 'a declared host and a local key are never pruned');
+  h.db.setSetting('global', { remoteHosts: [{ alias: 'host', enabled: false }] });
+  const undeclared = await worker.post('pruneUndeclaredRepairFolders', ['host::remote', 'selected-b']);
+  assert.equal(undeclared.error, undefined, 'the narrow cleanup is not refused by the deletion fence');
+  deep([...h.db.getSetting('bridge_uuid_reindex_folders')], ['selected-b']);
+});

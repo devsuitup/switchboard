@@ -115,7 +115,7 @@ function* targetUnits(name, args) {
   } else if (name === 'effects') {
     if (!args[2] && (db.getSetting('_writer_revision') || 0) !== args[1]) throw Object.assign(new Error('cache snapshot changed before writer admission'), { code: 'WRITER_STALE' });
     for (const effect of args[0]) {
-      if (!rawCommands.has(effect.name) && effect.name !== 'completeRepairFolders') throw new Error(`invalid writer effect ${effect.name}`);
+      if (!rawCommands.has(effect.name) && !['completeRepairFolders', 'addRepairFolders'].includes(effect.name)) throw new Error(`invalid writer effect ${effect.name}`);
       yield* units(effect.name, effect.args);
     }
   } else {

@@ -49,7 +49,7 @@ for (const change of ['delete', 'append']) {
     else fs.appendFileSync(file, JSON.stringify({ type: 'user', message: { content: 'later content' } }) + '\n');
     let signatures;
     assert.doesNotThrow(() => { signatures = row.messageSignatures; }, 'signature access must not depend on a still-readable file');
-    assert.deepEqual(signatures, change === 'delete' ? [] : [{ signature: JSON.stringify(['user', first.message]), uuid: null }]);
+    assert.deepEqual(signatures, change === 'delete' ? null : [{ signature: JSON.stringify(['user', first.message]), uuid: null }]);
     assert.doesNotThrow(() => mergeBridgeGroups([], [row], () => null));
   });
 }

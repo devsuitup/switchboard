@@ -131,15 +131,20 @@ Claude full reads use `jsonl-scan.scanLines` with 256 KiB chunks through the
 observed EOF. Daily metrics accumulate as lines arrive. The reader captures
 64-byte head/tail witnesses and the unterminated tail for both existing indexes.
 Startup, refreshFolder and bridge rereads use the same parser. Lazy bridge
-signature evidence also streams, bounded to the original read's byte length;
-an unreadable or truncated source yields empty signature evidence, so deleting
-a bridge source between reading and merging cannot fail its folder. Neither
+signature evidence also streams, bounded to the original read's byte length.
+An unreadable or truncated source yields unknown (`null`) signature evidence,
+never an empty list, so deleting or locking a bridge source between reading and
+merging cannot fail its folder and cannot certify an over-count (#1189, see
+"Bridge history divergence"). Neither
 path materializes a whole-file UTF-8 string or an array of every line. For
 ordinary-sized records, output semantics and the version-1 golden ledger stay
 unchanged. The shared scanner caps each line at 64 MiB before
 UTF-8 conversion, discards oversized records through the next newline, and
 marks an oversized unterminated continuation as skipped. Claude, Codex, bridge
-signatures and refresh message recounts share this rule. Metric buckets and
+signatures and refresh message recounts share this rule. The cap shipped without
+a content-version bump: a transcript with a line over 64 MiB that was indexed
+before #1184 keeps its old count until its file changes or a forced rebuild
+(accepted, negligible exposure, #1189). Metric buckets and
 bridge identity evidence still depend on transcript content. The regression
 injects a lower line cap. The whole-string regression uses 2 MiB locally with
 an injected readFileSync limit; CI or SWITCHBOARD_TEST_LARGE_TRANSCRIPT runs
@@ -154,8 +159,18 @@ text. It is not a successful `session_cache.fullReadStamp`. Prior rows survive
 with null content stamps; new failed transcripts do not create display rows.
 Matching witnesses suppress startup retries across reopen; changed or removed
 sources, forced rebuilds, content-version changes and configuration changes
-invalidate them. An explicit folder refresh retries witnessed sources and
-removes the witness after a successful read. Claude sidecars and Codex
+invalidate them. `refreshFolder` (Claude and harness folders) retries a
+witnessed source only when the refresh is targeted at it (`opts.files` names
+it) or when the witness stamp no longer matches the file (`matchesFullRead`,
+with the Codex title snapshot as dependency); it removes the witness after a
+successful read. An untargeted refresh (folder-level watcher event, reconcile,
+project add/unarchive) leaves an unchanged witnessed source unread: without a
+cached row it is skipped, with one it takes the ordinary unchanged/header path.
+That path never does a full read of it either: the size-pinned full read
+(a growth under a preserved mtime) and the full read requested by a filtered
+message recount are both skipped while the witness matches.
+(#1189; before, every untargeted refresh fully reread every witnessed file).
+Claude sidecars and Codex
 effective titles remain dependencies. Transient I/O errors (including EBUSY,
 EACCES, EPERM, EMFILE, ENFILE, EIO, EAGAIN), short reads and raced failures have
 no durable negative witness. Only deferrals with read error codes enter the
@@ -191,6 +206,8 @@ each source once after replan checks, even if the writer subsequently fails, at 
 Missing stamps use `changed-during-read`; main-side races use
 `raced-before-publication`. Sources withheld only by bridge-group expansion use
 `bridge-sibling`, at either stage, without claiming that their files changed.
+Members of a group whose bridge signature evidence could not be re-read use
+`bridge-evidence-unknown`; it is a read error, so it arms the in-run retry queue.
 Subagent names include their parent session ID:
 `file=<parentSessionId>/agent-<id>.jsonl`. The size is the pre-read observation
 (or the checked stamp for a publication race, zero if unavailable); no absolute source
@@ -1341,6 +1358,76 @@ independent repeated turn from a copy; timestamp fallback on wholly UUID-less
 histories can also omit distinct older turns. This is a disclosed legacy
 limitation, not an exact identity guarantee. An unreadable predecessor does not
 establish overlap; a readable member with its own contribution stays independent.
+
+Signature evidence is read lazily, after the row read. When that bounded re-read
+fails (the file was locked or deleted in between), `messageSignatures` is
+`null`, meaning unknown, not empty (#1189). If a predecessor's evidence is
+unknown, or the member's own evidence is unknown and no own UUID decides, the
+member is not re-derived: it keeps its fresh or cached row and the whole group
+is deferred. `mergeBridgeGroups` returns the group's session IDs in `deferred`
+and clears `fullReadStamp` on every group row it upserts, so the next startup
+selects them again instead of trusting a recovery computed without exclusions.
+The startup worker also records each member as a deferred source
+(`bridge-evidence-unknown`), and `deferStartupSources` then withholds the existing
+rows of the group as for any other deferred bridge source.
+This guarantees recovery, not the absence of a temporary over-count: a deferred
+member that is new to the index is still published from its raw read, copied
+messages included, with a null stamp, until the next merge with readable evidence.
+
+Remote mirrors are never part of local startup selection, and the remote indexer
+only rescans folders its sync reports as changed or that are missing from the
+cache, so a null stamp alone would never bring them back. A non-startup scan
+therefore returns the group's IDs as `bridgeDeferred`. `writeScannedFolder` and
+`writeScannedFolderPartial` add a remote folder key (`<alias>::<folder>`) with
+such a result to `bridge_uuid_reindex_folders` (`repairFoldersAfterScan`). The
+add travels as its own writer effect: `cache-effects.js` turns a write of that
+setting into `completeRepairFolders` for removed keys and `addRepairFolders` for
+added ones, and the writer worker runs `commands.addRepairFolders`. A plain
+`setSetting` would persist nothing, because the setting is never copied
+wholesale from main. A non-startup full scan clears a folder's marker only
+when it read every file (`counters.filesFailed` is 0) and produced no
+`bridgeDeferred`: a member unreadable at its first read is left out before the
+merge, so the absence of a deferral alone does not prove convergence. This rule
+applies to every marked folder, local repairs included. Startup publication
+keeps its own completion rule.
+
+The remote indexer reads that setting (`listRepairFolderKeys`) and gives a
+marked folder of its host a full rescan even when the mirror did not change,
+with an exponential backoff per folder key: the first rescan is due at once,
+the next 5 minutes after it, then 10, 20, … capped at 6 hours
+(`REPAIR_RETRY_BASE_MS`, `REPAIR_RETRY_MAX_MS` in `remote-index.js`). A permanent
+failure therefore costs at most one full-folder rescan every 6 hours, not one per
+cycle. The attempt count is in memory: it resets when the marker is cleared and
+when the app restarts, so the first cycle after a launch retries at once. The
+marker itself is durable, so a restart in between does not lose the rescan.
+Local non-startup scans do not set the marker; local startup already selects
+their null-stamped rows.
+
+Project deletion removes each exclusive folder's key from the list in the same
+`folderMeta` unit that deletes its `cache_meta` row
+(`project-delete-writer.js`, `applyDeletionUnit`). A leftover key would make any
+later `completeRepairFolders` naming it (repair convergence, `main.js` pruning
+of undeclared hosts) bind to the deleted project and fail with
+`PROJECT_EPOCH_STALE`. This applied on main to the #534 migration keys as well.
+A folder shared with another project keeps its key: the deletion keeps its
+metadata, and the writer's ownership rules for such a folder are unchanged.
+Ordinary completion of such a key (`completeRepairFolders`) stays bound to the
+folder owners and is refused (`DELETION_OWNERSHIP` or `PROJECT_EPOCH_STALE`)
+while the deletion fences them. That binding is kept on purpose: a remove-only
+command could still erase a repair that is needed, for example when the scan
+that would clear it had its other effects refused by the same fence.
+
+The undeclared-host prune in `getProjectsSnapshot` (#1308) therefore uses its
+own writer command, `pruneUndeclaredRepairFolders`. It is not a folder producer,
+so deletion ownership does not bind it. Instead, the worker validates each key
+against its own settings: it removes only keys with a non-null alias that is
+not an enabled host in `global.remoteHosts` (`enabledHosts`). A local key, or a
+key of a host that is declared again by the time the command runs, is never
+removed. Main also wraps the call: a failure is logged at warn
+(`[projects] repair cleanup for undeclared hosts deferred`) and never fails the
+project listing. The keys stay in the setting, so the next snapshot retries.
+Before this change, origin/main awaited `completeRepairFolders` there, and a
+refusal failed the whole `get-projects` reply.
 
 At database open, `bridge_uuid_index_version = 1` records a one-time transaction
 that removes only bridged top-level cache rows, their metrics and their FTS

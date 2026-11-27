@@ -1567,3 +1567,32 @@ test('start and restart with zero hosts prune all mirrored folders without SSH o
     assert.deepEqual(timers.created, []);
   } finally { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+test('a marked remote folder is rescanned with an exponential backoff, not every cycle (#1189)', async () => {
+  const dataDir = tmp('idx-repair-backoff');
+  fs.mkdirSync(path.join(dataDir, 'remote', 'vps', 'projects', '-srv-demo'), { recursive: true });
+  const now = fakeClock(1_000_000);
+  const scans = [];
+  let marked = ['vps::-srv-demo'];
+  const indexer = createRemoteIndexer({
+    getHosts: () => [{ alias: 'vps' }], dataDir, transport: {}, timers: fakeTimers(), now,
+    listIndexedFolderKeys: () => ['vps::-srv-demo'], listRepairFolderKeys: () => marked,
+    scanFolders: async args => { scans.push(args.folders); return { ok: true }; },
+    sync: async () => ({ fetched: 0, unchanged: 1, removed: 0, failed: 0, total: 1, changedFolders: new Set(), sessions: [] }),
+  });
+  const cycle = async ms => { now.advance(ms); await indexer.refreshNow(); return scans.length; };
+  try {
+    assert.equal(await cycle(0), 1, 'the first cycle rescans the marked folder');
+    assert.equal(await cycle(60_000), 1, 'the next cycle inside the delay does not');
+    assert.equal(await cycle(4 * 60_000), 2, 'retried after 5 minutes');
+    assert.equal(await cycle(9 * 60_000), 2, 'the second delay doubles');
+    assert.equal(await cycle(60_000), 3, 'retried after 10 minutes');
+    for (let i = 0; i < 12; i++) await cycle(6 * 3600_000);
+    const capped = scans.length;
+    assert.equal(await cycle(6 * 3600_000), capped + 1, 'the delay is capped at 6 hours');
+    marked = [];
+    await cycle(0);
+    marked = ['vps::-srv-demo'];
+    assert.equal(await cycle(0), capped + 2, 'a cleared then new marker starts over');
+  } finally { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
