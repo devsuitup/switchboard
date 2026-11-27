@@ -2095,12 +2095,13 @@ inside an object or a closure. The chain check is syntactic: it proves each
 function names the next one, not that the call runs, so a call made
 unreachable behind a condition still passes it.
 
-`archivingSessionIds` is an archive lock, not moved. The row archive button
-captures the session id before awaiting and releases that id, so a re-key
-while its confirmation is open no longer leaves the original transcript's
-button disabled. The project archive still releases the current
-`session.sessionId` of each session after its stop awaits: a re-key during
-those awaits leaves the original id locked until the renderer reloads.
+`archivingSessionIds` is an archive lock, not moved. The row, group and
+project archive actions capture the session ids they lock before awaiting
+and release those ids, never the `session.sessionId` read again afterwards:
+`rekeySessionTab` renames that object in place, so a re-key while a
+confirmation or a stop is pending would otherwise leave the original
+transcript's Archive button disabled until the renderer reloads.
+`test/dom-archive-busy-rekey.test.js` pins the row and project paths.
 
 Two source-keyed stores stay under the old id without a visible effect.
 `sessionExits` (`process-exit.js`) records the PTY that ended under an id:
