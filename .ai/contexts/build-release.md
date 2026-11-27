@@ -168,8 +168,9 @@ The pacman `artifactName` in `package.json` includes `${arch}` so publish's
 electron-builder's pacman artifact macro expands to `x64` and `aarch64`
 (the latter is the arm64 job), producing `switchboard-doctly-<v>-x64.pacman`
 and `switchboard-doctly-<v>-aarch64.pacman`. The package name remains
-`switchboard-doctly`. A full release now has 20 assets, including both pacman
-packages; each Linux update manifest must reference its own package and hash.
+`switchboard-doctly`. A full release has 20 assets (measured on v0.1.0-beta.3, 2026-11-27), 9 of
+them macOS, so a release drafted without macOS has 11; both pacman
+packages are among them; each Linux update manifest must reference its own package and hash.
 `test/build-workflow.test.js` loads the real package configuration and builder
 macro helpers to check that both matrix entries retain distinct filenames.
 This guard does not build packages or generate manifests; verify those in the
