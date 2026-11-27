@@ -28,8 +28,11 @@ jobs:
       - name: Fetch main and release branches
         run: git fetch --no-tags --prune origin '+refs/heads/main:refs/remotes/origin/main' '+refs/heads/release/*:refs/remotes/origin/release/*'
 
+      - name: Extract the checker from main
+        run: git show origin/main:scripts/check-release-provenance.js > "$RUNNER_TEMP/check-release-provenance.js"
+
       - name: Check every incoming commit
         env:
           BASE_BRANCH: ${{ github.base_ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/check-release-provenance.js pr "$BASE_BRANCH" "$HEAD_SHA"
+        run: node "$RUNNER_TEMP/check-release-provenance.js" pr "$BASE_BRANCH" "$HEAD_SHA"

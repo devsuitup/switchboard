@@ -348,10 +348,16 @@ temporary repository.
 ### Release provenance
 
 The maintainer's rule (2026-11-27) is enforced by
-`scripts/check-release-provenance.js`, with no npm dependencies:
+`scripts/check-release-provenance.js`, using only Node built-ins. Both jobs
+fetch `origin/main`, extract its checker with
+`git show origin/main:scripts/check-release-provenance.js` into
+`$RUNNER_TEMP/check-release-provenance.js`, and execute that copy from the
+repository working directory. The PR or tag cannot replace the checker
+through edits to its checked-out script. The checker must land on main
+before these workflows run; a missing main copy fails the job.
 
 - On every tag push, `release-tag` explicitly fetches `origin/release/*`
-  and runs `node scripts/check-release-provenance.js tag "$GITHUB_REF_NAME"`
+  and runs `node "$RUNNER_TEMP/check-release-provenance.js" tag "$GITHUB_REF_NAME"`
   before the version/beta check. The tag's peeled commit must be reachable
   from at least one fetched release branch; an ancestor is sufficient.
   This also applies to betas and finals without a previous beta.
@@ -359,17 +365,21 @@ The maintainer's rule (2026-11-27) is enforced by
   and the release branches and checks every commit in
   `origin/<base>..<PR head SHA>`, including commits brought by a merge.
   A commit passes if it is reachable from `origin/main`, is a merge commit,
-  touches only the root `CHANGELOG.md`, `package.json` and/or
+  is a bump limited to the root `CHANGELOG.md`, `package.json` and/or
   `package-lock.json`, or has a standalone
   `(cherry picked from commit <sha>)` line from `git cherry-pick -x` whose
   full source SHA is reachable from `origin/main`.
-  Empty non-main commits do not count as bumps. Renames include both paths.
+  A bump may change `CHANGELOG.md` freely. Package JSON is compared with
+  its parent after deleting only `version`; the lock comparison deletes
+  only root `version` and `packages[""].version`. All remaining parsed JSON
+  must be equal, so scripts and dependencies cannot be changed as a bump.
+  Missing or invalid package JSON does not qualify. Empty non-main commits
+  do not count as bumps. Renames include both paths.
   Failures list every offending commit: land the fix on main first and
   backport it with `-x`.
 
-The PR check deliberately uses a file allowlist for bumps; the final-tag
-check still verifies that package files differ from the last beta only by
-version. Provenance validates ancestry and the recorded source, not patch
+The PR check compares bumps to their parent; the final-tag check compares
+package files to the last beta. Provenance validates ancestry and the recorded source, not patch
 equivalence. Merge commits are exempt, but their incoming parent histories
 are checked. Exit 1 means a rule violation; exit 2 means invalid usage or
 unreadable Git inputs. Both block the job.

@@ -46,6 +46,7 @@ function prCheck(overrides = {}, onMain = []) {
     listCommits: () => [SHA],
     readCommit: () => commit,
     isOnMain: sha => onMain.includes(sha),
+    readFileAt: () => JSON.stringify({ version: '1.2.0' }),
   });
 }
 
@@ -105,7 +106,11 @@ test('build job fetches release refs and checks provenance before publish', () =
   const workflow = yaml.load(fs.readFileSync(path.join(__dirname, '..', '.github/workflows/build.yml'), 'utf8'));
   const job = workflow.jobs['release-tag'];
   const fetch = job.steps.findIndex(s => s.run?.includes('+refs/heads/release/*:refs/remotes/origin/release/*'));
-  const check = job.steps.findIndex(s => s.run === 'node scripts/check-release-provenance.js tag "$GITHUB_REF_NAME"');
+  assert.match(job.steps[fetch].run, /\+refs\/heads\/main:refs\/remotes\/origin\/main/);
+  const extract = job.steps.findIndex(s => s.run === 'git show origin/main:scripts/check-release-provenance.js > "$RUNNER_TEMP/check-release-provenance.js"');
+  assert.ok(extract > fetch, 'checker must be extracted from fetched main');
+  const check = job.steps.findIndex(s => s.run === 'node "$RUNNER_TEMP/check-release-provenance.js" tag "$GITHUB_REF_NAME"');
+  assert.ok(check > extract, 'tag must execute the trusted checker');
   assert.ok(fetch >= 0, 'release refs must be fetched explicitly');
   assert.ok(check > fetch, 'tag provenance must run after fetch');
   assert.ok(workflow.jobs.publish.needs.includes('release-tag'));
@@ -126,7 +131,10 @@ test('PR workflow checks the actual head against the fetched release base and ma
   const fetch = job.steps.findIndex(s => s.run?.includes('+refs/heads/main:refs/remotes/origin/main'));
   assert.ok(fetch >= 0);
   assert.match(job.steps[fetch].run, /\+refs\/heads\/release\/\*:refs\/remotes\/origin\/release\/\*/);
-  const check = job.steps.findIndex(s => s.run === 'node scripts/check-release-provenance.js pr "$BASE_BRANCH" "$HEAD_SHA"');
+  const extract = job.steps.findIndex(s => s.run === 'git show origin/main:scripts/check-release-provenance.js > "$RUNNER_TEMP/check-release-provenance.js"');
+  assert.ok(extract > fetch, 'checker must be extracted from fetched main');
+  const check = job.steps.findIndex(s => s.run === 'node "$RUNNER_TEMP/check-release-provenance.js" pr "$BASE_BRANCH" "$HEAD_SHA"');
+  assert.ok(check > extract, 'PR must execute the trusted checker');
   assert.ok(check > fetch);
   assert.equal(job.steps[check].env.BASE_BRANCH, '$' + '{{ github.base_ref }}');
   assert.equal(job.steps[check].env.HEAD_SHA, '$' + '{{ github.event.pull_request.head.sha }}');
@@ -151,6 +159,8 @@ function repoFixture(t) {
   };
   git('init', '-q');
   git('symbolic-ref', 'HEAD', 'refs/heads/main');
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'fixture', version: '1.2.0', scripts: { test: 'node --test' } }));
+  fs.writeFileSync(path.join(dir, 'package-lock.json'), JSON.stringify({ name: 'fixture', version: '1.2.0', lockfileVersion: 3, packages: { '': { name: 'fixture', version: '1.2.0' }, 'node_modules/example': { version: '1.0.0' } } }));
   const base = commit('base.txt', 'base', 'base');
   git('update-ref', 'refs/remotes/origin/release/1.2', base);
   git('update-ref', 'refs/remotes/origin/main', base);
@@ -184,7 +194,7 @@ test('real Git: -x backport passes; unported commits hidden by a merge are liste
   repo.git('checkout', '-qb', 'side');
   const bad = repo.commit('bad.txt', 'release only', 'unported side commit');
   repo.git('checkout', 'backport');
-  repo.commit('package.json', '{}', 'bump');
+  repo.commit('CHANGELOG.md', 'next bump', 'bump');
   repo.git('merge', '--no-ff', 'side', '-m', 'merge side');
   const result = check();
   assert.equal(result.ok, false);
@@ -207,6 +217,68 @@ test('real Git: unknown cherry-pick source is rejected and missing main fails cl
   assert.equal(check().ok, false);
   repo.git('update-ref', '-d', 'refs/remotes/origin/main');
   assert.throws(check);
+});
+
+
+function bumpPackage(repo, file, change) {
+  const value = JSON.parse(fs.readFileSync(path.join(repo.dir, file), 'utf8'));
+  change(value);
+  return repo.commit(file, JSON.stringify(value), 'chore(release): bump');
+}
+
+for (const [name, file, change] of [
+  ['package script', 'package.json', value => { value.scripts.postinstall = 'node unreviewed.js'; }],
+  ['package dependency', 'package.json', value => { value.dependencies = { example: '2.0.0' }; }],
+  ['lock dependency', 'package-lock.json', value => { value.packages['node_modules/example'].version = '2.0.0'; }],
+  ['lock root dependency', 'package-lock.json', value => { value.packages[''].dependencies = { example: '2.0.0' }; }],
+]) {
+  test('real Git: bump changing ' + name + ' is rejected', t => {
+    const repo = repoFixture(t);
+    const bad = bumpPackage(repo, file, value => { value.version = '1.2.1'; change(value); });
+    const result = checkReleaseProvenance({ base: 'release/1.2', head: 'HEAD', ...repo.readers });
+    assert.equal(result.ok, false, name + ' must not qualify as a version-only bump');
+    assert.match(result.message, new RegExp(bad));
+  });
+}
+
+function mergedReleaseFixture(t, withCode) {
+  const repo = repoFixture(t);
+  repo.git('checkout', '-qb', 'release/1.2');
+  repo.git('checkout', '-qb', 'previous-bump');
+  bumpPackage(repo, 'package.json', value => { value.version = '1.2.1'; });
+  repo.git('checkout', 'release/1.2');
+  repo.git('merge', '--no-ff', 'previous-bump', '-m', 'Merge previous release bump');
+  const releaseTip = repo.git('rev-parse', 'HEAD');
+  repo.git('update-ref', 'refs/remotes/origin/release/1.2', releaseTip);
+  repo.git('checkout', '-qb', 'bump/next', repo.base);
+  repo.commit('CHANGELOG.md', 'next release notes', 'prepare changelog');
+  repo.git('merge', '--no-ff', 'release/1.2', '-m', 'Merge release/1.2 into bump/next');
+  let bad;
+  if (withCode) {
+    repo.git('checkout', '-qb', 'unported-side');
+    bad = repo.commit('fix.js', 'unported code', 'release-only code');
+    repo.git('checkout', 'bump/next');
+    repo.git('merge', '--no-ff', 'unported-side', '-m', 'Merge unported side');
+  }
+  bumpPackage(repo, 'package.json', value => { value.version = '1.2.2'; });
+  bumpPackage(repo, 'package-lock.json', value => {
+    value.version = '1.2.2';
+    value.packages[''].version = '1.2.2';
+  });
+  return { ...repo, bad };
+}
+
+test('real Git: #1312 release-only bump and merge base merged into a bump head passes', t => {
+  const repo = mergedReleaseFixture(t, false);
+  const result = checkReleaseProvenance({ base: 'release/1.2', head: 'HEAD', ...repo.readers });
+  assert.equal(result.ok, true, result.message);
+});
+
+test('real Git: #1312 topology rejects non-bump code brought by a head merge', t => {
+  const repo = mergedReleaseFixture(t, true);
+  const result = checkReleaseProvenance({ base: 'release/1.2', head: 'HEAD', ...repo.readers });
+  assert.equal(result.ok, false, 'merged non-bump code must still be checked');
+  assert.match(result.message, new RegExp(repo.bad));
 });
 
 function cli(args, git) {

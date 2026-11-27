@@ -3,6 +3,7 @@
 'use strict';
 
 const { execFileSync } = require('node:child_process');
+const { isDeepStrictEqual } = require('node:util');
 
 const BUMP_FILES = new Set(['CHANGELOG.md', 'package.json', 'package-lock.json']);
 const DOCS = 'docs/releasing.md#the-tag-check';
@@ -16,14 +17,38 @@ function checkTagProvenance({ tag, resolveTag, containingBranches }) {
   return { ok: true, message: tag + ': reachable from ' + branches.join(', ') };
 }
 
-function checkReleaseProvenance({ base, head, listCommits, readCommit, isOnMain }) {
+function isBump(sha, commit, readFileAt) {
+  if (!commit.files.length || !commit.files.every(file => BUMP_FILES.has(file))) return false;
+  return commit.files.every(file => {
+    if (file === 'CHANGELOG.md') return true;
+    if (commit.parents.length !== 1) return false;
+    const values = [commit.parents[0], sha].map(ref => {
+      const text = readFileAt(ref, file);
+      if (text === null) return null;
+      let value;
+      try {
+        value = JSON.parse(text);
+      } catch (err) {
+        if (err instanceof SyntaxError) return null;
+        throw err;
+      }
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+      delete value.version;
+      if (file === 'package-lock.json' && value.packages?.['']) delete value.packages[''].version;
+      return value;
+    });
+    return values.every(value => value !== null) && isDeepStrictEqual(values[0], values[1]);
+  });
+}
+
+function checkReleaseProvenance({ base, head, listCommits, readCommit, readFileAt, isOnMain }) {
   const offenders = [];
   const commits = listCommits(base, head);
   for (const sha of commits) {
     if (isOnMain(sha)) continue;
     const commit = readCommit(sha);
     if (commit.parents.length > 1) continue;
-    if (commit.files.length > 0 && commit.files.every(file => BUMP_FILES.has(file))) continue;
+    if (isBump(sha, commit, readFileAt)) continue;
     const sources = [...commit.message.matchAll(/^\(cherry picked from commit ([a-fA-F0-9]{40}|[a-fA-F0-9]{64})\)\r?$/gm)];
     if (sources.some(match => isOnMain(match[1]))) continue;
     offenders.push('  ' + sha + ' ' + commit.message.split(/\r?\n/)[0]);
@@ -31,7 +56,7 @@ function checkReleaseProvenance({ base, head, listCommits, readCommit, isOnMain 
   if (offenders.length) {
     return { ok: false, message: [
       'Release provenance: fixes must land on main first, then use git cherry-pick -x into release/*.',
-      'Each commit must be on origin/main, a merge, a bump touching only CHANGELOG.md/package.json/package-lock.json, or carry a cherry-pick source reachable from origin/main.',
+      'Each commit must be on origin/main, a merge, a bump changing only CHANGELOG.md and package/lock version fields, or carry a cherry-pick source reachable from origin/main.',
       ...offenders,
       'See ' + DOCS,
     ].join('\n') };
@@ -57,6 +82,14 @@ function createGitReaders({ cwd, env } = {}) {
       message: git(['show', '-s', '--format=%B', sha]),
       files: git(['diff-tree', '--root', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', sha]).split('\0').filter(Boolean),
     }),
+    readFileAt: (sha, file) => {
+      try {
+        return git(['show', sha + ':' + file]);
+      } catch (err) {
+        if (err.status === 128) return null;
+        throw err;
+      }
+    },
     isOnMain: sha => {
       const main = resolve('refs/remotes/origin/main');
       let commit;

@@ -127,7 +127,15 @@ first PR to a release branch shows.
 readers; the CLI exits 0/1/2 for success/rule failure/input or Git failure.
 No SQLite, Electron or npm dependencies are involved; the PR job uses Node 20.
 
-The tag-push-only `release-tag` job explicitly fetches the release refspec,
+Both provenance jobs fetch `origin/main` and extract its checker with
+`git show origin/main:scripts/check-release-provenance.js` into
+`$RUNNER_TEMP/check-release-provenance.js`. They execute that copy with the
+checkout as cwd, so changing the PR/tag copy of the script cannot bypass
+the check. The script requires only Node built-ins; no repository modules
+or npm resolution from the temporary directory are needed. Main must
+contain the checker before rollout; extraction errors fail the job.
+
+The tag-push-only `release-tag` job also explicitly fetches the release refspec,
 then requires the peeled tag commit to be contained by an
 `origin/release/*` branch, before the existing version/beta check.
 `publish` still needs both `build` and `release-tag`.
@@ -139,16 +147,24 @@ environment variable, not the synthetic merge SHA. The range is
 `origin/<base>..<head>`, not first-parent history or a tree diff.
 Each commit must be on main, a merge, a nonempty bump touching only the
 three root release files, or an `-x` backport with its full source SHA on
-main. NUL-delimited paths and disabled rename detection retain deletions
+main. A bump can change `CHANGELOG.md` freely, but parsed `package.json`
+must equal its parent after deleting only `version`; for the lock, only
+root `version` and `packages[""].version` are deleted. Missing or invalid
+package JSON is not a bump. Scripts and dependencies require main provenance.
+NUL-delimited paths and disabled rename detection retain deletions
 when code is renamed into an allowed file. Missing refs fail closed.
 The check validates recorded provenance, not patch equivalence; merge
-resolutions and the contents of the three bump files are exempt by policy.
+resolutions and changelog contents are exempt by policy.
 
 `test/check-release-provenance.test.js` requires production code directly,
 uses real temporary Git histories, parses both workflows and executes the
 CLI in a VM with a filename and no source wrapping. It covers annotated
 ancestor tags, off-release tags, valid backports, missing source/main refs,
 merge-parent offenders, disguised renames, CLI errors and workflow wiring.
+A real Git fixture reproduces #1312: release-only bump and merge commits on
+the base, a head merging that base tip, and subsequent version bumps. It
+accepts that history and rejects unported code brought by another head merge.
+Package script/dependency and lock dependency changes are rejected.
 The procedure and maintainer settings are documented in
 [The tag check](../../docs/releasing.md#the-tag-check); `docs/branching.md`
 does not exist on this base. Release branches use merge commits to preserve
