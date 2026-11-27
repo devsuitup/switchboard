@@ -109,7 +109,7 @@ test('pending unreachable remote repairs cannot block empty local cache or searc
       isCachePopulated: () => empty !== 'cache',
       isSearchIndexPopulated: () => empty !== 'search',
       isInitialScanComplete: () => true,
-      getSetting: key => key === 'global' ? { remoteHosts: [{ alias: 'vps', enabled: empty === 'cache' }] }
+      getSetting: key => key === 'global' ? { remoteHosts: [{ alias: 'vps', enabled: true }] }
         : key === 'bridge_uuid_reindex_folders' ? ['vps::-srv-demo'] : null,
       setSetting: () => assert.fail('a declared remote repair must remain pending'),
       populateCacheViaWorker: () => calls.push('populate'),
@@ -194,4 +194,31 @@ test('get-projects starts entrypoint and custom-title backfills on cold and warm
     await handler();
     assert.deepEqual(calls, ['backfill', 'titles', 'build'], warm ? 'warm cache' : 'cold cache');
   }
+});
+
+test('get-projects clears disabled remote repairs without folder metadata and preserves enabled and local repairs', async () => {
+  const settings = new Map([
+    ['global', { remoteHosts: [{ alias: 'disabled', enabled: false }, { alias: 'enabled', enabled: true }, { alias: 'default' }] }],
+    ['bridge_uuid_reindex_folders', ['disabled::-srv-one', 'disabled::-srv-two', 'enabled::-srv-demo', 'default::-srv-demo', 'local-repair']],
+  ]);
+  const calls = [];
+  const handler = makeHandler({
+    isCachePopulated: () => false,
+    isSearchIndexPopulated: () => false,
+    isInitialScanComplete: () => true,
+    getSetting: key => settings.get(key),
+    setSetting: (key, value) => settings.set(key, value),
+    populateCacheViaWorker: () => calls.push('populate'),
+    reconcileCacheFromFilesystem: () => calls.push('reconcile'),
+    buildProjectsFromCache: () => { calls.push('build'); return []; },
+  });
+  await handler();
+  assert.deepEqual(settings.get('bridge_uuid_reindex_folders'), ['enabled::-srv-demo', 'default::-srv-demo', 'local-repair'],
+    'disabled hosts must not retain pending repairs');
+  assert.deepEqual(calls, ['reconcile', 'build'], 'local repair still prevents a duplicate population');
+  settings.set('bridge_uuid_reindex_folders', ['disabled::-srv-one']);
+  calls.length = 0;
+  await handler();
+  assert.deepEqual(settings.get('bridge_uuid_reindex_folders'), [], 'the final disabled repair is removed');
+  assert.deepEqual(calls, ['populate', 'build'], 'remote repair cleanup cannot block empty-cache population');
 });

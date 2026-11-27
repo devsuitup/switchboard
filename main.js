@@ -1536,7 +1536,7 @@ async function getProjectsSnapshot(showArchived, retry = false, { logConflict = 
     const repairFolders = getSetting('bridge_uuid_reindex_folders');
     let repairPending = false;
     if (Array.isArray(repairFolders) && repairFolders.length) {
-      const aliases = new Set(normalizeHosts((getSetting('global') || {}).remoteHosts).map(host => host.alias));
+      const aliases = new Set(normalizeHosts((getSetting('global') || {}).remoteHosts).filter(host => host.enabled).map(host => host.alias));
       const declared = repairFolders.filter(key => {
         const { alias } = parseFolderKey(key);
         if (alias === null) { repairPending = true; return true; }
