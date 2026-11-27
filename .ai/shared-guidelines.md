@@ -42,6 +42,7 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Check something only a running app shows (layout, a full IPC round trip), in CI | [../docs/e2e.md](../docs/e2e.md) — Playwright journeys in `e2e/` |
 | Working practices for AI agents (HANDOFF format, shell pitfalls, review loop) | [agent-practices.md](agent-practices.md) |
 | Test a PR or a release candidate against a running app | [../docs/testing-a-pr.md](../docs/testing-a-pr.md) |
+| Name a branch, pick squash or merge commit, cut onto `release/X.Y` or port a release back to `main` | [docs/branching.md](../docs/branching.md) |
 | Cut a release | [docs/releasing.md](../docs/releasing.md) — and its fork gotchas, which are not optional |
 | Change the build/release workflow (matrix per event, strict publish) | [contexts/build-release.md](contexts/build-release.md) |
 | Change the Linux updater restart, environment, lock retry or manual restart notice | [contexts/updater-relaunch.md](contexts/updater-relaunch.md) |

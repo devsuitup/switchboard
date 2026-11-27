@@ -91,7 +91,18 @@ runner, and that electron-builder packages a `-beta.N` version on every target
 ## Release branches (#1199)
 
 The maintainer decided on 2026-11-25 that `main` never freezes: releases are
-cut from `release/X.Y` ([releasing.md](../../docs/releasing.md#release-branches)).
+tagged on `release/X.Y` ([releasing.md](../../docs/releasing.md#release-branches),
+branch model in [branching.md](../../docs/branching.md)). A beta's bump branch
+starts at `origin/main` and its PR to `release/X.Y` is merged with a merge
+commit; the final's starts at `origin/release/X.Y`, because the tag check
+refuses a final that differs from its last beta by more than version and
+changelog. Each release returns to `main` through a port-back PR from a branch
+at the tag, also merged with a merge commit, so each branch stays an ancestor
+of the other and the next cut merges cleanly. Nothing in the workflows
+enforces the merge method: both rulesets allow merge, squash and rebase, and
+the choice is procedure. A squashed port-back (#1293) made the next cut
+(#1312) conflict on the version and `CHANGELOG.md`.
+
 The workflow side is the trigger list `[main, 'release/*']` in `test.yml`
 (PR and push), `build.yml` (PR) and `pr-title.yml` (PR); tag pushes are not
 filtered by branch. `*` does not cross `/`, so `release/*` matches
@@ -106,9 +117,10 @@ whatever the branch. `docs` is not a required check on either base.
 
 Bootstrap: `pull_request` workflows are read from the PR's merge commit, so a
 PR to a release branch runs CI only if the base or the PR carries the
-triggers. `release/0.1` was cut at `v0.1.0-beta.2` without them; they reach it
-with a backport that ships in its next beta, because the tag check refuses a
-final differing from its last beta by a workflow file.
+triggers. `release/0.1` was created at `v0.1.0-beta.2` without them; the
+`0.1.0-beta.3` cut from `main` (#1292) carried them in. A branch without them
+gets them in a beta, never in a final, because the tag check refuses a final
+differing from its last beta by a workflow file.
 
 Known limit: the notes' compare link uses `git describe` on the tag's own
 history. Finals tagged on one release branch are not ancestors of the next
