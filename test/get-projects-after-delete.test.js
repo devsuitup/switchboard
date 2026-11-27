@@ -224,3 +224,17 @@ test('deletion between project computation and publication fences old effects an
   assert.equal(reopened.allProjects.length, 3, 'a later producer must use the fresh reopened epoch');
   assert.ok(h.db.getCachedSession(h.projects[0].sessionId), 'fresh reindex after explicit re-add is writable');
 });
+
+test('re-adding a deleted project clears its hide entry whatever the spelling the deletion stored', supported, async t => {
+  const h = await setup(t);
+  await h.remove();
+  const stored = h.db.getSetting('global');
+  assert.equal(stored.hiddenProjects.length, 1, 'committed deletion must hide the project');
+  await h.writer.revealAddedProject(fs.realpathSync.native(h.projects[0].projectPath));
+  const global = h.db.getSetting('global');
+  assert.deepEqual([...global.hiddenProjects], [], 'Add project must remove the deletion hide entry');
+  assert.deepEqual(Object.keys(global.hiddenProjectKinds), []);
+  assert.deepEqual(Object.keys(global.hiddenProjectScopes), []);
+  const reopened = await h.makeList()('both');
+  assert.equal(reopened.allProjects.length, 3);
+});

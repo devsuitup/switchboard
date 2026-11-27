@@ -271,17 +271,16 @@ function createWriterCommands(db) {
     revealAddedProject(projectPath, proof) {
       reopen([{ alias: null, projectPath }], proof);
       const global = db.getSetting('global') || {};
-      if (isProjectHidden(global.hiddenProjects, null, projectPath, global.hiddenProjectScopes)) {
+      const matched = (global.hiddenProjects || []).filter(entry => isProjectHidden([entry], null, projectPath, global.hiddenProjectScopes));
+      if (matched.length) {
         const kinds = { ...global.hiddenProjectKinds };
-        delete kinds[projectPath];
-        const fields = { hiddenProjects: global.hiddenProjects.filter(p => p !== projectPath), hiddenProjectKinds: kinds };
-        if (global.hiddenProjectScopes) {
-          fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
-          delete fields.hiddenProjectScopes[projectPath];
-        }
-        if (global.hiddenProjectArchivedAt) {
-          fields.hiddenProjectArchivedAt = { ...global.hiddenProjectArchivedAt };
-          delete fields.hiddenProjectArchivedAt[projectPath];
+        const fields = { hiddenProjects: global.hiddenProjects.filter(p => !matched.includes(p)), hiddenProjectKinds: kinds };
+        if (global.hiddenProjectScopes) fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
+        if (global.hiddenProjectArchivedAt) fields.hiddenProjectArchivedAt = { ...global.hiddenProjectArchivedAt };
+        for (const entry of matched) {
+          delete kinds[entry];
+          if (fields.hiddenProjectScopes) delete fields.hiddenProjectScopes[entry];
+          if (fields.hiddenProjectArchivedAt) delete fields.hiddenProjectArchivedAt[entry];
         }
         patch(fields);
       }
