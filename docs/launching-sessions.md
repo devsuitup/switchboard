@@ -5,7 +5,9 @@ A Claude Code or Codex session started, resumed or forked from this machine's si
 one is started, resumed or forked, and with which options.
 
 Not every session Switchboard lists is one of these. A
-[scheduled task](automation.md#schedules) runs headless, with no terminal. A
+[scheduled task](automation.md#schedules) runs headless, with no terminal, by
+default; one with `run-as-background: true` runs as a background session you
+can join (see [Join a scheduled run](automation.md#join-a-scheduled-run)). A
 [background agent](background-agents.md) runs under the Claude CLI's daemon;
 clicking its row attaches (`claude attach`), and detaching leaves the session
 running. A session on a [remote host](remote-hosts.md)

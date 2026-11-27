@@ -68,6 +68,13 @@ says Claude is waiting. Click **Diff**, or Ctrl+Shift+D (Cmd+Shift+D on macOS),
 to return. Closing the shown Diff rejects it. Closing another tool leaves the
 parked Diff waiting.
 
+A second proposal that arrives while one is still unanswered does not replace
+it: it waits behind it, and the dot on **Diff** says Claude is still waiting.
+Once you have answered the shown one, **Diff** opens the next, oldest first.
+When the session's CLI stops, a proposal still on screen stays
+readable but loses its Accept and Reject buttons, since no answer can reach the
+CLI any more; proposals still waiting behind it are removed from the panel.
+
 ## File viewer
 
 Files Claude opens, files you open from a terminal link (see

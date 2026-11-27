@@ -8,12 +8,16 @@ shortcuts are all on [Keyboard shortcuts](keyboard-shortcuts.md).
 
 On the left, the header above the terminal shows:
 
-- a **status dot**, before the name: green with a glow while the process runs,
-  grey otherwise. Its tooltip says the state in words: `Running`; `Stopped`
+- a **status icon**, before the name: the same activity icon as the
+  conversation's sidebar row (Working, Response ready, Needs your attention,
+  Waiting for input, Idle… — see [Status Indicators](notifications.md#the-icon)).
+  Its tooltip and accessible name give the activity and the lifecycle in words,
+  for example `Idle · Open here` or `Working · Attached here · keeps running
+  in the background`. Once the process has ended, the lifecycle reads `Stopped`
   after a Stop you asked for; `Detached` after leaving an attached background
-  session; `Not running` when the process is gone with no recorded exit; `Killed (SIGKILL)` (or
-  another signal) when a signal ended it without a Stop; `Exited (code N)` when
-  it exited on its own;
+  session; `Not running` when the process is gone with no recorded exit;
+  `Killed (SIGKILL)` (or another signal) when a signal ended it without a Stop;
+  `Exited (code N)` when it exited on its own;
 - the session's name, the title the program sets on the terminal (or Claude's
   latest notification), the session id, and the shell profile's name when it is
   not **Auto**.
@@ -140,6 +144,17 @@ pre-filled with the selection. Enter goes to the next match, Shift+Enter to the
 previous one, Esc closes the bar. It searches what the terminal holds, not the
 transcript; the sidebar's [search](session-browser.md#search) covers
 transcripts.
+
+## Output received while you were away
+
+Output that arrives while a terminal is not on screen, or faster than it can
+be drawn, is held and drawn when you come back. What is held is bounded, to a
+few megabytes per terminal (`public/terminal-manager.js`): beyond that, the
+oldest part is dropped. After a long sleep or a large burst, a terminal may
+therefore show only its most recent output, even though its scrollback
+could hold more lines. Paste, mouse and alternate-screen modes are
+kept. The full conversation stays in the transcript, readable with **View
+messages**.
 
 ## Multi-line input
 

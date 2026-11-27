@@ -124,8 +124,8 @@ The Changes badge is the one place that already meets "never colour alone".
 | Control | Where | Label (title) | Icon | Effect | Confirmation |
 |---|---|---|---|---|---|
 | Row Stop | `sidebar.js` row handler | `Stop session` | red square | `confirmAndStopSession` (`app.js`): stop every eligible part, including background jobs attached here or not; local PTYs and remote processes keep their routes | Fresh job checks before one danger confirmation naming the count, locations, job ids and process loss, with the conversation kept. Refusals and unknown checks explain exclusions; Retry targets only failures; an empty plan shows a notice |
-| Grid Stop | `grid-view.js` | `Stop session` | red square | Same routes, targeting only the card's tab; an attached background agent ends | One confirmation naming this session and what ends |
-| Header Stop | `index.html`, `app.js` | `Stop session` | red square | Same routes, targeting only the header's tab | Same as Grid Stop |
+| Grid Stop | `grid-view.js` | `Stop session` | red square | `confirmAndStopSession` with the card's id: resolves the containing conversation and stops every eligible part, exactly as Row Stop (#917, v0.0.103) | Same as Row Stop |
+| Header Stop | `index.html`, `app.js` | `Stop session` | red square | `confirmAndStopSession` with the header's id: the same conversation-wide plan as Row Stop | Same as Row Stop |
 | Row / Grid / Header Detach | `sidebar.js`, `grid-view.js`, `app.js` | `Detach (the session keeps running)` | neutral eject | `detachSession`: detach open background attach clients; row gathers every attached part, card and header target only their tab | None; each successful detach offers Undo for 10 s |
 | Agents Stop | `agents-view.js` `runAgentVerb` | `Stop` | text button | `claude stop` on the job | Fresh refusal check, then danger `appConfirm` naming the job and id, the process ending and the conversation kept |
 | Agents Attach | `agents-view.js` `attachBgAgent`; button or double-click | `Attach` / `Go to tab`; title = aria-label | text | open an attach tab; when already attached here, find the open tab by job id and show it, including when its key differs from the roster session id | none |
@@ -149,7 +149,7 @@ The Changes badge is the one place that already meets "never colour alone".
   be let go without ending the process (bg attach, remote attach).
 - Agents Stop goes through the same confirmation as every Stop (implemented).
 - Keep merged-row Stop as one confirmation naming all targets and exclusions;
-  grid and header Stop keep targeting only their tab.
+  grid and header Stop share that plan (implemented, #917).
 - `Attach` reads `Go to tab` when an attach tab is already open (implemented,
   decision 2026-10-22, #546). The same button and `data-verb="attach"` survive
   roster renders; only its label and accessible name change.
@@ -196,13 +196,22 @@ the conversation's head. It toggles the existing Response ready activity slot
 without a confirmation, persists through sidebar rebuilds in renderer memory,
 and is reachable with Tab through the existing focus-visible action strip.
 
-**Archive all older sessions**, beside `+ N older`, always asks once through
-`appConfirm`. The question names the number of unarchived conversation rows
-(including slug-group members, excluding subagents) and defines older using
-the current visible-item limit and age cutoff. Running targets make the
-question dangerous. Refused rows keep persistent errors while eligible rows
-archive; unreachable hosts keep the archive-without-stop notice. Undo restores
-successful rows and leaves stopped processes stopped.
+**Archive all older sessions**, beside `+ N older`, asks once through
+`appConfirm` when at least one row is eligible. The question names the number
+of eligible conversation rows (including slug-group members, excluding
+subagents) and defines older using the current visible-item limit and age
+cutoff. It never stops a process: the
+preflight (`prepareOlderArchive` in `public/sidebar.js`) keeps, with a reason,
+the session on screen, rows with a tab open here, running here or waiting to
+restore, pinned rows, sessions live elsewhere, remote sessions alive on their
+host, and any row whose archive would still have a process to stop ("running
+or attached"). The question lists the rows to archive, kept and refused, and is
+not dangerous. With no eligible row, no question is asked: an error notice
+says **Nothing eligible to archive.** with the kept and refused lists.
+Eligibility is checked again for each row just before it is archived; a row
+that became ineligible is kept. Refused rows keep persistent errors while
+eligible rows archive, and one notice lists the kept rows. Undo restores the
+archived rows.
 
 **Find in messages** belongs to the focused message viewer: Ctrl+F (Cmd+F on
 macOS), a live counter, Previous/Next, Enter/Shift+Enter to wrap, Escape to close

@@ -100,6 +100,10 @@ and the absence of new Unicode directories in the checkout after teardown.
   and `ELECTRON_RUN_AS_NODE`. Build the fixture projects with `makeRepo` / `makePlainDir` before
   calling `launch()`, because the app reads them at startup. See
   [Live testing](live-testing.md) for why each of these is needed.
+  It does **not** replace `CODEX_HOME`: an inherited value points the app at
+  that Codex home instead of the temporary one, so a journey run where it is
+  set sees the real Codex sessions and their projects. Unset `CODEX_HOME`
+  before running the journeys locally.
 - **Plain terminals only.** Open a session with `openPlainTerminal`, the
   project's `+` → Terminal. Never click the fixture's session row: that would
   start `claude --resume`.

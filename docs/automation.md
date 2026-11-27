@@ -135,7 +135,10 @@ When the expression matches, Switchboard:
    and the other `cli.*` flags, through the **Shell Profile** shell, in the
    project directory, with `FORCE_COLOR=0`;
 3. discards the output, and writes the exit code and any stderr to the main log
-   (`[schedule]` lines). No notification is shown.
+   (`[schedule]` lines). A run that fails (non-zero exit, a signal, a timeout,
+   a failed start) shows an error notice naming the schedule, the result and a
+   hint; repeated failures of the same schedule update one notice with their
+   count (*failed N times, last: …*). A successful run shows no notice.
 
 The run appears as a session in the project, grouped with the schedule's other
 runs under its slug; open it to read the result.
@@ -934,11 +937,19 @@ that resending is safe; inspect the residue first. `written: true` continues to
 mean the complete text-plus-Enter pair, including on an interrupted later retry.
 
 **What `confirmed` proves, and what it does not.** It means the three checked
-facts for ordinary commands, nothing more. The turn check is a level probe over the
-verification window, not an edge tied to this write: any busy transition in the
-window satisfies it — a human typing, another process. Triggers aimed at the
-same session are serialized, so a second trigger cannot cause it, but an actor
-outside the watcher can. A caller that must not act twice on one intent still
+facts for ordinary commands, nothing more, and how tightly the turn check is
+tied to this write depends on what Switchboard can read. With a CLI descriptor
+and a readable session transcript, the descriptor's reaction after the Enter
+counts only together with the command's own entry in the transcript after it
+(see the table above): unrelated activity, such as a turn the CLI starts for a
+task notification, does not satisfy it. With a descriptor but no readable
+transcript, `busy` or `waiting` after the Enter counts alone. Without a
+descriptor, the check is a level probe over the verification window, not an
+edge tied to this write: any busy transition in the window satisfies it — a
+human typing, another process. Triggers aimed at the same session are
+serialized, so a second trigger cannot cause it, but an actor outside the
+watcher can, and in the two weaker cases its activity is indistinguishable
+from this write's. A caller that must not act twice on one intent still
 checks the effect itself — a smaller context, a new transcript, a file on disk.
 Take `confirmed` as "the hand-off went through cleanly", `activity` as
 "something happened, unattributed". A slash command that misses the completion
@@ -1032,7 +1043,7 @@ The two reserved values mean opposite things:
   (`not sent`, *the step deadline passed before it could be written; nothing
   was written*). Keystrokes typed in the terminal are never held back: they are
   how a dialog is answered.
-- A chain step is held until the CLI's descriptor reads `idle`, up to the step's deadline. If it still reads `busy` or `waiting` (or any status other than `idle`) then, the step is not written: `not sent` for the first step, `chain timeout` for a later one, with the cause in `reason`. A session with delegated agents running keeps the parent descriptor `busy`, so such a chain fails cleanly instead of typing into a busy composer. Without a readable descriptor at the first read nothing is waited for, but a step is never written once its own deadline has passed (it then fails `not sent` or `chain timeout`).
+- A chain step is held until the CLI's descriptor reads `idle`, up to the step's deadline, with one exception: while the descriptor reads `busy` or `shell`, the step is also written when the session transcript shows the turn over — its last main-thread entry closes a turn that ended after the previous step's Enter (any closed turn, for the first step), the transcript has not changed for `SWITCHBOARD_TRANSCRIPT_QUIET_MS` (3 s), and no dialog (`waiting`) was seen in the settle window. The step's `ready_source` then says `transcript`. This is the case of a session whose background agents or background shell jobs keep the parent descriptor `busy` or `shell` after its turn ended. Otherwise, if the descriptor still reads `busy` or `waiting` (or any status other than `idle`) at the deadline, the step is not written: `not sent` for the first step, `chain timeout` for a later one, with the cause in `reason`; a session with delegated agents still mid-turn fails cleanly instead of typing into a busy composer. Without a readable descriptor at the first read nothing is waited for, but a step is never written once its own deadline has passed (it then fails `not sent` or `chain timeout`).
 - When the wait ends because the session never got there and the CLI's
   descriptor read `waiting` (a dialog is open: a permission prompt or a
   question) at any sample in the last few hundred milliseconds of it, `reason`
@@ -1075,18 +1086,28 @@ that sent `/compact` and timed out waiting for the session reports
 `/compact` twice.
 
 Read `steps[]`, not the count. It holds the steps the chain **reached**. A step
-whose politeness wait never found a free prompt has an entry too, with
-`submitted: "no"` — the only way a step entry carries that value, and the mark
-of a step that was never written. With `steps_total` (on every result):
+held before its write — its politeness wait never found a free prompt, the CLI
+never got ready, or its deadline passed first — has an entry too, with
+`submitted: "no"` and no `text_written` field. A step cut off during its own
+write, when ownership or the pinned generation changed between the text and
+the Enter, also ends with `submitted: "no"`, but its entry carries
+`text_written: true` and `enter_written: false`: its text may still sit in the
+session's input box (see above). `submitted: "no"` on an entry is therefore not
+proof that the step was never written. With `steps_total` (on every result):
 
-- when the last entry's `submitted` is `"no"`, that step was **not** sent, and
-  the unsent tail starts at its `idx`;
+- when the last entry's `submitted` is `"no"` and it has no
+  `text_written: true`, that step was **not** sent, and the unsent tail starts
+  at its `idx`;
+- when the last entry's `submitted` is `"no"` with `text_written: true`, part of
+  that step reached the session: inspect the input box and clear or submit what
+  is there before resending anything, or the resent text is appended to it;
 - otherwise the last entry was sent, and the tail starts at `max(steps[].idx) + 1`;
 - the tail runs to `steps_total - 1`;
 - with no entry at all, the whole chain is the tail.
 
 Taking `max(steps[].idx) + 1` in every case loses a resume prompt that
-politeness held back. An empty `steps: []` and a missing `steps` both mean
+politeness held back; taking `idx` for every `"no"` entry can type a step twice
+into the same input box. An empty `steps: []` and a missing `steps` both mean
 nothing went out; read them as `(result.steps || []).length === 0`.
 
 ### Failures in the watcher itself

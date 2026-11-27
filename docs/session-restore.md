@@ -40,8 +40,9 @@ restore** starts nothing, including for the remembered active background tab.
 A live worker is attached. A working, done, running or failed job proven dead is respawned as the same job,
 with the same conversation and name, then attached, unless a live continuation holds it. Background restore never
 opens an interactive `--resume` tab or sends `/bg`. A stopped job is not
-respawned automatically, and neither is a dead blocked job: its notice offers **Respawn**, which checks that the
-conversation can be restarted before doing so.
+respawned automatically, and neither is a dead blocked job: its notice offers **Respawn**, which checks
+worker liveness and continuations again before restarting it; a deleted, unowned continuation does not prevent
+recovery.
 
 Unknown worker liveness, conflicting records and a refused
 respawn leave the entry saved and display the reason. Entries saved by older
@@ -65,7 +66,12 @@ one opens behind it without taking the focus. The tab order still follows the
 saved order once every tab is open.
 
 Temporary background attachment failures are retried at startup and collected
-in one dismissible notice with recovery actions. A finished job with queued
+in one dismissible notice with recovery actions. Only the first attempt may
+respawn a job; every retry only attaches, so a job is never restarted twice.
+While the job's state file says it is still starting, Switchboard keeps
+retrying the attachment about once a second for up to 30 seconds from the first
+attempt, without holding up the other tabs; if the job turns out to have
+stopped, the notice offers **Respawn**. A finished job with queued
 tasks first attempts recovery; after a successful respawn whose worker is
 confirmed dead, its saved tab is released. Timeouts and daemon errors retain
 the entry for the next launch.
