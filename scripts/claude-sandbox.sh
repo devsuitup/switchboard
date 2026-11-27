@@ -373,6 +373,12 @@ inside_ro_area() {
   return 1
 }
 
+# Sets the variable named $1 to the NUL-terminated output of the command that
+# follows, a trailing newline in a path included.
+read_path0() {
+  IFS= read -r -d '' "$1" < <("${@:2}" 2>/dev/null) || true
+}
+
 # Fails when resolving path $1 goes through a symbolic link that sits in a
 # directory the sandbox can write: the session could re-point it.
 check_chain() {
@@ -391,7 +397,7 @@ check_chain() {
       if chain_link_writable "${cur:-/}" "$comp" "${2:-}"; then
         fail "refusing to launch: $cur/$comp is a symbolic link in a directory the sandbox can write, on the way to $orig, which it protects; the session could re-point it. Replace the link with what it points to (for git hooks, set core.hooksPath to that directory instead), or turn Sandbox off for this session."
       fi
-      link="$(readlink "$cur/$comp")"
+      read_path0 link readlink -z -- "$cur/$comp"
       case "$link" in /*) cur="" ;; esac
       rest="$link${rest:+/$rest}"
     else
@@ -558,7 +564,7 @@ verify_control_mounts() {
 protect_resolved_link() {
   local link="$1" target="$2" text="${3-}"
   [ -n "$target" ] && [ -e "$target" ] || return 0
-  [ -n "$text" ] || text="$(readlink "$link")"
+  [ -n "$text" ] || read_path0 text readlink -z -- "$link"
   case "$text" in /*) ;; *) text="${link%/*}/$text" ;; esac
   check_chain "$text"
   if protect_resolved "$target" && [ -d "$target" ]; then
@@ -567,7 +573,9 @@ protect_resolved_link() {
 }
 
 protect_link_target() {
-  protect_resolved_link "$1" "$(realpath -m -- "$1" 2>/dev/null || true)"
+  local target
+  read_path0 target realpath -z -m -- "$1"
+  protect_resolved_link "$1" "$target"
 }
 
 # Every symbolic link at any depth below directory $1, resolved in one call.
@@ -732,7 +740,7 @@ bind_project_claude_dir() {
 protect_path() {
   local p="$1" real
   check_chain "$p"
-  real="$(readlink -m -- "$p")"
+  read_path0 real readlink -m -z -- "$p"
   if [ -e "$real" ]; then
     protect_resolved "$real" || true
   elif [ "${2:-}" = dir ] && sandbox_view "$real"; then
@@ -792,9 +800,10 @@ protect_repo_root() {
   elif [ -d "$d/.git" ]; then
     GIT_WORKTREES+=("$d")
   elif [ -e "$d/.git" ]; then
-    mount_op --ro-bind "$d/.git" "$d/.git"
+    [ "$create" = covered ] || mount_op --ro-bind "$d/.git" "$d/.git"
     GIT_WORKTREES+=("$d")
   fi
+  [ "$create" != covered ] || return 0
   if [ "$create" = repo ]; then
     if [ -e "$d/.git" ]; then create=create; else create=nocreate; fi
   fi
@@ -826,7 +835,10 @@ protect_tree() {
   protect_repo_root "$d" "$create"
   while IFS= read -r -d '' n; do
     if inside_ro_area "$n"; then
-      if [ "${n##*/}" = .claude ] && { [ -L "$n" ] || [ -d "$n" ]; }; then protect_claude_dir "$n" nocreate; else RO_REQUIRED+=("$n"); fi
+      case "${n##*/}" in
+        .claude) if [ -L "$n" ] || [ -d "$n" ]; then protect_claude_dir "$n" nocreate; else RO_REQUIRED+=("$n"); fi ;;
+        .git) RO_REQUIRED+=("$n"); protect_repo_root "$(dirname "$n")" covered ;;
+      esac
       continue
     fi
     case "${n##*/}" in

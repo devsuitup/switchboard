@@ -283,6 +283,11 @@ the sandbox sees it: a repository reached both through an Additional Directory
 that is a symbolic link and through its real path, or through an opted-in
 `skills`, is protected at each.
 
+A repository that already lies under a read-only mount of its own (inside
+`$NVM_DIR` below the project, say) gets no mount of its own for its `.git`,
+but its paths are still read from git as above, so a `core.hooksPath` outside
+it is protected too, and a `.git` there that is a symbolic link is refused.
+
 The search below a bound directory does not enter `node_modules`, and does not
 cross into another filesystem (`find -xdev`): a `.git` or `.claude` inside a
 `node_modules`, or on a mount or a bind inside the project, is not protected.

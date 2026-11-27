@@ -1465,6 +1465,51 @@ test('sandbox wrapper: refuses a .claude under a read-only tool directory that i
     }
   });
 
+test('sandbox wrapper: a repository under a read-only tool directory keeps its core.hooksPath protected against a state link to it',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const tools = path.join(rig.proj, 'tools');
+      const sample = path.join(tools, 'sample');
+      const store = path.join(rig.root, 'store', 'todos');
+      fs.mkdirSync(sample, { recursive: true });
+      fs.mkdirSync(store, { recursive: true });
+      fs.writeFileSync(path.join(store, 'pre-commit'), '');
+      git(sample, 'init', '-q');
+      git(sample, 'config', 'core.hooksPath', store);
+      let res = rig.run(['--version'], { NVM_DIR: tools });
+      assert.equal(res.status, 0, `the repository under the tool directory alone launches\n${res.stderr}`);
+      fs.rmSync(path.join(dir, 'todos'), { recursive: true, force: true });
+      fs.symlinkSync(store, path.join(dir, 'todos'));
+      res = rig.run(['--version'], { NVM_DIR: tools });
+      assert.equal(res.status, 125, 'the hooks directory would be writable through the todos target');
+      assert.match(res.stderr, /store\/todos, which the sandbox binds read-write for a state entry of ~\/\.claude, is at or inside .*store\/todos, which it keeps read-only/);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: a link in the project\'s .claude whose target ends in a newline has that target protected',
+  { skip: !LINUX && 'requires Linux newline filenames and symlinks' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      fs.mkdirSync(path.join(rig.proj, '.claude'));
+      const hooks = path.join(rig.proj, 'hooks\n');
+      fs.mkdirSync(hooks);
+      fs.writeFileSync(path.join(hooks, 'hook.sh'), '');
+      fs.symlinkSync('../hooks\n', path.join(rig.proj, '.claude', 'hooks'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(accessAt(ops, path.join(hooks, 'hook.sh')), '--ro-bind', 'the newline-ending hooks target stays read-only');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
 test('sandbox wrapper: a linked state directory outside ~/.claude is followed only to a directory named claude, never to / or a parent of $HOME',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
