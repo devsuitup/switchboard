@@ -924,7 +924,7 @@ for (const agree of [false, true]) {
 }
 
 for (const throws of [false, true]) {
-  test('viewer Delete reports ' + (throws ? 'rejected IPC' : 'refusal') + ' through appAlert', async () => {
+  test('viewer Delete reports ' + (throws ? 'rejected IPC' : 'refusal') + ' in its notice, not through appAlert', async () => {
     const t = setup({ disk: 'one' });
     try {
       await t.open('one');
@@ -933,7 +933,9 @@ for (const throws of [false, true]) {
       t.window.appAlert = async ({ message }) => { alerts.push(message); };
       t.panel.opts.onDelete = async () => { if (throws) throw new Error('busy'); return { ok: false, error: 'busy' }; };
       await t.panel._delete();
-      assert.deepEqual(alerts, ['Delete failed: busy']);
+      assert.deepEqual(alerts, []);
+      assert.equal(noticeText(t), 'Could not delete this file — try Delete again, or close any program that has it open.');
+      assert.equal(t.panel.noticeEl.title, 'busy');
     } finally { t.destroy(); }
   });
 }

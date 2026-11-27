@@ -1136,30 +1136,30 @@ ipcMain.handle('check-remap-project', (_event, oldPath) => {
   return error ? { ok: false, error } : { ok: true };
 });
 
-ipcMain.handle('remap-project', async (_event, oldPath, newPath) => {
+async function remapMissingProject(oldPath, newPath) {
   try {
     // Validate oldPath/newPath are strings (basic sanitisation)
     if (typeof oldPath !== 'string' || typeof newPath !== 'string') {
-      return { error: 'Invalid arguments' };
+      return { code: 'invalid-arguments', error: 'Invalid arguments' };
     }
 
     // Re-check at handler entry: if oldPath came back, no remap is needed
     if (fs.existsSync(oldPath)) {
-      return { error: 'Project path now exists — remap no longer needed' };
+      return { code: 'path-back', error: 'Project path now exists — remap no longer needed' };
     }
 
     // Validate the new path exists and is a directory
     let stat;
-    try { stat = fs.lstatSync(newPath); } catch { return { error: 'Path does not exist' }; }
-    if (!stat.isDirectory()) return { error: 'Path is not a directory' };
+    try { stat = fs.lstatSync(newPath); } catch { return { code: 'target-missing', error: 'Path does not exist' }; }
+    if (!stat.isDirectory()) return { code: 'target-not-directory', error: 'Path is not a directory' };
 
     // Find the session folder for the old project path using the same encoding the CLI uses
     const folder = encodeProjectPath(oldPath);
     const folderPath = path.join(PROJECTS_DIR, folder);
-    if (!fs.existsSync(folderPath)) return { error: 'No session data found for this project' };
+    if (!fs.existsSync(folderPath)) return { code: 'no-session-data', error: 'No session data found for this project' };
 
     const refusal = remapProjectRefusal(oldPath);
-    if (refusal) return { error: refusal };
+    if (refusal) return { code: 'active-sessions', error: refusal };
 
     // Rewrite cwd in all session JSONL files (top-level + subagents) so
     // `claude --resume` from CLI also picks up the new path.
@@ -1170,9 +1170,11 @@ ipcMain.handle('remap-project', async (_event, oldPath, newPath) => {
     notifyRendererProjectsChanged('project-remap');
     return { ok: true };
   } catch (err) {
-    return { error: err.message };
+    return { code: 'failed', error: err.message };
   }
-});
+}
+
+ipcMain.handle('remap-project', (_event, oldPath, newPath) => remapMissingProject(oldPath, newPath));
 
 // --- IPC: delete-worktree ---
 const worktreeDelete = require('./worktree-delete');
@@ -3799,17 +3801,19 @@ ipcMain.handle('read-activity-trace-file', (_event, filePath) => {
   }
 });
 
-ipcMain.handle('delete-activity-trace-file', (_event, filePath) => {
+function deleteActivityTraceFile(filePath) {
   const resolved = resolveTraceFile(filePath);
-  if (!resolved) return { ok: false, error: 'not an activity-trace file' };
-  if (resolved === activityTrace.currentFile()) return { ok: false, error: 'the trace is writing to this file — turn debug mode off first' };
+  if (!resolved) return { ok: false, code: 'not-trace', error: 'not an activity-trace file' };
+  if (resolved === activityTrace.currentFile()) return { ok: false, code: 'recording', error: 'the trace is writing to this file — turn debug mode off first' };
   try {
     fs.unlinkSync(resolved);
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: err.message };
+    return { ok: false, code: err.code, error: err.message };
   }
-});
+}
+
+ipcMain.handle('delete-activity-trace-file', (_event, filePath) => deleteActivityTraceFile(filePath));
 
 // --- IPC: terminal-input (fire-and-forget) ---
 ipcMain.on('terminal-input', (_event, sessionId, data) => {

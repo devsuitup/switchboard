@@ -29,6 +29,7 @@ let panelBackBtn = null;
 
 // Diff-specific DOM
 let diffToolbarEl = null;
+let diffSaveFailureEl = null;
 let diffBodyEl = null;
 let diffActionsEl = null;
 let diffToggleBtn = null;
@@ -320,6 +321,12 @@ function initFilePanel() {
   diffToolbarEl.appendChild(diffControls);
   diffContainer.appendChild(diffToolbarEl);
 
+  diffSaveFailureEl = document.createElement('div');
+  diffSaveFailureEl.className = 'viewer-panel-notice diff-save-failure';
+  diffSaveFailureEl.setAttribute('role', 'alert');
+  diffSaveFailureEl.style.display = 'none';
+  diffContainer.appendChild(diffSaveFailureEl);
+
   diffBodyEl = document.createElement('div');
   diffBodyEl.id = 'file-panel-body';
   diffContainer.appendChild(diffBodyEl);
@@ -525,6 +532,21 @@ function updateDiffSaveButton(tab) {
   btn.disabled = !!tab.resolved;
   btn.title = tab.cliStopped ? 'The CLI stopped — this diff can no longer be answered or saved'
     : tab.resolved ? 'This diff has been answered — Save is off until the session closes it' : 'Save changes';
+  showDiffSaveFailure(tab);
+}
+
+function showDiffSaveFailure(tab) {
+  if (!diffSaveFailureEl) return;
+  const failure = tab && !tab.resolved ? tab.saveFailure : null;
+  diffSaveFailureEl.textContent = failure ? 'Could not save this file — your edits are kept; try Save again or copy them elsewhere.' : '';
+  diffSaveFailureEl.title = failure || '';
+  diffSaveFailureEl.style.display = failure ? '' : 'none';
+}
+
+function setDiffSaveFailure(tab, reason) {
+  tab.saveFailure = reason;
+  const state = currentPanelSessionId ? getSessionState(currentPanelSessionId) : null;
+  if (state?.currentTab === tab) showDiffSaveFailure(tab);
 }
 
 // see .ai/contexts/viewer-panel.md ("Saving over a file that moved")
@@ -555,14 +577,15 @@ async function saveDiffTab(tab) {
     }
     if (result && result.ok) {
       saved = true;
+      setDiffSaveFailure(tab, null);
       tab.diskBaseline = content.replace(/\r\n?/g, '\n');
       const btn = diffToolbarEl.querySelector('.fp-save-btn');
       if (btn) flashButtonText(btn, 'Saved!');
     } else if (result && result.reason !== 'stale') {
-      await appAlert({ title: 'Switchboard', message: `Save failed: ${result.error || 'unknown error'}` });
+      setDiffSaveFailure(tab, result.error || 'unknown error');
     }
   } catch (err) {
-    await appAlert({ title: 'Switchboard', message: `Save failed: ${(err && err.message) || 'unknown error'}` });
+    setDiffSaveFailure(tab, (err && err.message) || 'unknown error');
   } finally {
     tab.saving = false;
     const queued = tab.saveQueued;

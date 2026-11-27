@@ -147,7 +147,7 @@ class ViewerPanel {
     this.container.insertBefore(this.noticeEl, this.toolbar.el.nextSibling);
   }
 
-  _setNotice(state, detail) {
+  _setNotice(state, detail, message) {
     this._noticeState = state;
     let text = '';
     if (state === 'changed') {
@@ -162,8 +162,13 @@ class ViewerPanel {
       text = `This file can no longer be read: ${detail}`;
     } else if (state === 'save-failed') {
       text = `Save failed: ${detail}`;
+    } else if (state === 'delete-failed') {
+      text = message || 'Could not delete this file — try Delete again, or close any program that has it open.';
     }
     this.noticeTextEl.textContent = text;
+    this.noticeEl.title = state === 'delete-failed' ? detail : '';
+    if (state === 'delete-failed') this.noticeEl.setAttribute('role', 'alert');
+    else this.noticeEl.removeAttribute('role');
     this.noticeEl.style.display = state ? '' : 'none';
     this.noticeEl.classList.toggle('changes-error', !!state);
     this.noticeReloadBtn.style.display = state === 'changed' || state === 'stale' ? '' : 'none';
@@ -268,16 +273,22 @@ class ViewerPanel {
     const myGen = this._openGen;
     const name = filePath.split('/').pop();
     if (!await appConfirm({ title: 'Delete?', message: `Delete "${name}"?\n\nThis cannot be undone.`, confirmLabel: 'Delete', danger: true }) || this._openGen !== myGen) return;
+    let failure = null;
+    let message;
     try {
       const result = await this.opts.onDelete(filePath);
       if (result && result.ok !== false) {
-        if (this._openGen === myGen && this.opts.onClose) this.opts.onClose();
-      } else {
-        await appAlert({ title: 'Switchboard', message: `Delete failed: ${result?.error || 'unknown error'}` });
+        if (this._openGen !== myGen) return;
+        if (this._noticeState === 'delete-failed') this._setNotice(null);
+        if (this.opts.onClose) this.opts.onClose();
+        return;
       }
+      failure = result?.error || 'unknown error';
+      message = result?.message;
     } catch (err) {
-      await appAlert({ title: 'Switchboard', message: `Delete failed: ${err.message}` });
+      failure = (err && err.message) || 'unknown error';
     }
+    if (this._openGen === myGen) this._setNotice('delete-failed', failure, message);
   }
 
   /**

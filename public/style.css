@@ -6438,7 +6438,8 @@ body { display: flex; flex-direction: column; }
 }
 
 #changes-diff-notice.changes-error,
-.viewer-panel-notice.changes-error {
+.viewer-panel-notice.changes-error,
+.viewer-panel-notice.diff-save-failure {
   color: var(--danger);
 }
 
@@ -6505,6 +6506,12 @@ body { display: flex; flex-direction: column; }
 .activity-trace-file-meta {
   font-size: 11px;
   color: var(--text-inactive);
+  margin-top: 2px;
+}
+
+.activity-trace-file-error {
+  font-size: 11px;
+  color: var(--danger);
   margin-top: 2px;
 }
 

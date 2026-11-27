@@ -36,8 +36,9 @@ function getActivityTracePanel() {
       if (result && result.ok) {
         container.style.display = 'none';
         refreshActivityTraceList();
+        return result;
       }
-      return result;
+      return { ...result, ok: false, message: traceDeleteFailureMessage(result) };
     },
     onClose: () => { container.style.display = 'none'; },
   });
@@ -68,9 +69,10 @@ async function openActivityTraceFile(file) {
     result = { ok: false, error: (err && err.message) || String(err) };
   }
   if (!result || !result.ok) {
-    await appAlert({ title: 'Switchboard', message: `Could not read ${file.name}: ${(result && result.error) || 'unknown error'}` });
+    setTraceRowFailure(file, 'Could not open this trace — try Open again, or reopen Diagnostics to refresh the list.', (result && result.error) || 'unknown error');
     return;
   }
+  setTraceRowFailure(file, null);
   if (typeof hideAllViewers === 'function') hideAllViewers();
   if (typeof terminalArea !== 'undefined' && terminalArea) terminalArea.style.display = 'none';
   if (typeof placeholder !== 'undefined' && placeholder) placeholder.style.display = 'none';
@@ -82,9 +84,27 @@ async function openActivityTraceFile(file) {
   panel.open(title, file.filePath, result.content);
 }
 
+function traceDeleteFailureMessage(result) {
+  const code = result && result.code;
+  if (code === 'recording') return 'Could not delete this trace — debug mode is still writing to it; turn debug mode off, then Delete again.';
+  if (code === 'not-trace' || code === 'ENOENT') return 'Could not delete this file — it is no longer there; reopen Diagnostics to refresh the list.';
+  return 'Could not delete this file — try Delete again, or close any program that has it open.';
+}
+
+function setTraceRowFailure(file, message, reason) {
+  const rows = activityTraceListEl ? activityTraceListEl.querySelectorAll('.activity-trace-file') : [];
+  const row = [...rows].find(candidate => candidate.dataset.filePath === file.filePath);
+  const failure = row && row.querySelector('.activity-trace-file-error');
+  if (!failure) return;
+  failure.textContent = message || '';
+  failure.title = message ? reason : '';
+  failure.hidden = !message;
+}
+
 function buildActivityTraceRow(file, listEl) {
   const row = document.createElement('div');
   row.className = 'activity-trace-file';
+  row.dataset.filePath = file.filePath;
 
   const info = document.createElement('div');
   info.className = 'activity-trace-file-info';
@@ -103,8 +123,14 @@ function buildActivityTraceRow(file, listEl) {
   meta.className = 'activity-trace-file-meta';
   meta.textContent = `${formatTraceSize(file.size)} · ${formatTraceDate(file.modified)}`;
 
+  const failure = document.createElement('div');
+  failure.className = 'activity-trace-file-error';
+  failure.setAttribute('role', 'alert');
+  failure.hidden = true;
+
   info.appendChild(name);
   info.appendChild(meta);
+  info.appendChild(failure);
 
   const actions = document.createElement('div');
   actions.className = 'activity-trace-file-actions';
@@ -131,7 +157,7 @@ function buildActivityTraceRow(file, listEl) {
     if (result && result.ok) {
       renderActivityTraceFiles(listEl);
     } else {
-      await appAlert({ title: 'Switchboard', message: `Delete failed: ${(result && result.error) || 'unknown error'}` });
+      setTraceRowFailure(file, traceDeleteFailureMessage(result), (result && result.error) || 'unknown error');
     }
   });
 

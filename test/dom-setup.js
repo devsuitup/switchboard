@@ -20,7 +20,7 @@ const { JSDOM } = require('jsdom');
 const { loadAppFunctions } = require('./app-source');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
-const MORPHDOM_PATH = path.join(__dirname, '..', 'node_modules', 'morphdom', 'dist', 'morphdom-umd.js');
+const MORPHDOM_PATH = require.resolve('morphdom/dist/morphdom-umd.js');
 
 // Minimal DOM stub that index.html sets up. sidebar.js looks up several
 // of these by id via document.getElementById — we just need them present.
