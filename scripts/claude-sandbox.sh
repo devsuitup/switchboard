@@ -756,19 +756,27 @@ protect_path() {
 # What git runs on its own: the repository's config, its hooks directory and
 # the one core.hooksPath names, and, for every linked worktree, the files that
 # point git at the shared repository.
+git_newline_refuse() {
+  fail "refusing to launch: a git path of $1 contains a newline (the repository, its git directory or core.hooksPath), so the sandbox cannot tell which paths to protect."
+}
+
 protect_git() {
-  local d="$1" out git_dir common_dir hooks_dir w
+  local d="$1" out nl git_dir common_dir hooks_dir w
   if ! command -v git >/dev/null 2>&1; then
     debug "git is not installed; $d/.git gets no further protection (git cannot run in the sandbox either)"
     return 0
   fi
   out="$(cd "$d" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE \
-         git rev-parse --path-format=absolute --git-dir --git-common-dir --git-path hooks 2>/dev/null)" ||
+         git rev-parse --path-format=absolute --git-dir --git-common-dir --git-path hooks 2>/dev/null && printf x)" ||
     fail "refusing to launch: git cannot read the repository at $d, so the sandbox cannot tell which of its paths to protect. Check it with 'git -C $d rev-parse --git-dir'."
-  if [ "$(printf '%s\n' "$out" | wc -l)" -ne 3 ]; then
-    fail "refusing to launch: a git path of $d contains a newline (the repository, its git directory or core.hooksPath), so the sandbox cannot tell which paths to protect."
+  out="${out%x}"
+  nl="${out//[!$'\n']/}"
+  if [ "${#nl}" -ne 3 ] || [ "${out: -1}" != $'\n' ]; then
+    git_newline_refuse "$d"
   fi
-  { IFS= read -r git_dir; IFS= read -r common_dir; IFS= read -r hooks_dir; } <<<"$out"
+  git_dir="${out%%$'\n'*}"; out="${out#*$'\n'}"
+  common_dir="${out%%$'\n'*}"; out="${out#*$'\n'}"
+  hooks_dir="${out%$'\n'}"
   [ -n "${GIT_DONE[$d]:-}" ] && return 0
   GIT_DONE["$d"]=1
   protect_path "$common_dir/config"
@@ -778,7 +786,9 @@ protect_git() {
     # git reports the hooks path resolved; the configured one is what a link
     # on the way could re-point.
     local configured
-    configured="$(cd "$d" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE git config --get core.hooksPath 2>/dev/null || true)"
+    configured="$(cd "$d" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE git config --get core.hooksPath 2>/dev/null; printf x)"
+    configured="${configured%x}"; configured="${configured%$'\n'}"
+    case "$configured" in *$'\n'*) git_newline_refuse "$d" ;; esac
     case "$configured" in
       "") ;;
       /*) check_chain "$configured" ;;

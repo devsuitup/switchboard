@@ -1530,6 +1530,22 @@ test('sandbox wrapper: a working directory whose name ends in a newline keeps th
     }
   });
 
+test('sandbox wrapper: refuses a repository whose core.hooksPath ends in a newline',
+  { skip: !LINUX && 'requires Linux newline filenames' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      git(rig.proj, 'init', '-q');
+      fs.mkdirSync(path.join(rig.proj, 'hooks\n'));
+      git(rig.proj, 'config', 'core.hooksPath', 'hooks\n');
+      const { status, stderr } = rig.run();
+      assert.equal(status, 125, `hooks\\n would stay writable while hooks is protected\n${stderr}`);
+      assert.match(stderr, /a git path of .* contains a newline/);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
 test('sandbox wrapper: refuses a repository under a read-only tool directory whose name ends in a newline',
   { skip: !LINUX && 'requires Linux newline filenames and symlinks' }, () => {
     const rig = makeRig({ recordArgs: true });
