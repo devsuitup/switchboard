@@ -146,6 +146,46 @@ const restoreInFlight = new Map();
 // see .ai/contexts/session-cache.md ("Restore on click")
 const dormantWorkingSet = new Map();
 
+// see docs/session-restore.md ("A restored session whose CLI never connects")
+const CLI_RESTART_EXIT_WAIT_MS = 10000;
+const cliLiveness = createCliLiveness({
+  isOnline: () => navigator.onLine !== false,
+  onChange: sessionId => applyStateClasses(sessionId, storedActivitySnapshot(sessionId)),
+  restart: sessionId => restartSessionWithoutCli(sessionId),
+});
+window.addEventListener('online', () => cliLiveness.online());
+window.addEventListener('offline', () => cliLiveness.offline());
+
+async function restartSessionWithoutCli(sessionId) {
+  const entry = openSessions.get(sessionId);
+  if (!entry || entry.closed || entry.attach || entry.session?.remoteAlias || !activePtyIds.has(sessionId)) return false;
+  if (localPtyStates.get(sessionId)?.snapshot().busy) return false;
+  let input = null, live;
+  try { input = await window.api.getSessionInputPending(sessionId); } catch { return false; }
+  if (input?.ok !== true || input.pending !== false) return false;
+  try { live = await window.api.getSessionLiveElsewhere(sessionId); } catch { return false; }
+  if (live != null || openSessions.get(sessionId) !== entry || entry.closed) return false;
+  const wasActive = activeSessionId === sessionId;
+  const closed = new Promise(resolve => { (entry.closedWaiters ||= []).push(resolve); });
+  let stopped;
+  try { stopped = await window.api.stopSession(sessionId); } catch { return false; }
+  if (!stopped || stopped.ok === false) return false;
+  let timer;
+  const exited = await Promise.race([closed.then(() => true),
+    new Promise(resolve => { timer = setTimeout(() => resolve(false), CLI_RESTART_EXIT_WAIT_MS); })]);
+  clearTimeout(timer);
+  if (!exited) return false;
+  cliLiveness.expect(sessionId);
+  try {
+    await openSession({ ...entry.session, sessionId, headSessionId: sessionId, mergedMemberIds: [] }, undefined, {
+      automatic: true, fromRestore: true, live: null, continuationResolved: true, activate: wasActive, activeFrom: activeSessionId,
+    });
+  } finally {
+    cliLiveness.settle(sessionId);
+  }
+  return true;
+}
+
 function dismissDormantSession(sessionId) {
   if (!dormantWorkingSet.delete(sessionId)) return;
   persistWorkingSet();
@@ -588,6 +628,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         let opened;
         if (window.isDeletedProjectRestoreTarget?.(item)) continue;
         let blockedBy;
+        if (typeof cliLiveness !== 'undefined') cliLiveness.expect(s.sessionId);
         try {
           opened = await openSession(s, undefined, {
             automatic: true, fromRestore: true, live, continuationResolved: true, chosenPart: keptChoice, allowBgAttach: s.sessionId !== originalId || item.bg === true, ...showWhenOpened(item),
@@ -595,6 +636,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
           });
         } finally {
           restoreInFlight.delete(originalId);
+          if (typeof cliLiveness !== 'undefined') cliLiveness.settle(s.sessionId);
         }
         if (opened === false) {
           const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
@@ -1249,6 +1291,7 @@ function applyProcessExit(sessionId, exitCode, signal, stopped) {
   stopped ||= !!(entry?.attach && !entry.session?.remoteAlias && entry.jobEnding === 'stop');
   noteSessionExit(sessionId, exitCode, signal, stopped, !!(stopped && ((entry?.attach && !entry.jobEnding) || (entry?.session?.remoteAlias && entry.detachRequested))));
   if (typeof setSessionMcpState === 'function' && typeof filePanelState !== 'undefined' && filePanelState.get(sessionId)) setSessionMcpState(sessionId, 'off');
+  if (typeof cliLiveness !== 'undefined') cliLiveness.exited(sessionId);
   // see .ai/contexts/session-state.md ("A session main drops")
   activePtyIds.delete(sessionId);
   if (!sessionItemEl(sessionId)?.dataset.remoteAlias) dropLocalPtySession(sessionId, 'process-exited');
@@ -1258,6 +1301,7 @@ function applyProcessExit(sessionId, exitCode, signal, stopped) {
     entry.closed = true;
     entry.completeDetach?.();
     delete entry.completeDetach;
+    for (const resolve of entry.closedWaiters?.splice(0) || []) resolve();
     if (entry.attach) skippedWorkingSetEntries.delete(sessionId);
     // Write a visible exit banner so the user can see when the process ended
     // and read any error output it printed (claude / devbox / shell stderr).

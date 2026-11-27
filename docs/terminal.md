@@ -13,7 +13,9 @@ On the left, the header above the terminal shows:
   Waiting for input, Idle… — see [Status Indicators](notifications.md#the-icon)).
   Its tooltip and accessible name give the activity and the lifecycle in words,
   for example `Idle · Open here` or `Working · Attached here · keeps running
-  in the background`. Without a terminal open here, the lifecycle is the first
+  in the background`; a restored session whose CLI never connected reads
+  `No CLI connected · Open here · …` (see [Session Restore](session-restore.md#a-restored-session-whose-cli-never-connects)).
+  Without a terminal open here, the lifecycle is the first
   of these that applies (`lifecycleLabel`, `public/process-exit.js`): `Job
   done`, `Job stopped` or `Job failed` for a background job the daemon no
   longer hosts; `Running in background` for a job it still hosts (a detached

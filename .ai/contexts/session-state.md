@@ -406,6 +406,88 @@ manual open has cancelled automatic retry. A thrown retry reports only members
 still held and absent from open tabs. When no continuation remains held, the
 pending notice clears, including after the final project reload.
 
+## Restored sessions without a CLI (#776)
+
+User-facing behaviour: `docs/session-restore.md`, "A restored session whose
+CLI never connects".
+
+**What was measured (2026-11-28, by reading code, no live run).** Switchboard
+learns that a CLI is there from one event only: the IDE bridge's WebSocket
+`connection` (`src/main/integrations/mcp/mcp-bridge.js`, the `CLI connected`
+log line), forwarded to the renderer as `mcp-status` and folded into
+`setSessionMcpState` (`public/file-panel.js`). `open-terminal` starts that
+bridge only when `launchHarness.capabilities.ideBridge` holds and IDE
+emulation is on (`main.js`, `--ide` plus `CLAUDE_CODE_SSE_PORT`), and returns
+`mcpState: 'listening'`. A PTY that dies sends `process-exited`
+(`applyProcessExit`, exit banner, `mcpState 'off'`); a CLI that hangs, or
+runs without ever reaching the bridge, sends nothing at all, so its row looks
+like any idle open terminal. The installed CLI (2.1.302, Windows, read from
+the strings of its bundled `claude.exe`) connects to the IDE from a one-shot
+effect of its interactive UI: it scans `~/.claude/ide/*.lock` for up to
+30 s (`Ubr`), awaits the policy-limits cold-start waiter (bounded, 5 s
+budget), then calls `connectToServer` once and never retries. The connection
+itself is to `127.0.0.1` and does not need the network. **Inferred, not
+measured:** in the 2026-10-22 incident the CLIs either exited before their UI
+(but an exit would have shown its banner and `Exited`), hung before their UI
+mounted, or had their single connect attempt fail; which one, and in which CLI
+version, is not established. No live network-down run was made.
+
+**The tracker.** `public/cli-liveness.js` (`createCliLiveness`, dual-mode,
+pure, injected timers and `isOnline`) holds one state per session id:
+`expected` → `waiting` → `no-cli` → `restarting`. `runRestore` calls
+`expect(id)` just before its `openSession` of an interactive resume and
+`settle(id)` after it, so only restored opens are watched; the open result's
+`listening` (through `setSessionMcpState`) arms `CLI_LIVENESS_NO_CLI_MS`
+(60 s: the CLI's 30-second lock scan plus its 5-second policy wait, with margin,
+against 3 to 6 s seen in the field). Any other MCP state (`connected`, `off`,
+`failed`) or `exited(id)` from `applyProcessExit` drops the state, except
+while `restarting`. Codex rows, attaches and sessions with emulation off never
+get `listening`, so they are never armed.
+
+**The restart.** On `no-cli`, one restart per session id per app run
+(`restarted` set, consumed before the attempt whatever its outcome):
+immediately if the network was reported down since the PTY started and is up
+now, on the next `online` event, or after `CLI_LIVENESS_RESTART_TIMEOUT_MS`
+(5 min). The renderer `online`/`offline` events and `navigator.onLine` were
+chosen over polling `net.isOnline()` in main: the tracker, the restore path
+and the restart all live in the renderer, the events need no timer, and both
+read the same Chromium network-change notifier. Its known limit: a link up
+without internet (NetworkManager `CONNECTED_LOCAL`, which preceded launch in
+the incident) is already online, so the timeout carries that case.
+`restartSessionWithoutCli` (`public/app.js`) refuses when the entry is gone,
+closed, an attach, remote, or busy, when `session-input-pending` (main,
+`inputPendingReply` over the PTY's `composerState`) does not answer
+`{ok: true, pending: false}`, or when `session-live-elsewhere` is non-null or
+throws. It then calls `stop-session`, waits for `applyProcessExit` to resolve
+the entry's `closedWaiters` (bounded by `CLI_RESTART_EXIT_WAIT_MS`, 10 s, a
+ref'd timer), re-arms with `expect`, and reopens through `openSession` with
+`automatic`, `fromRestore`, `live: null` and `continuationResolved`, the same
+resume path a click on an exited row takes. No new spawn path exists.
+
+**The display.** Not a rung of `renderSessionIcon`: `noCliIcon`
+(`public/session-activity-dom.js`) replaces the winning rung with the `stale`
+slot class (Not running's dash; `.running` keeps it green while the PTY is
+here) and the title `No CLI connected`, for a non-remote row with a PTY here
+whose id the tracker reports. It runs in `applyStateClasses`, the header
+painter and under `scheduledRunIcon`, so a running schedule's ⏱ still wins.
+`rowLifecycleLabel` passes `noCli` and `restartPending` to `lifecycleLabel`,
+which reads `Open here · no CLI connected · restarts once, when the network is
+back or within 5 minutes`, then `… · stop it, then click it to start it
+again` once the restart is spent. The tracker's `onChange` repaints through
+`applyStateClasses`; the lifecycle words are part of `sidebarRenderInputs`,
+so an unchanged-refresh skip (#543) cannot keep a stale row. No CSS changed.
+
+**Limits.** A session re-keyed before it connects is not followed to its new
+id. Fresh restored entries (`launchNewSession`) and background restores are
+not watched. A quit between the restart's stop and its reopen can drop the
+session from the saved set, as any stop would.
+
+Evidence: `test/cli-liveness-776.test.js` (tracker, fake timers),
+`test/restore-no-cli-776.test.js` (shipped `runRestore`, `openSession`,
+`applyProcessExit` and `restartSessionWithoutCli` in jsdom),
+`test/dom-no-cli-776.test.js` (sidebar slot and lifecycle words),
+`test/session-input-pending-776.test.js` (`inputPendingReply`).
+
 ## Conversation head turn and the single spinner (#625)
 
 `system/informational` transcript records (including the CLI's auto-mode

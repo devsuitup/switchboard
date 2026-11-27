@@ -105,7 +105,7 @@ const { configureWindowsJobHelper } = require('./src/main/terminals/windows-job-
 const { stopProcessTree } = require('./src/main/terminals/stop-process-tree');
 const { JOB_ID_RE, isHostedJob } = require('./src/main/bg-agents/bg-agents-roster');
 const { createTerminalResizeHandler } = require('./src/main/terminals/terminal-resize');
-const { createComposerState } = require('./src/main/terminals/composer-state');
+const { createComposerState, inputPendingReply } = require('./src/main/terminals/composer-state');
 const { createInputAttach, noteInputAttach } = require('./src/main/terminals/input-attach');
 const { handleTerminalInput } = require('./src/main/terminals/terminal-input');
 const { createTriggerContext } = require('./src/main/triggers/trigger-context');
@@ -3826,6 +3826,9 @@ ipcMain.on('terminal-input', (_event, sessionId, data) => {
   }
   handleTerminalInput(activeSessions, sessionId, data, Date.now());
 });
+
+// see docs/session-restore.md ("A restored session whose CLI never connects")
+ipcMain.handle('session-input-pending', (_event, sessionId) => inputPendingReply(activeSessions.get(sessionId)));
 
 // --- IPC: terminal-resize (fire-and-forget) ---
 const handleTerminalResize = createTerminalResizeHandler(activeSessions, undefined, (sessionId, phase, cols, rows, ok) => {
