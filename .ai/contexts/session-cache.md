@@ -165,7 +165,10 @@ it) or when the witness stamp no longer matches the file (`matchesFullRead`,
 with the Codex title snapshot as dependency); it removes the witness after a
 successful read. An untargeted refresh (folder-level watcher event, reconcile,
 project add/unarchive) leaves an unchanged witnessed source unread: without a
-cached row it is skipped, with one it takes the ordinary unchanged/header path
+cached row it is skipped, with one it takes the ordinary unchanged/header path.
+That path never does a full read of it either: the size-pinned full read
+(a growth under a preserved mtime) and the full read requested by a filtered
+message recount are both skipped while the witness matches.
 (#1189; before, every untargeted refresh fully reread every witnessed file).
 Claude sidecars and Codex
 effective titles remain dependencies. Transient I/O errors (including EBUSY,
@@ -1364,6 +1367,22 @@ selects them again instead of trusting a recovery computed without exclusions.
 The startup worker also records each member as a deferred source
 (`bridge-evidence-unknown`), and `deferStartupSources` then withholds the existing
 rows of the group as for any other deferred bridge source.
+This guarantees recovery, not the absence of a temporary over-count: a deferred
+member that is new to the index is still published from its raw read, copied
+messages included, with a null stamp, until the next merge with readable evidence.
+
+Remote mirrors are never part of local startup selection, and the remote indexer
+only rescans folders its sync reports as changed or that are missing from the
+cache, so a null stamp alone would never bring them back. A non-startup scan
+therefore returns the group's IDs as `bridgeDeferred`. `writeScannedFolder` and
+`writeScannedFolderPartial` add a remote folder key (`<alias>::<folder>`) with
+such a result to `bridge_uuid_reindex_folders`, and a remote full scan without
+`bridgeDeferred` clears it as before. The remote indexer reads that setting
+(`listRepairFolderKeys`) and gives each marked folder of its host a full rescan
+on every cycle, even when the mirror did not change, until a scan converges. The
+marker is durable, so a restart in between does not lose the rescan. Local
+non-startup scans do not set the marker; local startup already selects their
+null-stamped rows.
 
 At database open, `bridge_uuid_index_version = 1` records a one-time transaction
 that removes only bridged top-level cache rows, their metrics and their FTS

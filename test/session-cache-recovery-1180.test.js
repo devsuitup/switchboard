@@ -43,6 +43,37 @@ async function failedRead(t, runtime, error) {
   return { f, folder, file, id, result };
 }
 
+test('claude: a witnessed source grown under a preserved mtime is not pinned-reread by an untargeted refresh (#1189)', options, async t => {
+  const f = await base.fixture(t);
+  const file = f.write('old', 'old');
+  f.write('neighbor');
+  const pinned = new Date('2024-06-01T00:00:00.000Z');
+  fs.utimesSync(file, pinned, pinned);
+  assert.equal((await f.cache.populateCacheViaWorker()).ok, true);
+  const indexedSize = f.db.getCachedSession('old').fileSize;
+  fs.appendFileSync(file, JSON.stringify({ type: 'user', cwd: f.root, uuid: 'grown', timestamp: '2024-01-01T00:00:01.000Z', message: { content: 'grown' } }) + '\n');
+  fs.utimesSync(file, pinned, pinned);
+  const inventory = [{ folder: f.folder, meta: f.db.getFolderMeta(f.folder), rows: f.db.getCachedByFolder(f.folder), metadata: [] }];
+  const open = fs.openSync;
+  let bodyReads = 0;
+  const inject = () => t.mock.method(fs, 'openSync', function (target, ...args) {
+    if (target === file && /at (?:Object\.)?readSessionFile /.test(new Error().stack)) { bodyReads++; throw new TypeError('synthetic derivation error'); }
+    return open.call(this, target, ...args);
+  });
+  let patch = inject();
+  const messages = codex.scan({ projectsDir: f.projects, inventory, scope: [f.folder], disabledHarnesses: [] });
+  patch.mock.restore();
+  await f.writer.writeScannedFolderPartial(messages.find(msg => msg.result).result);
+  assert.equal(JSON.parse(f.db.getFolderMeta(f.folder).readFailures || '[]').length, 1, 'the growth is witnessed as a deterministic failure');
+  assert.equal(f.db.getCachedSession('old').fileSize, indexedSize, 'the old row keeps its old size');
+  bodyReads = 0;
+  patch = inject();
+  await f.writer.refreshFolder(f.folder);
+  await f.writer.refreshFolder(f.folder);
+  patch.mock.restore();
+  assert.equal(bodyReads, 0, 'the size-pinned full read must not retry an unchanged witness');
+});
+
 for (const runtime of ['claude', 'codex']) {
   for (const code of ['EBUSY', 'EACCES', 'EPERM', 'EMFILE', 'ENFILE', 'EIO', 'EAGAIN', 'short']) {
     test(`${runtime}: transient ${code} recovers on next start`, options, async t => {

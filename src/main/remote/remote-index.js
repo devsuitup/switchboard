@@ -92,6 +92,7 @@ function buildPlaceholderSession(alias, descriptor) {
  *   transport                        -> see remote-mirror.js
  *   scanFolders({projectsDir, folderPrefix, folders}) -> Promise
  *   listIndexedFolderKeys()          -> every folder key already in the cache
+ *   listRepairFolderKeys()           -> folder keys awaiting a full rescan (bridge_uuid_reindex_folders)
  *   dropFolder(folderKey)            -> remove a folder from cache + search
  *   setRemoteRoots(Map<alias,dir>)   -> tell the cache where each mirror lives
  *   notify()                         -> push a sidebar refresh
@@ -314,8 +315,14 @@ function createRemoteIndexer(ctx) {
           if (parsed.alias === host.alias) indexed.add(parsed.folder);
         }
         const present = mirrorFolders(projectsDir);
+        const repairs = new Set((ctx.listRepairFolderKeys ? ctx.listRepairFolderKeys() : [])
+          .map(parseFolderKey).filter(parsed => parsed.alias === host.alias).map(parsed => parsed.folder));
         for (const folder of present) {
           if (!indexed.has(folder)) toScan.add(folder);
+          if (repairs.has(folder)) {
+            fullRepairs.add(folder);
+            toScan.add(folder);
+          }
           const key = joinFolderKey(host.alias, folder);
           if (checkedGhostFolders.has(key) || !ctx.getCachedByFolder) continue;
           const ghost = ctx.getCachedByFolder(key).some(row => !row.parentSessionId

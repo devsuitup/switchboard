@@ -663,7 +663,7 @@ function refreshFolder(folder, opts = {}) {
       continue; // unchanged, skip
     }
 
-    const fullReadPinned = changedSize && !linked && cachedEntry.fileMtime === fileMtime && fileSize <= continuationBytesLeft;
+    const fullReadPinned = (!failure || retryFailure) && changedSize && !linked && cachedEntry.fileMtime === fileMtime && fileSize <= continuationBytesLeft;
     let pinnedRead = null;
     if (fullReadPinned) {
       continuationBytesLeft = 0;
@@ -694,7 +694,7 @@ function refreshFolder(folder, opts = {}) {
       collector.accounted.add(relativeFile);
       if (linked) linkedVersions.set(cachedDbId, { stat, filePath, relativeFile });
       if (count?.needsFullRead) {
-        const s = fullReadPinned ? null : readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
+        const s = fullReadPinned || failure ? null : readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
         if (s) {
           newFileReads.push(s);
           countRecountMtimes.set(s.sessionId, fileMtime);
@@ -1572,10 +1572,17 @@ function writeScannedFolder(r, unverifiedLocalFolder = null) {
     }));
   }
   setFolderMeta(folder, projectPath, indexMtimeMs, r.readFailures);
-  if (!r.startup && setSetting && pendingRepairFolders().includes(folder)) {
+  if (!rememberRemoteBridgeDeferral(r) && !r.startup && setSetting && pendingRepairFolders().includes(folder)) {
     setSetting('bridge_uuid_reindex_folders', pendingRepairFolders().filter(key => key !== folder));
   }
   return sessions.length;
+}
+
+// see .ai/contexts/session-cache.md ("Bridge history divergence")
+function rememberRemoteBridgeDeferral(r) {
+  if (r.startup || !r.bridgeDeferred?.length || parseFolderKey(r.folder).alias === null || !setSetting) return false;
+  if (!pendingRepairFolders().includes(r.folder)) setSetting('bridge_uuid_reindex_folders', [...pendingRepairFolders(), r.folder]);
+  return true;
 }
 
 /** Persist one `{type:'folder', result:{partial:true}}` file-subset scan
@@ -1607,6 +1614,7 @@ function writeScannedFolderPartial(r) {
     deleteSearchSession(sessionId);
   }
   setFolderMeta(folder, projectPath, indexMtimeMs, r.readFailures);
+  rememberRemoteBridgeDeferral(r);
   return sessions.length;
 }
 

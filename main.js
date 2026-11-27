@@ -726,6 +726,7 @@ const remoteIndexer = createRemoteIndexer({
   scanFolders: scanFoldersViaWorker,
   refreshHeadTurns: alias => refreshRemoteHeadTurns(alias),
   listIndexedFolderKeys: () => [...getAllFolderMeta().keys()],
+  listRepairFolderKeys: () => { const folders = getSetting('bridge_uuid_reindex_folders'); return Array.isArray(folders) ? folders : []; },
   getCachedByFolder,
   dropFolder: async folderKey => await writer.dropRemoteFolder(folderKey),
   setRemoteRoots,
