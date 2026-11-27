@@ -2642,12 +2642,13 @@ function rebindSidebarEvents(projects) {
         e.stopPropagation();
         const newVal = session.archived ? 0 : 1;
         if (newVal) {
-          if (archivingSessionIds.has(session.sessionId)) return;
-          setArchiveBusy(session.sessionId, true);
+          const sessionId = session.sessionId;
+          if (archivingSessionIds.has(sessionId)) return;
+          setArchiveBusy(sessionId, true);
           try {
             await archiveSessionRows([session]);
           } finally {
-            setArchiveBusy(session.sessionId, false);
+            setArchiveBusy(sessionId, false);
           }
           return;
         }

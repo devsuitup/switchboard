@@ -2091,7 +2091,16 @@ entry in that inventory: either the call chain from `rekeySessionTab` or
 `rekeyActivityState` that moves it, which the test checks against the source,
 or a named reason it stays under the old id. Not detected: a top-level `let`
 declared without an initializer and assigned later, and containers nested
-inside an object or a closure.
+inside an object or a closure. The chain check is syntactic: it proves each
+function names the next one, not that the call runs, so a call made
+unreachable behind a condition still passes it.
+
+`archivingSessionIds` is an archive lock, not moved. The row archive button
+captures the session id before awaiting and releases that id, so a re-key
+while its confirmation is open no longer leaves the original transcript's
+button disabled. The project archive still releases the current
+`session.sessionId` of each session after its stop awaits: a re-key during
+those awaits leaves the original id locked until the renderer reloads.
 
 Two source-keyed stores stay under the old id without a visible effect.
 `sessionExits` (`process-exit.js`) records the PTY that ended under an id:
@@ -2108,7 +2117,9 @@ after each await and in the error path before writing the shell label,
 including the automatic-profile hide operation. `rekeySessionTab` renames that
 object in place before selecting the new id, so a re-key of the active session
 mid-await still writes the label, while a switch to another session drops the
-stale reply.
+stale reply. Known limit: the guard compares ids, not calls, so after a
+switch from A to B and back to A, a late rejection of A's first call still
+hides the label A's newer call wrote.
 
 For a proven background move, capture map key/object, effective source id,
 target/job, folder and exit drain before invoking metadata or the confirmation
