@@ -307,8 +307,9 @@ commands, with the ancestry checks around them, are in
    the draft's assets. CI refuses to publish if it cannot read the releases,
    and never writes to a published release. Once published, add or replace an
    asset by hand with `gh release upload --repo devsuitup/switchboard --clobber` (see below), or tag a new
-   version. Delete the draft or move the tag only while the release is still a
-   draft. The workflow token has `contents: read`; only the publish job has
+   version. A draft may be deleted while it is still a draft; a tag is never
+   moved or deleted ([Fork release-flow gotchas](#fork-release-flow-gotchas)).
+   The workflow token has `contents: read`; only the publish job has
    `contents: write`, and no checkout persists credentials.
 
 5. **Publish a beta draft**, after checking its assets and its flag:
@@ -463,9 +464,15 @@ through the same gate. Beta installs can still receive a withdrawn release, now 
   commit on the release branch, which is what the branch ships. A tag on the
   bump branch's own commit is not the release branch's tip, names a different
   tree whenever the release branch held something the bump branch did not, and
-  points at nothing that was merged if the PR changes before it lands. If a
-  build already started from such a tag, cancel it (`gh run cancel --repo devsuitup/switchboard`), delete the tag locally
-  and on `origin`, and tag the merged commit.
+  points at nothing that was merged if the PR changes before it lands.
+- **A wrong tag is never reused.** Cancel its build
+  (`gh run cancel <id> --repo devsuitup/switchboard`); never publish its draft,
+  and delete the draft release if the build created one
+  (`gh release delete <tag> --repo devsuitup/switchboard`, which leaves the tag
+  in place); then tag the right commit under the next version (the next beta
+  number), whose version bump goes through the normal cut. The admin bypass of
+  `release-tags` technically allows deleting or moving a tag; the project does
+  not use it for release tags.
 - **Unsigned macOS builds need `"mac": {"identity": null}` and
   `"notarize": false` in `package.json`.** electron-builder reads a `CSC_LINK`
   that is set but empty as a certificate path; `stat('')` resolves to the
