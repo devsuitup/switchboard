@@ -196,6 +196,15 @@ resize, close and a late spawn refusal still address the existing shell. Only a
 new shell derives `panel:<current owner>`; renaming an existing renderer entry
 alone would disconnect it from main-process output and stop routing.
 
+Known limit: main's panel record keeps the spawn-time owner in `panelFor`;
+`publishRekey` (`session-transitions.js`) moves `activeSessions` but not that
+field. After the owner is re-keyed, clickable paths in the shell
+(`resolveTerminalPathsCwd`, `src/main/terminals/terminal-path-target.js`)
+resolve the old owner id, which is no longer in `activeSessions`, so the cwd
+comes from the old transcript's recorded working directory, and the answer is
+`no-cwd` when that cannot be resolved. Input, output, resize and close are not
+affected. Rewriting `panelFor` in `publishRekey` would remove the limit.
+
 | Event | The shell |
 |---|---|
 | Session switch | Kept running. The container is unmounted (`.visible` off, `panelMounted` false), output accumulates, and replays in one write on return. |

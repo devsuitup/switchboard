@@ -172,6 +172,24 @@ test('rekey preserves a stalled-frame fallback and destruction cancels both call
   } finally { h.destroy(); }
 });
 
+test('a rekey inside an open sync update keeps it buffered on its safety timer until the update ends', () => {
+  const h = setup();
+  try {
+    h.send('\x1b[?2026hhalf');
+    const entry = h.window.openSessions.get(h.window.activeSessionId);
+    h.window.openSessions.delete(h.window.activeSessionId);
+    h.window.openSessions.set('new-id', entry);
+    h.window.rekeyTerminalBuffers(h.window.activeSessionId, 'new-id');
+    h.window.activeSessionId = 'new-id';
+    assert.equal(h.frames.size, 0, 'no frame may flush half of the update');
+    assert.deepEqual([...h.timers.values()].map(timer => timer.ms), [500]);
+    h.send(' frame\x1b[?2026l');
+    assert.equal(h.spies.write, 0);
+    [...h.frames.values()].forEach(frame => frame());
+    assert.deepEqual(h.spies.writes, ['\x1b[?2026hhalf frame\x1b[?2026l']);
+  } finally { h.destroy(); }
+});
+
 test('ordinary animation frames preserve cadence and cancel their fallback', () => {
   const h = setup();
   try {

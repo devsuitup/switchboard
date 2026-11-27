@@ -2073,17 +2073,42 @@ moves the file panel, written activity, session metadata, PTY generation/open
 state, restore bookkeeping, panel-shell ownership, terminal buffers and grid
 card before selecting the new id. Activity keeps the event-specific reset or
 preservation policy. The terminal's write buffer is rescheduled under the new
-id; hidden replay data and LRU position survive unchanged.
+id; a buffer inside an open synchronized update keeps waiting on its 500 ms
+safety timer instead of flushing half the update on the next frame. Hidden
+replay data and LRU position survive unchanged.
+
+Initial detection has no sender: main never emits `session-detected`
+(`ipc-bridge.md`, "Busy-state reconciliation"). The `onSessionDetected`
+handler and the `detected` cases of the re-key tests exercise a branch no
+running app reaches; they are kept so the handler stays correct if the
+channel returns.
 
 `test/session-rekey-renderer.test.js` loads the shipped event handlers and
-renderer modules, exercises all five transitions, and enumerates top-level
-terminal/panel containers with an AST. A new Map, Set or array needs an explicit
-policy in that inventory; WebGL warmth holds entry objects, and redraw markers
-are immutable configuration rather than session keys.
+renderer modules, exercises all five transitions, and enumerates every
+top-level container of every `public/*.js` with an AST: `new Map/Set/WeakMap/WeakSet`,
+array and object literals, and `Object.create`. Each one needs an explicit
+entry in that inventory: either the call chain from `rekeySessionTab` or
+`rekeyActivityState` that moves it, which the test checks against the source,
+or a named reason it stays under the old id. Not detected: a top-level `let`
+declared without an initializer and assigned later, and containers nested
+inside an object or a closure.
 
-`showTerminalHeader` captures the session id before awaiting settings/profiles.
-It checks active ownership after each await and in the error path before writing
-the shell label, including the automatic-profile hide operation.
+Two source-keyed stores stay under the old id without a visible effect.
+`sessionExits` (`process-exit.js`) records the PTY that ended under an id:
+main sends `process-exited` for the new id once it has re-keyed, so a live
+fork or `/clear` never leaves a record under the old one, and a record left
+by a background handoff describes the old process truthfully; opening the new
+id forgets its own record. `localTranscriptStates` and its timers
+(`local-transcript-adapter.js`) exist only for ids without a local PTY, and
+`localTranscriptPtyTakeover` empties them when a PTY appears, so a re-keyed
+tab has none to move.
+
+`showTerminalHeader` compares the active id with the live `session.sessionId`
+after each await and in the error path before writing the shell label,
+including the automatic-profile hide operation. `rekeySessionTab` renames that
+object in place before selecting the new id, so a re-key of the active session
+mid-await still writes the label, while a switch to another session drops the
+stale reply.
 
 For a proven background move, capture map key/object, effective source id,
 target/job, folder and exit drain before invoking metadata or the confirmation
