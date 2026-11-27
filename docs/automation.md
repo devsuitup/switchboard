@@ -1088,7 +1088,8 @@ that sent `/compact` and timed out waiting for the session reports
 Read `steps[]`, not the count. It holds the steps the chain **reached**. A step
 held before its write — its politeness wait never found a free prompt, the CLI
 never got ready, or its deadline passed first — has an entry too, with
-`submitted: "no"` and no `text_written` field. A step cut off during its own
+`submitted: "no"` and a `text_written` field that is absent or `false`; a
+step whose delivery deadline passed at the guarded write is in this case. A step cut off during its own
 write, when ownership or the pinned generation changed between the text and
 the Enter, also ends with `submitted: "no"`, but its entry carries
 `text_written: true` and `enter_written: false`: its text may still sit in the

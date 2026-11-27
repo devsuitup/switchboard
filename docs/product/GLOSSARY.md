@@ -178,9 +178,15 @@ concept. Each entry gives:
   refused rows with reasons. Active sessions, all open tabs including closed
   ones, sessions running here or waiting to restore, pinned sessions, sessions
   live elsewhere, remote sessions alive on their host, and rows that would
-  still need a process stopped stay unarchived; it never stops a process. An
-  empty eligible set asks nothing and shows a **Nothing eligible to archive.**
-  notice; the button is disabled only while an archive of that list runs (#819; `docs/product/UI-PATTERNS.md` §2.3).
+  still need a process stopped stay unarchived; it never stops a process. The
+  button is disabled while an archive of that list runs, and whenever every
+  older row already has a local keep reason (on screen, tab open here, running
+  here, waiting to restore, pinned, or remote and alive on its host;
+  `olderArchiveKeepReason`). When it is enabled but the click's preflight,
+  which also asks whether a session is live elsewhere and whether archiving
+  would stop a process, finds no eligible row, nothing is asked and a
+  **Nothing eligible to archive.** notice lists the kept and refused rows
+  (#819; `docs/product/UI-PATTERNS.md` §2.3).
 
 ### Find in messages
 

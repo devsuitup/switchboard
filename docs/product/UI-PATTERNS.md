@@ -206,8 +206,12 @@ the session on screen, rows with a tab open here, running here or waiting to
 restore, pinned rows, sessions live elsewhere, remote sessions alive on their
 host, and any row whose archive would still have a process to stop ("running
 or attached"). The question lists the rows to archive, kept and refused, and is
-not dangerous. With no eligible row, no question is asked: an error notice
-says **Nothing eligible to archive.** with the kept and refused lists.
+not dangerous. The button itself is disabled while an archive of the list
+runs and whenever every older row already has a local keep reason
+(`olderArchiveKeepReason`, checked when the list is rendered). When the
+asynchronous preflight on click still finds no eligible row (live elsewhere,
+running or attached), no question is asked: an error notice says **Nothing
+eligible to archive.** with the kept and refused lists.
 Eligibility is checked again for each row just before it is archived; a row
 that became ineligible is kept. Refused rows keep persistent errors while
 eligible rows archive, and one notice lists the kept rows. Undo restores the

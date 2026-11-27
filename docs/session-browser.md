@@ -189,9 +189,13 @@ the older rows in one go, after one confirmation that lists the rows to
 archive, the rows kept and the rows refused, with reasons. It never stops a
 process: the session on screen, rows with a tab open here, running here or
 waiting to restore, pinned rows, sessions live elsewhere, remote sessions alive
-on their host, and any row that would need a process stopped are kept. With
-no eligible row, it asks nothing and a notice says **Nothing eligible to
-archive.** Undo restores the archived rows.
+on their host, and any row that would need a process stopped are kept. The
+button is disabled when every older row is already kept for one of the
+reasons Switchboard can see at once (on screen, tab open, running here,
+waiting to restore, pinned, remote and alive). If it is enabled but the checks
+made on click (live elsewhere, a process to stop) leave no eligible row, it
+asks nothing and a notice says **Nothing eligible to archive.** Undo restores
+the archived rows.
 
 ### Sessions started by a program
 

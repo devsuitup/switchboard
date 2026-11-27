@@ -13,11 +13,19 @@ On the left, the header above the terminal shows:
   Waiting for input, Idle… — see [Status Indicators](notifications.md#the-icon)).
   Its tooltip and accessible name give the activity and the lifecycle in words,
   for example `Idle · Open here` or `Working · Attached here · keeps running
-  in the background`. Once the process has ended, the lifecycle reads `Stopped`
-  after a Stop you asked for; `Detached` after leaving an attached background
-  session; `Not running` when the process is gone with no recorded exit;
-  `Killed (SIGKILL)` (or another signal) when a signal ended it without a Stop;
-  `Exited (code N)` when it exited on its own;
+  in the background`. Without a terminal open here, the lifecycle is the first
+  of these that applies (`lifecycleLabel`, `public/process-exit.js`): `Job
+  done`, `Job stopped` or `Job failed` for a background job the daemon no
+  longer hosts; `Running in background` for a job it still hosts (a detached
+  attach included); `Running elsewhere` (or `Running on <host>`) when the CLI
+  reports the process alive; `Not running` when it is gone with no recorded
+  exit, or after a detach once the process is known to be gone; then the
+  recorded exit — `Detached` after leaving an attach, `Stopped` after a Stop you
+  asked for, `Killed (SIGKILL)` (or another signal) when a signal ended it,
+  `Exited (code N)` when it exited on its own. The line written into the
+  terminal when its process ends (*session stopped*, *session detached*,
+  *session exited (code N)*…) always reports how this terminal's process
+  ended, whatever the header says;
 - the session's name, the title the program sets on the terminal (or Claude's
   latest notification), the session id, and the shell profile's name when it is
   not **Auto**.
