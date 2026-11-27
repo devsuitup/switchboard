@@ -727,9 +727,14 @@ stale `(sessionId, pid)` pairs while the 3 s table cache expires, a refresh is i
 flight, or a table read fails (#687). An unreadable or empty table does not
 replace that set or notify projects. This keeps a rejected reused PID from
 reappearing during an ordinary refresh and prevents repeated read failures
-from alternating the sidebar verdict. Only a successful fresh table recomputes
+from alternating the sidebar verdict. A successful fresh table recomputes
 the set; an unchanged set is silent, while a newly valid writer can return and
-notify projects. The fallback is scoped to sidebar exclusion, leaving delivery
+notify projects. A writer the fresh table rejects after that read, such as one
+reseeded by `ensureWatching()` after a watcher error, joins the set silently,
+since the caller already excludes it (#695). A retained pair whose descriptor
+mtime is later than the last successful read's `observedAt` leaves the set: a
+restart under the same session and PID is unknown, not stale, until the next
+successful read decides again. The fallback is scoped to sidebar exclusion, leaving delivery
 and ownership checks to report their existing unknown result without fresh proof.
 
 The Agents view (`.ai/contexts/bg-agents.md`) reads the same

@@ -310,6 +310,67 @@ for (const failure of ['throws', 'null', 'empty']) {
   });
 }
 
+function bootReusedPid(t, readsFail) {
+  const clock = { now: Date.now() + 10000 };
+  const procStart = '134000000000000000';
+  const h = bootMain(t, {
+    descriptor: { procStart, pidDomain: 'win32:anchor', kind: 'bg', jobId: 'aaaaaaaa' },
+    platform: 'win32', readParentPid: undefined, readProcStart: () => procStart, now: () => clock.now,
+    readProcessTable: async () => {
+      if (readsFail()) throw new Error('process table unavailable');
+      return new Map([[4242, { ppid: 1, created: '134000000001000000' }]]);
+    },
+  });
+  return { ...h, clock, procStart };
+}
+
+test('a reused PID first rejected by a fresh table after its last read stays excluded once reads fail (#695)', async t => {
+  let failed = false;
+  const h = bootReusedPid(t, () => failed);
+  cli.stop();
+  await cli.refreshProcessTable({ force: true });
+  assert.ok(cli.ensureWatching());
+  let statusChanges = 0;
+  t.after(cli.onStatusesChanged(() => { statusChanges++; }));
+  assert.equal(cli.getSidebarDescriptors({ allWriters: true }).length, 0, 'the fresh table rejects the reseeded writer');
+  assert.equal(cli.getSidebarDescriptors().length, 0);
+  failed = true;
+  h.clock.now += cli.PROCESS_TABLE_TTL_MS + 1;
+  await cli.refreshProcessTable();
+  assert.equal(cli.getSidebarDescriptors({ allWriters: true }).length, 0, 'the rejection seen on the fresh table outlives a failed read');
+  assert.equal(cli.getSidebarDescriptors().length, 0);
+  assert.equal(cli.getStatus('A'), undefined);
+  assert.equal(statusChanges, 0, 'retaining an already excluded row notifies nobody');
+});
+
+test('a descriptor rewritten after the last good table read leaves the retained exclusion while reads fail (#695)', async t => {
+  let failed = false;
+  const h = bootReusedPid(t, () => failed);
+  await cli.refreshProcessTable();
+  assert.equal(cli.getSidebarDescriptors().length, 0);
+  failed = true;
+  h.clock.now += cli.PROCESS_TABLE_TTL_MS + 1;
+  await cli.refreshProcessTable();
+  assert.equal(cli.getSidebarDescriptors().length, 0, 'an unchanged descriptor stays excluded after a failed read');
+  const file = path.join(h.dir, '4242.json');
+  const descriptor = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const rewrittenAt = (h.clock.now + 1000) / 1000;
+  await descriptorBatch(t, () => {
+    fs.writeFileSync(file, JSON.stringify({ ...descriptor, status: 'waiting' }));
+    fs.utimesSync(file, rewrittenAt, rewrittenAt);
+  });
+  const rows = cli.getSidebarDescriptors();
+  assert.equal(rows.length, 1, 'a restart under the same session and PID is no longer hidden by the old verdict');
+  assert.equal(rows[0].status, 'waiting');
+  h.clock.now += cli.PROCESS_TABLE_TTL_MS + 1;
+  await cli.refreshProcessTable();
+  assert.equal(cli.getSidebarDescriptors().length, 1, 'a later failed read does not restore the dropped verdict');
+  failed = false;
+  h.clock.now += cli.PROCESS_TABLE_TTL_MS + 1;
+  await cli.refreshProcessTable();
+  assert.equal(cli.getSidebarDescriptors().length, 0, 'a successful read after the rewrite decides again');
+});
+
 test('576r2 minor 1: unchanged descriptor writes do not push but status changes and new sessions do', { timeout: 8000 }, async t => {
   const h = bootMain(t);
   const file = path.join(h.dir, '4242.json');
