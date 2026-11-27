@@ -388,8 +388,11 @@ async function workerEvidence(job, allStates = false) {
     || !Number.isInteger(first.roster.supervisorPid) || first.roster.supervisorPid <= 0
     || typeof first.tableEntry !== 'function' || first.tableEntry(first.roster.supervisorPid)
     || !(workerTimestamp(first.roster.updatedAt) >= workerTimestamp(job.updatedAt))) return evidence;
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  if (gen !== generation) return 'unknown';
+  for (let round = 0, wait = 1000; round < 2 && wait > 0; round++) {
+    await new Promise(resolve => setTimeout(resolve, wait));
+    if (gen !== generation) return 'unknown';
+    wait = Math.min(1000, first.observedAt + 1000 - Date.now());
+  }
   const confirmed = classifyWorkerLiveness(job, first, await workerSample(true));
   return gen !== generation || confirmed === 'dead' && !unchangedWorkerJob(job) ? 'unknown' : confirmed;
 }

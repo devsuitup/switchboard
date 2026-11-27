@@ -604,7 +604,8 @@ the glyph. Dormant changes repaint through `syncDormantRow`. The status bar
 counts `N open here`; the filter selects the same PTY population. Idle remains
 a filled dot; open-here Idle adds a two-pixel satellite below it using shadow
 geometry, and Not running scales the dot to a six-by-two-pixel dash without
-changing its layout box, at half opacity. Waiting and dormant keep their
+changing its layout box, opaque, in the dim neutral colour
+(`--text-neutral-dim`). Waiting and dormant keep their
 separate hollow rings.
 Stop visibility and dispatch retain their existing PTY/live-row rule.
 The snapshot also sets `has-busy-agents` on the card so the shared CSS rule
@@ -1765,6 +1766,14 @@ Selectors depend only on `session-icon--<rung>`, with no layout measurement.
 | idle | `session-icon--idle` | no glyph; green with `.running` — a row or grid card whose PTY is here, at rest | sidebar, grid, header and live idle Agents jobs |
 | stale | `session-icon--stale` | opaque grey dash | finished background jobs without a live descriptor, across session surfaces |
 | archived | `session-icon--archived` | base filled dot at 0.5 opacity | reserved, unused |
+| (scheduled run) | `session-icon--scheduled` | orange `--state-waiting` `⏱` glyph, no fill, halo or border | sidebar rows and grid cards of a local row with a running schedule |
+
+`session-icon--scheduled` is the ninth slot class and is not a priority rung:
+`renderSessionIcon` never returns it. `scheduledRunIcon` (`public/session-activity-dom.js`)
+replaces the winning rung's slot class, glyph and title with it whenever
+`row.runningScheduleIds` is non-empty and the row is not remote, so it wins over
+every rung while the run lasts. The title reads "Scheduled run in progress" and
+no lifecycle segment is added.
 
 The busy braille animation pauses while the window is hidden or unfocused
 (#544). `session-activity-dom.js` reuses `document.hasFocus()` and native
@@ -1778,8 +1787,9 @@ is both visible and focused; see ADR 0002. The regression is
 `test/dom-busy-spinner-pause.test.js`.
 
 `--state-waiting` lives in `:root` and reuses the existing attention orange;
-the attention slot and summary also reference it. The UI has one shared dark
-palette, no light-theme overrides; terminal themes change xterm only. Waiting's
+the attention slot and summary also reference it. The light theme
+(`:root[data-theme="light"]`) overrides it with a darker orange, as it does the
+rest of the palette; terminal themes change xterm only. Waiting's
 hollow ring differs from idle's filled dot without relying on colour or opacity.
 Green retains its existing live-process meaning through `.running`.
 
@@ -1816,7 +1826,7 @@ there is no header or the session is unrelated.
 
 `session-activity-dom.js` is the only file that writes the sidebar slot:
 
-- `writeIconSlot(el, icon, title, text)` clears any previous `session-icon--*` class
+- `writeIconSlot(el, icon, title, text, session, lifecycle)` clears any previous `session-icon--*` class
   (robust to a rung's `slotClasses` shrinking or changing shape — a plain
   diff of the old vs. new class would also work but this needs no diffing),
   applies `icon.slotClasses`, and sets `el.title`/`el.dataset.glyph` from
@@ -1889,10 +1899,10 @@ needs to re-derive it: every rung's visual now keys on its own
 
 ```css
 .session-icon--busy { background: transparent !important; animation: none !important; ... }
-.session-icon--busy::before { content: "\280B"; animation: braille-spin ...; color: #4fc3f7; ... }
+.session-icon--busy::before { content: "\280B"; animation: braille-spin ...; color: var(--link); ... }
 .session-icon--agents-busy { background: transparent !important; ... }
-.session-icon--agents-busy::before { content: "\283F"; color: #8088ff; ... }
-.session-icon--response-ready { background: #4fc3f7 !important; ... }
+.session-icon--agents-busy::before { content: "\283F"; color: var(--accent); ... }
+.session-icon--response-ready { background: var(--link) !important; ... }
 .session-icon--attention { background: var(--state-waiting) !important; ... }
 ```
 
@@ -1901,25 +1911,34 @@ sets) carries `!important` on the active rungs — busy/attention/response-ready
 agentsBusy rows are very often also `.running` (a busy session almost always
 has a live PTY), and unlike the old code the rung is now a single class with
 no extra row-ancestor classes to lean on for specificity. Waiting similarly
-overrides the running fill and halo. Idle has no override; stale and reserved
-archived only apply opacity and do not need `!important`.
+overrides the running fill and halo. Idle has no override; stale (dim
+background, full opacity, dash scale) and reserved archived (opacity) do not
+use `!important`.
 
-**`has-busy-agents` is the one exception, and it stays row-level on purpose**
-(point 1 of the original brief: "`.has-busy-agents` stays a row-level class
-— a tint — but its glyph rung lives in the slot when nothing higher is
-active"). A busy session with live subagents needs the busy spinner tinted
+**`has-busy-agents` is the one exception** (point 1 of the original brief:
+"`.has-busy-agents` stays a row-level class — a tint — but its glyph rung lives
+in the slot when nothing higher is active"). It is a row class on sidebar rows
+and grid cards; the terminal header has no row, so `paintTerminalHeaderStatus`
+sets it on the `#terminal-header-status` icon itself (`setHasBusyAgents`), which
+the `.session-icon--busy.has-busy-agents::before` selector below covers. A busy session with live subagents needs the busy spinner tinted
 violet instead of its default blue; since `agentsBusy` never wins the JS
 priority race while `busy` is active, there is no `session-icon--agents-busy`
 class to key on in that case — so the tint is a **plain compound selector**,
 row tint class + slot rung class, not a priority tie-break:
 
 ```css
-.session-item.has-busy-agents .session-icon--busy::before { color: #8088ff; }
+.session-icon--busy.has-busy-agents::before,
+.grid-card.has-busy-agents .session-icon--busy::before,
+.session-item.has-busy-agents .session-icon--busy::before { color: var(--accent); }
 ```
 
-This is the only place a row-level class still appears next to `.session-icon`
-in the slot's own visual rules, and `test/session-icon-slot-css-boundary.test.js`
-allows it explicitly (it only forbids `:not(`, not row classes generally) —
+Other ancestor selectors on the slot do not arbitrate rungs either:
+`.session-item.dormant .session-icon` (the dormant ring),
+`.busy-spinners-paused .session-icon--busy::before` (the pause) and
+`.session-item.is-terminal .session-icon.running` /
+`.session-icon--idle.running` (the terminal-row halo).
+`test/session-icon-slot-css-boundary.test.js` allows the tint and these
+selectors (it only forbids `:not(`, not row classes generally) —
 the boundary is "no priority re-arbitration in CSS", not "no row class may
 ever touch the slot's selector".
 
@@ -2073,17 +2092,54 @@ moves the file panel, written activity, session metadata, PTY generation/open
 state, restore bookkeeping, panel-shell ownership, terminal buffers and grid
 card before selecting the new id. Activity keeps the event-specific reset or
 preservation policy. The terminal's write buffer is rescheduled under the new
-id; hidden replay data and LRU position survive unchanged.
+id; a buffer inside an open synchronized update keeps waiting on its 500 ms
+safety timer instead of flushing half the update on the next frame. Hidden
+replay data and LRU position survive unchanged.
+
+Initial detection has no sender: main never emits `session-detected`
+(`ipc-bridge.md`, "Busy-state reconciliation"). The `onSessionDetected`
+handler and the `detected` cases of the re-key tests exercise a branch no
+running app reaches; they are kept so the handler stays correct if the
+channel returns.
 
 `test/session-rekey-renderer.test.js` loads the shipped event handlers and
-renderer modules, exercises all five transitions, and enumerates top-level
-terminal/panel containers with an AST. A new Map, Set or array needs an explicit
-policy in that inventory; WebGL warmth holds entry objects, and redraw markers
-are immutable configuration rather than session keys.
+renderer modules, exercises all five transitions, and enumerates every
+top-level container of every `public/*.js` with an AST: `new Map/Set/WeakMap/WeakSet`,
+array and object literals, and `Object.create`. Each one needs an explicit
+entry in that inventory: either the call chain from `rekeySessionTab` or
+`rekeyActivityState` that moves it, which the test checks against the source,
+or a named reason it stays under the old id. Not detected: a top-level `let`
+declared without an initializer and assigned later, and containers nested
+inside an object or a closure. The chain check is syntactic: it proves each
+function names the next one, not that the call runs, so a call made
+unreachable behind a condition still passes it.
 
-`showTerminalHeader` captures the session id before awaiting settings/profiles.
-It checks active ownership after each await and in the error path before writing
-the shell label, including the automatic-profile hide operation.
+`archivingSessionIds` is an archive lock, not moved. The row, group and
+project archive actions capture the session ids they lock before awaiting
+and release those ids, never the `session.sessionId` read again afterwards:
+`rekeySessionTab` renames that object in place, so a re-key while a
+confirmation or a stop is pending would otherwise leave the original
+transcript's Archive button disabled until the renderer reloads.
+`test/dom-archive-busy-rekey.test.js` pins the row and project paths.
+
+Two source-keyed stores stay under the old id without a visible effect.
+`sessionExits` (`process-exit.js`) records the PTY that ended under an id:
+main sends `process-exited` for the new id once it has re-keyed, so a live
+fork or `/clear` never leaves a record under the old one, and a record left
+by a background handoff describes the old process truthfully; opening the new
+id forgets its own record. `localTranscriptStates` and its timers
+(`local-transcript-adapter.js`) exist only for ids without a local PTY, and
+`localTranscriptPtyTakeover` empties them when a PTY appears, so a re-keyed
+tab has none to move.
+
+`showTerminalHeader` compares the active id with the live `session.sessionId`
+after each await and in the error path before writing the shell label,
+including the automatic-profile hide operation. `rekeySessionTab` renames that
+object in place before selecting the new id, so a re-key of the active session
+mid-await still writes the label, while a switch to another session drops the
+stale reply. Known limit: the guard compares ids, not calls, so after a
+switch from A to B and back to A, a late rejection of A's first call still
+hides the label A's newer call wrote.
 
 For a proven background move, capture map key/object, effective source id,
 target/job, folder and exit drain before invoking metadata or the confirmation

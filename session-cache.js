@@ -422,11 +422,17 @@ function sidebarRowState(row) {
 }
 
 // see .ai/contexts/session-cache.md ("Harness folders")
-function refreshHarnessFolder(harness, folder) {
+function refreshHarnessFolder(harness, folder, opts = {}) {
   const dir = harness.folderPath(folder);
   if (!dir || !fs.existsSync(dir)) return dropFolderRows(folder, { search: true });
   const cached = new Map(getCachedByFolder(folder).map(row => [row.sessionId, row]));
-  const failures = readFailures(getFolderMeta?.(folder));
+  const failures = readFailures(getFolderMeta?.(folder), harness.id);
+  let titleSnapshot;
+  const unchangedFailure = (file, failure) => {
+    if (opts.files instanceof Set && opts.files.has(path.basename(file))) return false;
+    if (titleSnapshot === undefined) titleSnapshot = harness.readTitleSnapshot ? harness.readTitleSnapshot() : null;
+    return matchesFullRead(file, failure.stamp, harness.id, path.basename(file), titleSnapshot);
+  };
   const titles = harness.readSessionTitles ? harness.readSessionTitles() : null;
   const files = harness.listTranscripts(dir);
   const current = new Set();
@@ -441,7 +447,8 @@ function refreshHarnessFolder(harness, folder) {
     try { stat = fs.statSync(file); } catch { continue; }
     const row = cached.get(sessionId);
     const title = titles instanceof Map ? titles.get(sessionId) || null : row?.aiTitle || null;
-    if (!failure && row && row.fileMtime === stat.mtime.toISOString() && (row.fileSize ?? null) === stat.size && (row.aiTitle || null) === title) continue;
+    if (failure ? unchangedFailure(file, failure)
+      : row && row.fileMtime === stat.mtime.toISOString() && (row.fileSize ?? null) === stat.size && (row.aiTitle || null) === title) continue;
     const session = harness.readSessionFile(file, folder, null);
     if (!session) continue;
     failures.delete(path.basename(file));
@@ -494,7 +501,7 @@ function harnessReconciliationFolders(metaMap) {
 function refreshFolder(folder, opts = {}) {
   if (pendingRepairFolders().includes(folder)) cacheBackend.invalidateFullIndex?.(folder);
   const harness = harnessForFolder(folder);
-  if (harness.folderPrefix) return refreshHarnessFolder(harness, folder);
+  if (harness.folderPrefix) return refreshHarnessFolder(harness, folder, opts);
   opts = continuationRefreshScope(folder, opts);
   const collector = opts.continuationCollector || { deferred: new Set(), accounted: new Set() };
   const clearDeferred = () => {
@@ -626,6 +633,8 @@ function refreshFolder(folder, opts = {}) {
     const relativeFile = path.relative(folderPath, filePath);
     const relativeSource = relativeFile.split(path.sep).join('/');
     const failure = failures.get(relativeSource);
+    const retryFailure = !!failure && (targeted || !matchesFullRead(filePath, failure.stamp, 'claude', relativeSource));
+    if (failure && !retryFailure && !cachedEntry) { collector.accounted.add(relativeFile); continue; }
     const linked = cachedEntry && !parentSessionId && linkedContinuation(cachedEntry);
     const changedLinked = linked && changedContinuation(cachedEntry, filePath, stat);
     const plan = opts.preparedContinuations?.get(cachedDbId);
@@ -648,15 +657,19 @@ function refreshFolder(folder, opts = {}) {
     }
     const changedIndex = snapshot ? !sameContinuationStamp(snapshot, stat)
       : persistedStamp && !matchesContinuationStamp(persistedStamp, stat);
-    if (!failure && !changedLinked && !changedSize && cachedEntry && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
+    if (!retryFailure && !changedLinked && !changedSize && cachedEntry && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
       && (!cachedEntry.continuationIndex || !changedIndex || parentSessionId || cachedEntry.parentSessionId)) {
       collector.accounted.add(relativeFile);
       continue; // unchanged, skip
     }
 
-    const fullReadPinned = changedSize && !linked && cachedEntry.fileMtime === fileMtime && fileSize <= continuationBytesLeft;
-    if (fullReadPinned) continuationBytesLeft = 0;
-    if (!failure && cachedEntry && !fullReadPinned) {
+    const fullReadPinned = (!failure || retryFailure) && changedSize && !linked && cachedEntry.fileMtime === fileMtime && fileSize <= continuationBytesLeft;
+    let pinnedRead = null;
+    if (fullReadPinned) {
+      continuationBytesLeft = 0;
+      pinnedRead = readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
+    }
+    if (!retryFailure && cachedEntry && !pinnedRead) {
       let continuationIndex = cachedEntry.continuationIndex;
       if (validPlan) continuationIndex = plan.serialized;
       else if (opts.preparedContinuations?.has(cachedDbId) && changedLinked) { defer(); continue; }
@@ -681,7 +694,7 @@ function refreshFolder(folder, opts = {}) {
       collector.accounted.add(relativeFile);
       if (linked) linkedVersions.set(cachedDbId, { stat, filePath, relativeFile });
       if (count?.needsFullRead) {
-        const s = readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
+        const s = fullReadPinned || failure ? null : readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
         if (s) {
           newFileReads.push(s);
           countRecountMtimes.set(s.sessionId, fileMtime);
@@ -742,7 +755,7 @@ function refreshFolder(folder, opts = {}) {
     // entry / metrics / name are built AFTER merge resolution below, from
     // whatever object actually survives (a compaction mirror's raw read here
     // may still be replaced by a cutoff-filtered re-derivation, or dropped).
-    const s = readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
+    const s = fullReadPinned ? pinnedRead : readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
     if (s) {
       failures.delete(relativeSource);
       if (!parentSessionId && s.continuationIndex) {
@@ -1559,10 +1572,18 @@ function writeScannedFolder(r, unverifiedLocalFolder = null) {
     }));
   }
   setFolderMeta(folder, projectPath, indexMtimeMs, r.readFailures);
-  if (!r.startup && setSetting && pendingRepairFolders().includes(folder)) {
-    setSetting('bridge_uuid_reindex_folders', pendingRepairFolders().filter(key => key !== folder));
-  }
+  const repairs = repairFoldersAfterScan(r, true);
+  if (repairs && setSetting) setSetting('bridge_uuid_reindex_folders', repairs);
   return sessions.length;
+}
+
+// see .ai/contexts/session-cache.md ("Bridge history divergence")
+function repairFoldersAfterScan(r, fullScan) {
+  if (r.startup) return null;
+  const pending = pendingRepairFolders();
+  if (r.bridgeDeferred?.length && parseFolderKey(r.folder).alias !== null) return pending.includes(r.folder) ? null : [...pending, r.folder];
+  if (!fullScan || !pending.includes(r.folder) || r.counters?.filesFailed > 0) return null;
+  return pending.filter(key => key !== r.folder);
 }
 
 /** Persist one `{type:'folder', result:{partial:true}}` file-subset scan
@@ -1594,6 +1615,8 @@ function writeScannedFolderPartial(r) {
     deleteSearchSession(sessionId);
   }
   setFolderMeta(folder, projectPath, indexMtimeMs, r.readFailures);
+  const repairs = repairFoldersAfterScan(r, false);
+  if (repairs && setSetting) setSetting('bridge_uuid_reindex_folders', repairs);
   return sessions.length;
 }
 

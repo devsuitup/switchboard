@@ -4,58 +4,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
-const { createRequire } = require('node:module');
+const openStore = require('./fixtures/conversation-store.cjs');
 const { createWriterCommands } = require('../session-index-commands');
-const supported = (() => {
-  if (Number(process.versions.node.split('.')[0]) >= 22) return true;
-  try { const Database = require('better-sqlite3'); new Database(':memory:').close(); return true; }
-  catch { return false; }
-})();
-
-function openStore() {
-  const filename = require.resolve('../session-index-store');
-  const nativeRequire = createRequire(filename);
-  let Database;
-  try {
-    Database = nativeRequire('better-sqlite3');
-    new Database(':memory:').close();
-  } catch (error) {
-    if (error.code !== 'ERR_DLOPEN_FAILED' && !error.message.includes('NODE_MODULE_VERSION')) throw error;
-    const { DatabaseSync } = require('node:sqlite');
-    Database = class {
-      constructor(file) { this.raw = new DatabaseSync(file); this.sequence = 0; }
-      get open() { return this.raw.isOpen; }
-      prepare(sql) { return this.raw.prepare(sql); }
-      exec(sql) { this.raw.exec(sql); }
-      close() { this.raw.close(); }
-      pragma(sql, options) {
-        const rows = this.raw.prepare('PRAGMA ' + sql).all();
-        return options?.simple ? Object.values(rows[0])[0] : rows;
-      }
-      transaction(fn) {
-        const run = (...args) => {
-          const savepoint = 'rekey_' + this.sequence++;
-          this.exec('SAVEPOINT ' + savepoint);
-          try { const result = fn(...args); this.exec('RELEASE ' + savepoint); return result; }
-          catch (error) { this.exec('ROLLBACK TO ' + savepoint); this.exec('RELEASE ' + savepoint); throw error; }
-        };
-        run.immediate = run;
-        return run;
-      }
-    };
-  }
-  const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
-    require: id => id === 'better-sqlite3' ? Database : nativeRequire(id),
-    module, exports: module.exports, process, performance, Buffer, console,
-  }, { filename });
-  return module.exports.openSessionIndexStore({ readonly: false });
-}
-
 for (const hydrated of [false, true]) {
   test(`two-hop legacy rekey preserves a newer user rename, hydrated first: ${hydrated}`, {
-    skip: !supported && 'native SQLite ABI differs; node:sqlite requires Node 22',
+    skip: !openStore.supported && 'native SQLite ABI differs; node:sqlite requires Node 22',
   }, t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rekey-696-'));
     const prior = process.env.SWITCHBOARD_DATA_DIR;

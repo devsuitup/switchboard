@@ -351,6 +351,87 @@ test('mixed coverage still compares a complete predecessor with a legacy copied 
   assert.ok(!b.textContent.includes('Copied payload'));
 });
 
+test('a predecessor whose signatures cannot be re-read leaves the merged member uncertified (#1189)', { timeout: 9000 }, async t => {
+  const f = fixture(t);
+  f.write('a', [f.msg('known', '01', 'Copied payload')]);
+  await cache.scanFoldersViaWorker({ projectsDir: f.root, folders: [f.folder] });
+  f.write('b', [f.msg(undefined, '01', 'Copied payload'), f.msg('own', '02')]);
+  const predecessor = path.join(f.dir, 'a.jsonl');
+  const original = fs.openSync;
+  let injected = 0;
+  fs.openSync = (file, ...args) => {
+    if (file === predecessor && /at Object\.get \([^)]*read-session-file\.js/.test(new Error().stack)) { injected++; throw Object.assign(new Error('synthetic lock'), { code: 'EBUSY' }); }
+    return original(file, ...args);
+  };
+  try { cache.refreshFolder(f.folder, { files: new Set(['b.jsonl']) }); }
+  finally { fs.openSync = original; }
+  assert.ok(injected > 0, 'the failure reaches the lazy signature read');
+  assert.ok(f.rows.has('b'));
+  assert.equal(f.rows.get('b').fullReadStamp, null, 'unknown signature evidence must not certify the member');
+});
+
+function scanInProcess(workerData) {
+  const filename = require.resolve('../workers/scan-projects');
+  const native = require('node:module').createRequire(filename);
+  const messages = [];
+  require('node:vm').runInNewContext(fs.readFileSync(filename, 'utf8'), { Buffer, console, process,
+    require: name => name === 'worker_threads' ? { parentPort: { postMessage: msg => messages.push(msg) },
+      workerData: { targets: [], disabledHarnesses: [], remaps: {}, ...workerData } } : native(name),
+  }, { filename });
+  return messages;
+}
+
+test('a remote mirror whose bridge signatures could not be re-read is fully rescanned until it converges (#1189)', { timeout: 15000 }, async t => {
+  const f = fixture(t);
+  const remote = path.join(f.root, 'remote', 'vps', 'projects');
+  const folder = '-srv-demo', key = 'vps::-srv-demo', dir = path.join(remote, folder);
+  fs.mkdirSync(dir, { recursive: true });
+  const bridge = { type: 'bridge-session', bridgeSessionId: 'cse_remote' };
+  const msg = (uuid, text) => ({ type: 'user', uuid, timestamp: '2026-10-01T10:00:00.000Z', cwd: '/srv/demo', message: { content: text } });
+  const write = (id, entries) => fs.writeFileSync(path.join(dir, id + '.jsonl'), entries.concat(bridge).map(e => JSON.stringify(e)).join('\n') + '\n');
+  write('a', [msg('known', 'Copied payload')]);
+  write('b', [msg(undefined, 'Copied payload'), { ...msg('own', 'own'), timestamp: '2026-10-02T10:00:00.000Z' }]);
+  cache.setRemoteRoots(new Map([['vps', remote]]));
+  const predecessor = path.join(dir, 'a.jsonl');
+  const original = fs.openSync;
+  let injected = 0;
+  fs.openSync = (file, ...args) => {
+    if (file === predecessor && /at Object\.get \([^)]*read-session-file\.js/.test(new Error().stack)) { injected++; throw Object.assign(new Error('synthetic lock'), { code: 'EBUSY' }); }
+    return original(file, ...args);
+  };
+  let messages;
+  try { messages = scanInProcess({ projectsDir: remote, folderPrefix: 'vps', folders: [folder] }); }
+  finally { fs.openSync = original; }
+  assert.ok(injected > 0, 'the failure reaches the lazy signature read');
+  cache.writeScannedFolder(messages.find(m => m.type === 'folder').result);
+  assert.ok(f.meta.has(key));
+  const scans = [];
+  const indexer = createRemoteIndexer({
+    getHosts: () => [{ alias: 'vps' }], dataDir: f.root, transport: {},
+    listIndexedFolderKeys: () => [...f.meta.keys()],
+    listRepairFolderKeys: () => f.settings.get('bridge_uuid_reindex_folders') || [],
+    scanFolders: async args => { scans.push(args); return cache.scanFoldersViaWorker(args); },
+    sync: async () => ({ fetched: 0, unchanged: 2, removed: 0, failed: 0, changedFolders: new Set(), sessions: [] }),
+  });
+  t.after(() => indexer.dispose());
+  await indexer.refreshNow();
+  assert.equal(scans.length, 1, 'an unchanged mirror with unknown bridge evidence is rescanned');
+  assert.equal(scans[0].fileSubsets, undefined, 'the rescan is a full folder scan');
+  assert.equal(f.rows.get('b').messageCount, 1, 'the copied payload is excluded once signatures are readable');
+  assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders') || [], [], 'a converged scan clears the marker');
+});
+
+test('mergeBridgeGroups defers a group whose signature evidence is unknown', { timeout: 9000 }, t => {
+  const f = fixture(t);
+  f.write('a', [f.msg('known', '01', 'Copied payload')]);
+  f.write('b', [f.msg(undefined, '01', 'Copied payload'), f.msg('own', '02')]);
+  const rows = ['a', 'b'].map(id => f.reread(id));
+  fs.unlinkSync(path.join(f.dir, 'a.jsonl'));
+  const merged = mergeBridgeGroups([], rows, f.reread);
+  assert.deepEqual([...merged.deferred].sort(), ['a', 'b']);
+  assert.ok(merged.toUpsert.every(row => row.fullReadStamp === null), 'every published member of the group is uncertified');
+});
+
 test('reconcile keeps a running row whose transcript vanished and skips unchanged transcript bodies', { timeout: 9000 }, async t => {
   const f = fixture(t);
   f.write('a', [f.msg('a-own', '01')]);

@@ -165,15 +165,22 @@ scrolled into view. A near-zero positive threshold also detects
 the transition from an intersecting zero-area edge to a partial reveal,
 without waiting for the existing 99% output-seen threshold.
 The observer owns offscreen WebGL suspension; grid refit frames restore the
-context after fitting. A newly created context skips texture-atlas clearing;
+context after fitting on the entry held by the frame, without another session-id
+lookup that could select a different entry during re-keying (#864).
+A newly created context skips texture-atlas clearing;
 a retained context clears its atlas before repainting. Grid entry, the Sessions
-tab return and the Agents return share `refitOpenTerminals`. A per-card reveal
+tab return, the Agents return and the Group by project toggle share
+`refitOpenTerminals`; toggling leaves offscreen cards unfitted until revealed.
+A per-card reveal
 flag prevents a subsequent positive observer callback from duplicating that
 return fit, and an entry pending-frame flag coalesces requests before the frame.
 This reuses the existing observe/unobserve lifecycle without an extra observer
 or scroll listener. These guarantees are exercised with shipped
 renderer code in `test/terminal-grid-refit.test.js`; real browser layout and
-GPU cost require a separate live measurement.
+GPU cost require a separate live measurement. The WebGL identity regression
+injects a split re-key at the fit boundary (the entry id changes before the
+registry mapping), then verifies which terminal receives the addon; it does not
+establish that an asynchronous re-key can interrupt a synchronous frame.
 
 `requestTerminalRefresh` marks the entry and calls `scheduleTerminalFit` in
 `public/terminal-manager.js`. Container ResizeObserver callbacks share this

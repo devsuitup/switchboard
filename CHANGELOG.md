@@ -4,6 +4,22 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.1.0-beta.4 — 2026-11-27
+
+### Changed
+- A failed **Save** in the Diff tool, a trace that cannot be opened or deleted in **Settings → Diagnostics**, a failed **Delete** in the Memory viewer and a failed **Change path** on a missing project no longer stop you with a dialog. The failure now shows next to the button you used, or as a notice for **Change path**, and says what to do next; the reason is in its tooltip, or on the notice's second line. Your unsaved edits in the Diff tool are kept, and the message goes away once the action succeeds. Deleting the trace debug mode is still writing tells you to turn debug mode off first, and a **Change path** that is no longer needed because the project's folder is back offers **Refresh** instead of another remap. (#709)
+
+### Fixed
+- In a sandboxed session (Linux), a protected path reached through the target of another linked `~/.claude` entry, such as `hooks` linked inside the directory `todos` links to, is now read-only, and a linked entry whose target is, or lies inside, a protected path or a read-only entry, or overlaps `shell-snapshots`, `session-env`, `backups` or `state`, is refused at launch. A last check over the finished mount list also refuses a read-write mount that would reach a read-only path under another spelling, the file a linked `~/.claude.json` points to, a private entry's target, or a `.claude` left to the read-only `$NVM_DIR` or tool directory it sits in. A linked `~/.config/claude`, `~/.cache/claude` or `~/.local/share/claude` is followed only to a directory named `claude`, never to `/` or a parent of your home directory. A protected path inside `shell-snapshots`, `session-env`, `backups` or `state` of `~/.claude` is no longer mounted from the host over the session's private copy, which could show it other sessions' shell snapshots. (#513)
+- Toggling **Group by project** in the terminal grid no longer redraws visible terminals twice. (#864)
+- The shell shown in a session's header no longer stays on the previous session's shell when you fork or `/clear` the session you are viewing just as it opens. (#858)
+- When a session is forked or cleared while it is being archived, from its own row or with its folder, the **Archive** button of the original conversation no longer stays disabled in the sidebar. (#858)
+- A transcript that grows without its modification time changing and cannot be fully read no longer triggers repeated full reads on every session refresh, avoiding needless disk and CPU work. (#868)
+- A transcript that cannot be read is no longer read again in full at every folder refresh while it has not changed. A conversation continued across several transcripts no longer keeps counting its copied messages twice when one of its transcripts was locked or deleted while it was being indexed: it is read again at the next launch, or at the next refresh of a remote host. (#1189)
+- On Windows and macOS, a session whose Claude process ended no longer reappears in the Agents view or the sidebar after its process number is reused, while Switchboard cannot read the process list; a session started again under the same process number is no longer hidden until the list can be read. (#695)
+- On Windows, a project you deleted and then added back with **Add project** shows in the sidebar again instead of staying hidden. (#1188)
+- On Windows, **Respawn** and **Delete** of a background session whose daemon has stopped are no longer refused with "cannot tell" now and then when the computer is under load: Switchboard waits the full second it needs before looking at the processes again. (#837)
+
 ## v0.1.0-beta.3 — 2026-11-27
 
 ### Fixed

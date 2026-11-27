@@ -2832,7 +2832,6 @@ function openNewSession(project) {
 }
 
 async function showTerminalHeader(session) {
-  const sessionId = session.sessionId;
   const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary);
   terminalHeaderName.textContent = displayName;
   terminalHeaderId.textContent = session.sessionId;
@@ -2845,19 +2844,19 @@ async function showTerminalHeader(session) {
   // Show active shell profile
   try {
     const effective = await window.api.getEffectiveSettings(session.projectPath);
-    if (activeSessionId !== sessionId) return;
+    if (activeSessionId !== session.sessionId) return;
     const profileId = effective.shellProfile || SETTING_DEFAULTS.shellProfile;
     if (profileId === 'auto') {
       terminalHeaderShell.style.display = 'none';
     } else {
       const profiles = await window.api.getShellProfiles();
-      if (activeSessionId !== sessionId) return;
+      if (activeSessionId !== session.sessionId) return;
       const profile = profiles.find(p => p.id === profileId);
       terminalHeaderShell.textContent = profile ? profile.name : profileId;
       terminalHeaderShell.style.display = '';
     }
   } catch {
-    if (activeSessionId !== sessionId) return;
+    if (activeSessionId !== session.sessionId) return;
     terminalHeaderShell.style.display = 'none';
   }
 }

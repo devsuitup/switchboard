@@ -1,6 +1,16 @@
 # Context: session-cache
 
-**Purpose**: index every Claude session JSONL on disk into a queryable SQLite cache so the sidebar renders without re-scanning `~/.claude/projects/` and so search is full-text. Watches the projects directory for changes and refreshes incrementally.
+**Purpose**: index every Claude session JSONL on disk, and every Codex rollout under `$CODEX_HOME/sessions` (folders `codex/...`, rows with `runtime: 'codex'`; see [cli-harnesses](cli-harnesses.md)), into a queryable SQLite cache so the sidebar renders without re-scanning `~/.claude/projects/` and so search is full-text. Watches the projects directory for changes and refreshes incrementally.
+
+## Column-reconcile CI coverage gap (#869)
+
+CI does not exercise the column reconcile (including `runtime` and
+`sessionFile`) against `better-sqlite3`: dependency installation builds the
+native module for Electron's ABI, so the real-store cases in
+`hide-sdk-sessions.test.js` and `harness-schema.test.js` skip on Node 20 and
+use the `conversation-store.cjs` fixture's `node:sqlite` fallback on Node 22.
+Those runs cover the reconcile SQL through the fallback, but do not verify the
+`better-sqlite3` driver path. CI workflows are unchanged.
 
 ## Pin storage and diagnostics (#1207)
 
@@ -121,15 +131,20 @@ Claude full reads use `jsonl-scan.scanLines` with 256 KiB chunks through the
 observed EOF. Daily metrics accumulate as lines arrive. The reader captures
 64-byte head/tail witnesses and the unterminated tail for both existing indexes.
 Startup, refreshFolder and bridge rereads use the same parser. Lazy bridge
-signature evidence also streams, bounded to the original read's byte length;
-an unreadable or truncated source yields empty signature evidence, so deleting
-a bridge source between reading and merging cannot fail its folder. Neither
+signature evidence also streams, bounded to the original read's byte length.
+An unreadable or truncated source yields unknown (`null`) signature evidence,
+never an empty list, so deleting or locking a bridge source between reading and
+merging cannot fail its folder and cannot certify an over-count (#1189, see
+"Bridge history divergence"). Neither
 path materializes a whole-file UTF-8 string or an array of every line. For
 ordinary-sized records, output semantics and the version-1 golden ledger stay
 unchanged. The shared scanner caps each line at 64 MiB before
 UTF-8 conversion, discards oversized records through the next newline, and
 marks an oversized unterminated continuation as skipped. Claude, Codex, bridge
-signatures and refresh message recounts share this rule. Metric buckets and
+signatures and refresh message recounts share this rule. The cap shipped without
+a content-version bump: a transcript with a line over 64 MiB that was indexed
+before #1184 keeps its old count until its file changes or a forced rebuild
+(accepted, negligible exposure, #1189). Metric buckets and
 bridge identity evidence still depend on transcript content. The regression
 injects a lower line cap. The whole-string regression uses 2 MiB locally with
 an injected readFileSync limit; CI or SWITCHBOARD_TEST_LARGE_TRANSCRIPT runs
@@ -144,8 +159,18 @@ text. It is not a successful `session_cache.fullReadStamp`. Prior rows survive
 with null content stamps; new failed transcripts do not create display rows.
 Matching witnesses suppress startup retries across reopen; changed or removed
 sources, forced rebuilds, content-version changes and configuration changes
-invalidate them. An explicit folder refresh retries witnessed sources and
-removes the witness after a successful read. Claude sidecars and Codex
+invalidate them. `refreshFolder` (Claude and harness folders) retries a
+witnessed source only when the refresh is targeted at it (`opts.files` names
+it) or when the witness stamp no longer matches the file (`matchesFullRead`,
+with the Codex title snapshot as dependency); it removes the witness after a
+successful read. An untargeted refresh (folder-level watcher event, reconcile,
+project add/unarchive) leaves an unchanged witnessed source unread: without a
+cached row it is skipped, with one it takes the ordinary unchanged/header path.
+That path never does a full read of it either: the size-pinned full read
+(a growth under a preserved mtime) and the full read requested by a filtered
+message recount are both skipped while the witness matches.
+(#1189; before, every untargeted refresh fully reread every witnessed file).
+Claude sidecars and Codex
 effective titles remain dependencies. Transient I/O errors (including EBUSY,
 EACCES, EPERM, EMFILE, ENFILE, EIO, EAGAIN), short reads and raced failures have
 no durable negative witness. Only deferrals with read error codes enter the
@@ -181,6 +206,8 @@ each source once after replan checks, even if the writer subsequently fails, at 
 Missing stamps use `changed-during-read`; main-side races use
 `raced-before-publication`. Sources withheld only by bridge-group expansion use
 `bridge-sibling`, at either stage, without claiming that their files changed.
+Members of a group whose bridge signature evidence could not be re-read use
+`bridge-evidence-unknown`; it is a read error, so it arms the in-run retry queue.
 Subagent names include their parent session ID:
 `file=<parentSessionId>/agent-<id>.jsonl`. The size is the pre-read observation
 (or the checked stamp for a publication race, zero if unavailable); no absolute source
@@ -233,6 +260,38 @@ Missing or duplicate identities still force conservative full validation;
 configuration/version changes, explicit rebuilds, bridge dependencies and unknown
 writer outcomes retain their existing broader-validation rules. A true ambiguous
 layout therefore cannot promise a single-file reread without weakening safety.
+
+## Codex exclusions across warm starts (#1195)
+
+A rollout yielding no session used to have no persisted freshness evidence:
+empty files, malformed-only JSONL, missing cwd/metadata or user prompt, and
+subagents were selected as changed again on every startup. The Codex worker
+now stores a tagged negative observation `{ stamp, excluded: true }` in the
+existing `cache_meta.readFailures` envelope. The exclusion has no error code,
+is not a failed read or a session content certificate, and creates no display,
+search or metrics row. Only Codex callers accept these tagged observations;
+Claude's failure selection is unchanged. No schema/content version changes.
+
+Completed null parses reuse their stable observation. Header-only subagent
+exclusions compare the worker's initial observation with the source after the
+header read, retaining the 256 KiB read bound. Both enter the ordinary source
+checks and writer publication boundary. Filesystem identity, size, nanosecond
+mtime/ctime and effective title must match before an exclusion can skip a
+subsequent read. A changed file is reclassified, even with a pinned mtime; a
+removed file loses its marker. Force, content-version and configuration changes
+invalidate these observations along with other negative observations. A retained
+existing session row still requires reading/deletion rather than being silently
+kept behind an exclusion marker. Explicit folder refresh retries excluded files
+and preserves their markers until a session is produced; startup validates any
+remaining markers against the current source.
+
+The SQLite reopen regression `test/codex-warm-exclusions-1195.test.js` reproduces
+two consecutive unchanged warm starts for five exclusion shapes, subsequent
+conversion to a real session, invalidation, removal and prior-row deletion.
+Controls establish that exec rollouts already persist hidden-but-certified rows,
+deterministic parser exceptions already persist error witnesses, and an append
+during a read defers once then settles after a stable retry. These synthetic
+fixtures do not identify the maintainer's unavailable real rollouts.
 
 ## Local warm startup (#1144 A2, #1152 Codex)
 
@@ -287,7 +346,8 @@ Every Codex result has projectPath null and the full reader's index watermark,
 including the title index mtime. Startup reads finish intentionally excluded
 rollouts only when a prior row might need deletion. Unindexed subagents stop
 after the metadata header (at most one 256 KiB chunk per scan), without creating
-a certificate or a deferral. Deferrals use filename UUIDs, leave the watermark zero and retain pending
+a content certificate or a deferral. Stable exclusions now persist the source
+observation as described above (#1195). Deferrals use filename UUIDs, leave the watermark zero and retain pending
 state. Exec sessions remain indexed and certified; hiding remains a projection.
 Warm completion says "Indexed session changes" rather than reporting replaced
 rows as the total history size. The full-population flag, including a forced
@@ -460,8 +520,9 @@ Issue #1255.
 | File | LOC | Role |
 |---|---|---|
 | `session-index-store.js` | ~1270 | SQLite (better-sqlite3) schema + prepared statements, opened writable only by the writer worker ([session-index-writer](session-index-writer.md)). Owns `session_cache`, `session_meta`, `cache_meta`, `settings`, `search_fts` (FTS5 + trigram tokenizer). |
-| `db.js` | 30 | Main's readonly connection: `openSessionIndexStore({ readonly: true })` plus a settings mirror. Re-exports the store's API. |
-| `session-cache.js` | ~2050 | Indexer + watcher. Reads `~/.claude/projects/<folder>/*.jsonl` (+ subagents subdir), populates rows, emits projects-changed events. |
+| `db.js` | 30 | Main's readonly connection: `openSessionIndexStore({ readonly: true })` plus a settings mirror. It re-exports the store's whole object, but only its readers are usable: a mutator called through it fails on the readonly connection. |
+| `session-index-writer.js` / `session-index-writer-client.js` / `workers/session-index-writer.js` | ~600 / ~275 / ~290 | The only writer: the command facade main and `session-cache.js` call, its worker client, and the worker that owns the writable store (see [session-index-writer](session-index-writer.md)). |
+| `session-cache.js` | ~2070 | Indexer + watcher. Reads `~/.claude/projects/<folder>/*.jsonl` (+ subagents subdir) and, through the harness adapters, Codex rollouts; populates rows, emits projects-changed events. |
 | `read-session-file.js` | ~840 | Streaming JSONL reader. `readSessionFile()` (full) + `readSessionDisplayHeader()` (256 KB / 500 lines of head plus a 256 KB tail for titles). |
 | `encode-project-path.js` | ~60 | `/path/to/project` → `-path-to-project` folder name. Mirrors Claude CLI's encoding. |
 | `derive-project-path.js` | ~310 | Inverse: read `cwd` field from JSONL, derive original projectPath. **Collapses worktrees back to parent repo** via `resolveWorktreePath`. |
@@ -473,18 +534,28 @@ Issue #1255.
 | `src/main/session-index/message-count.js` / `read-counters.js` | ~60 / ~65 | Shared message-count predicate; byte and read counters for the per-folder diagnostics. |
 | `cache-effects.js`, `folder-index-state.js` | ~80 / ~50 | Projection-effect recorder; folder and transcript index mtimes. |
 | `src/main/projects/last-known-projects.js` | ~145 | Persisted last sidebar payload (`get-last-known-projects`); documented in [ipc-bridge](ipc-bridge.md). |
+| `fts-match.js` | ~85 | The whole session search query (`createSessionSearch`, `buildFtsMatch`, `idLookupTerm`), shared by the search worker and the store's fallback (see "Search"). |
+| `workers/search-query.js` | ~70 | Read-only search worker, so a query never queues behind a scan. |
+| `src/main/session-index/session-refs.js` | ~95 | Search body refs (`collectRefs`, `mergeSearchBodyRefs`; see "Search" and ADR 0006). |
+| `session-continuations.js` | ~260 | Continuation ids, stamps and the continuation index (see "Continuation rows (#564)" and "Continuation index (#518B)"). |
+| `subagent-attribution.js` | ~45 | Which transcript path is a root, subagent or workflow agent (see [subagent-observability](subagent-observability.md)). |
+| `harnesses/` (`index.js`, `claude.js`, `codex.js`, `contract.js`) | | Per-CLI adapters: folder ownership, transcript paths and Codex rollout reading (see [cli-harnesses](cli-harnesses.md)). |
 
 ## Public surface
 
-From `db.js` (the store's API, re-exported):
+The store's API (`session-index-store.js`). `db.js` opens it readonly, so main
+reads through `db.js` and every mutator below runs only in the writer worker,
+reached through the writer facade (`session-index-writer.js`). `session-cache.js`
+receives as `ctx.db` the recording adapter of `cache-effects.js`, which
+`writer.initializeCache` passes; its writes reach the writer, not `db.js`.
 
-- **Sessions**: `getAllCached`, `getCachedByFolder(folder)`, `getCachedByParent(parentSessionId)`, `getCachedSession(sessionId)`, `upsertCachedSessions(rows[])`, `deleteCachedSession`, `deleteCachedFolder`
-- **Meta**: `getMeta`, `getAllMeta`, `setName`, `toggleStar`, `setStarred`, `setArchived` (session-level user state)
-- **Folder meta**: `getFolderMeta`, `setFolderMeta(folder, projectPath, indexMtimeMs)` — tracks index freshness
-- **Search**: `searchByType(type, query, limit, titleOnly)`, `upsertSearchEntries`, `deleteSearchType/Session/Folder`
+- **Sessions**: `getAllCached`, `getCachedByFolder(folder)`, `getCachedByParent(parentSessionId)`, `getCachedSession(sessionId)`; writer only: `upsertCachedSessions(rows[])`, `deleteCachedSession`, `deleteCachedFolder`
+- **Meta**: `getMeta`, `getAllMeta`; writer only: `setName`, `toggleStar`, `setStarred`, `setArchived` (session-level user state)
+- **Folder meta**: `getFolderMeta`; writer only: `setFolderMeta(folder, projectPath, indexMtimeMs)` — tracks index freshness
+- **Search**: `searchByType(type, query, limit, titleOnly)`; writer only: `upsertSearchEntries`, `deleteSearchType/Session/Folder`
 - **Stats**: `getDailyMetrics()` — `session_metrics` grouped by message date, returns `[{date, messageCount, toolCallCount, tokens, sessionCount}]` (the Stats tab's heatmap and daily bars, through `buildStatsFromDb` in `main.js`); also `getDailyModelTokens`, `getModelUsage`, `getTotalCounts`.
-- **Settings**: `getSetting`, `setSetting`, `deleteSetting`
-- **Misc**: `touchCachedModified(sessionId)` — 1-column UPDATE, cheap
+- **Settings**: `getSetting` (from `db.js`'s mirror); writer only: `setSetting`, `deleteSetting`
+- **Misc** (writer only): `touchCachedModified(sessionId, modified, fileMtime = modified)` — one UPDATE of the two columns `modified` and `fileMtime`, cheap
 
 From `session-cache.js`:
 
@@ -502,7 +573,8 @@ From `derive-project-path.js`: `deriveProjectPath(folderPath, folderName, opts)`
 The local projects watcher awaits `writer.refreshFolder` for existing dirty
 folders and `writer.dropFolderRows` for vanished folders. `refreshFolder`
 returns true for structural changes, `'activity'` for activity-only changes,
-and false for pending bridge repairs or unchanged rows. Every folder is
+and false for unchanged rows. Pending bridge repairs invalidate the full-index
+seal but still allow incremental discovery. Every folder is
 processed even after an earlier one changed. Structural changes take priority
 over activity when a flush includes both classes. Added/deleted rows,
 changed folder project paths and removal of cached empty projects return true;
@@ -774,7 +846,7 @@ Issue #616 slice 1 routes get-projects through projects-worker-client.js to work
 
 Async reconciliation logs a missing projects directory and resolves, matching the synchronous entry point. Each folder has its own error boundary so a failed refresh does not prevent later folders from reconciling. Deleted deferred transcripts are accounted for even in full refreshes; vanished folders and folders without a project path clear deferred work after the writer acknowledges the effects. The final synchronous refresh checks filesystem stamps before applying its batch; no intervening await or cache-index write can change the cached continuation index there.
 
-The projects worker never writes: main relays its effects to the writer worker ([session-index-writer.md](session-index-writer.md)). Before applying effects without an intervening await, the relay checks the request token against SQLite total_changes/data_version, the writer's `_writer_revision` and the current projected activeSessions/remoteRoots. The worker sends ordered effects after each completed folder only when effects exist or retained live rows changed; unchanged folders send no progress message. Main validates the version before each batch and refreshes the token after its own writes; a watcher/scan/settings/live-session change stops further writes from that snapshot and retries with a fresh snapshot. Worker reconciles bypass the synchronous helper's throttle because main owns their five-second throttle. A read-only reply with no retained-row changes and no reconciliation may publish its partial snapshot during cold-scan writes, so first paint never waits for the background scan to settle. Retained live rows are copied back for releaseLiveSession on exit. The worker skips reconciliation while the completeness marker is absent and excludes pending repair folders. An accepted reconciliation advances main's five-second throttle, and so does a completed cold scan whose completeness marker is set (#1125): the scan just read every file, so the first post-scan load is a plain build rather than a full stat sweep that could outlive the caller's deadline. Cold-start population stays fire-and-forget; the existing entrypoint backfill, archive state persistence, remote placeholders and attachability annotation stay on main.
+The projects worker never writes: main relays its effects to the writer worker ([session-index-writer.md](session-index-writer.md)). Before applying effects without an intervening await, the relay checks the request token against SQLite total_changes/data_version, the writer's `_writer_revision` and the current projected activeSessions/remoteRoots. The worker sends ordered effects after each completed folder only when effects exist or retained live rows changed; unchanged folders send no progress message. Main validates the version before each batch and refreshes the token after its own writes; a watcher/scan/settings/live-session change stops further writes from that snapshot and retries with a fresh snapshot. Worker reconciles bypass the synchronous helper's throttle because main owns their five-second throttle. A read-only reply with no retained-row changes and no reconciliation may publish its partial snapshot during cold-scan writes, so first paint never waits for the background scan to settle. Retained live rows are copied back for releaseLiveSession on exit. The worker skips reconciliation while the completeness marker is absent. Pending repair markers survive incremental reconciliation; they do not exclude folders from discovery. An accepted reconciliation advances main's five-second throttle, and so does a completed cold scan whose completeness marker is set (#1125): the scan just read every file, so the first post-scan load is a plain build rather than a full stat sweep that could outlive the caller's deadline. Cold-start population stays fire-and-forget; the existing entrypoint backfill, archive state persistence, remote placeholders and attachability annotation stay on main.
 
 There is one in-flight job and at most one pending job. Each dispatch owns its
 callers; pending options retain reconcile and byte-measurement requests with
@@ -942,8 +1014,15 @@ while display fields refresh. Subagents retain their existing filesystem
 timestamp semantics. The same cap applies to a size change downward; ordinary
 advancing-mtime writes keep the bounded header path and its existing count/body
 trade-off. Linked continuations retain
-their stamp validation, preparation budget and race deferral. A failed exceptional
-full read keeps the previous row/size so a later refresh can retry.
+their stamp validation, preparation budget and race deferral. A pinned full read
+returning null falls back to the existing header/count path without attempting
+another full read in that walk (#868). The fallback records the observed size,
+clears the obsolete continuation index and full-content certificate, and retains
+cached display fields when the header has no usable signal. An unchanged next
+walk skips that row, leaving its continuation budget available to other files.
+Size-only adoption is insufficient here: the old continuation stamp could still
+force a scan on the next walk. Content unavailable to the bounded fallback
+remains cached until a later source change or full scan.
 
 The writer store adds nullable `fileSize INTEGER` through its existing
 version-independent schema reconciliation, without wiping cached rows. Existing
@@ -1014,9 +1093,9 @@ A kept row is recorded with its folder. On PTY exit, `main.js` calls `releaseLiv
   - **Copied tails often retain timestamps, but time order does not establish identity.** An independent member can have thousands of its own messages before another member's `modified`. Complete conversation UUID coverage permits an exact union: exclude the UUIDs already present in preceding members. Timestamp cutoffs remain a compatibility fallback for legacy transcripts, with the limitations below.
   - **Detection is full-read-only.** `readSessionFile()` extracts `bridgeSessionId` from the first `bridge-session` record it sees; `readSessionDisplayHeader()` (the incremental/header-only refresh path, capped at 256 KB / 500 lines) never attempts it, because the record is not reliably near the head of the file — on the real mirror fixture it sat at byte ~3.08 MB of a 3.08 MB file, past the cap. A `readSessionFile()` full read still happens once per file, the first time it's seen (the "NEW file" branch of `refreshFolder`), so the value is captured and then persisted in `session_cache.bridgeSessionId`, carried forward unchanged by every later header-only merge.
   - **Members with a contribution keep their own `session_cache` rows.** `mergeBridgeGroups` groups top-level rows by `bridgeSessionId` and orders them by `created`, then `sessionId`. With complete UUID coverage, each contribution excludes preceding UUIDs, even when its own messages have older timestamps. A continuation attaches to the predecessor with the most shared UUIDs, breaking ties by the latest shared position in its message sequence and then predecessor `modified`; a merged predecessor resolves to its visible root. If that predecessor has later activity, or there is no shared UUID, the contribution remains independent. Pure duplicates contribute no row.
-  - **Cached merge labels do not prove that a group is still correctly derived.** Top-level changes, new members and deletions in a cached bridge folder queue a file-subset worker scan including all its cached bridge members and the changed files. The worker re-evaluates their current full histories, removes gone predecessors before merging, and rewrites contributions, metrics and search entries together through the existing scan-result path. This also restores shared UUIDs when an independent member is promoted after the earlier owner disappears. Concurrent watcher requests for the same folder are combined into subsequent batches; an unchanged group is stat-only and does not run another worker.
+  - **Cached merge labels do not prove that a group is still correctly derived.** Ordinary cached-file refreshes retain their merge labels. New-member discovery and deletion-driven promotion re-read histories in `refreshFolder`, on the calling thread: main for watcher refreshes, the Projects query worker for reconciliation. Startup and remote subsets use the scan worker. Each merge excludes gone predecessors and derives contributions, metrics and search entries from the surviving histories. An unchanged watcher group stays stat-only. See "Issue #534 follow-up triage" below.
   - **`mergedIntoSessionId` rows are excluded from sidebar/session-count listings, but their contributions count in message/token aggregates.** `buildProjectsFromCache` rolls the contributions and activity onto their visible root; `getTotalCounts().totalSessions` excludes merged rows. Complete UUID coverage makes the contributions disjoint by message identity, not by timestamp: their date ranges can overlap. A plain `SUM` of `session_metrics` therefore remains correct.
-  - **Residual gaps, named rather than hidden**: (1) the transcript viewer (`read-session-jsonl`) still resolves a sessionId to exactly one physical file, so opening the *merged* (winner) session shows only its own pre-compaction content — post-compaction content is visible only by separately finding the mirror's own row/search hit, not through a stitched view. (2) FTS search body for the winner is built from its own `textContent` only (pre-compaction text); the mirror keeps its own, separate search entry (its post-compaction `textContent`), so post-compaction text is findable but surfaces as a second, unlabelled-in-the-sidebar search hit rather than under the visible session's own entry. Both are scoped follow-ups, not silently-accepted data loss — nothing here drops tokens, messages, or the ability to eventually find the content, only the "one unified view" polish.
+  - **Residual gaps, named rather than hidden**: (1) the transcript viewer (`read-session-jsonl`) still resolves a sessionId to exactly one physical file, so opening a grouped session shows the selected physical part only. The Parts menu and search can open other parts separately; there is no stitched view. (2) FTS search body for the winner is built from its own `textContent` only (pre-compaction text); the mirror keeps its own, separate search entry (its post-compaction `textContent`), so post-compaction text is findable but surfaces as a second, unlabelled-in-the-sidebar search hit rather than under the visible session's own entry. Both are scoped follow-ups, not silently-accepted data loss — nothing here drops tokens, messages, or the ability to eventually find the content, only the "one unified view" polish.
   - **Winner tie-break is `created`, then `sessionId` string order, and can be picked "wrong" in a narrow case**: if a session is short enough that the mirror's recopied context window covers its *entire* history, the mirror's own unfiltered `created` can tie the true parent's. The sessionId string tie-break is then arbitrary. This does not affect correctness of totals (the group still partitions all activity with no double-count either way) — only which of the two sessionIds ends up as the visible "primary" one. Not fixed here; flagged for whoever hits it.
   - **Open question #1 (absence)**: a transcript with no `bridgeSessionId` is never grouped with anything — `mergeBridgeGroups` only builds a group when the field is a non-empty string, so old-format transcripts and any layout that never emits the field simply keep their own row, exactly like today.
   - **Open question #2 (which file keeps being written)**: established by measurement above — the mirror, not the parent. That is exactly why the mirror is never discarded: dropping it would silently erase every message written after the compaction, for as long as the session keeps being used. The union design keeps both files' rows, forever, each independently refreshed.
@@ -1249,8 +1328,9 @@ The arrays are removed before worker `postMessage` and database upserts.
 Ordinary watcher flushes retain the incremental strategy: unchanged files are
 skipped, changed cached files use the bounded display header and the existing
 shared continuation-index budget. Neither refresh nor warm reconciliation queues
-a full scan of unchanged bridge members. Both functions return synchronously;
-folder freshness is stamped before they return. Counts, FTS bodies and bridge
+a full scan of unchanged bridge members. `refreshFolder` computes synchronously
+on its caller's thread. The watcher awaits the main-side writer facade and its
+write ACK; Projects reconciliation calls the same core inside its query worker. Counts, FTS bodies and bridge
 labels stay cached until members are fully read anyway, just as other live
 transcripts do. Full scans and new-member merges attach continuations to the
 UUID-sharing predecessor's visible root rather than the earliest unrelated member.
@@ -1262,8 +1342,9 @@ and increase main-thread memory. Moving this one-off discovery merge to a worker
 is follow-up work, not part of ordinary flushes. Deleting a predecessor similarly
 re-reads surviving members once, restoring UUIDs and metrics removed by the old
 winner, including an independent promoted member. Remote deletion-only subsets
-perform this restoration in their existing worker; ordinary subsets no longer
-expand to all cached bridged files.
+perform this restoration in their existing worker. Subset enumeration is limited
+to the requested files, but `mergeBridgeGroups` can still read cached siblings
+and unrelated unsettled groups; it is not a bound on total transcript I/O.
 
 Legacy transcripts with no known UUID evidence retain the timestamp fallback
 when it contributes messages. When the fallback is empty, or any UUID evidence is
@@ -1278,6 +1359,76 @@ histories can also omit distinct older turns. This is a disclosed legacy
 limitation, not an exact identity guarantee. An unreadable predecessor does not
 establish overlap; a readable member with its own contribution stays independent.
 
+Signature evidence is read lazily, after the row read. When that bounded re-read
+fails (the file was locked or deleted in between), `messageSignatures` is
+`null`, meaning unknown, not empty (#1189). If a predecessor's evidence is
+unknown, or the member's own evidence is unknown and no own UUID decides, the
+member is not re-derived: it keeps its fresh or cached row and the whole group
+is deferred. `mergeBridgeGroups` returns the group's session IDs in `deferred`
+and clears `fullReadStamp` on every group row it upserts, so the next startup
+selects them again instead of trusting a recovery computed without exclusions.
+The startup worker also records each member as a deferred source
+(`bridge-evidence-unknown`), and `deferStartupSources` then withholds the existing
+rows of the group as for any other deferred bridge source.
+This guarantees recovery, not the absence of a temporary over-count: a deferred
+member that is new to the index is still published from its raw read, copied
+messages included, with a null stamp, until the next merge with readable evidence.
+
+Remote mirrors are never part of local startup selection, and the remote indexer
+only rescans folders its sync reports as changed or that are missing from the
+cache, so a null stamp alone would never bring them back. A non-startup scan
+therefore returns the group's IDs as `bridgeDeferred`. `writeScannedFolder` and
+`writeScannedFolderPartial` add a remote folder key (`<alias>::<folder>`) with
+such a result to `bridge_uuid_reindex_folders` (`repairFoldersAfterScan`). The
+add travels as its own writer effect: `cache-effects.js` turns a write of that
+setting into `completeRepairFolders` for removed keys and `addRepairFolders` for
+added ones, and the writer worker runs `commands.addRepairFolders`. A plain
+`setSetting` would persist nothing, because the setting is never copied
+wholesale from main. A non-startup full scan clears a folder's marker only
+when it read every file (`counters.filesFailed` is 0) and produced no
+`bridgeDeferred`: a member unreadable at its first read is left out before the
+merge, so the absence of a deferral alone does not prove convergence. This rule
+applies to every marked folder, local repairs included. Startup publication
+keeps its own completion rule.
+
+The remote indexer reads that setting (`listRepairFolderKeys`) and gives a
+marked folder of its host a full rescan even when the mirror did not change,
+with an exponential backoff per folder key: the first rescan is due at once,
+the next 5 minutes after it, then 10, 20, … capped at 6 hours
+(`REPAIR_RETRY_BASE_MS`, `REPAIR_RETRY_MAX_MS` in `remote-index.js`). A permanent
+failure therefore costs at most one full-folder rescan every 6 hours, not one per
+cycle. The attempt count is in memory: it resets when the marker is cleared and
+when the app restarts, so the first cycle after a launch retries at once. The
+marker itself is durable, so a restart in between does not lose the rescan.
+Local non-startup scans do not set the marker; local startup already selects
+their null-stamped rows.
+
+Project deletion removes each exclusive folder's key from the list in the same
+`folderMeta` unit that deletes its `cache_meta` row
+(`project-delete-writer.js`, `applyDeletionUnit`). A leftover key would make any
+later `completeRepairFolders` naming it (repair convergence, `main.js` pruning
+of undeclared hosts) bind to the deleted project and fail with
+`PROJECT_EPOCH_STALE`. This applied on main to the #534 migration keys as well.
+A folder shared with another project keeps its key: the deletion keeps its
+metadata, and the writer's ownership rules for such a folder are unchanged.
+Ordinary completion of such a key (`completeRepairFolders`) stays bound to the
+folder owners and is refused (`DELETION_OWNERSHIP` or `PROJECT_EPOCH_STALE`)
+while the deletion fences them. That binding is kept on purpose: a remove-only
+command could still erase a repair that is needed, for example when the scan
+that would clear it had its other effects refused by the same fence.
+
+The undeclared-host prune in `getProjectsSnapshot` (#1308) therefore uses its
+own writer command, `pruneUndeclaredRepairFolders`. It is not a folder producer,
+so deletion ownership does not bind it. Instead, the worker validates each key
+against its own settings: it removes only keys with a non-null alias that is
+not an enabled host in `global.remoteHosts` (`enabledHosts`). A local key, or a
+key of a host that is declared again by the time the command runs, is never
+removed. Main also wraps the call: a failure is logged at warn
+(`[projects] repair cleanup for undeclared hosts deferred`) and never fails the
+project listing. The keys stay in the setting, so the next snapshot retries.
+Before this change, origin/main awaited `completeRepairFolders` there, and a
+refusal failed the whole `get-projects` reply.
+
 At database open, `bridge_uuid_index_version = 1` records a one-time transaction
 that removes only bridged top-level cache rows, their metrics and their FTS
 entries, and clears the affected folder gates. Subagents, unrelated rows,
@@ -1287,21 +1438,54 @@ and the next database open retries. Successful subsequent opens are no-ops.
 
 The repair transaction also saves exactly the affected folder keys in
 `bridge_uuid_reindex_folders`. Population adopts those local folders and forces
-their full read, sharing the startup/rebuild retry coordinator. Pending folders
-are excluded from synchronous reconciliation and watcher refresh until their
-accepted worker publication, so a flush cannot recreate invalidated rows through
-a main-thread full read. A failed repair retains its marker and follows bounded
-population retries; successful sealed publication clears it. There is no
-independent initialization repair worker.
+their full read, sharing the startup/rebuild retry coordinator. A failed repair
+retains its marker and follows population retries after 30 seconds, 2 minutes
+and 10 minutes, then waits for an explicit forced population or restart.
+Successful sealed publication clears the marker. There is no independent
+initialization repair worker or failure-finally release of local repair gates.
+Watcher refresh and reconciliation can discover sessions while a repair remains
+pending, but cannot seal that repair. The watcher can still fully read missing
+rows on main; `get-projects` reconciliation now runs in the Projects query worker.
 
 Repaired remote folder gates remain absent until the remote indexer's existing
 full-folder worker scans the mirror, even if SSH reports no changed files. That
 write clears the remote pending key. Dropping a cached remote folder clears its
-key, and `get-projects` removes pending keys of aliases no longer declared, even
-without folder metadata. Remote pending keys never block local cache/search
+key, and `get-projects` removes pending keys of removed or disabled aliases, even
+without folder metadata. Enabled aliases (including the default enabled state)
+and local repair keys remain pending. Pruning uses the writer's existing
+`completeRepairFolders` command; it neither certifies nor recreates folder rows. Remote pending keys never block local cache/search
 population. Merely listing on-disk projects never stamps
 remote `cache_meta`. Worker full-folder replacement and subset deletions honour
 `keepIfRunning`, preserving active PTY rows, metrics and search until release.
+
+### Issue #534 follow-up triage
+
+Checked against origin/main bcf32919145c77bd34ee22a4af061c878601fe7c.
+The historical multi-second timings in #534 were not remeasured.
+
+| Item | Status | Current execution path |
+|---|---|---|
+| 1. New-member predecessor reads | STILL APPLIES on the watcher path | Main's watcher awaits `writer.refreshFolder`; the writer facade calls `cache.refreshFolder` on main. Its `mergeBridgeGroups` callback reads predecessors in full. Projects reconciliation performs that same computation in `workers/projects-query.js`. |
+| 2. Deletion-driven sibling reads | STILL APPLIES on the watcher path | `refreshFolder`'s `deletedBridges` loop reads surviving members on its caller's thread. Remote deletion subsets perform their equivalent loop in `workers/scan-projects.js`. |
+| 3. Repeated remote subset derivation | STILL APPLIES | `readFolderFileSubsetFromFilesystem` passes all cached rows to `mergeBridgeGroups`. Fresh members trigger predecessor reads and filtered rereads; an unrelated cached group with unsettled labels can also be rederived. All of this runs in the scan worker, including on later changed-file cycles. |
+| 4. Failed repair followed by synchronous main reconciliation | NO LONGER APPLIES as reported | `reindexRepairedFolders` joins `populateCacheViaWorker`. Failure retains the marker and schedules bounded retries. `getProjectsSnapshot` relays reconciliation to the Projects query worker and suppresses it while indexing is unfinished. Watcher discovery still has the main-thread costs described above. |
+| 5. Disabled host repair entries | STILL APPLIES at the base; fixed here | `getProjectsSnapshot` now filters normalized hosts by `enabled` before subtracting abandoned repair keys through the writer. |
+| 6. Stitched transcript view | STILL APPLIES | `read-session-jsonl` chooses one cached row and one physical transcript path; follow/next use that same path. Parts can be opened separately. |
+
+For items 1 and 2, move full bridge computation off main with a folder-scoped
+queue, fresh row/file witnesses and the existing writer publication fences.
+Preserve deletion promotion, live-row retention, watcher notification results,
+continuation deferral and full-read certificates. A bare asynchronous call or
+posting the existing readonly SQLite adapter to the writer is insufficient.
+
+For item 3, cache source-stamped UUID/signature evidence and derived dependency
+witnesses, invalidate the affected group on source/member changes, and preserve
+the legacy fallback and deletion promotion. Skipping a cached label alone is
+not sound. These changes exceed the small safe production patch allowed here.
+
+Item 6 needs a conversation-level reader with ordered parts, message identity
+deduplication, provenance and a checkpoint spanning all followed files. It is
+outside this patch. No renderer change is made.
 
 Payload signatures are lazy, non-enumerable transient evidence: fully identified
 UUID histories retain no transcript lines and build no signatures. Their getter
@@ -3052,7 +3236,14 @@ nesting, background descriptors, file lists and trigger resolver all use this
 matcher. Working-set fallback uses the persisted local project identity.
 File-list worker policy/version, archive retirement snapshots and sidebar
 invalidation include scopes. Writer hide accepts an optional third `{ alias }`
-argument; unhide/re-add remove the matching entry's scope. Worktree cleanup
+argument; unhide/re-add remove the matching entry's scope. Re-add removes every
+local entry whose `visibilityPath` equals the added path's and whose scope
+admits the local host, with its kind, scope and archive time under the stored
+key, not only an entry spelled exactly like it: deletion stores the canonical
+spelling (lowercase on Windows), and an exact-string removal left a re-added
+Windows project hidden (#1188). Only equality counts: a hidden worktree group
+that hides the added path as a descendant stays, so adding one child does not
+reveal its siblings or the group. Worktree cleanup
 keeps its existing path-wide cache deletion and removes the stored path mark
 and its scope. Global Settings already rereads and spreads the latest global
 record on Save, preserving scopes alongside archive state without a new form
@@ -3291,7 +3482,7 @@ lists never cross the writer transport. See `session-index-writer.md` for orderi
 - `db-session-metrics.test.js` — covers the `getTotalCounts` pure-JS mirror's `mergedIntoSessionId` exclusion (kept in sync with the real SQL by the SQL-level test above)
 - IPC consumers of cached payloads: `get-projects`, `get-active-sessions`, `search`, `get-stats-from-db`, `list-subagents`, `read-session-jsonl`
 - Renderer: `public/sidebar.js` (consumes `buildProjectsFromCache` output), `public/stats-view.js` (consumes `get-stats-from-db`, built from `getDailyMetrics` and the other `session_metrics` queries)
-- If you add a new `session_cache` column, update the SELECT in `getCachedByFolder` — it's `SELECT *` so additions land automatically, but the renderer needs to know about them.
+- If you add a new `session_cache` column, add its `ALTER TABLE` repair and add it to `cacheUpsert`'s explicit column list (and its `ON CONFLICT` update) in `session-index-store.js`. Reads such as `getCachedByFolder` are `SELECT *`, so they return it without change, but the renderer needs to know about it.
 
 ## Schema reference
 
@@ -3302,17 +3493,33 @@ session_cache(sessionId PK, folder, projectPath, summary, firstPrompt,
               created, modified, messageCount, slug, aiTitle,
               parentSessionId, agentId, subagentType, description,
               fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint,
-              scheduleSlug, continuationIndex, customTitle)
+              scheduleSlug, continuationIndex, runtime DEFAULT 'claude',
+              sessionFile, customTitle, workflowRunId, messageCountIndex,
+              fileSize, fullReadStamp)
+session_name_derivation(sessionId PK, witness)   -- deleted with its session_cache row
 session_meta(sessionId PK, name, starred, archived)
-session_meta_fields(sessionId, field, revision, source, transcriptTitle; PK (sessionId, field))
+session_meta_fields(sessionId, field, revision, source, transcriptTitle, updatedAt;
+                    PK (sessionId, field))
 session_metrics(sessionId, date, model, messageCount, toolCallCount,
                 inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens;
                 PK (sessionId, date, model))
-cache_meta(folder PK, projectPath, indexMtimeMs)
+cache_meta(folder PK, projectPath, indexMtimeMs, fullIndexVersion,
+           fullIndexConfig, fullIndexPending, readFailures)
 search_content(rowid PK, title, body)
 search_fts USING fts5(title, body, content='search_content', tokenize='trigram case_sensitive 0')
 search_map(rowid PK, id, type, folder)   -- backref for FTS delete
 settings(key PK, value JSON)
+session_requests(stemKey PK, suppliedHash, rawHash, family, actualStem,
+                 resultBytes, createdAt, completedAt, revision)
+session_request_commands(domainId, actionToken, command, argsHash, rawHash,
+                         outcomeJson, revision, createdAt; PK (domainId, actionToken))
+project_delete_fences(projectKey PK, epoch, operationId, blocked)
+project_delete_operations(operationId PK, projectKey, expectedEpoch, ownedEpoch,
+                          manifestHash, membershipDigest, writerMembershipDigest,
+                          optionsJson, state, phase, startRevision, lastRevision,
+                          nextUnit, totalUnits, sealed, errorJson, createdAt, finishedAt)
+project_delete_units(operationId, ordinal, category, targetJson, status,
+                     resultJson; PK (operationId, ordinal))   -- cascade on operation delete
 ```
 
 ## Continuation rows (#564)

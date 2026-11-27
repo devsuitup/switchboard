@@ -84,8 +84,22 @@ function readFolderFromFilesystem(folder) {
       return readForScan(path.join(folderPath, sessionId + '.jsonl'), key, projectPath, { dedupeSinceTimestamp: cutoff, excludedMessageUuids, excludedMessageSignatures });
     } catch (error) { if (startupRead) throw error; return null; }
   };
-  const { toUpsert } = mergeBridgeGroups([], sessions, reread);
-  return { folder: key, projectPath, sessions: toUpsert, indexMtimeMs };
+  const { toUpsert, deferred } = mergeBridgeGroups([], sessions, reread);
+  return { folder: key, projectPath, sessions: toUpsert, indexMtimeMs, ...deferUnknownBridgeEvidence(folderPath, deferred) };
+}
+
+// see .ai/contexts/session-cache.md ("Bridge history divergence")
+function deferUnknownBridgeEvidence(folderPath, sessionIds) {
+  if (!sessionIds?.length) return {};
+  if (!startupRead) return { bridgeDeferred: sessionIds };
+  for (const sessionId of sessionIds || []) {
+    const relativePath = sessionId + '.jsonl';
+    if (!safeRelativePath(relativePath)) continue;
+    startupRead.failed.add(relativePath);
+    if (!startupRead.errors.has(relativePath)) startupRead.errors.set(relativePath,
+      { size: observation(path.join(folderPath, relativePath))?.size || '0', error: 'bridge-evidence-unknown' });
+  }
+  return {};
 }
 
 // rel is POSIX-separated (remote inventory, not the local fs) -- see
@@ -152,10 +166,11 @@ function readFolderFileSubsetFromFilesystem(folder, files, existingRows, derived
     const full = reread(row.sessionId, null);
     if (full) freshRows.push(full);
   }
-  const { toUpsert, toDelete } = startupRead && !freshRows.length && !goneIds.length ? { toUpsert: [], toDelete: [] }
+  const { toUpsert, toDelete, deferred } = startupRead && !freshRows.length && !goneIds.length ? { toUpsert: [], toDelete: [] }
     : mergeBridgeGroups((existingRows || []).filter(row => !goneIds.includes(row.sessionId)), freshRows, reread);
   return { folder: key, projectPath, sessions: toUpsert,
-    toDelete: [...new Set([...goneIds, ...toDelete])].filter(id => !startupRead || !toUpsert.some(row => row.sessionId === id)), indexMtimeMs, partial: true };
+    toDelete: [...new Set([...goneIds, ...toDelete])].filter(id => !startupRead || !toUpsert.some(row => row.sessionId === id)), indexMtimeMs, partial: true,
+    ...deferUnknownBridgeEvidence(folderPath, deferred) };
 }
 
 function readStartupFolder(folder) {
@@ -279,15 +294,16 @@ function readStartupCodexFolder(harness, folder, state) {
     if (!relativePath || byPath.has(relativePath)) { reason ||= 'ambiguous-source'; continue; }
     byPath.set(relativePath, row);
   }
-  const failures = workerData.startup.force || meta?.fullIndexVersion !== SESSION_CONTENT_INDEX_VERSION || meta?.fullIndexConfig !== scanConfig() ? new Map() : readFailures(meta);
-  const failedSources = new Set();
+  const failures = workerData.startup.force || meta?.fullIndexVersion !== SESSION_CONTENT_INDEX_VERSION || meta?.fullIndexConfig !== scanConfig() ? new Map() : readFailures(meta, 'codex');
+  const failedSources = new Set(), excludedSources = new Set();
   const selected = new Set(entry.deferred || []), checks = new Map();
   const present = new Set(files.map(file => path.basename(file)));
   for (const file of files) {
     const relativePath = path.basename(file), row = byPath.get(relativePath);
-    if (matchesFullRead(file, failures.get(relativePath)?.stamp, 'codex', relativePath, titleSnapshot)) {
+    const previous = failures.get(relativePath);
+    if (matchesFullRead(file, previous?.stamp, 'codex', relativePath, titleSnapshot) && (!previous.excluded || !row)) {
       selected.delete(relativePath);
-      failedSources.add(relativePath);
+      (previous.excluded ? excludedSources : failedSources).add(relativePath);
       checks.set(relativePath, failures.get(relativePath).stamp);
       continue;
     }
@@ -315,10 +331,13 @@ function readStartupCodexFolder(harness, folder, state) {
       checks.set(relativePath, null);
       continue;
     }
-    if (failedSources.has(relativePath)) continue;
+    if (failedSources.has(relativePath) || excludedSources.has(relativePath)) continue;
     const outcome = {};
     const row = harness.readSessionFile(file, folder, { startup: true, outcome, titleSnapshot, allowSubagentEarlyStop: !byPath.has(relativePath) });
-    if (outcome.status === 'excluded-early') continue;
+    if (outcome.status === 'excluded-early') {
+      outcome.stamp = failureStamp(file, 'codex', relativePath, before, { title: titleSnapshot.titles.get(harness.sessionIdFromPath(file)) || null });
+      outcome.status = outcome.stamp ? 'excluded' : 'deferred';
+    }
     if (outcome.status === 'failed') {
       readErrors.push([relativePath, { size: before.size, error: outcome.error }]);
       const stamp = deterministicReadFailure(outcome.error) && failureStamp(file, 'codex', relativePath, before, { title: titleSnapshot.titles.get(harness.sessionIdFromPath(file)) || null });
@@ -335,6 +354,7 @@ function readStartupCodexFolder(harness, folder, state) {
     }
     else {
       checks.set(relativePath, outcome.stamp);
+      if (!row && outcome.status === 'excluded') failures.set(relativePath, { stamp: outcome.stamp, excluded: true });
       if (!row && byPath.has(relativePath)) toDelete.push(byPath.get(relativePath).sessionId);
     }
     if (row) sessions.push(row);

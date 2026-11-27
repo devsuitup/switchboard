@@ -1207,6 +1207,423 @@ test('sandbox wrapper: refuses a symlinked state entry of ~/.claude whose target
     }
   });
 
+test('sandbox wrapper: a protected path reached through another state link\'s target is read-only there',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const todos = path.join(rig.root, 'store', 'todos');
+      const projects = path.join(rig.root, 'store', 'projects');
+      const own = path.join(projects, folderOf(rig.proj));
+      fs.mkdirSync(path.join(todos, 'hooks'), { recursive: true });
+      fs.mkdirSync(path.join(own, 'commands'), { recursive: true });
+      fs.symlinkSync(todos, path.join(dir, 'todos'));
+      fs.symlinkSync(path.join(todos, 'hooks'), path.join(dir, 'hooks'));
+      fs.symlinkSync(projects, path.join(dir, 'projects'));
+      fs.symlinkSync(path.join(own, 'commands'), path.join(dir, 'commands'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(accessAt(ops, todos), '--bind', 'the state target stays writable');
+      assert.equal(accessAt(ops, own), '--bind', 'the transcript folder stays writable');
+      for (const p of [path.join(todos, 'hooks', 'x.sh'), path.join(own, 'commands', 'x.md')]) {
+        assert.equal(accessAt(ops, p), '--ro-bind', `${p} must be read-only inside the writable state target`);
+      }
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a state link whose target is, or is inside, a path the sandbox keeps read-only',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const todos = path.join(rig.root, 'store', 'todos');
+      fs.mkdirSync(todos, { recursive: true });
+      fs.symlinkSync(todos, path.join(dir, 'todos'));
+      for (const protectedTarget of [todos, path.dirname(todos)]) {
+        fs.rmSync(path.join(dir, 'hooks'), { force: true });
+        fs.symlinkSync(protectedTarget, path.join(dir, 'hooks'));
+        const { status, stderr } = rig.run();
+        assert.equal(status, 125, `must fail closed with hooks -> ${protectedTarget}`);
+        assert.match(stderr, /binds read-write for a state entry of ~\/\.claude, is at or inside/);
+      }
+      assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), [], 'refused before bwrap');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a state link whose target overlaps a private entry of ~/.claude',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      const inside = path.join(dir, 'shell-snapshots', 'todos');
+      fs.mkdirSync(path.join(inside, 'hooks'), { recursive: true });
+      fs.symlinkSync(inside, path.join(dir, 'todos'));
+      fs.symlinkSync(path.join(inside, 'hooks'), path.join(dir, 'hooks'));
+      let res = rig.run();
+      assert.equal(res.status, 125, 'a state target inside a private entry must fail closed');
+      assert.match(res.stderr, /overlaps .*shell-snapshots, which the sandbox keeps private/);
+
+      fs.unlinkSync(path.join(dir, 'todos'));
+      fs.unlinkSync(path.join(dir, 'hooks'));
+      fs.rmSync(path.join(dir, 'shell-snapshots'), { recursive: true });
+      const todos = path.join(rig.root, 'store', 'todos');
+      fs.mkdirSync(path.join(todos, 'shell-snapshots'), { recursive: true });
+      fs.symlinkSync(todos, path.join(dir, 'todos'));
+      fs.symlinkSync(path.join(todos, 'shell-snapshots'), path.join(dir, 'shell-snapshots'));
+      res = rig.run();
+      assert.equal(res.status, 125, 'a private target inside a state target must fail closed');
+      assert.match(res.stderr, /overlaps .*shell-snapshots, which the sandbox keeps private/);
+      assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), [], 'refused before bwrap');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a state link whose target is inside an entry of ~/.claude mounted read-only',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(path.join(dir, 'hooks', 'todos'), { recursive: true });
+      fs.symlinkSync(path.join(dir, 'hooks', 'todos'), path.join(dir, 'todos'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 125, 'must fail closed');
+      assert.match(stderr, /mounts read-write, is at or inside .*hooks, which it keeps read-only/);
+      assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), [], 'refused before bwrap');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a state link whose target exposes a read-only path under another spelling',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const todos = path.join(rig.root, 'store', 'todos');
+      fs.mkdirSync(path.join(todos, '.claude', 'hooks'), { recursive: true });
+      fs.writeFileSync(path.join(todos, '.claude', 'hooks', 'hook.sh'), '');
+      const alias = path.join(rig.root, 'project-alias');
+      fs.symlinkSync(todos, alias);
+      fs.symlinkSync(todos, path.join(dir, 'todos'));
+      const { status, stderr } = rig.run(['--version'], {}, alias);
+      assert.equal(status, 125, 'the hooks would be writable through the todos target');
+      assert.match(stderr, /keeps read-only, is also reached read-write/);
+      assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), [], 'refused before bwrap');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a state link whose target holds the file a linked ~/.claude.json points to',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const cache = path.join(rig.root, 'store', 'cache');
+      fs.mkdirSync(cache, { recursive: true });
+      fs.writeFileSync(path.join(cache, 'claude.json'), '{}\n');
+      fs.symlinkSync(cache, path.join(dir, 'cache'));
+      fs.symlinkSync(path.join(cache, 'claude.json'), path.join(rig.home, '.claude.json'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 125, 'the host ~/.claude.json would be writable through the cache target');
+      assert.match(stderr, /private copy/);
+      assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), [], 'refused before bwrap');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a state link inside a private entry\'s target whose name ends in a newline',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const priv = path.join(rig.root, 'cache') + '\n';
+      fs.mkdirSync(path.join(priv, 'todos'), { recursive: true });
+      fs.symlinkSync(priv, path.join(dir, 'shell-snapshots'));
+      fs.symlinkSync(path.join(priv, 'todos'), path.join(dir, 'todos'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 125, 'the host shell snapshots would be writable through the todos target');
+      assert.match(stderr, /keeps private|private copy/);
+      assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), [], 'refused before bwrap');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: a state link to a project\'s agent-memory, already writable there, is accepted',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const memory = path.join(rig.proj, '.claude', 'agent-memory');
+      fs.mkdirSync(memory, { recursive: true });
+      fs.symlinkSync(memory, path.join(dir, 'agent-memory'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(accessAt(ops, path.join(memory, 'notes.md')), '--bind');
+      assert.equal(accessAt(ops, path.join(rig.proj, '.claude', 'settings.json')), '--ro-bind');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: a .claude under a read-only tool directory stays protected against a state link into it',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const tools = path.join(rig.proj, 'tools');
+      const todos = path.join(tools, 'sample', '.claude', 'todos');
+      fs.mkdirSync(todos, { recursive: true });
+      fs.writeFileSync(path.join(todos, 'hook.sh'), '');
+      let res = rig.run(['--version'], { NVM_DIR: tools });
+      assert.equal(res.status, 0, `a .claude under the tool directory alone launches\n${res.stderr}`);
+      fs.rmSync(path.join(dir, 'todos'), { recursive: true, force: true });
+      fs.symlinkSync(todos, path.join(dir, 'todos'));
+      res = rig.run(['--version'], { NVM_DIR: tools });
+      assert.equal(res.status, 125, 'the nested .claude would be writable through the todos target');
+      assert.match(res.stderr, /mounts read-write, is at or inside .*sample\/\.claude, which it keeps read-only/);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: a link inside a .claude under a read-only tool directory keeps its target protected against a state link to it',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const tools = path.join(rig.proj, 'tools');
+      const config = path.join(tools, 'sample', '.claude');
+      const store = path.join(rig.root, 'store', 'todos');
+      fs.mkdirSync(config, { recursive: true });
+      fs.mkdirSync(store, { recursive: true });
+      fs.writeFileSync(path.join(store, 'hook.sh'), '');
+      fs.symlinkSync(store, path.join(config, 'hooks'));
+      let res = rig.run(['--version'], { NVM_DIR: tools });
+      assert.equal(res.status, 0, `a linked hooks under the tool directory alone launches\n${res.stderr}`);
+      fs.rmSync(path.join(dir, 'todos'), { recursive: true, force: true });
+      fs.symlinkSync(store, path.join(dir, 'todos'));
+      res = rig.run(['--version'], { NVM_DIR: tools });
+      assert.equal(res.status, 125, 'the hooks target would be writable through the todos target');
+      assert.match(res.stderr, /store\/todos, which the sandbox binds read-write for a state entry of ~\/\.claude, is at or inside .*store\/todos, which it keeps read-only/);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a .claude under a read-only tool directory that is a symbolic link',
+  { skip: !LINUX && 'linux only' }, () => {
+    for (const layout of ['through a project link', 'with a linked hooks below it']) {
+      const rig = makeRig({ recordArgs: true });
+      try {
+        const dir = path.join(rig.home, '.claude');
+        fs.mkdirSync(dir);
+        const tools = path.join(rig.proj, 'tools');
+        const sample = path.join(tools, 'sample');
+        const external = path.join(rig.root, 'dotfiles', 'config');
+        fs.mkdirSync(sample, { recursive: true });
+        fs.mkdirSync(external, { recursive: true });
+        if (layout === 'through a project link') {
+          const redirect = path.join(rig.proj, 'config-link');
+          fs.writeFileSync(path.join(external, 'settings.json'), '{}');
+          fs.symlinkSync(external, redirect);
+          fs.symlinkSync(redirect, path.join(sample, '.claude'));
+        } else {
+          const inner = path.join(external, 'worktrees', 'repo', '.claude');
+          const store = path.join(rig.root, 'store', 'todos');
+          fs.mkdirSync(inner, { recursive: true });
+          fs.mkdirSync(store, { recursive: true });
+          fs.writeFileSync(path.join(store, 'hook.sh'), '');
+          fs.symlinkSync(external, path.join(sample, '.claude'));
+          fs.symlinkSync(store, path.join(inner, 'hooks'));
+          fs.rmSync(path.join(dir, 'todos'), { recursive: true, force: true });
+          fs.symlinkSync(store, path.join(dir, 'todos'));
+        }
+        const res = rig.run(['--version'], { NVM_DIR: tools });
+        assert.equal(res.status, 125, `a linked .claude under the tool directory is refused, ${layout}\n${res.stderr}`);
+        assert.match(res.stderr, /tools\/sample\/\.claude is a symbolic link/);
+      } finally {
+        rig.cleanup();
+      }
+    }
+  });
+
+test('sandbox wrapper: a repository under a read-only tool directory keeps its core.hooksPath protected against a state link to it',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const tools = path.join(rig.proj, 'tools');
+      const sample = path.join(tools, 'sample');
+      const store = path.join(rig.root, 'store', 'todos');
+      fs.mkdirSync(sample, { recursive: true });
+      fs.mkdirSync(store, { recursive: true });
+      fs.writeFileSync(path.join(store, 'pre-commit'), '');
+      git(sample, 'init', '-q');
+      git(sample, 'config', 'core.hooksPath', store);
+      let res = rig.run(['--version'], { NVM_DIR: tools });
+      assert.equal(res.status, 0, `the repository under the tool directory alone launches\n${res.stderr}`);
+      fs.rmSync(path.join(dir, 'todos'), { recursive: true, force: true });
+      fs.symlinkSync(store, path.join(dir, 'todos'));
+      res = rig.run(['--version'], { NVM_DIR: tools });
+      assert.equal(res.status, 125, 'the hooks directory would be writable through the todos target');
+      assert.match(res.stderr, /store\/todos, which the sandbox binds read-write for a state entry of ~\/\.claude, is at or inside .*store\/todos, which it keeps read-only/);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: a link in the project\'s .claude whose target ends in a newline has that target protected',
+  { skip: !LINUX && 'requires Linux newline filenames and symlinks' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      fs.mkdirSync(path.join(rig.proj, '.claude'));
+      const hooks = path.join(rig.proj, 'hooks\n');
+      fs.mkdirSync(hooks);
+      fs.writeFileSync(path.join(hooks, 'hook.sh'), '');
+      fs.symlinkSync('../hooks\n', path.join(rig.proj, '.claude', 'hooks'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(accessAt(ops, path.join(hooks, 'hook.sh')), '--ro-bind', 'the newline-ending hooks target stays read-only');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: a working directory whose name ends in a newline keeps the targets of its .claude links protected',
+  { skip: !LINUX && 'requires Linux newline filenames and symlinks' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      const proj = `${rig.proj}\n`;
+      fs.renameSync(rig.proj, proj);
+      fs.mkdirSync(path.join(proj, '.claude'));
+      fs.mkdirSync(path.join(proj, 'hooks'));
+      fs.writeFileSync(path.join(proj, 'hooks', 'run'), '');
+      fs.symlinkSync('../hooks', path.join(proj, '.claude', 'hooks'));
+      const { status, stderr } = rig.run(['--version'], {}, proj);
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(accessAt(ops, path.join(proj, 'hooks', 'run')), '--ro-bind', 'the hooks target stays read-only');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a repository whose core.hooksPath ends in a newline',
+  { skip: !LINUX && 'requires Linux newline filenames' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      git(rig.proj, 'init', '-q');
+      fs.mkdirSync(path.join(rig.proj, 'hooks\n'));
+      git(rig.proj, 'config', 'core.hooksPath', 'hooks\n');
+      const { status, stderr } = rig.run();
+      assert.equal(status, 125, `hooks\\n would stay writable while hooks is protected\n${stderr}`);
+      assert.match(stderr, /a git path of .* contains a newline/);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a repository under a read-only tool directory whose name ends in a newline',
+  { skip: !LINUX && 'requires Linux newline filenames and symlinks' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const tools = path.join(rig.proj, 'tools');
+      const sample = path.join(tools, 'sample\n');
+      const store = path.join(rig.root, 'store', 'todos');
+      fs.mkdirSync(sample, { recursive: true });
+      fs.mkdirSync(store, { recursive: true });
+      git(sample, 'init', '-q');
+      git(sample, 'config', 'core.hooksPath', store);
+      fs.rmSync(path.join(dir, 'todos'), { recursive: true, force: true });
+      fs.symlinkSync(store, path.join(dir, 'todos'));
+      const res = rig.run(['--version'], { NVM_DIR: tools });
+      assert.equal(res.status, 125, `the repository's hooks would be left unprotected\n${res.stderr}`);
+      assert.match(res.stderr, /a git path of .*tools\/sample\n contains a newline/);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: a linked state directory outside ~/.claude is followed only to a directory named claude, never to / or a parent of $HOME',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      fs.mkdirSync(path.join(rig.home, '.cache'));
+      const link = path.join(rig.home, '.cache', 'claude');
+      for (const target of ['/', rig.root, path.join(rig.root, 'store', 'other')]) {
+        fs.mkdirSync(target, { recursive: true });
+        fs.rmSync(link, { force: true });
+        fs.symlinkSync(target, link);
+        const { status, stderr } = rig.run();
+        assert.equal(status, 125, `~/.cache/claude -> ${target} must fail closed`);
+        assert.match(stderr, /\.cache\/claude links to /);
+      }
+      const data = path.join(rig.root, 'data', 'claude');
+      fs.mkdirSync(data, { recursive: true });
+      fs.rmSync(link, { force: true });
+      fs.symlinkSync(data, link);
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      assert.equal(accessAt(parseMounts(rig.lastBwrapArgs()), path.join(link, 'x')), '--bind');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: a protected path inside a private entry of ~/.claude gets no host mount over its tmpfs',
+  { skip: !LINUX && 'linux only' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      for (const d of ['shell-snapshots/linked', 'session-env', 'backups', 'state']) {
+        fs.mkdirSync(path.join(dir, d), { recursive: true });
+      }
+      fs.writeFileSync(path.join(dir, 'shell-snapshots', 'linked', 'snapshot.sh'), '');
+      fs.symlinkSync(path.join(dir, 'shell-snapshots', 'linked'), path.join(dir, 'commands'));
+      git(rig.proj, 'init', '-q');
+      git(rig.proj, 'config', 'core.hooksPath', path.join(dir, 'session-env'));
+      const { status, stderr } = rig.run();
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      for (const name of ['shell-snapshots', 'session-env', 'backups', 'state']) {
+        const priv = path.join(dir, name);
+        assert.equal(mountAt(ops, priv)?.op, '--tmpfs', `${name} stays a private tmpfs`);
+        assert.deepEqual(ops.filter(o => o.dest.startsWith(priv + '/')), [],
+          `nothing from the host is mounted inside ${name}`);
+      }
+      assert.equal(accessAt(ops, path.join(dir, 'shell-snapshots', 'linked', 'snapshot.sh')), '--tmpfs');
+      assert.equal(accessAt(ops, path.join(rig.proj, '.git', 'hooks')), '--ro-bind', 'the repository keeps its own protection');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
 test('sandbox wrapper: refuses a symlinked state entry whose target contains $HOME',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
@@ -2059,8 +2476,8 @@ test('control aliases: mutable links and writable state descendants refuse befor
     assert.match(res.stderr, /symbolic link.*sandbox can write/);
     const cache = path.join(rig.home, '.cache', 'claude');
     fs.mkdirSync(path.dirname(cache), { recursive: true });
-    fs.mkdirSync(path.join(control, 'descendant'));
-    fs.symlinkSync(path.join(control, 'descendant'), cache);
+    fs.mkdirSync(path.join(control, 'claude'));
+    fs.symlinkSync(path.join(control, 'claude'), cache);
     res = rig.run(['--version'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: control });
     assert.equal(res.status, 125, res.stderr);
     assert.match(res.stderr, /overlaps control path|reopens control path/);

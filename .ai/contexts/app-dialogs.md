@@ -179,6 +179,59 @@ These bounds also cover alternating IDs and large payloads. The fixed deadline
 is not extended by new events. Its timer is unreferenced, cleared on disposal, and pending counts flush
 on graceful quit. Abrupt termination can lose the final partial window.
 
+## Failures say what to do (#709)
+
+A failure shown to the user says what failed, then what to do, in one short
+sentence. The first line carries no UUID and no long path; the backend's
+reason goes elsewhere. `appAlert` is not used for a failure: it blocks the
+window and gives no next step.
+
+- **A panel with the failed control shows it inline**, next to that control,
+  as an element with `role="alert"`. The reason sits in its `title`. The text
+  clears on the next successful action.
+  - Diff tool Save (`public/file-panel.js`): `.diff-save-failure`, under the
+    diff toolbar. The failure belongs to its tab (`tab.saveFailure`), so a
+    diff opened later does not inherit it, and an answered diff hides it. The
+    buffer is never touched: a retry writes the same edits.
+  - Diagnostics trace rows (`public/activity-trace-panel.js`): Open and
+    Delete write `.activity-trace-file-error` in the row of the file, found
+    by `data-file-path`. A successful Open clears it; a successful Delete
+    redraws the list.
+  - `ViewerPanel` Delete (`public/viewer-panel.js`, Memory and trace
+    viewers): the `delete-failed` state of the existing `.viewer-panel-notice`
+    under the toolbar. An `onDelete` refusal may carry its own `message`,
+    shown instead of the default sentence. The viewer stays open with its
+    document; a successful Delete clears it before `onClose`.
+- **No panel: an app notice** (`showAppNotice`, `public/app-notices.js`).
+  Sidebar **Change path** uses the `sessionActionNoticeId('Change path',
+  project)` id, which its pre-check failure shares, with the sentence on the
+  first line and the reason on the second (`.app-notice-message` keeps
+  newlines). A successful remap clears it with `clearAppNotice`.
+
+**The "what to do" must be true for the refusal.** A retry that cannot
+succeed is not an instruction, so main tags each refusal with a `code` and
+the renderer picks the sentence from it:
+
+| Refusal (main.js) | `code` | What the user is told |
+|---|---|---|
+| `deleteActivityTraceFile`: the file debug mode is writing | `recording` | turn debug mode off, then Delete again |
+| `deleteActivityTraceFile`: outside the trace folder, or already gone | `not-trace`, `ENOENT` | reopen Diagnostics to refresh the list |
+| `deleteActivityTraceFile`: any other unlink error | the fs `code` | try Delete again, or close the program holding it |
+| `remapMissingProject`: the original folder is back | `path-back` | nothing to change; **Refresh** the project list (info notice with a Refresh action) |
+| `remapMissingProject`: no session folder for the project | `no-session-data` | **Refresh** the project list |
+| `remapMissingProject`: a session of the project still runs | `active-sessions` | stop those sessions, then Change path again |
+| `remapMissingProject`: target missing or not a folder | `target-missing`, `target-not-directory` | choose an existing folder, then Change path again |
+| `remapMissingProject`: bad arguments or a failed rewrite | `invalid-arguments`, `failed` | fix the cause shown below, then Change path again |
+
+The recording trace keeps its Delete button: the list's `current` flag and
+the viewer cannot tell for sure which file main is writing at the moment of
+the click, and main's refusal is the authority, so the message follows it.
+`test/failure-refusal-codes.test.js` loads both main functions with
+`loadAppFunctions` and pins every code.
+
+Tests: `test/dom-failure-recovery.test.js`, one case per site, asserts that no
+`appAlert` is called, the sentence, the reason, and the clearing.
+
 ## Modal stack and keyboard router
 
 `public/modal-stack.js` loads before every renderer consumer. It owns the modal stack and the only modal `keydown` listener, installed on `document` in capture phase. Each modal calls `registerModal({ overlay, cancel, enter, bodyEnter })` after mounting and calls the returned unregister function on every close path. The stack's last registration owns the keys; neither DOM class order nor the current event target chooses another modal.

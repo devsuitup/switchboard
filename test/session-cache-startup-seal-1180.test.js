@@ -41,8 +41,10 @@ for (const runtime of ['claude', 'codex']) {
       return open.call(this, target, ...args);
     });
     await f.writer.refreshFolder(folder);
+    assert.equal(refreshReads, 0, 'an untargeted refresh leaves an unchanged witnessed source unread');
+    await f.writer.refreshFolder(folder, { files: new Set([path.basename(file)]) });
     refreshOpen.mock.restore();
-    assert.equal(refreshReads, 1, 'explicit refresh retries the witnessed source');
+    assert.equal(refreshReads, 1, 'a targeted refresh retries the witnessed source');
     fs.appendFileSync(file, '\n');
     assert.equal((await f.restart()).ok, true);
     assert.equal(f.scans().find(item => item.folder === folder).filesRead, 1);
@@ -75,8 +77,10 @@ for (const kind of ['P full baseline', 'S sealed baseline']) {
       return open.call(this, target, ...args);
     });
     await f.writer.refreshFolder(f.folder);
+    assert.equal(refreshReads, 0, 'an untargeted refresh leaves an unchanged unindexed failure unread');
+    await f.writer.refreshFolder(f.folder, { files: new Set([path.basename(bad)]) });
     patch.mock.restore();
-    assert.equal(refreshReads, 1, 'explicit refresh retries an unchanged unindexed failure');
+    assert.equal(refreshReads, 1, 'a targeted refresh retries an unchanged unindexed failure');
     f.write('poison', 'repaired');
     assert.equal((await f.restart()).ok, true);
     assert.equal(f.scans()[0].filesRead, 1, 'only the changed failed file is retried');

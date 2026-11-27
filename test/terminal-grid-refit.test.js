@@ -41,6 +41,11 @@ function setup(t) {
   sessionsTab.className = 'sidebar-tab';
   sessionsTab.dataset.tab = 'sessions';
   document.body.append(sessionsTab);
+  const schedulesContent = document.createElement('div');
+  schedulesContent.id = 'schedules-content';
+  document.body.append(schedulesContent);
+  window.setSchedulesVisible = () => {};
+  window.endSessionSearch = () => {};
   window.activeTab = 'stats';
   window.searchGeneration = 0;
   window.projectsChangedWhileAway = false;
@@ -288,7 +293,7 @@ for (const event of ['focus', 'visibilitychange']) {
   });
 }
 
-for (const route of ['agents', 'sessions-tab', 'show-grid']) {
+for (const route of ['agents', 'sessions-tab', 'show-grid', 'group-by-project']) {
   for (const observerFirst of [false, true]) {
     test(`${route} return and observer fit each visible card once (observer first: ${observerFirst})`, t => {
       const h = setup(t);
@@ -299,19 +304,58 @@ for (const route of ['agents', 'sessions-tab', 'show-grid']) {
         h.window.focusGridCard = () => {};
       }
       const deliver = () => { h.intersect(visible, true); h.intersect(below, false); };
-      if (observerFirst) deliver();
+      if (route === 'group-by-project') {
+        h.window.layoutGridCards = () => {
+          for (const card of [visible, below]) {
+            const previous = card.el;
+            card.el = h.document.createElement('div');
+            card.el.className = 'grid-card';
+            card.el.dataset.sessionId = card.entry.session.sessionId;
+            card.el.getBoundingClientRect = previous.getBoundingClientRect;
+            card.el.append(card.entry.element);
+            h.window.terminalsEl.append(card.el);
+            h.read('gridCards').set(card.entry.session.sessionId, card.el);
+          }
+          if (observerFirst) deliver();
+          return ['visible', 'below'];
+        };
+        h.window.focusGridCard = () => {};
+      } else if (observerFirst) deliver();
       if (route === 'agents') {
         h.read('agentsViewActive = true');
         h.window.hideAgentsView();
       } else if (route === 'sessions-tab') {
         h.document.querySelector('.sidebar-tab').click();
+      } else if (route === 'group-by-project') {
+        h.window.setGridGroupByProject(false);
       } else {
         h.window.showGridView();
       }
       h.flushFrames();
       if (!observerFirst) { deliver(); h.flushFrames(); }
-      assert.deepEqual(visible.calls, { fits: 1, repaints: 1, clears: 1 });
-      assert.deepEqual(below.calls, { fits: 0, repaints: 0, clears: 0 });
+      assert.deepEqual({ visible: visible.calls, offscreen: below.calls }, {
+        visible: { fits: 1, repaints: 1, clears: 1 },
+        offscreen: { fits: 0, repaints: 0, clears: 0 },
+      });
     });
   }
 }
+
+test('a grid fit loads WebGL on its held entry during a registry re-key', t => {
+  const h = setup(t);
+  const held = h.card('old', rect(0, 0, 250, 200));
+  const displaced = h.card('new', rect(0, 500, 250, 200));
+  held.entry.webglAddon = null;
+  displaced.entry.webglAddon = null;
+  held.entry.fitAddon.fit = () => {
+    held.calls.fits++;
+    held.entry.session.sessionId = 'new';
+  };
+  h.intersect(held, true);
+  h.flushFrames();
+  h.window.openSessions.delete('old');
+  h.window.openSessions.set('new', held.entry);
+  assert.ok(held.entry.webglAddon, 'WebGL must load on the entry held by the fit frame');
+  assert.equal(displaced.entry.webglAddon, null, 'the previous registry occupant must not receive WebGL');
+  assert.deepEqual(held.calls, { fits: 1, repaints: 1, clears: 0 });
+});

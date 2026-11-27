@@ -276,3 +276,69 @@ test('writer persists transcript sizes across reopen and upgrades legacy rows wi
   await reopenedWriter.applyProjectsWorkerEffects({ effects: [{ name: 'setCachedFileSize', args: [OLD, beforeRelay.fileSize] }], keptLiveRows: [] });
   assert.deepEqual({ ...store.getCachedSession(OLD) }, beforeRelay, 'Projects effect relay preserves content and recency');
 });
+
+for (const failure of ['read-error', 'no-summary']) {
+  for (const subagent of [false, true]) {
+    for (const targeted of [false, true]) {
+      test(`null pinned full read settles the row and leaves the next walk budget available: ${failure}, subagent=${subagent}, targeted=${targeted}`, async t => {
+        const h = fixture(t);
+        const relative = subagent ? path.join(OLD, 'subagents', 'agent-child.jsonl') : OLD + '.jsonl';
+        const file = path.join(h.dir, relative);
+        const id = subagent ? subagentSessionId(OLD, 'child') : OLD;
+        const pinned = new Date('2030-01-01T00:00:00.000Z');
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, line({ type: 'user', cwd: h.root, isSidechain: subagent,
+          timestamp: '2026-10-19T08:00:00.000Z', message: { content: 'original prompt' } }));
+        h.write(OTHER);
+        for (const target of [file, h.file(OTHER)]) fs.utimesSync(target, pinned, pinned);
+        const writer = memoryWriter(h.db, cache);
+        await writer.ready;
+        const init = () => writer.initializeCache({ PROJECTS_DIR: h.root, activeSessions: h.activeSessions,
+          getMainWindow: () => null, log: h.log });
+        init();
+        await writer.refreshFolder(h.folder);
+        const before = { ...h.rows.get(id) };
+        assert.ok(before.fullReadStamp, 'start with certified cached content');
+        if (!subagent) assert.ok(before.continuationIndex, 'start with a persisted continuation index');
+        if (failure === 'no-summary') {
+          fs.writeFileSync(file, line({ type: 'cost-state', padding: 'x'.repeat(2000) }));
+        } else {
+          fs.appendFileSync(file, line({ type: 'assistant', timestamp: '2026-10-19T10:00:00.000Z',
+            message: { content: 'new answer' } }) + line({ type: 'custom-title', customTitle: 'Updated header' }));
+        }
+        fs.utimesSync(file, pinned, pinned);
+        assert.ok(fs.statSync(file).size > before.fileSize, 'the pinned row grew');
+        const open = fs.openSync;
+        const fullReads = [];
+        t.mock.method(fs, 'openSync', function (target, ...args) {
+          if ([file, h.file(OTHER)].includes(target) && /at (?:Object\.)?readSessionFile /.test(new Error().stack)) {
+            fullReads.push(target);
+            if (target === file && failure === 'read-error') throw Object.assign(new Error('fixture read failure'), { code: 'EACCES' });
+          }
+          return open.call(this, target, ...args);
+        });
+        const opts = targeted ? { files: new Set([relative, OTHER + '.jsonl']) } : {};
+        await writer.refreshFolder(h.folder, opts);
+        assert.deepEqual(fullReads, [file], 'the first walk attempts the pinned full read once');
+        const afterFirst = { ...h.rows.get(id) };
+        fs.appendFileSync(h.file(OTHER), line({ type: 'assistant', timestamp: '2026-10-19T11:00:00.000Z',
+          message: { content: 'later row needs the full read budget' } }));
+        fs.utimesSync(h.file(OTHER), pinned, pinned);
+        fullReads.length = 0;
+        init();
+        await writer.refreshFolder(h.folder, opts);
+        assert.equal(fullReads.filter(target => target === file).length, 0, 'the second walk must not reread the failed pinned row');
+        assert.deepEqual(fullReads, [h.file(OTHER)], 'the second walk retains its full read budget for another grown row');
+        assert.equal(h.rows.get(OTHER).modified, '2026-10-19T11:00:00.000Z');
+        assert.equal(afterFirst.fileSize, fs.statSync(file).size, 'the fallback records the observed size');
+        assert.equal(afterFirst.fullReadStamp, null, 'a failed full read cannot certify replacement content');
+        assert.equal(afterFirst.summary, before.summary, 'retain the last known summary when none can be read');
+        if (failure === 'read-error') {
+          assert.equal(afterFirst.customTitle, 'Updated header');
+          assert.equal(afterFirst.messageCount, 2);
+        }
+        assert.deepEqual(h.rows.get(id), afterFirst, 'the settled row survives cache reinitialization unchanged');
+      });
+    }
+  }
+}

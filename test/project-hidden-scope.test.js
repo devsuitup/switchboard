@@ -8,7 +8,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { applyAndPersistArchived } = require('../archived-projects');
-const { isHiddenRepositoryWorktree } = require('../public/worktree-nesting');
+const { isHiddenRepositoryWorktree, isProjectHidden } = require('../public/worktree-nesting');
 const { memoryWriter } = require('./fixtures/writer-memory.cjs');
 const { extractFunction } = require('./app-source');
 
@@ -187,4 +187,46 @@ for (const kind of ['descriptors', 'admission']) test(`empty hidden lists skip a
   if (kind === 'descriptors') assert.equal(policy.descriptors(), descriptors, 'empty-list shortcut must return the original descriptors');
   else assert.equal(policy.archived('/visible'), false);
   assert.equal(calls, 0, 'empty policies must do no filesystem normalization');
+});
+
+
+for (const kind of ['archive', 'delete', undefined]) test('Add project of a child keeps its hidden worktree group and sibling hidden, kind=' + kind, async t => {
+  const h = storage(t, {});
+  const parent = path.join(h.dir, 'repo', '.worktrees', 'topic');
+  const added = path.join(parent, 'pkg-a');
+  const sibling = path.join(parent, 'pkg-b');
+  fs.mkdirSync(added, { recursive: true });
+  fs.mkdirSync(sibling, { recursive: true });
+  await h.writer.hideProject(parent, kind, { alias: null });
+  const globalBefore = h.db.getSetting('global');
+  assert.equal(isProjectHidden(globalBefore.hiddenProjects, null, sibling, globalBefore.hiddenProjectScopes), true);
+  await h.writer.revealAddedProject(added);
+  const after = h.db.getSetting('global');
+  assert.equal(isProjectHidden(after.hiddenProjects, null, sibling, after.hiddenProjectScopes), true,
+    'Add child must not unhide its sibling by removing the intentionally hidden worktree group');
+  assert.deepEqual(after, globalBefore);
+});
+
+test('Add project clears equal entries under any spelling with their stored keys and keeps unrelated entries', async t => {
+  const h = storage(t, {});
+  const added = path.join(h.dir, 'MixedCaseRepo');
+  fs.mkdirSync(added);
+  const entry = process.platform === 'win32' ? added.toLowerCase() : added + '/';
+  const alternate = added.replaceAll('\\', '/') + '/';
+  const sibling = path.join(h.dir, 'unrelated');
+  const remote = 'box::/srv/repo';
+  const entries = [entry, alternate, sibling, remote];
+  const fields = { hiddenProjects: entries, hiddenProjectKinds: {}, hiddenProjectScopes: {}, hiddenProjectArchivedAt: {} };
+  for (const value of entries) {
+    fields.hiddenProjectKinds[value] = value === entry ? 'delete' : 'archive';
+    fields.hiddenProjectScopes[value] = { alias: value === remote ? 'box' : null };
+    fields.hiddenProjectArchivedAt[value] = 123;
+  }
+  h.db.setSetting('global', fields);
+  await h.writer.revealAddedProject(added);
+  const after = h.db.getSetting('global');
+  assert.deepEqual(after.hiddenProjects, [sibling, remote]);
+  for (const key of ['hiddenProjectKinds', 'hiddenProjectScopes', 'hiddenProjectArchivedAt']) {
+    assert.deepEqual(Object.keys(after[key]), [sibling, remote], key + ' must use the stored string key');
+  }
 });

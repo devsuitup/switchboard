@@ -187,6 +187,9 @@ Main-process modules `trigger-watcher.js` and `trigger-context.js` live in
 | `src/main/terminals/terminal-input.js` | `handleTerminalInput(activeSessions, sessionId, data, now)` — the body of the `terminal-input` IPC handler; feeds `session.composerState`. |
 | `src/main/terminals/input-attach.js` | `createInputAttach`/`noteInputAttach`: whether the CLI in a PTY has attached its input, read from bracketed paste in its output; backs `ctx.getInputAttachedAt` (see "Readiness of a freshly started CLI"). |
 | `src/main/terminals/tab-input-lock.js` | The per-tab mutex (`acquireTabInput`), shared with the Send to background action (`tryAcquireTabInput`; see "Re-keyed sessions"). |
+| `src/main/terminals/composer-state.js` | `createComposerState`/`noteUserInput`/`isComposerEmpty`: the model of typed, unsubmitted input kept on `session.composerState`; read by the trigger context's composer checks and by `composerEmptyAfterWrite`. |
+| `src/main/terminals/stop-session.js` | `stopLocalSession(session, sessionId, kill)`: the PTY stop that the versioned stop action reaches through main's `stop` lifecycle dependency. |
+| `src/main/cli/session-state-v1.js` | `createV1Reader`: the bounded CLI descriptor reader behind `cliSessionState.liveElsewhereV1Checked`, the "live elsewhere" check of v1 open, stop and launch validation. |
 | `main.js` (wiring) | `require('./src/main/triggers/trigger-watcher').start(createTriggerContext({ … }))` in the `app.whenReady` block, right after `startScheduler`, plus the one-line `terminal-input` registration. |
 
 ## Public surface
@@ -679,9 +682,16 @@ age checks and produces `refused`, `interrupted by restart`, `uncertain:true`;
 it preserves the normalized ID and recorded boolean lifecycle/write evidence,
 submission rank and step count. The recovery record uses `version`, `action`,
 `mode` (`new`/`resume`/`stop`), `sessionId`, `deadline` and confirmed evidence
-fields. This build creates no action markers because it initiates no actions.
-The later lifecycle slice must atomically claim/update a marker before effects;
-this recovery reader alone does not provide exactly-once execution or a
+fields. The open/new and stop executions in `trigger-actions.js` save markers
+through `execution.saveMarker`; only some precede the effect they name. Stop
+saves `claimed` and `prompt-attempted` before the final note is delivered,
+`note-delivered` after that delivery returns, `note-finished` (or `claimed`
+without a note) before the stop request, and `stop-requested` after `deps.stop`
+returned. Open/new saves `claimed` before the spawn, `spawned` once the tab has
+opened, the same phase again once the opened session is accepted, and the
+submission evidence (`submitted` once Enter was written) after prompt delivery.
+A marker that follows its effect records evidence of it; it does not reserve
+it. The recovery reader alone does not provide exactly-once execution or a
 power-loss guarantee.
 
 `resolveLocalTarget(id, deps)` is a read-only closed-transcript resolver. It
@@ -769,19 +779,19 @@ An exact settings-hidden recorded cwd still refuses before root fallback.
 `getTriggerProjectSnapshot` retains settings-hidden provenance and refuses a
 concurrent provenance change. Closed resume revalidates exact transcript
 identity and recorded cwd before spawn, with no fresh-start fallback. New uses
-the known project and ordinary defaults. Stop/final-note completion remains
-slice D. A successful resolution alone never authorizes launch or writing.
+the known project and ordinary defaults. Stop and its final note are
+implemented by `executeStop` (see "Versioned stop"). A successful resolution
+alone never authorizes launch or writing.
 
 Each watcher owns one `createNewSessionLimiter` bucket: capacity three,
 continuous refill of one token per 20000 ms, capped at three, reset on restart.
 Its synchronous `reserve()` is atomic in one JS event loop and returns null on
 exhaustion. A reservation's `refund()` is idempotent for definite pre-spawn
 failure; `retain()` makes it nonrefundable once spawn may have happened. There
-is no timer, refill queue, setting or open-session cap. The later new-session
-path must reserve after schema/project validation and before dispatch, return
-`new session rate limit exceeded` on exhaustion, and retain uncertain effects.
-Resume, stop and manual + never consume a token. This refusal-only build consumes
-none. Tests use injected clocks for burst/refill/refund and parallel reservation.
+is no timer, refill queue, setting or open-session cap. The new-session path
+reserves after schema/project validation and before allocating the ID, returns
+`new session rate limit exceeded` on exhaustion, and retains uncertain effects.
+Resume, stop and manual + never consume a token. Tests use injected clocks for burst/refill/refund and parallel reservation.
 
 ### Sandbox writer identity
 
@@ -884,8 +894,9 @@ no retry without Sandbox. See [sandbox.md](../../docs/sandbox.md#file-trigger-co
 
 Result publication uses the synchronous Windows rename retry policy documented
 in [session-cache.md](session-cache.md#atomic-rename-retries-on-windows-900).
-After retry exhaustion, the existing log-and-delete-trigger behaviour still
-loses the result; this change does not add recovery or replay.
+When that rename retry is exhausted, `writeResult` rethrows; the input is
+retained, not deleted, and retried after 250 ms, 1 s, 5 s, then 30 s capped
+(see "Shared result namespace" above).
 
 ### Escape key trigger
 
@@ -1381,11 +1392,15 @@ sent nothing to any PTY, so `"not sent"` is the semantically correct value —
 and the one that lets the harness re-evaluate the (probably-gone) session
 cleanly instead of treating the refusal as a hung chain.
 
-**Never descends into `processed/`.** `readdirSync(triggersDir)` only
-returns direct children; it does not recurse. The existing `.json`-suffix
-filter in `handleFile()` additionally excludes the `processed` directory
-entry itself (a directory name has no `.json` suffix), so no separate
-exclusion was needed for the one sub-directory this module creates.
+**`processed/` is read for action markers only.** `readdirSync(triggersDir)`
+only returns direct children; it does not recurse, and the `.json`-suffix
+filter in `handleFile()` excludes the `processed` directory entry itself. A
+second `fs.readdirSync(processedDir)` then looks only for
+`<uuid>.action.json` markers: a marker whose `<uuid>.json` input is absent from
+the first listing (compared lowercased on Windows) is an orphan, and its input
+name goes through `handleFile()` for marker recovery (see "Versioned
+requests"). Any other file in `processed/`, such as a result, is never treated
+as a trigger.
 
 Tests: `test/trigger-watcher.test.js`, the "Startup scan" section — a
 pre-existing trigger being picked up, the age guard's refusal shape, the age
@@ -1393,8 +1408,8 @@ threshold being re-read live across two triggers processed by the same
 running watcher (not fixed at the point `trigger-watcher.js` was first
 required), scan/watcher dedup (a name torn down and recreated — a plain
 overwrite reports as a `change` event on this platform and would prove
-nothing — while the scan's own dispatch is still in-flight), `processed/`
-never being scanned, and `MAX_INFLIGHT` being respected for scan-origin names
+nothing — while the scan's own dispatch is still in-flight), a stray
+non-marker `.json` in `processed/` never being treated as a trigger, and `MAX_INFLIGHT` being respected for scan-origin names
 (exactly 8 of 12 pre-existing triggers start immediately; releasing 3 lets 3
 queued ones take their place).
 

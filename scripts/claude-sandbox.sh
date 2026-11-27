@@ -43,6 +43,11 @@ set -u
 DEBUG="${SWITCHBOARD_SANDBOX_DEBUG:-0}"
 debug() { [ "$DEBUG" = "1" ] && echo "claude-sandbox: $*" >&2; return 0; }
 fail() { echo "claude-sandbox: $*" >&2; exit 125; }
+# Sets the variable named $1 to the NUL-terminated output of the command that
+# follows, a trailing newline in a path included; fails when it printed none.
+read_path0() {
+  IFS= read -r -d '' "$1" < <("${@:2}" 2>/dev/null)
+}
 
 if ! command -v bwrap >/dev/null 2>&1; then
   fail "bwrap not found — install bubblewrap (e.g. apt install bubblewrap)"
@@ -295,12 +300,23 @@ fi
 
 # The host paths the sandbox can write, as bound, and their resolved form.
 WRITABLE_ROOTS=("$CLAUDE_DIR" "${RW_STATE_DIRS[@]}" "${RW_DIRS[@]}")
-for _e in ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; do
-  [ -L "$CLAUDE_DIR/$_e" ] && [ -d "$CLAUDE_DIR/$_e" ] && WRITABLE_ROOTS+=("$(readlink -f "$CLAUDE_DIR/$_e")")
+STATE_LINK_ROOTS=(); STATE_LINK_NAMES=()
+for _e in "${USER_STATE_ENTRIES[@]}"; do
+  if [ -L "$CLAUDE_DIR/$_e" ] && [ -e "$CLAUDE_DIR/$_e" ]; then
+    read_path0 _real readlink -f -z -- "$CLAUDE_DIR/$_e"
+    STATE_LINK_ROOTS+=("$_real"); STATE_LINK_NAMES+=("$_e")
+  fi
 done
+PROJECTS_LINK_TARGET=""
+if [ -L "$CLAUDE_DIR/projects" ] && [ -d "$CLAUDE_DIR/projects" ]; then
+  read_path0 PROJECTS_LINK_TARGET readlink -f -z -- "$CLAUDE_DIR/projects"
+  STATE_LINK_ROOTS+=("$PROJECTS_LINK_TARGET/$PROJECT_FOLDER"); STATE_LINK_NAMES+=(projects)
+fi
+WRITABLE_ROOTS+=(${STATE_LINK_ROOTS[@]+"${STATE_LINK_ROOTS[@]}"})
 WRITABLE_REALS=()
 for _r in "${WRITABLE_ROOTS[@]}"; do
-  WRITABLE_REALS+=("$(readlink -f "$_r" 2>/dev/null || true)")
+  read_path0 _real readlink -f -z -- "$_r"
+  WRITABLE_REALS+=("$_real")
 done
 BASE_WRITABLE_ROOTS=("${WRITABLE_ROOTS[@]}")
 
@@ -382,7 +398,7 @@ check_chain() {
       if chain_link_writable "${cur:-/}" "$comp" "${2:-}"; then
         fail "refusing to launch: $cur/$comp is a symbolic link in a directory the sandbox can write, on the way to $orig, which it protects; the session could re-point it. Replace the link with what it points to (for git hooks, set core.hooksPath to that directory instead), or turn Sandbox off for this session."
       fi
-      link="$(readlink "$cur/$comp")"
+      read_path0 link readlink -z -- "$cur/$comp"
       case "$link" in /*) cur="" ;; esac
       rest="$link${rest:+/$rest}"
     else
@@ -391,9 +407,20 @@ check_chain() {
   done
 }
 
+# True when sandbox path $1 is at or below a private entry of ~/.claude, where
+# the sandbox sees its own tmpfs rather than the host.
+in_private_area() {
+  local p
+  for p in "${USER_PRIVATE_ENTRIES[@]}"; do
+    case "$1/" in "$CLAUDE_DIR/$p"/*) return 0 ;; esac
+  done
+  return 1
+}
+
 # Mounts the resolved host path $1 read-only at every place the sandbox sees
 # it, under each writable root that contains it, and remembers each for the
-# pins below.
+# pins below. With $3 set to "ro", a place already inside a read-only mount
+# gets no mount of its own and is left to the finished plan's check instead.
 protect_resolved() {
   local real="$1" i root view found=1
   [ -n "${PROTECTED_SEEN[$real]:-}" ] && return 1
@@ -407,7 +434,9 @@ protect_resolved() {
       "$root"/*) view="${WRITABLE_ROOTS[i]}${real#"$root"}" ;;
       *) continue ;;
     esac
+    in_private_area "$view" && continue
     found=0
+    if [ "${3:-}" = ro ] && inside_ro_area "$view"; then RO_REQUIRED+=("$view"); continue; fi
     mount_op --ro-bind "$real" "$view"
     PIN_VIEWS+=("$view"); PIN_IDX+=("$i")
   done
@@ -421,7 +450,7 @@ control_path_forms() {
   IFS= read -r -d '' lexical < <(realpath -m -s -z -- "$p" 2>/dev/null) && [ -n "$lexical" ] &&
     IFS= read -r -d '' resolved < <(readlink -m -z -- "$p" 2>/dev/null) && [ -n "$resolved" ] || fail "cannot resolve control path: $p"
   case "$lexical$resolved" in *$'\n'*|*$'\r'*) fail "unrepresentable control path: $p" ;; esac
-  real="$(readlink -e -- "$p" 2>/dev/null || true)"
+  read_path0 real readlink -e -z -- "$p"
   [ "$real" != / ] || fail "control path covers the filesystem root: $p"
   case "$real" in *$'\n'*|*$'\r'*) fail "unrepresentable control path: $p" ;; esac
   if [ -z "$real" ]; then
@@ -473,7 +502,7 @@ protect_control_tree() {
   CONTROL_ROOT_START="${#WRITABLE_ROOTS[@]}"
   for i in "${!M_OP[@]}"; do
     [ "${M_OP[i]}" = --bind ] || continue
-    real="$(readlink -e -- "${M_SRC[i]}" 2>/dev/null)" && [ -n "$real" ] || fail "cannot resolve writable mount for control path $CONTROL_DIR: ${M_SRC[i]}"
+    read_path0 real readlink -e -z -- "${M_SRC[i]}" && [ -n "$real" ] || fail "cannot resolve writable mount for control path $CONTROL_DIR: ${M_SRC[i]}"
     WRITABLE_ROOTS+=("${M_DEST[i]}"); WRITABLE_REALS+=("$real")
   done
   control_path_forms "$CONTROL_DIR"
@@ -486,8 +515,8 @@ protect_control_tree() {
     forms="${control_forms[i]}"; real="${controls[i]}"
     while IFS= read -r control; do
       for requested in "${RW_DIRS[@]}"; do
-        request_lexical="$(realpath -m -s -- "$requested" 2>/dev/null)" && [ -n "$request_lexical" ] &&
-          request_real="$(readlink -m -- "$requested" 2>/dev/null)" && [ -n "$request_real" ] || fail "cannot resolve requested mount for control path: $CONTROL_DIR"
+        read_path0 request_lexical realpath -m -s -z -- "$requested" && [ -n "$request_lexical" ] &&
+          read_path0 request_real readlink -m -z -- "$requested" && [ -n "$request_real" ] || fail "cannot resolve requested mount for control path: $CONTROL_DIR"
         for request_form in "$request_lexical" "$request_real"; do
           case "$request_form/" in "$control"/*) fail "refusing writable mount '$requested' at or below control path: $CONTROL_DIR" ;; esac
         done
@@ -538,7 +567,7 @@ verify_control_mounts() {
 protect_resolved_link() {
   local link="$1" target="$2" text="${3-}"
   [ -n "$target" ] && [ -e "$target" ] || return 0
-  [ -n "$text" ] || text="$(readlink "$link")"
+  [ -n "$text" ] || read_path0 text readlink -z -- "$link"
   case "$text" in /*) ;; *) text="${link%/*}/$text" ;; esac
   check_chain "$text"
   if protect_resolved "$target" && [ -d "$target" ]; then
@@ -547,7 +576,9 @@ protect_resolved_link() {
 }
 
 protect_link_target() {
-  protect_resolved_link "$1" "$(realpath -m -- "$1" 2>/dev/null || true)"
+  local target
+  read_path0 target realpath -z -m -- "$1"
+  protect_resolved_link "$1" "$target"
 }
 
 # Every symbolic link at any depth below directory $1, resolved in one call.
@@ -569,15 +600,33 @@ protect_links_below() {
   done
 }
 
+# True when resolved path $1 is / or contains $HOME, however it is spelled.
+covers_home() {
+  local f
+  [ "$1" = / ] && return 0
+  while IFS= read -r f; do
+    case "$f/" in "$1"/*) return 0 ;; esac
+  done <<<"$_home_forms"
+  return 1
+}
+
+# ~/.config/claude and the like: a link is followed only to a directory named
+# claude, never to / or a parent of $HOME.
+check_state_dir_link() {
+  local target
+  IFS= read -r -d '' target < <(readlink -f -z -- "$1" 2>/dev/null)
+  if [ -z "$target" ] || covers_home "$target" || [ "${target##*/}" != claude ] || [ ! -d "$target" ]; then
+    fail "refusing to launch: $1 links to ${target:-nothing}. A linked $1 is followed only to a directory named claude, elsewhere, and never to / or a parent of \$HOME; point it at one, or turn Sandbox off for this session."
+  fi
+}
+
 # A symlinked state entry of ~/.claude is followed only to a target of the
 # same kind and name, and never to $HOME or a parent of it.
 bind_state_link_target() {
   local link="$1" name="${1##*/}" target
-  target="$(readlink -f "$link" 2>/dev/null)" || return 0
+  read_path0 target readlink -f -z -- "$link" || return 0
   [ -n "$target" ] && [ -e "$target" ] || { debug "state link $link dangles"; return 0; }
-  case "$HOME/" in
-    "$target"/*) fail "refusing to launch: $link links to $target, which contains \$HOME, so binding it would expose everything the sandbox hides. Point the link at a directory of its own." ;;
-  esac
+  covers_home "$target" && fail "refusing to launch: $link links to $target, which contains \$HOME, so binding it would expose everything the sandbox hides. Point the link at a directory of its own."
   if [ "${target##*/}" != "$name" ] || { [ "$2" = dir ] && [ ! -d "$target" ]; } || { [ "$2" = file ] && [ ! -f "$target" ]; }; then
     fail "refusing to launch: $link links to $target. A symbolic link in ~/.claude is followed only to a $2 of the same name ($name), elsewhere; point it at one, or turn Sandbox off for this session."
   fi
@@ -588,9 +637,10 @@ bind_state_link_target() {
 # ~/.claude transcripts: the whole directory read-only, the session's own
 # folder read-write.
 bind_projects_dir() {
-  local e="$1" base="$1"
+  local e="$1" base="$1" text
   if [ -L "$e" ]; then
-    mount_op --symlink "$(readlink "$e")" "$e"
+    read_path0 text readlink -z -- "$e"
+    mount_op --symlink "$text" "$e"
     bind_state_link_target "$e" dir --ro-bind
     base="$STATE_LINK_TARGET"
   else
@@ -600,6 +650,7 @@ bind_projects_dir() {
     fail "refusing to launch: $base/$PROJECT_FOLDER, this session's transcript folder, is a symbolic link"
   elif [ -d "$base/$PROJECT_FOLDER" ]; then
     mount_op --bind "$base/$PROJECT_FOLDER" "$base/$PROJECT_FOLDER"
+    RW_EXCEPTIONS[$((${#M_DEST[@]} - 1))]=1
   else
     MISSING_DIRS+=("$base/$PROJECT_FOLDER")
   fi
@@ -621,12 +672,13 @@ bind_user_claude_dir() {
       mount_op --tmpfs "" "$e"
       [ -L "$e" ] && PRIVATE_LINKS+=("$e")
     elif [ -L "$e" ]; then
-      mount_op --symlink "$(readlink "$e")" "$e"
+      read_path0 text readlink -z -- "$e"
+      mount_op --symlink "$text" "$e"
       if in_list "$name" "${USER_STATE_ENTRIES[@]}"; then
         case "$name" in *.json|*.jsonl|.last-*) kind=file ;; *) kind=dir ;; esac
         STATE_LINK_TARGET=""
         if in_list "$name" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; then
-          text="$(readlink "$e")"
+          read_path0 text readlink -z -- "$e"
           case "$text" in /*) ;; *) text="$dir/$text" ;; esac
           check_chain "$text"
         fi
@@ -659,9 +711,13 @@ bind_user_claude_dir() {
 # way: the CLI saves its top-level state files through a temporary file
 # created next to them.
 bind_project_claude_dir() {
-  local dir="$1" e name restore_glob
-  inside_ro_area "$dir" && return 0
-  mount_op --ro-bind "$dir" "$dir"
+  local dir="$1" e name restore_glob covered=""
+  # see docs/sandbox.md, "~/.claude and each bound directory's .claude"
+  if inside_ro_area "$dir"; then
+    RO_REQUIRED+=("$dir"); covered=1
+  else
+    mount_op --ro-bind "$dir" "$dir"
+  fi
   restore_glob="$(shopt -p nullglob dotglob)"
   shopt -s nullglob dotglob
   for e in "$dir"/*; do
@@ -669,8 +725,9 @@ bind_project_claude_dir() {
     if in_list "$name" "${PROJECT_STATE_ENTRIES[@]}"; then
       if [ -L "$e" ]; then
         debug "state link $e left as is"
-      else
+      elif [ -z "$covered" ]; then
         mount_op --bind "$e" "$e"
+        RW_EXCEPTIONS[$((${#M_DEST[@]} - 1))]=1
         in_list "$name" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"} && OPT_IN_BINDS+=("project:$((${#M_DEST[@]} - 1))")
       fi
     elif [ -L "$e" ]; then
@@ -688,10 +745,10 @@ bind_project_claude_dir() {
 protect_path() {
   local p="$1" real
   check_chain "$p"
-  real="$(readlink -m -- "$p")"
+  read_path0 real readlink -m -z -- "$p"
   if [ -e "$real" ]; then
-    protect_resolved "$real" || true
-  elif [ "${2:-}" = dir ] && sandbox_view "$real"; then
+    protect_resolved "$real" 0 ro || true
+  elif [ "${2:-}" = dir ] && sandbox_view "$real" && ! inside_ro_area "$SV_VIEW"; then
     MISSING_DIRS+=("$real")
   fi
 }
@@ -699,19 +756,27 @@ protect_path() {
 # What git runs on its own: the repository's config, its hooks directory and
 # the one core.hooksPath names, and, for every linked worktree, the files that
 # point git at the shared repository.
+git_newline_refuse() {
+  fail "refusing to launch: a git path of $1 contains a newline (the repository, its git directory or core.hooksPath), so the sandbox cannot tell which paths to protect."
+}
+
 protect_git() {
-  local d="$1" out git_dir common_dir hooks_dir w
+  local d="$1" out nl git_dir common_dir hooks_dir w
   if ! command -v git >/dev/null 2>&1; then
     debug "git is not installed; $d/.git gets no further protection (git cannot run in the sandbox either)"
     return 0
   fi
   out="$(cd "$d" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE \
-         git rev-parse --path-format=absolute --git-dir --git-common-dir --git-path hooks 2>/dev/null)" ||
+         git rev-parse --path-format=absolute --git-dir --git-common-dir --git-path hooks 2>/dev/null && printf x)" ||
     fail "refusing to launch: git cannot read the repository at $d, so the sandbox cannot tell which of its paths to protect. Check it with 'git -C $d rev-parse --git-dir'."
-  if [ "$(printf '%s\n' "$out" | wc -l)" -ne 3 ]; then
-    fail "refusing to launch: a git path of $d contains a newline (the repository, its git directory or core.hooksPath), so the sandbox cannot tell which paths to protect."
+  out="${out%x}"
+  nl="${out//[!$'\n']/}"
+  if [ "${#nl}" -ne 3 ] || [ "${out: -1}" != $'\n' ]; then
+    git_newline_refuse "$d"
   fi
-  { IFS= read -r git_dir; IFS= read -r common_dir; IFS= read -r hooks_dir; } <<<"$out"
+  git_dir="${out%%$'\n'*}"; out="${out#*$'\n'}"
+  common_dir="${out%%$'\n'*}"; out="${out#*$'\n'}"
+  hooks_dir="${out%$'\n'}"
   [ -n "${GIT_DONE[$d]:-}" ] && return 0
   GIT_DONE["$d"]=1
   protect_path "$common_dir/config"
@@ -721,7 +786,9 @@ protect_git() {
     # git reports the hooks path resolved; the configured one is what a link
     # on the way could re-point.
     local configured
-    configured="$(cd "$d" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE git config --get core.hooksPath 2>/dev/null || true)"
+    configured="$(cd "$d" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE git config --get core.hooksPath 2>/dev/null; printf x)"
+    configured="${configured%x}"; configured="${configured%$'\n'}"
+    case "$configured" in *$'\n'*) git_newline_refuse "$d" ;; esac
     case "$configured" in
       "") ;;
       /*) check_chain "$configured" ;;
@@ -748,9 +815,10 @@ protect_repo_root() {
   elif [ -d "$d/.git" ]; then
     GIT_WORKTREES+=("$d")
   elif [ -e "$d/.git" ]; then
-    mount_op --ro-bind "$d/.git" "$d/.git"
+    [ "$create" = covered ] || mount_op --ro-bind "$d/.git" "$d/.git"
     GIT_WORKTREES+=("$d")
   fi
+  [ "$create" != covered ] || return 0
   if [ "$create" = repo ]; then
     if [ -e "$d/.git" ]; then create=create; else create=nocreate; fi
   fi
@@ -765,7 +833,7 @@ protect_claude_dir() {
     bind_project_claude_dir "$c"
   elif [ -e "$c" ]; then
     mount_op --ro-bind "$c" "$c"
-  elif [ "$create" = create ] && [ -w "$(dirname "$c")" ]; then
+  elif [ "$create" = create ] && [ -w "${c%/*}" ]; then
     MISSING_DIRS+=("$c")
   fi
 }
@@ -781,10 +849,16 @@ protect_tree() {
   local d="$1" create="$2" n
   protect_repo_root "$d" "$create"
   while IFS= read -r -d '' n; do
-    inside_ro_area "$n" && continue
+    if inside_ro_area "$n"; then
+      case "${n##*/}" in
+        .claude) if [ -L "$n" ] || [ -d "$n" ]; then protect_claude_dir "$n" nocreate; else RO_REQUIRED+=("$n"); fi ;;
+        .git) RO_REQUIRED+=("$n"); protect_repo_root "${n%/*}" covered ;;
+      esac
+      continue
+    fi
     case "${n##*/}" in
       .claude) protect_claude_dir "$n" "$create" ;;
-      .git) protect_repo_root "$(dirname "$n")" "$create" ;;
+      .git) protect_repo_root "${n%/*}" "$create" ;;
     esac
   done < <(find "$d/" -xdev -mindepth 2 \( -name node_modules -prune \) -o \
              \( -name .git -print0 -prune \) -o \( -name .claude -type d -print0 \) -o \
@@ -885,6 +959,119 @@ check_opt_in_binds() {
   done
 }
 
+# A state link target bound read-write must not overlap a private entry, nor
+# lie at or inside a path the sandbox keeps read-only, transcripts aside.
+check_state_link_binds() {
+  local s r k p
+  local -a privs=() targets=()
+  for p in "${USER_PRIVATE_ENTRIES[@]}"; do
+    privs+=("$CLAUDE_DIR/$p")
+    IFS= read -r -d '' r < <(readlink -m -z -- "$CLAUDE_DIR/$p") && privs+=("$r")
+  done
+  targets=(${STATE_LINK_ROOTS[@]+"${STATE_LINK_ROOTS[@]}"})
+  [ -z "$PROJECTS_LINK_TARGET" ] || targets+=("$PROJECTS_LINK_TARGET")
+  for s in ${targets[@]+"${targets[@]}"}; do
+    for r in "${privs[@]}"; do
+      case "$s/" in "$r"/*) state_link_refuse_private "$s" "$r" ;; esac
+      case "$r/" in "$s"/*) state_link_refuse_private "$s" "$r" ;; esac
+    done
+  done
+  for k in ${STATE_LINK_ROOTS[@]+"${!STATE_LINK_ROOTS[@]}"}; do
+    s="${STATE_LINK_ROOTS[k]}"
+    for r in "${!PROTECTED_SEEN[@]}"; do
+      case "$s/" in "$r"/*) state_link_refuse "$s" "$r" ;; esac
+    done
+  done
+}
+
+# Sets EFF to the operation that decides access at sandbox path $1 in the
+# finished plan: the nearest bind, read-only bind or tmpfs at or above it.
+effective_access() {
+  local p="$1"
+  EFF=""
+  while [ -n "$p" ]; do
+    case "${MOUNTED[$p]:-}" in --bind|--ro-bind|--tmpfs) EFF="${MOUNTED[$p]}"; return 0 ;; esac
+    p="${p%/*}"
+  done
+}
+
+# see docs/sandbox.md, "The finished mount plan"
+check_mount_plan() {
+  local i j k n h v src p
+  local -a idx=() srcs=() reals=() rw=() ph=() pd=() pk=()
+  for ((i = SYSTEM_MOUNTS; i < ${#M_OP[@]}; i++)); do
+    case "${M_OP[i]}" in --bind|--ro-bind) idx+=("$i"); srcs+=("${M_SRC[i]}") ;; esac
+  done
+  [ "${#srcs[@]}" -gt 0 ] && mapfile -d '' reals < <(readlink -m -z -- "${srcs[@]}")
+  for n in "${!idx[@]}"; do
+    i="${idx[n]}"
+    if [ "${M_OP[i]}" = --bind ]; then
+      rw+=("$n")
+    else
+      ph+=("${reals[n]}"); pd+=("${M_DEST[i]}"); pk+=(ro)
+    fi
+  done
+  for p in "${USER_PRIVATE_ENTRIES[@]}"; do
+    [ "${MOUNTED[$CLAUDE_DIR/$p]:-}" = --tmpfs ] || continue
+    IFS= read -r -d '' h < <(readlink -m -z -- "$CLAUDE_DIR/$p") || continue
+    ph+=("$h"); pd+=("$CLAUDE_DIR/$p"); pk+=(private)
+  done
+  if [ -L "$CLAUDE_JSON" ] && IFS= read -r -d '' h < <(readlink -m -z -- "$CLAUDE_JSON"); then
+    ph+=("$h"); pd+=("$CLAUDE_JSON"); pk+=(json)
+  fi
+  for p in ${RO_REQUIRED[@]+"${RO_REQUIRED[@]}"}; do
+    IFS= read -r -d '' h < <(readlink -m -z -- "$p") || continue
+    ph+=("$h"); pd+=("$p"); pk+=(ro)
+  done
+  for n in ${rw[@]+"${rw[@]}"}; do
+    i="${idx[n]}"; src="${reals[n]}"
+    if [ -z "$src" ] || covers_home "$src"; then
+      fail "refusing to launch: ${M_DEST[i]}, which the sandbox mounts read-write, resolves to ${src:-nothing}, which is the filesystem root or contains \$HOME; the sandbox would expose everything it is meant to hide."
+    fi
+    for k in "${!ph[@]}"; do
+      h="${ph[k]}"
+      [ "$h" != / ] || plan_refuse_inside "${M_DEST[i]}" "$h" "${pd[k]}"
+      case "$h/" in "$src"/*)
+        v="${M_DEST[i]}${h#"$src"}"
+        effective_access "$v"
+        case "${pk[k]}" in
+          ro) [ "$EFF" != --bind ] || plan_refuse_exposed "$h" "$v" "${M_DEST[i]}" ;;
+          json) [ "$EFF" != --bind ] || plan_refuse_private "$h" "${M_DEST[i]}" ;;
+          *) [ "$EFF" = --tmpfs ] || plan_refuse_private "$h" "${M_DEST[i]}" ;;
+        esac ;;
+      esac
+      case "$src/" in "$h"/*)
+        [ "${pk[k]}" = ro ] || plan_refuse_private "$h" "${M_DEST[i]}"
+        v="${pd[k]}${src#"$h"}"
+        opt_in_access_at "$v" "$i"
+        [ -n "$OA_IDX" ] && [ "$OA_IDX" != "$i" ] && [ "${M_OP[OA_IDX]}" = --bind ] && continue
+        [ -n "${RW_EXCEPTIONS[i]:-}" ] && [ "${M_DEST[i]}" = "$v" ] && continue
+        plan_refuse_inside "${M_DEST[i]}" "$h" "${pd[k]}" ;;
+      esac
+    done
+  done
+}
+
+plan_refuse_exposed() {
+  fail "refusing to launch: $1, which the sandbox keeps read-only, is also reached read-write at $2, through $3; the session could change it there. Give the entry or directory behind $3 a path of its own, or turn Sandbox off for this session."
+}
+
+plan_refuse_inside() {
+  fail "refusing to launch: $1, which the sandbox mounts read-write, is at or inside $2, which it keeps read-only at $3; the session could change part of it through $1. Give the entry or directory behind $1 a path of its own, or turn Sandbox off for this session."
+}
+
+plan_refuse_private() {
+  fail "refusing to launch: $1, which the sandbox replaces with a private copy, overlaps $2, which it mounts read-write; other sessions outside the sandbox use what is there, and the session could reach it through $2. Move it out of $2, or turn Sandbox off for this session."
+}
+
+state_link_refuse() {
+  fail "refusing to launch: $1, which the sandbox binds read-write for a state entry of ~/.claude, is at or inside $2, which it keeps read-only; the session could change it there. Give that entry a directory of its own, or turn Sandbox off for this session."
+}
+
+state_link_refuse_private() {
+  fail "refusing to launch: $1, the target of a state entry of ~/.claude, overlaps $2, which the sandbox keeps private; binding it would expose or let the session change what other sessions source from there. Give that entry a directory of its own, or turn Sandbox off for this session."
+}
+
 # Sets OA_IDX to the mount that decides access at sandbox path $1, mount $2
 # left out: the deepest at or above it, the later one on the same path.
 opt_in_access_at() {
@@ -926,9 +1113,11 @@ build_bwrap_args() {
   OPT_IN_BINDS=()
   PRIVATE_LINKS=()
   CONTROL_VIEWS=()
+  RW_EXCEPTIONS=()
+  RO_REQUIRED=()
   WRITABLE_ROOTS=("${BASE_WRITABLE_ROOTS[@]}")
   WRITABLE_REALS=()
-  for d in "${WRITABLE_ROOTS[@]}"; do WRITABLE_REALS+=("$(readlink -m -- "$d" 2>/dev/null || true)"); done
+  for d in "${WRITABLE_ROOTS[@]}"; do read_path0 _real readlink -m -z -- "$d"; WRITABLE_REALS+=("$_real"); done
   local d name i
   mount_op --dev "" /dev
   mount_op --proc "" /proc
@@ -948,6 +1137,7 @@ build_bwrap_args() {
       debug "skip ro-bind $d (does not exist)"
     fi
   done
+  SYSTEM_MOUNTS="${#M_DEST[@]}"
   for d in "${RW_DIRS_BY_DEPTH[@]}"; do
     if [ -e "$d" ]; then
       bind_project_dir "$d"
@@ -959,6 +1149,7 @@ build_bwrap_args() {
   # bwrap is going to refuse must not leave anything behind in $HOME.
   for d in "${RW_STATE_DIRS[@]}"; do
     if [ -e "$d" ]; then
+      [ -L "$d" ] && check_state_dir_link "$d"
       mount_op --bind "$d" "$d"
     else
       MISSING_DIRS+=("$d")
@@ -979,6 +1170,8 @@ build_bwrap_args() {
   pin_protected_paths
   verify_control_mounts
   check_opt_in_binds
+  check_state_link_binds
+  check_mount_plan
 
   BWRAP_ARGS=(--unshare-all --share-net --die-with-parent)
   local order
@@ -995,6 +1188,7 @@ build_bwrap_args() {
 }
 
 declare -A MOUNTED PROTECTED_SEEN GIT_DONE
+declare -a RW_EXCEPTIONS RO_REQUIRED
 
 # The copy of ~/.claude.json the sandbox starts from. An empty object, not an
 # empty file, when there is none: claude parses this path as JSON.

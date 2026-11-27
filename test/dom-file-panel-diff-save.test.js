@@ -79,6 +79,13 @@ function flush() {
   return p;
 }
 
+function assertSaveFailure(ctx, reason) {
+  const failure = ctx.window.document.querySelector('#file-panel-diff .diff-save-failure');
+  assert.equal(failure.textContent, 'Could not save this file — your edits are kept; try Save again or copy them elsewhere.');
+  assert.equal(failure.title, reason);
+  assert.notEqual(failure.style.display, 'none');
+}
+
 async function openDiffAndSave(ctx) {
   ctx.window.switchPanel('s1');
   ctx.calls.openDiff('s1', 'd1', { oldFilePath: '/repo/a.js', oldContent: 'old\r\n', newContent: 'proposed\n' });
@@ -100,11 +107,12 @@ test('the diff tab saves against the content it was opened with', async () => {
 });
 
 
-test('any other refusal is reported', async () => {
+test('any other refusal is reported under the diff toolbar', async () => {
   const ctx = setup({ saveImpl: () => ({ ok: false, error: 'File does not exist' }) });
   try {
     await openDiffAndSave(ctx);
-    assert.deepEqual(ctx.calls.alerts, ['Save failed: File does not exist']);
+    assert.deepEqual(ctx.calls.alerts, []);
+    assertSaveFailure(ctx, 'File does not exist');
   } finally { ctx.destroy(); }
 });
 
@@ -148,7 +156,8 @@ test('a queued click is dropped when the first save fails', async () => {
     finishers[0]({ ok: false, error: 'disk full' });
     await flush();
     assert.equal(ctx.calls.saves.length, 1);
-    assert.deepEqual(ctx.calls.alerts, ['Save failed: disk full']);
+    assert.deepEqual(ctx.calls.alerts, []);
+    assertSaveFailure(ctx, 'disk full');
   } finally { ctx.destroy(); }
 });
 
@@ -156,7 +165,8 @@ test('a rejected save IPC is reported', async () => {
   const ctx = setup({ saveImpl: () => Promise.reject(new Error('the channel is gone')) });
   try {
     await openDiffAndSave(ctx);
-    assert.deepEqual(ctx.calls.alerts, ['Save failed: the channel is gone']);
+    assert.deepEqual(ctx.calls.alerts, []);
+    assertSaveFailure(ctx, 'the channel is gone');
   } finally { ctx.destroy(); }
 });
 

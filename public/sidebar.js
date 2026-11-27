@@ -35,6 +35,14 @@ const archivingSessionIds = new Set();
 const archivingGroupIds = new Set();
 const remappingProjectPaths = new Set();
 const deletingWorktreePaths = new Set();
+
+function remapFailureMessage(code) {
+  if (code === 'path-back') return 'No change needed — the project\'s original folder is back; refresh the project list.';
+  if (code === 'no-session-data') return 'Could not change the project path — no sessions are recorded for it any more; refresh the project list.';
+  if (code === 'active-sessions') return 'Could not change the project path — stop this project\'s running sessions, then try Change path again.';
+  if (code === 'target-missing' || code === 'target-not-directory') return 'Could not change the project path — choose an existing folder, then try Change path again.';
+  return 'Could not change the project path — fix the cause below, then try Change path again.';
+}
 const ARCHIVE_CHECKING_TITLE = 'Checking the host before archiving…';
 const unreadButtonTemplate = document.createElement('button');
 unreadButtonTemplate.className = 'session-unread-btn';
@@ -2127,13 +2135,14 @@ async function archiveProjectFolder(project, button) {
       const notStopped = [];
       const groupKey = 'ph-' + folderId(project.projectPath, project.remoteAlias);
       const own = sessions.filter(s => !archivingSessionIds.has(s.sessionId));
+      const ownIds = new Map(own.map(s => [s, s.sessionId]));
       setGroupArchiveBusy(groupKey, true);
-      for (const s of own) setArchiveBusy(s.sessionId, true);
+      for (const id of ownIds.values()) setArchiveBusy(id, true);
       const unreachable = new Map();
       try {
         for (const { session: s, plan: sessionPlan } of confirmed.prepared.plans.filter(({ session }) => own.includes(session))) {
           let stopResult;
-          try { stopResult = await stopForArchive(s, unreachable, sessionPlan); } finally { setArchiveBusy(s.sessionId, false); }
+          try { stopResult = await stopForArchive(s, unreachable, sessionPlan); } finally { setArchiveBusy(ownIds.get(s), false); }
           didStop ||= !!stopResult.didStop;
           if (!stopResult.ok) {
             refused = true;
@@ -2144,7 +2153,7 @@ async function archiveProjectFolder(project, button) {
           }
         }
       } finally {
-        for (const s of own) if (archivingSessionIds.has(s.sessionId)) setArchiveBusy(s.sessionId, false);
+        for (const id of ownIds.values()) if (archivingSessionIds.has(id)) setArchiveBusy(id, false);
         setGroupArchiveBusy(groupKey, false);
       }
       if (refused) {
@@ -2275,10 +2284,24 @@ function rebindSidebarEvents(projects) {
           if (!newPath) return;
           const projectShortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
           if (!await appConfirm({ title: 'Remap?', message: `Remap ${projectShortName} to:\n${newPath}?`, confirmLabel: 'Remap', danger: true })) return;
-          const result = await window.api.remapProject(project.projectPath, newPath);
-          if (result.error) {
-            await appAlert({ title: 'Switchboard', message: 'Failed to remap: ' + result.error });
+          let failure;
+          let code;
+          try {
+            const result = await window.api.remapProject(project.projectPath, newPath);
+            failure = result && !result.error ? null : result?.error || 'The remap backend returned no result';
+            code = result?.code;
+          } catch (error) {
+            failure = error?.message || String(error);
+          }
+          const noticeId = sessionActionNoticeId('Change path', project);
+          if (failure) {
+            const refresh = code === 'path-back' || code === 'no-session-data';
+            showAppNotice({ id: noticeId, kind: code === 'path-back' ? 'info' : 'error', sessions: [project],
+              message: remapFailureMessage(code) + '\n' + failure,
+              actionLabel: refresh ? 'Refresh' : undefined,
+              onAction: refresh ? () => Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); }) : undefined });
           } else {
+            clearAppNotice(noticeId);
             Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
           }
         } finally {
@@ -2642,12 +2665,13 @@ function rebindSidebarEvents(projects) {
         e.stopPropagation();
         const newVal = session.archived ? 0 : 1;
         if (newVal) {
-          if (archivingSessionIds.has(session.sessionId)) return;
-          setArchiveBusy(session.sessionId, true);
+          const sessionId = session.sessionId;
+          if (archivingSessionIds.has(sessionId)) return;
+          setArchiveBusy(sessionId, true);
           try {
             await archiveSessionRows([session]);
           } finally {
-            setArchiveBusy(session.sessionId, false);
+            setArchiveBusy(sessionId, false);
           }
           return;
         }

@@ -4,11 +4,11 @@ const archive = require('./archived-projects');
 const { scheduleRegistry } = require('./src/main/schedules/schedule-runner');
 const { whatsNewOnStartup } = require('./src/main/app/changelog');
 const { migrateSchedulesTabDefault } = require('./src/main/schedules/schedules-tab-migration');
-const { isProjectHidden } = require('./public/worktree-nesting');
+const { isProjectHidden, visibilityPath } = require('./public/worktree-nesting');
 const { createHash } = require('node:crypto');
 const path = require('node:path');
 const { archiveProjectIdentity: projectIdentity } = require('./src/main/projects/project-archive-workflow');
-const { parseFolderKey } = require('./src/main/remote/remote-hosts');
+const { parseFolderKey, enabledHosts } = require('./src/main/remote/remote-hosts');
 const { assertHarnessSettings } = require('./harnesses');
 
 const requestError = (code, message) => Object.assign(new Error(message), { code });
@@ -271,17 +271,18 @@ function createWriterCommands(db) {
     revealAddedProject(projectPath, proof) {
       reopen([{ alias: null, projectPath }], proof);
       const global = db.getSetting('global') || {};
-      if (isProjectHidden(global.hiddenProjects, null, projectPath, global.hiddenProjectScopes)) {
+      const target = visibilityPath(projectPath);
+      const matched = (global.hiddenProjects || []).filter(entry => typeof entry === 'string' && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}::/.test(entry)
+        && visibilityPath(entry) === target && isProjectHidden([entry], null, projectPath, global.hiddenProjectScopes));
+      if (matched.length) {
         const kinds = { ...global.hiddenProjectKinds };
-        delete kinds[projectPath];
-        const fields = { hiddenProjects: global.hiddenProjects.filter(p => p !== projectPath), hiddenProjectKinds: kinds };
-        if (global.hiddenProjectScopes) {
-          fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
-          delete fields.hiddenProjectScopes[projectPath];
-        }
-        if (global.hiddenProjectArchivedAt) {
-          fields.hiddenProjectArchivedAt = { ...global.hiddenProjectArchivedAt };
-          delete fields.hiddenProjectArchivedAt[projectPath];
+        const fields = { hiddenProjects: global.hiddenProjects.filter(p => !matched.includes(p)), hiddenProjectKinds: kinds };
+        if (global.hiddenProjectScopes) fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
+        if (global.hiddenProjectArchivedAt) fields.hiddenProjectArchivedAt = { ...global.hiddenProjectArchivedAt };
+        for (const entry of matched) {
+          delete kinds[entry];
+          if (fields.hiddenProjectScopes) delete fields.hiddenProjectScopes[entry];
+          if (fields.hiddenProjectArchivedAt) delete fields.hiddenProjectArchivedAt[entry];
         }
         patch(fields);
       }
@@ -359,6 +360,23 @@ function createWriterCommands(db) {
     completeRepairFolders(folders) {
       const pending = db.getSetting('bridge_uuid_reindex_folders');
       if (Array.isArray(pending)) db.setSetting('bridge_uuid_reindex_folders', pending.filter(key => !folders.includes(key)));
+    },
+    pruneUndeclaredRepairFolders(folders) {
+      const enabled = new Set(enabledHosts((db.getSetting('global') || {}).remoteHosts).map(host => host.alias));
+      const removable = new Set((Array.isArray(folders) ? folders : []).filter(key => {
+        if (typeof key !== 'string') return false;
+        const { alias } = parseFolderKey(key);
+        return alias !== null && !enabled.has(alias);
+      }));
+      const pending = db.getSetting('bridge_uuid_reindex_folders');
+      if (Array.isArray(pending) && pending.some(key => removable.has(key))) db.setSetting('bridge_uuid_reindex_folders', pending.filter(key => !removable.has(key)));
+      return [...removable];
+    },
+    addRepairFolders(folders) {
+      const pending = db.getSetting('bridge_uuid_reindex_folders');
+      const current = Array.isArray(pending) ? pending : [];
+      const added = folders.filter(key => typeof key === 'string' && !current.includes(key));
+      if (added.length) db.setSetting('bridge_uuid_reindex_folders', [...current, ...added]);
     },
     completeRemap() {},
     recordRemap(folder, newPath) {

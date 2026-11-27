@@ -4,6 +4,8 @@
 
 **2026-10-13:** implemented by PR #610 (`trigger-context.js`, `pinDelivery`); the current behaviour is described in `.ai/contexts/trigger-watcher.md`, "Re-keyed sessions". Line references below remain those of the verified HEAD named under Context.
 
+**2026-11-27:** versioned (v1) triggers, issue #1022, depart from decision 2 and from the "Linux sandbox / direct" matrix row on sandboxed tabs, and add per-write gates; see "Update for versioned triggers (2026-11-27)".
+
 ## Context
 
 Current modules live in `src/main/triggers/` after ADR 0005, step 8.
@@ -696,12 +698,38 @@ replies, and treating `getDescriptorIdentity` as a process-generation check.
    outcomes (continuation rule), One lock per tab (pin E=R), Test matrix
    (Q4 rows) and Consequences (old-id promise and documentation).
 
+## Update for versioned triggers (2026-11-27)
+
+Versioned (`version: 1`) triggers landed for issue #1022 in PRs #1049, #1054,
+#1058 and #1072 (2026-11-09 to 2026-11-11). Their delivery goes through the
+same `pinDelivery` binding (`src/main/triggers/trigger-context.js`) with a v1
+flag, and three rules differ from what this record decided. Legacy delivery
+keeps the rules above.
+
+- **A sandboxed tab refuses `unknown` ownership, even for a direct key.** On a
+  v1 binding whose tab is sandboxed, outside a chain's own reset authorization
+  (decision 1), the per-write check refuses `unknown` and the text-preparation
+  wait keeps waiting on it until the deadline, as it does for an alias. For v1, this replaces decision 2's "direct keys still deliver
+  on `unknown`" and the "Linux sandbox / direct" matrix row. Ownership there
+  comes from `observeTabWriterV1`, a host-side writer identity (see
+  `.ai/contexts/trigger-watcher.md`, "Sandbox writer identity"). The v1
+  descriptor fallback also uses it: a sandboxed tab whose observed writer names
+  the requested id is admitted, and two such tabs are ambiguous.
+- **Every v1 write is bounded by the deadline.** The deadline check that legacy
+  delivery applies to text writes only applies to every v1 write, before and
+  after the ownership inspection.
+- **More gates before each v1 write.** A closing app refuses, the action's own
+  validation runs again, and when the trigger sets `expectedCwd` the session's
+  cwd must be determinable and equal to it. An Escape key write, v1 or not,
+  needs a session whose state can be observed, a writer whose status is
+  `waiting`, and `mine` ownership for the effective id.
+
 ## Verification boundary
 
-This ADR is based on local source inspection and the supplied issue, commit
+At acceptance (2026-10-13), this ADR was based on local source inspection and the supplied issue, commit
 messages and diff. It adds no implementation or tests. The race scenarios are
 source-derived inferences; they were not reproduced against a running app here.
 Real macOS ownership, Linux namespace descriptors, Windows cold-table/PID reuse,
 and reset/continuation causality were not measured with a live CLI in this step.
 No claim is made that the proposed invariant is implemented or that its future
-test matrix passes. Implementation behind the accepted decisions is the next gate; the `-p` descriptor `kind` and the continuation behavior of live CLIs remain to be measured there.
+test matrix passes. Implementation behind the accepted decisions is the next gate; the `-p` descriptor `kind` and the continuation behavior of live CLIs remain to be measured there. The status lines at the top record what has been implemented since.

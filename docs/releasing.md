@@ -230,6 +230,9 @@ The first beta of a new minor line is the exception: its bump PR has base
      assets for a full build (dmg, zip and their blockmaps for arm64 and x64; the
      Windows installer and its blockmap; two AppImages, two debs, two pacman
      packages (`-x64.pacman` and `-aarch64.pacman`); four `latest*.yml` update manifests);
+     measured on v0.1.0-beta.3 (2026-11-27): 9 of the 20 are macOS (two `.dmg`,
+     two `.zip`, their four `.blockmap` and `latest-mac.yml`), so a release
+     drafted without macOS has 11;
    - writes the release notes: the text of the tag's `CHANGELOG.md` section,
      without its heading (`scripts/changelog-section.js`), then a **Full
      changelog** link comparing the previous tag with this one (for a final,
