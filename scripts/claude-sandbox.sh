@@ -43,6 +43,11 @@ set -u
 DEBUG="${SWITCHBOARD_SANDBOX_DEBUG:-0}"
 debug() { [ "$DEBUG" = "1" ] && echo "claude-sandbox: $*" >&2; return 0; }
 fail() { echo "claude-sandbox: $*" >&2; exit 125; }
+# Sets the variable named $1 to the NUL-terminated output of the command that
+# follows, a trailing newline in a path included; fails when it printed none.
+read_path0() {
+  IFS= read -r -d '' "$1" < <("${@:2}" 2>/dev/null)
+}
 
 if ! command -v bwrap >/dev/null 2>&1; then
   fail "bwrap not found — install bubblewrap (e.g. apt install bubblewrap)"
@@ -298,18 +303,20 @@ WRITABLE_ROOTS=("$CLAUDE_DIR" "${RW_STATE_DIRS[@]}" "${RW_DIRS[@]}")
 STATE_LINK_ROOTS=(); STATE_LINK_NAMES=()
 for _e in "${USER_STATE_ENTRIES[@]}"; do
   if [ -L "$CLAUDE_DIR/$_e" ] && [ -e "$CLAUDE_DIR/$_e" ]; then
-    STATE_LINK_ROOTS+=("$(readlink -f "$CLAUDE_DIR/$_e")"); STATE_LINK_NAMES+=("$_e")
+    read_path0 _real readlink -f -z -- "$CLAUDE_DIR/$_e"
+    STATE_LINK_ROOTS+=("$_real"); STATE_LINK_NAMES+=("$_e")
   fi
 done
 PROJECTS_LINK_TARGET=""
 if [ -L "$CLAUDE_DIR/projects" ] && [ -d "$CLAUDE_DIR/projects" ]; then
-  PROJECTS_LINK_TARGET="$(readlink -f "$CLAUDE_DIR/projects")"
+  read_path0 PROJECTS_LINK_TARGET readlink -f -z -- "$CLAUDE_DIR/projects"
   STATE_LINK_ROOTS+=("$PROJECTS_LINK_TARGET/$PROJECT_FOLDER"); STATE_LINK_NAMES+=(projects)
 fi
 WRITABLE_ROOTS+=(${STATE_LINK_ROOTS[@]+"${STATE_LINK_ROOTS[@]}"})
 WRITABLE_REALS=()
 for _r in "${WRITABLE_ROOTS[@]}"; do
-  WRITABLE_REALS+=("$(readlink -f "$_r" 2>/dev/null || true)")
+  read_path0 _real readlink -f -z -- "$_r"
+  WRITABLE_REALS+=("$_real")
 done
 BASE_WRITABLE_ROOTS=("${WRITABLE_ROOTS[@]}")
 
@@ -371,12 +378,6 @@ inside_ro_area() {
     p="${p%/*}"
   done
   return 1
-}
-
-# Sets the variable named $1 to the NUL-terminated output of the command that
-# follows, a trailing newline in a path included.
-read_path0() {
-  IFS= read -r -d '' "$1" < <("${@:2}" 2>/dev/null) || true
 }
 
 # Fails when resolving path $1 goes through a symbolic link that sits in a
@@ -447,7 +448,7 @@ control_path_forms() {
   IFS= read -r -d '' lexical < <(realpath -m -s -z -- "$p" 2>/dev/null) && [ -n "$lexical" ] &&
     IFS= read -r -d '' resolved < <(readlink -m -z -- "$p" 2>/dev/null) && [ -n "$resolved" ] || fail "cannot resolve control path: $p"
   case "$lexical$resolved" in *$'\n'*|*$'\r'*) fail "unrepresentable control path: $p" ;; esac
-  real="$(readlink -e -- "$p" 2>/dev/null || true)"
+  read_path0 real readlink -e -z -- "$p"
   [ "$real" != / ] || fail "control path covers the filesystem root: $p"
   case "$real" in *$'\n'*|*$'\r'*) fail "unrepresentable control path: $p" ;; esac
   if [ -z "$real" ]; then
@@ -499,7 +500,7 @@ protect_control_tree() {
   CONTROL_ROOT_START="${#WRITABLE_ROOTS[@]}"
   for i in "${!M_OP[@]}"; do
     [ "${M_OP[i]}" = --bind ] || continue
-    real="$(readlink -e -- "${M_SRC[i]}" 2>/dev/null)" && [ -n "$real" ] || fail "cannot resolve writable mount for control path $CONTROL_DIR: ${M_SRC[i]}"
+    read_path0 real readlink -e -z -- "${M_SRC[i]}" && [ -n "$real" ] || fail "cannot resolve writable mount for control path $CONTROL_DIR: ${M_SRC[i]}"
     WRITABLE_ROOTS+=("${M_DEST[i]}"); WRITABLE_REALS+=("$real")
   done
   control_path_forms "$CONTROL_DIR"
@@ -512,8 +513,8 @@ protect_control_tree() {
     forms="${control_forms[i]}"; real="${controls[i]}"
     while IFS= read -r control; do
       for requested in "${RW_DIRS[@]}"; do
-        request_lexical="$(realpath -m -s -- "$requested" 2>/dev/null)" && [ -n "$request_lexical" ] &&
-          request_real="$(readlink -m -- "$requested" 2>/dev/null)" && [ -n "$request_real" ] || fail "cannot resolve requested mount for control path: $CONTROL_DIR"
+        read_path0 request_lexical realpath -m -s -z -- "$requested" && [ -n "$request_lexical" ] &&
+          read_path0 request_real readlink -m -z -- "$requested" && [ -n "$request_real" ] || fail "cannot resolve requested mount for control path: $CONTROL_DIR"
         for request_form in "$request_lexical" "$request_real"; do
           case "$request_form/" in "$control"/*) fail "refusing writable mount '$requested' at or below control path: $CONTROL_DIR" ;; esac
         done
@@ -621,7 +622,7 @@ check_state_dir_link() {
 # same kind and name, and never to $HOME or a parent of it.
 bind_state_link_target() {
   local link="$1" name="${1##*/}" target
-  target="$(readlink -f "$link" 2>/dev/null)" || return 0
+  read_path0 target readlink -f -z -- "$link" || return 0
   [ -n "$target" ] && [ -e "$target" ] || { debug "state link $link dangles"; return 0; }
   covers_home "$target" && fail "refusing to launch: $link links to $target, which contains \$HOME, so binding it would expose everything the sandbox hides. Point the link at a directory of its own."
   if [ "${target##*/}" != "$name" ] || { [ "$2" = dir ] && [ ! -d "$target" ]; } || { [ "$2" = file ] && [ ! -f "$target" ]; }; then
@@ -634,9 +635,10 @@ bind_state_link_target() {
 # ~/.claude transcripts: the whole directory read-only, the session's own
 # folder read-write.
 bind_projects_dir() {
-  local e="$1" base="$1"
+  local e="$1" base="$1" text
   if [ -L "$e" ]; then
-    mount_op --symlink "$(readlink "$e")" "$e"
+    read_path0 text readlink -z -- "$e"
+    mount_op --symlink "$text" "$e"
     bind_state_link_target "$e" dir --ro-bind
     base="$STATE_LINK_TARGET"
   else
@@ -668,12 +670,13 @@ bind_user_claude_dir() {
       mount_op --tmpfs "" "$e"
       [ -L "$e" ] && PRIVATE_LINKS+=("$e")
     elif [ -L "$e" ]; then
-      mount_op --symlink "$(readlink "$e")" "$e"
+      read_path0 text readlink -z -- "$e"
+      mount_op --symlink "$text" "$e"
       if in_list "$name" "${USER_STATE_ENTRIES[@]}"; then
         case "$name" in *.json|*.jsonl|.last-*) kind=file ;; *) kind=dir ;; esac
         STATE_LINK_TARGET=""
         if in_list "$name" ${OPT_IN_ENTRIES[@]+"${OPT_IN_ENTRIES[@]}"}; then
-          text="$(readlink "$e")"
+          read_path0 text readlink -z -- "$e"
           case "$text" in /*) ;; *) text="$dir/$text" ;; esac
           check_chain "$text"
         fi
@@ -818,7 +821,7 @@ protect_claude_dir() {
     bind_project_claude_dir "$c"
   elif [ -e "$c" ]; then
     mount_op --ro-bind "$c" "$c"
-  elif [ "$create" = create ] && [ -w "$(dirname "$c")" ]; then
+  elif [ "$create" = create ] && [ -w "${c%/*}" ]; then
     MISSING_DIRS+=("$c")
   fi
 }
@@ -837,13 +840,13 @@ protect_tree() {
     if inside_ro_area "$n"; then
       case "${n##*/}" in
         .claude) if [ -L "$n" ] || [ -d "$n" ]; then protect_claude_dir "$n" nocreate; else RO_REQUIRED+=("$n"); fi ;;
-        .git) RO_REQUIRED+=("$n"); protect_repo_root "$(dirname "$n")" covered ;;
+        .git) RO_REQUIRED+=("$n"); protect_repo_root "${n%/*}" covered ;;
       esac
       continue
     fi
     case "${n##*/}" in
       .claude) protect_claude_dir "$n" "$create" ;;
-      .git) protect_repo_root "$(dirname "$n")" "$create" ;;
+      .git) protect_repo_root "${n%/*}" "$create" ;;
     esac
   done < <(find "$d/" -xdev -mindepth 2 \( -name node_modules -prune \) -o \
              \( -name .git -print0 -prune \) -o \( -name .claude -type d -print0 \) -o \
@@ -1102,7 +1105,7 @@ build_bwrap_args() {
   RO_REQUIRED=()
   WRITABLE_ROOTS=("${BASE_WRITABLE_ROOTS[@]}")
   WRITABLE_REALS=()
-  for d in "${WRITABLE_ROOTS[@]}"; do WRITABLE_REALS+=("$(readlink -m -- "$d" 2>/dev/null || true)"); done
+  for d in "${WRITABLE_ROOTS[@]}"; do read_path0 _real readlink -m -z -- "$d"; WRITABLE_REALS+=("$_real"); done
   local d name i
   mount_op --dev "" /dev
   mount_op --proc "" /proc

@@ -1510,6 +1510,49 @@ test('sandbox wrapper: a link in the project\'s .claude whose target ends in a n
     }
   });
 
+test('sandbox wrapper: a working directory whose name ends in a newline keeps the targets of its .claude links protected',
+  { skip: !LINUX && 'requires Linux newline filenames and symlinks' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      fs.mkdirSync(path.join(rig.home, '.claude'));
+      const proj = `${rig.proj}\n`;
+      fs.renameSync(rig.proj, proj);
+      fs.mkdirSync(path.join(proj, '.claude'));
+      fs.mkdirSync(path.join(proj, 'hooks'));
+      fs.writeFileSync(path.join(proj, 'hooks', 'run'), '');
+      fs.symlinkSync('../hooks', path.join(proj, '.claude', 'hooks'));
+      const { status, stderr } = rig.run(['--version'], {}, proj);
+      assert.equal(status, 0, stderr);
+      const ops = parseMounts(rig.lastBwrapArgs());
+      assert.equal(accessAt(ops, path.join(proj, 'hooks', 'run')), '--ro-bind', 'the hooks target stays read-only');
+    } finally {
+      rig.cleanup();
+    }
+  });
+
+test('sandbox wrapper: refuses a repository under a read-only tool directory whose name ends in a newline',
+  { skip: !LINUX && 'requires Linux newline filenames and symlinks' }, () => {
+    const rig = makeRig({ recordArgs: true });
+    try {
+      const dir = path.join(rig.home, '.claude');
+      fs.mkdirSync(dir);
+      const tools = path.join(rig.proj, 'tools');
+      const sample = path.join(tools, 'sample\n');
+      const store = path.join(rig.root, 'store', 'todos');
+      fs.mkdirSync(sample, { recursive: true });
+      fs.mkdirSync(store, { recursive: true });
+      git(sample, 'init', '-q');
+      git(sample, 'config', 'core.hooksPath', store);
+      fs.rmSync(path.join(dir, 'todos'), { recursive: true, force: true });
+      fs.symlinkSync(store, path.join(dir, 'todos'));
+      const res = rig.run(['--version'], { NVM_DIR: tools });
+      assert.equal(res.status, 125, `the repository's hooks would be left unprotected\n${res.stderr}`);
+      assert.match(res.stderr, /a git path of .*tools\/sample\n contains a newline/);
+    } finally {
+      rig.cleanup();
+    }
+  });
+
 test('sandbox wrapper: a linked state directory outside ~/.claude is followed only to a directory named claude, never to / or a parent of $HOME',
   { skip: !LINUX && 'linux only' }, () => {
     const rig = makeRig({ recordArgs: true });
