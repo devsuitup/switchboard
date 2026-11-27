@@ -27,8 +27,8 @@ installs ([Update channels](#update-channels)).
 
 The beta rule starts with the first beta of a version: a final with no
 `vX.Y.Z-beta.N` tag of its own version, as every release up to `v0.0.N` was,
-is checked for its tag shape and `package.json` version only. That keeps a
-plain final releasable; the next version, `0.1.0`, ships as `0.1.0-beta.1`
+is checked for release-branch provenance, its tag shape and `package.json`
+version. That keeps a plain final releasable; the next version, `0.1.0`, ships as `0.1.0-beta.1`
 first (maintainer decision, 2026-11-24).
 
 ## Release branches
@@ -42,10 +42,12 @@ from it.
   `main`, and only by an admin (the `creation` rule of `release-protection`).
   `release/0.1` was created at `v0.1.0-beta.2`. A new minor line enters
   through its first beta: its bump PR lands on `main`, the merged commit is
-  tagged, and the branch is created at that tag:
+  tagged locally, and the branch is pushed before the tag so CI can verify
+  its provenance:
 
   ```bash
   git push origin 'v0.2.0-beta.1^{commit}:refs/heads/release/0.2'
+  git push origin v0.2.0-beta.1
   ```
 
 - **Cut a beta from `main`.** While the line has not diverged from `main`,
@@ -76,7 +78,8 @@ from it.
   release branch first: every commit a PR brings into `release/*` must
   already be on `main`, unless it is a merge commit, the version and
   changelog bump, or a cherry-pick whose `-x` trailer names a commit on
-  `main`; this is enforced by the release-provenance check of `build.yml`'s `release-tag` job (pending its own PR; remove this sentence if it does not land). The line's next beta is then a
+  `main`; this is enforced by the PR mode of `scripts/check-release-provenance.js`, run by the `release-provenance` job of `.github/workflows/release-provenance.yml` on every PR into `release/*` (not yet a required check, and
+  not yet on `release/0.1`, #1318). The line's next beta is then a
   maintenance beta:
 
   ```bash
@@ -205,7 +208,7 @@ commands, with the ancestry checks around them, are in
    admin can (ruleset 28267436 `release-tags` on `refs/tags/v*`: creation,
    update and deletion are restricted, so nobody else moves or deletes a
    release tag either). The tag is released only when its commit is on a
-   `release/*` branch, enforced by the release-provenance check of `build.yml`'s `release-tag` job (pending its own PR; remove this sentence if it does not land):
+   `release/*` branch, enforced by the tag mode of `scripts/check-release-provenance.js`, run by `build.yml`'s `release-tag` job on the tag push:
 
    ```bash
    git fetch origin
@@ -218,7 +221,7 @@ commands, with the ancestry checks around them, are in
    Name the commit rather than a branch tip, which may have moved since.
 
 4. **Wait for the build.** The tag starts `.github/workflows/build.yml`. Its
-   `release-tag` job runs [the tag check](#the-tag-check) while the packages
+   `release-tag` job runs the provenance tag mode and [the tag check](#the-tag-check) while the packages
    build; publish needs both. The builds run on macOS
    (macos-15), Windows (windows-2022), and Linux x64 and arm64 on separate
    runners. Packaging-related pull requests and manual dispatches build only
@@ -399,7 +402,7 @@ every tag, on each tag push, and `publish` needs it. It fails (exit 1) when:
 
 A final with no beta tag of its version skips the third point (diff,
 package/lock comparison, changelog section and fold) and passes on the first
-two; the job
+two plus release-branch provenance; the job
 logs `no vX.Y.Z-beta.N tag, so no beta comparison`. Betas of other versions do
 not count.
 
@@ -409,6 +412,60 @@ a usage error or a git failure, a tag that names no commit included; a file
 missing at an existing tag is a contract failure (exit 1).
 `test/check-release-tag.test.js` covers each case and runs the script on a
 temporary repository.
+
+### Release provenance
+
+The maintainer's rule (2026-11-27) is enforced by
+`scripts/check-release-provenance.js`, using only Node built-ins. Both jobs
+fetch `origin/main`, extract its checker with
+`git show origin/main:scripts/check-release-provenance.js` into
+`$RUNNER_TEMP/check-release-provenance.js`, and execute that copy from the
+repository working directory. The PR or tag cannot replace the checker
+through edits to its checked-out script. The checker must land on main
+before these workflows run; a missing main copy fails the job.
+
+The workflow files are the boundary that is not covered: `pull_request` reads
+`release-provenance.yml` and `build.yml` from the PR's merge ref, so a PR into
+`release/*` can edit either to remove or replace the invocation, and its run
+then checks nothing. A tag push likewise runs the `build.yml` of the tagged
+commit. Moving the PR check to `pull_request_target` once `release/*` carries
+the workflow is tracked in #1318; until then, review every change to these
+two files in a PR into `release/*`.
+
+- On every tag push, `release-tag` explicitly fetches `origin/release/*`
+  and runs `node "$RUNNER_TEMP/check-release-provenance.js" tag "$GITHUB_REF_NAME"`
+  before the version/beta check. The tag's peeled commit must be reachable
+  from at least one fetched release branch; an ancestor is sufficient.
+  This also applies to betas and finals without a previous beta.
+- On PRs into `release/*`, the `release-provenance` job fetches `origin/main`
+  and the release branches and checks every commit in
+  `origin/<base>..<PR head SHA>`, including commits brought by a merge.
+  A commit passes if it is reachable from `origin/main`, is a merge commit,
+  is a bump limited to the root `CHANGELOG.md`, `package.json` and/or
+  `package-lock.json`, or has a standalone
+  `(cherry picked from commit <sha>)` line from `git cherry-pick -x` whose
+  full source SHA is reachable from `origin/main`.
+  A bump may change `CHANGELOG.md` freely. Package JSON is compared with
+  its parent after deleting only `version`; the lock comparison deletes
+  only root `version` and `packages[""].version`. All remaining parsed JSON
+  must be equal, so scripts and dependencies cannot be changed as a bump.
+  Missing or invalid package JSON does not qualify. Empty non-main commits
+  do not count as bumps. Renames include both paths.
+  Failures list every offending commit: land the fix on main first and
+  backport it with `-x`.
+
+The PR check compares bumps to their parent; the final-tag check compares
+package files to the last beta. Provenance validates ancestry and the recorded source, not patch
+equivalence. Merge commits are exempt, but their incoming parent histories
+are checked. Exit 1 means a rule violation; exit 2 means invalid usage or
+unreadable Git inputs. Both block the job.
+
+Release PRs use merge commits, preserving the checked commits and their
+`-x` lines. The maintainer configured `release/*` as merge-commit only and
+creation, update and deletion of `v*` tags as admin-only. `release-provenance` is not yet a required check, and `release/0.1` gets the workflow only at its next cut from `main` (#1318):
+making it required is a separate repository setting, and until that cut a PR
+into `release/0.1` runs it only if the PR itself carries the workflow (a cut
+from `main` does). Local tests do not verify these GitHub settings or runs.
 
 ## Update channels
 

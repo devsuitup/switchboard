@@ -64,13 +64,16 @@ there is procedure, not a setting; on `release/*` only `merge` is. When the
 test matrix changes, `main-protection`, `release-protection` and the classic
 protection are updated together ([Releasing](releasing.md#steps)).
 
-Two more rules are enforced by the release-provenance check of `build.yml`'s `release-tag` job (pending its own PR; remove this sentence if it does not land):
+Two more rules are enforced by `scripts/check-release-provenance.js`:
 
-1. a tag is released only when its commit is on a `release/*` branch;
+1. a tag is released only when its commit is on a `release/*` branch:
+   the tag mode of `scripts/check-release-provenance.js`, run by `build.yml`'s `release-tag` job on the tag push;
 2. every commit a PR brings into `release/*` is already on `main`, unless it
    is a merge commit, the version and `CHANGELOG.md` bump, or a cherry-pick
    whose `(cherry picked from commit <sha>)` trailer (`git cherry-pick -x`)
-   names a commit on `main`.
+   names a commit on `main`: the PR mode of `scripts/check-release-provenance.js`, run by the `release-provenance` job of `.github/workflows/release-provenance.yml` on every PR into `release/*`.
+
+`release-provenance` is not yet a required check, and `release/0.1` gets the workflow only at its next cut from `main` (#1318). Both jobs run the checker from `main`'s copy, so editing the checked-out script does not bypass it. The workflow files themselves are not protected that way: `pull_request` reads the workflow from the PR's merge ref, so a PR into `release/*` can edit `release-provenance.yml` or `build.yml` to remove or replace the invocation. Moving the PR check to `pull_request_target` once `release/*` carries the workflow is tracked in #1318.
 
 `test.yml` (PR and push) and `build.yml` and `pr-title.yml` (PR) run for
 `main` and `release/*`. A tag push runs `build.yml` whatever the branch; only
@@ -271,7 +274,9 @@ The rule: a backport is a `git cherry-pick -x` of a commit already merged on
 `main`, never a fix written on the release branch first. The fix PR goes to
 `main`, is squashed there, and only that squash commit is cherry-picked; the
 `-x` trailer names it, so every backport is also on `main` and nothing ships
-from a release branch that `main` lacks. This is enforced by the release-provenance check of `build.yml`'s `release-tag` job (pending its own PR; remove this sentence if it does not land).
+from a release branch that `main` lacks. This is enforced by the PR mode of `scripts/check-release-provenance.js`, run by the `release-provenance` job of `.github/workflows/release-provenance.yml` on every PR into `release/*`
+([Protection](#protection): not yet a required check, and not yet on
+`release/0.1`, #1318).
 
 ```bash
 git fetch origin
