@@ -1,6 +1,6 @@
 # Context: session-cache
 
-**Purpose**: index every Claude session JSONL on disk into a queryable SQLite cache so the sidebar renders without re-scanning `~/.claude/projects/` and so search is full-text. Watches the projects directory for changes and refreshes incrementally.
+**Purpose**: index every Claude session JSONL on disk, and every Codex rollout under `$CODEX_HOME/sessions` (folders `codex/...`, rows with `runtime: 'codex'`; see [cli-harnesses](cli-harnesses.md)), into a queryable SQLite cache so the sidebar renders without re-scanning `~/.claude/projects/` and so search is full-text. Watches the projects directory for changes and refreshes incrementally.
 
 ## Column-reconcile CI coverage gap (#869)
 
@@ -503,8 +503,9 @@ Issue #1255.
 | File | LOC | Role |
 |---|---|---|
 | `session-index-store.js` | ~1270 | SQLite (better-sqlite3) schema + prepared statements, opened writable only by the writer worker ([session-index-writer](session-index-writer.md)). Owns `session_cache`, `session_meta`, `cache_meta`, `settings`, `search_fts` (FTS5 + trigram tokenizer). |
-| `db.js` | 30 | Main's readonly connection: `openSessionIndexStore({ readonly: true })` plus a settings mirror. Re-exports the store's API. |
-| `session-cache.js` | ~2050 | Indexer + watcher. Reads `~/.claude/projects/<folder>/*.jsonl` (+ subagents subdir), populates rows, emits projects-changed events. |
+| `db.js` | 30 | Main's readonly connection: `openSessionIndexStore({ readonly: true })` plus a settings mirror. It re-exports the store's whole object, but only its readers are usable: a mutator called through it fails on the readonly connection. |
+| `session-index-writer.js` / `session-index-writer-client.js` / `workers/session-index-writer.js` | ~600 / ~275 / ~290 | The only writer: the command facade main and `session-cache.js` call, its worker client, and the worker that owns the writable store (see [session-index-writer](session-index-writer.md)). |
+| `session-cache.js` | ~2070 | Indexer + watcher. Reads `~/.claude/projects/<folder>/*.jsonl` (+ subagents subdir) and, through the harness adapters, Codex rollouts; populates rows, emits projects-changed events. |
 | `read-session-file.js` | ~840 | Streaming JSONL reader. `readSessionFile()` (full) + `readSessionDisplayHeader()` (256 KB / 500 lines of head plus a 256 KB tail for titles). |
 | `encode-project-path.js` | ~60 | `/path/to/project` → `-path-to-project` folder name. Mirrors Claude CLI's encoding. |
 | `derive-project-path.js` | ~310 | Inverse: read `cwd` field from JSONL, derive original projectPath. **Collapses worktrees back to parent repo** via `resolveWorktreePath`. |
@@ -516,18 +517,28 @@ Issue #1255.
 | `src/main/session-index/message-count.js` / `read-counters.js` | ~60 / ~65 | Shared message-count predicate; byte and read counters for the per-folder diagnostics. |
 | `cache-effects.js`, `folder-index-state.js` | ~80 / ~50 | Projection-effect recorder; folder and transcript index mtimes. |
 | `src/main/projects/last-known-projects.js` | ~145 | Persisted last sidebar payload (`get-last-known-projects`); documented in [ipc-bridge](ipc-bridge.md). |
+| `fts-match.js` | ~85 | The whole session search query (`createSessionSearch`, `buildFtsMatch`, `idLookupTerm`), shared by the search worker and the store's fallback (see "Search"). |
+| `workers/search-query.js` | ~70 | Read-only search worker, so a query never queues behind a scan. |
+| `src/main/session-index/session-refs.js` | ~95 | Search body refs (`collectRefs`, `mergeSearchBodyRefs`; see "Search" and ADR 0006). |
+| `session-continuations.js` | ~260 | Continuation ids, stamps and the continuation index (see "Continuation rows (#564)" and "Continuation index (#518B)"). |
+| `subagent-attribution.js` | ~45 | Which transcript path is a root, subagent or workflow agent (see [subagent-observability](subagent-observability.md)). |
+| `harnesses/` (`index.js`, `claude.js`, `codex.js`, `contract.js`) | | Per-CLI adapters: folder ownership, transcript paths and Codex rollout reading (see [cli-harnesses](cli-harnesses.md)). |
 
 ## Public surface
 
-From `db.js` (the store's API, re-exported):
+The store's API (`session-index-store.js`). `db.js` opens it readonly, so main
+reads through `db.js` and every mutator below runs only in the writer worker,
+reached through the writer facade (`session-index-writer.js`). `session-cache.js`
+receives as `ctx.db` the recording adapter of `cache-effects.js`, which
+`writer.initializeCache` passes; its writes reach the writer, not `db.js`.
 
-- **Sessions**: `getAllCached`, `getCachedByFolder(folder)`, `getCachedByParent(parentSessionId)`, `getCachedSession(sessionId)`, `upsertCachedSessions(rows[])`, `deleteCachedSession`, `deleteCachedFolder`
-- **Meta**: `getMeta`, `getAllMeta`, `setName`, `toggleStar`, `setStarred`, `setArchived` (session-level user state)
-- **Folder meta**: `getFolderMeta`, `setFolderMeta(folder, projectPath, indexMtimeMs)` — tracks index freshness
-- **Search**: `searchByType(type, query, limit, titleOnly)`, `upsertSearchEntries`, `deleteSearchType/Session/Folder`
+- **Sessions**: `getAllCached`, `getCachedByFolder(folder)`, `getCachedByParent(parentSessionId)`, `getCachedSession(sessionId)`; writer only: `upsertCachedSessions(rows[])`, `deleteCachedSession`, `deleteCachedFolder`
+- **Meta**: `getMeta`, `getAllMeta`; writer only: `setName`, `toggleStar`, `setStarred`, `setArchived` (session-level user state)
+- **Folder meta**: `getFolderMeta`; writer only: `setFolderMeta(folder, projectPath, indexMtimeMs)` — tracks index freshness
+- **Search**: `searchByType(type, query, limit, titleOnly)`; writer only: `upsertSearchEntries`, `deleteSearchType/Session/Folder`
 - **Stats**: `getDailyMetrics()` — `session_metrics` grouped by message date, returns `[{date, messageCount, toolCallCount, tokens, sessionCount}]` (the Stats tab's heatmap and daily bars, through `buildStatsFromDb` in `main.js`); also `getDailyModelTokens`, `getModelUsage`, `getTotalCounts`.
-- **Settings**: `getSetting`, `setSetting`, `deleteSetting`
-- **Misc**: `touchCachedModified(sessionId)` — 1-column UPDATE, cheap
+- **Settings**: `getSetting` (from `db.js`'s mirror); writer only: `setSetting`, `deleteSetting`
+- **Misc** (writer only): `touchCachedModified(sessionId, modified, fileMtime = modified)` — one UPDATE of the two columns `modified` and `fileMtime`, cheap
 
 From `session-cache.js`:
 
@@ -3348,7 +3359,7 @@ lists never cross the writer transport. See `session-index-writer.md` for orderi
 - `db-session-metrics.test.js` — covers the `getTotalCounts` pure-JS mirror's `mergedIntoSessionId` exclusion (kept in sync with the real SQL by the SQL-level test above)
 - IPC consumers of cached payloads: `get-projects`, `get-active-sessions`, `search`, `get-stats-from-db`, `list-subagents`, `read-session-jsonl`
 - Renderer: `public/sidebar.js` (consumes `buildProjectsFromCache` output), `public/stats-view.js` (consumes `get-stats-from-db`, built from `getDailyMetrics` and the other `session_metrics` queries)
-- If you add a new `session_cache` column, update the SELECT in `getCachedByFolder` — it's `SELECT *` so additions land automatically, but the renderer needs to know about them.
+- If you add a new `session_cache` column, add its `ALTER TABLE` repair and add it to `cacheUpsert`'s explicit column list (and its `ON CONFLICT` update) in `session-index-store.js`. Reads such as `getCachedByFolder` are `SELECT *`, so they return it without change, but the renderer needs to know about it.
 
 ## Schema reference
 
@@ -3359,17 +3370,33 @@ session_cache(sessionId PK, folder, projectPath, summary, firstPrompt,
               created, modified, messageCount, slug, aiTitle,
               parentSessionId, agentId, subagentType, description,
               fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint,
-              scheduleSlug, continuationIndex, customTitle)
+              scheduleSlug, continuationIndex, runtime DEFAULT 'claude',
+              sessionFile, customTitle, workflowRunId, messageCountIndex,
+              fileSize, fullReadStamp)
+session_name_derivation(sessionId PK, witness)   -- deleted with its session_cache row
 session_meta(sessionId PK, name, starred, archived)
-session_meta_fields(sessionId, field, revision, source, transcriptTitle; PK (sessionId, field))
+session_meta_fields(sessionId, field, revision, source, transcriptTitle, updatedAt;
+                    PK (sessionId, field))
 session_metrics(sessionId, date, model, messageCount, toolCallCount,
                 inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens;
                 PK (sessionId, date, model))
-cache_meta(folder PK, projectPath, indexMtimeMs)
+cache_meta(folder PK, projectPath, indexMtimeMs, fullIndexVersion,
+           fullIndexConfig, fullIndexPending, readFailures)
 search_content(rowid PK, title, body)
 search_fts USING fts5(title, body, content='search_content', tokenize='trigram case_sensitive 0')
 search_map(rowid PK, id, type, folder)   -- backref for FTS delete
 settings(key PK, value JSON)
+session_requests(stemKey PK, suppliedHash, rawHash, family, actualStem,
+                 resultBytes, createdAt, completedAt, revision)
+session_request_commands(domainId, actionToken, command, argsHash, rawHash,
+                         outcomeJson, revision, createdAt; PK (domainId, actionToken))
+project_delete_fences(projectKey PK, epoch, operationId, blocked)
+project_delete_operations(operationId PK, projectKey, expectedEpoch, ownedEpoch,
+                          manifestHash, membershipDigest, writerMembershipDigest,
+                          optionsJson, state, phase, startRevision, lastRevision,
+                          nextUnit, totalUnits, sealed, errorJson, createdAt, finishedAt)
+project_delete_units(operationId, ordinal, category, targetJson, status,
+                     resultJson; PK (operationId, ordinal))   -- cascade on operation delete
 ```
 
 ## Continuation rows (#564)
