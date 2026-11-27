@@ -411,11 +411,14 @@ whatever they hold.
   listens on localhost.
 - **Claude's state, across projects.** `~/.claude` holds the credentials and
   every project's transcripts and memory files. A sandboxed session can read
-  all of them, and write the transcripts and memory files.
-- **Instructions.** The project's `CLAUDE.md` files, memory files under
-  `~/.claude/projects/*/memory`, and agent memory (`agent-memory`,
-  `agent-memory-local`) stay writable. They are read by later sessions as
-  instructions, not run.
+  all of them. It can write only its own project's transcript folder,
+  `~/.claude/projects/<this project's folder>`, including that project's
+  memory files; the rest of `~/.claude/projects` is read-only (see
+  [`~/.claude` and each bound directory's `.claude`](#claude-and-each-bound-directorys-claude)).
+- **Instructions.** The project's `CLAUDE.md` files, this project's memory
+  files under `~/.claude/projects/<this project's folder>/memory`, and agent
+  memory (`agent-memory`, `agent-memory-local`) stay writable. They are read
+  by later sessions as instructions, not run.
 - **The project's own files.** The working directory is read-write: whatever
   runs them later outside the sandbox runs what the session wrote — build
   scripts, `package.json` scripts, direnv's `.envrc`, editor tasks, and the

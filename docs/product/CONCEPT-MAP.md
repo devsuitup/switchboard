@@ -107,7 +107,10 @@ Plain-terminal rows show Stop only; subagent rows have no buttons
   `rebindSidebarEvents`, `public/app.js` `openSessionNow`).
 - R1.4 Stop on a row stops every running part after one confirmation naming
   the count, locations and process loss; the conversation is kept. Grid and
-  header Stop target only their tab. A background job running a part, attached
+  header Stop do the same since v0.0.103 (#917): both call
+  `confirmAndStopSession` with the tab's id, which resolves the containing
+  conversation and plans every eligible running part, not only that tab. A
+  background job running a part, attached
   here or not, is stopped through the daemon once its job id is checked; a job
   the daemon no longer hosts only detaches its tab. Processes outside this
   window stay running and are named (#777, #778). Retry confirms
@@ -362,9 +365,13 @@ a second writer. A conversation already open here is shown directly
 
 ## 12. Remote host session
 
-**States**: row icon from transcript activity (spinner until 20 s of silence,
-never Response ready) and descriptor dialogs (orange attention)
-(`docs/remote-hosts.md:192-203`); host dot (§6).
+**States**: row icon from the conversation head's turn, read from the mirrored
+transcript (spinner while the turn is open; a newer idle descriptor or terminal
+idle signal stops it, silence alone does not; an observed open-to-closed turn
+on a session you are not viewing sets Response ready) and descriptor dialogs
+(orange attention) (`public/session-status-projection.js`
+`projectHeadActivity`, `public/session-activity-dom.js`
+`applyHeadTurnSnapshot`; `docs/remote-hosts.md#status`); host dot (§6).
 
 **Actions**: click → attach through tmux, or read-only transcript (badge
 tooltip says which, `public/sidebar.js:1733-1739`); **Stop session** → "Stop
