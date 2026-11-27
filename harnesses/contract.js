@@ -8,12 +8,12 @@
  * @property {function(string): string} folderPath Folder key to absolute directory.
  * @property {function(string): (string|null)} folderForProject Absolute project path to folder key; null for ungrouped stores.
  * @property {function(string): string[]} listTranscripts Absolute folder directory to absolute transcript paths.
- * @property {function(string): (string|null)} sessionIdFromPath Transcript path to filename identity; null if unrecognized.
+ * @property {function(string): (string|null)} sessionIdFromPath Transcript path to cached session identity; null if unrecognized.
  * @property {function(Object): (string|null)} transcriptPath Cached row (sessionId, folder, sessionFile) to absolute path.
  */
 /**
  * @typedef {Object} TranscriptParser
- * @property {function(string, string, string, Object=): (Object|null)} readSessionFile Absolute transcript path, folder key, project path and adapter-specific options to metadata.
+ * @property {function(string, string, string, Object=): (Object|null)} readSessionFile Absolute transcript path, folder key, project path and adapter-specific options (Claude: parentSessionId and deduplication options) to metadata.
  * @property {function(Object[]): Object[]} toViewerEntries Raw transcript records to the records the message viewer renders.
  * @property {function(Object): (Object|null)} toViewerEntry One raw transcript record to its viewer record, or null when it is not shown.
  * @property {function(string): (string|null)} deriveProjectPath Absolute folder directory to project path; null for ungrouped stores.

@@ -83,12 +83,17 @@ the fork helper. `folderForProject(projectPath)` may return null when a store
 does not group by project.
 
 `groupsByProject` is a required boolean (Claude: true),
-`sessionIdFromPath(filePath)` is a required filename-identity extractor
-(Claude: basename without `.jsonl`), and `needsIdDetection({isNew, options})`
+`sessionIdFromPath(filePath)` is a required cache-identity extractor
+(Claude: basename without `.jsonl` for parents; `sub:<parent>:<agent>` for
+subagent transcripts under its configured projects root), and
+`needsIdDetection({isNew, options})`
 is a required launch predicate. Claude returns true only for `options.forkFrom`,
 as upstream does: a fresh ordinary launch accepts `--session-id`, while a fork
-mints its own id. Filename identity does not replace the fork parser's synthetic
-subagent ids. `assertHarness()` checks the boolean and both method types;
+mints its own id. Claude reuses `classifyTranscriptPath` and `subagentSessionId`
+to match the parser's preferred and legacy subagent identities (#869).
+The fourth `readSessionFile` argument is adapter-specific options, including
+Claude's `parentSessionId` and deduplication options; it is not a previous row.
+`assertHarness()` checks the boolean and both method types;
 semantic conformance is exercised against isolated storage in contract tests.
 
 The Codex adapter (below) supplies false `groupsByProject`, nullable
