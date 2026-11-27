@@ -69,6 +69,8 @@ The full index is [docs/README.md](docs/README.md).
   from source next to an installed copy, building, project layout.
 - [Testing a PR live](docs/testing-a-pr.md) and
   [live testing with a throwaway HOME](docs/live-testing.md).
+- [Branches](docs/branching.md): work branches squashed into `main`, release
+  branches `release/X.Y`, cuts and port-backs merged with a merge commit.
 - [Releasing](docs/releasing.md): the version bump, the tag, publishing the
   draft release.
 - Contributors and agents working in the code: [.ai/shared-guidelines.md](.ai/shared-guidelines.md)

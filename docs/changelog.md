@@ -40,11 +40,16 @@ Older versions: see [GitHub Releases](…).
   headings deleted, so the file never holds a beta beside its final
   ([Releasing](releasing.md)). `test/changelog.test.js` and the release tag
   check enforce it.
-- Versions are cut on `release/X.Y`, each branch with its own `## Unreleased`.
-  After each release its section is ported to `main`, and an entry that
-  section contains is removed from `main`'s `## Unreleased`: an entry that
-  shipped from a release branch never stays there, or the next line's first
-  beta would announce it again ([Releasing](releasing.md#steps), step 7).
+- Versions are tagged on `release/X.Y`, each branch with its own
+  `## Unreleased`. After each release the release branch is merged back into
+  `main` ([Branches](branching.md#port-back)), bringing its dated section;
+  an entry that section contains leaves `main`'s `## Unreleased`: an entry
+  that shipped from a release branch never stays there, or the next beta would
+  announce it again. Before each cut, the older dated sections of the bump
+  branch and the release branch must be identical, except the beta sections
+  a final folds: an entry merged on `main` after a cut can land under that
+  cut's heading ([Branches](branching.md#pitfalls)). A port-back adds the
+  release's section to `main` and keeps `main`'s own, newer ones.
 - Up to three groups per version, in this order: `### New`, `### Changed`,
   `### Fixed`. A group with no entry is left out.
 - The `---` line closes the last section: the pointer to GitHub Releases below
@@ -69,7 +74,9 @@ Every PR that changes what a user sees or can do adds its entry under
 - One or two plain sentences, on what the user sees or can now do, not on the
   code that does it.
 - A backport to a release branch carries the same entry, under that branch's
-  `## Unreleased`; `main` keeps its own until the release is ported.
+  `## Unreleased`; `main` keeps its own until the release is ported back.
+- Two open PRs that both add an entry conflict on `CHANGELOG.md`: merge
+  `origin/main` into the later one and keep both entries.
 - The PR or issue ref at the end: `(#338)`, or `(#337, #343)`.
 - If the change needs a caveat or an action from the user, say it in one
   sentence.
@@ -94,7 +101,7 @@ counts and changes merged in from its base branch (`main` or `release/X.Y`) do n
 A PR whose app change users do not see (a refactor, a log line) takes the
 `no-changelog` label instead. The script reads the labels through `gh api`
 when it runs, not from the event that started the job: after adding the label,
-re-run the failed job (`gh run rerun <run-id> --failed`, or **Re-run failed
+re-run the failed job (`gh run rerun <run-id> --repo devsuitup/switchboard --failed`, or **Re-run failed
 jobs** on the checks page).
 
 The YAML only invokes `scripts/check-changelog.js`:

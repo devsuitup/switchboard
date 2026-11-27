@@ -91,7 +91,27 @@ runner, and that electron-builder packages a `-beta.N` version on every target
 ## Release branches (#1199)
 
 The maintainer decided on 2026-11-25 that `main` never freezes: releases are
-cut from `release/X.Y` ([releasing.md](../../docs/releasing.md#release-branches)).
+tagged on `release/X.Y` ([releasing.md](../../docs/releasing.md#release-branches),
+branch model in [branching.md](../../docs/branching.md)). A beta's bump branch
+starts at `origin/main` and its PR to `release/X.Y` is merged with a merge
+commit; the final's starts at `origin/release/X.Y`, because the tag check
+refuses a final that differs from its last beta by more than version and
+changelog. Each release returns to `main` through a port-back PR from a branch
+at the tag, also merged with a merge commit, so each branch stays an ancestor
+of the other and the next cut merges cleanly. A line diverged from `main`
+takes only `git cherry-pick -x` backports of commits already on `main`, and
+its betas are cut from the release branch (maintenance betas). No workflow
+enforces the merge method: `release-protection` (28112036) allows only
+`merge` and its `creation` rule leaves branch creation to admins;
+`main-protection` allows all three, so a port-back's merge commit is
+procedure. A squashed port-back (#1293) made the next cut (#1312) conflict on
+the version and `CHANGELOG.md`. Ruleset 28267436 (`release-tags`,
+`refs/tags/v*`) restricts tag creation, update and deletion to admins.
+A release-provenance check in `release-tag` (a tag's commit on a `release/*`
+branch; every commit a PR brings into `release/*` already on `main` unless a
+merge commit, the bump, or a cherry-pick whose `-x` trailer names a commit on
+`main`) is pending its own PR; remove this sentence if it does not land.
+
 The workflow side is the trigger list `[main, 'release/*']` in `test.yml`
 (PR and push), `build.yml` (PR) and `pr-title.yml` (PR); tag pushes are not
 filtered by branch. `*` does not cross `/`, so `release/*` matches
@@ -106,14 +126,16 @@ whatever the branch. `docs` is not a required check on either base.
 
 Bootstrap: `pull_request` workflows are read from the PR's merge commit, so a
 PR to a release branch runs CI only if the base or the PR carries the
-triggers. `release/0.1` was cut at `v0.1.0-beta.2` without them; they reach it
-with a backport that ships in its next beta, because the tag check refuses a
-final differing from its last beta by a workflow file.
+triggers. `release/0.1` was created at `v0.1.0-beta.2` without them; the
+`0.1.0-beta.3` cut from `main` (#1292) carried them in. A branch without them
+gets them in a beta, never in a final, because the tag check refuses a final
+differing from its last beta by a workflow file.
 
 Known limit: the notes' compare link uses `git describe` on the tag's own
-history. Finals tagged on one release branch are not ancestors of the next
-line, so a new line's `X.Y.0` compares with an older final; the link is
-corrected by hand in the draft.
+history. When an older line's releases were ported back with a merge commit,
+its finals are in `main`'s history and the next line sees them; when a
+port-back was squashed or skipped, they are not, a new line's `X.Y.0` compares
+with an older final, and the link is corrected by hand in the draft.
 
 The triggers are pinned by `test/build-workflow.test.js` and
 `test/lint-pr-title.test.js`. Not covered: GitHub starting the runs, which the
