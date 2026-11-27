@@ -655,8 +655,12 @@ function refreshFolder(folder, opts = {}) {
     }
 
     const fullReadPinned = changedSize && !linked && cachedEntry.fileMtime === fileMtime && fileSize <= continuationBytesLeft;
-    if (fullReadPinned) continuationBytesLeft = 0;
-    if (!failure && cachedEntry && !fullReadPinned) {
+    let pinnedRead = null;
+    if (fullReadPinned) {
+      continuationBytesLeft = 0;
+      pinnedRead = readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
+    }
+    if (!failure && cachedEntry && !pinnedRead) {
       let continuationIndex = cachedEntry.continuationIndex;
       if (validPlan) continuationIndex = plan.serialized;
       else if (opts.preparedContinuations?.has(cachedDbId) && changedLinked) { defer(); continue; }
@@ -681,7 +685,7 @@ function refreshFolder(folder, opts = {}) {
       collector.accounted.add(relativeFile);
       if (linked) linkedVersions.set(cachedDbId, { stat, filePath, relativeFile });
       if (count?.needsFullRead) {
-        const s = readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
+        const s = fullReadPinned ? null : readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
         if (s) {
           newFileReads.push(s);
           countRecountMtimes.set(s.sessionId, fileMtime);
@@ -742,7 +746,7 @@ function refreshFolder(folder, opts = {}) {
     // entry / metrics / name are built AFTER merge resolution below, from
     // whatever object actually survives (a compaction mirror's raw read here
     // may still be replaced by a cutoff-filtered re-derivation, or dropped).
-    const s = readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
+    const s = fullReadPinned ? pinnedRead : readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
     if (s) {
       failures.delete(relativeSource);
       if (!parentSessionId && s.continuationIndex) {
