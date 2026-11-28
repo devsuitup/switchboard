@@ -113,8 +113,14 @@ deadline check; an exhausted selected inspection returns a refused, "not inspect
 row while metadata planning can still complete. Unselected
 folders then retain their bounded share of the remaining time. Git listing,
 activity and each status read are deadline-bounded; status traversal and hashing
-also check the deadline/signal. Exhausted rows say "not inspected" and cannot be
-removed. An unchecked row adds no refusal and the metadata plan still completes.
+also check the deadline/signal. A bound expires a read only once the adapter's
+`now()` has reached the deadline: its timer runs on libuv's monotonic
+millisecond clock, not on `Date.now()`, and can fire before `Date.now()` reaches
+the deadline (each clock is floored to the millisecond separately, and the wall
+clock can be slewed or stepped), so an early timer re-arms instead of rejecting.
+A row reported exhausted therefore means every later row's deadline check also
+fails, and no further status read starts (#1294). Exhausted rows say "not
+inspected" and cannot be removed. An unchecked row adds no refusal and the metadata plan still completes.
 A selected inspection failure directs the user to the dedicated "Delete worktree"
 action in the sidebar. Exhausting the overall planner deadline still fails the
 preview, with that same fallback; selecting a folder never extends the deadline.
