@@ -2248,6 +2248,7 @@ async function handleSendToBackground(_event, sessionId, options, signal) {
     kill: entry => killPty(entry, sessionId),
     checkContinuations: async (id, _entry, validate) => {
       const approved = new Set(), asked = new Map(), stoppedIds = [];
+      let stopsConfirmed = false;
       const cancel = (reason, stopError = false, declined = false) => ({ declined: declined && !stopError && !stoppedIds.length, cancelled: reason
         + (stoppedIds.length ? ' Stop acknowledged: ' + stoppedIds.join(', ') + '.' : ''), stopError });
       for (;;) {
@@ -2257,6 +2258,25 @@ async function handleSendToBackground(_event, sessionId, options, signal) {
           return cancel('The old job was asked to stop, but background ownership is still unresolved ('
             + (owners.map(job => job.id).join(', ') || continuation.reason || 'unknown jobs remain')
             + '). This session stays in the foreground.', true);
+        }
+        if (stoppedIds.length && !stopsConfirmed) {
+          const pending = new Set(stoppedIds), deadline = Date.now() + 5000;
+          while (pending.size) {
+            for (const jobId of pending) {
+              let check;
+              try { check = await bgAgents.conversationCheck(jobId, { workerLiveness: 'all' }); }
+              catch { check = null; }
+              const refusal = validate();
+              if (refusal || signal?.aborted) return cancel(refusal || 'The background handoff was cancelled. This session stays in the foreground.', true);
+              if (check?.known && (check.state === 'stopped' || check.state === 'failed' || check.workerLiveness === 'dead')) pending.delete(jobId);
+            }
+            if (!pending.size) break;
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) return cancel('The old job did not stop in time; this session stays in the foreground.', true);
+            await new Promise(resolve => setTimeout(resolve, Math.min(250, remaining)));
+          }
+          stopsConfirmed = true;
+          continue;
         }
         if (owners.length) return { refuse: 'This conversation already runs in background job' + (owners.length > 1 ? 's ' : ' ') + owners.map(job => job.id).join(', ') + '. Open it from the sidebar instead.' };
         if (signal?.aborted) return cancel('The background handoff was cancelled. This session stays in the foreground.', false, true);

@@ -1595,7 +1595,20 @@ is not used here because its delete guard includes that parent's live PTY. A
 failed stop cancels with its reason, never as a user decline. Success is only
 a CLI acknowledgement. After the stop sequence, continuationJobCheck runs
 again: no /bg unless the graph is known and contains neither owners nor unknown
-jobs. Otherwise the move cancels with the reason. Partial failure lists every
+jobs. #1340 additionally requires positive end evidence for every stopped job
+id: conversationCheck(id, { workerLiveness: 'all' }) must return a known state
+of stopped/failed or workerLiveness dead. A done job whose worker is live only
+in the roster/process table can have no descriptor and therefore no hosted
+owner; an empty ownership recheck is not proof that this worker ended.
+Main samples immediately, then every 250 ms for up to five seconds while any
+stopped id lacks proof. Proven ids need no further polling. It revalidates the
+foreground tab and batch cancellation after each sample, and checks ownership
+again after all stopped ids are proved ended. The separate handoff confirmation
+deadline starts only after the question, stop and this verification complete.
+If the bound expires, the move returns cancelled, not declined, with
+"The old job did not stop in time; this session stays in the foreground."
+The failure notice includes the acknowledged ids. Otherwise unresolved
+ownership cancels with its reason. Partial failure lists every
 prior stop acknowledgement without claiming unverified worker death. The stop
 port does not atomically pin the worker incarnation; see Guarded stop ports above.
 

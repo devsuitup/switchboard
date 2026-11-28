@@ -433,7 +433,7 @@ function continuationChoiceFixture(t, { choice = 'cancel', stop = { ok: true }, 
     runExitHandoffs: require('../src/main/app/session-exit').runExitHandoffs,
   });
   h.ctx.log.info = text => logs.push(text);
-  h.ctx.bgAgents.conversationCheck = async () => ({ known: true, sessionIds: ['prior'], workerLiveness: 'unknown' });
+  h.ctx.bgAgents.conversationCheck = async () => ({ known: true, sessionIds: ['prior'], state: stops.length ? 'stopped' : 'done', workerLiveness: 'unknown' });
   h.ctx.bgAgents.continuationJobCheck = async id => id === 'OLD' && !stops.length
     ? { known: false, reason: 'worker liveness unknown for continuation job adb1224f',
       unknownJobs: [{ id: 'adb1224f', name: 'harness-dev', sessionId: 'prior', state: 'done' }] }
@@ -770,7 +770,7 @@ for (const outcome of ['success', 'failure', 'throw']) {
   test('#1295 r4 M1 Stop waits for the ordinary stop of a fresh live done worker: ' + outcome, async t => {
     const h = continuationChoiceFixture(t, { choice: 'stop' });
     const initial = h.ctx.bgAgents.continuationJobCheck;
-    let checks = 0, releaseStop;
+    let checks = 0, releaseStop, stopFinished = false;
     const stopResult = new Promise(resolve => { releaseStop = resolve; });
     t.after(() => releaseStop());
     h.ctx.bgAgents.continuationJobCheck = async id => ++checks === 1 ? initial(id) : { known: true, job: null };
@@ -778,12 +778,13 @@ for (const outcome of ['success', 'failure', 'throw']) {
     h.ctx.bgAgents.conversationCheck = async (id, options) => {
       samples.push([id, options.workerLiveness]);
       return { known: true, state: 'done', sessionIds: ['prior'], continuationSessionIds: ['prior', 'OLD'],
-        workerLiveness: 'live', hosted: false };
+        workerLiveness: stopFinished ? 'dead' : 'live', hosted: false };
     };
     h.ctx.bgAgents.liveJobCheck = () => ({ known: true, job: null });
     h.ctx.bgAgents.runVerb = async (...args) => {
       h.stops.push(args);
       await stopResult;
+      stopFinished = true;
       if (outcome === 'throw') throw new Error('stop unavailable');
       return outcome === 'success' ? { ok: true } : { ok: false, error: 'worker cannot be stopped' };
     };
@@ -803,7 +804,7 @@ for (const outcome of ['success', 'failure', 'throw']) {
     assert.equal(h.questions.length, 1);
     if (outcome === 'success') {
       assert.equal(result.ok, true);
-      assert.equal(checks, 2, 'a successful stop must still recheck background ownership');
+      assert.equal(checks, 3, 'a successful stop must recheck ownership again after worker death is proved');
       assert.deepEqual(h.writes, ['/bg', '\r']);
     } else {
       assert.equal(result.code, 'cancelled', 'a failed stop must not be reported as a user decline');
@@ -826,3 +827,58 @@ test('#1295 r4 a flapping job gets only one re-ask within a handoff', async t =>
   assert.deepEqual(h.writes, []);
   assert.equal(h.ipcMain.listenerCount('bg-continuation-choice-answer'), 0);
 });
+
+function stoppedWorkerFixture(t, evidence) {
+  const h = continuationChoiceFixture(t, { choice: 'stop' });
+  const samples = [], waits = [];
+  let time = 0;
+  h.ctx.Date = { now: () => time };
+  h.ctx.setTimeout = (fn, ms) => {
+    if (ms === 250) { waits.push(ms); time += ms; return setTimeout(fn, 0); }
+    return setTimeout(fn, ms);
+  };
+  h.ctx.bgAgents.conversationCheck = async (id, options) => {
+    if (!h.stops.length) return { known: true, state: 'done', workerLiveness: 'live' };
+    samples.push([id, options.workerLiveness]);
+    return evidence(samples.length, h);
+  };
+  return { ...h, samples, waits };
+}
+
+test('#1340 stop ACK with a live worker waits for dead evidence before /bg', async t => {
+  const h = stoppedWorkerFixture(t, sample => ({ known: true, state: 'done', workerLiveness: sample < 3 ? 'live' : 'dead' }));
+  const write = h.ctx.writePty;
+  h.ctx.writePty = (entry, text) => {
+    assert.ok(h.samples.length >= 3, '/bg must wait for positive worker death evidence after the stop ACK');
+    return write(entry, text);
+  };
+  const result = await h.handleSendToBackground({}, 'tab');
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(h.samples, Array.from({ length: 3 }, () => ['adb1224f', 'all']));
+  assert.deepEqual(h.waits, [250, 250]);
+  assert.deepEqual(h.stops, ['adb1224f']);
+  assert.deepEqual(h.stopOptions, [undefined], 'the handoff must keep using ordinary Stop');
+  assert.deepEqual(h.writes, ['/bg', '\r']);
+});
+
+test('#1340 a worker that survives the bound cancels visibly without /bg', async t => {
+  const h = stoppedWorkerFixture(t, () => ({ known: true, state: 'done', workerLiveness: 'live' }));
+  const result = await h.handleSendToBackground({}, 'tab');
+  assert.equal(result.code, 'cancelled', 'a surviving worker must cancel, not proceed or quietly decline');
+  assert.match(result.error, /The old job did not stop in time; this session stays in the foreground\./);
+  assert.deepEqual(h.writes, []);
+  assert.equal(h.waits.reduce((sum, ms) => sum + ms, 0), 5000);
+  assert.equal(h.questions.length, 1);
+  assert.equal(h.session.backgrounding, false);
+});
+
+for (const state of ['stopped', 'failed']) {
+  test('#1340 a job already ' + state + ' after Stop moves without polling delay', async t => {
+    const h = stoppedWorkerFixture(t, () => ({ known: true, state, workerLiveness: 'unknown' }));
+    const result = await h.handleSendToBackground({}, 'tab');
+    assert.deepEqual(h.samples, [['adb1224f', 'all']], 'read the stopped job state after acknowledgement');
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual(h.waits, []);
+    assert.deepEqual(h.writes, ['/bg', '\r']);
+  });
+}
