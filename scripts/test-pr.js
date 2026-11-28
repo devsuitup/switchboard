@@ -183,6 +183,7 @@ async function main({ checkout = path.resolve(__dirname, '..'), env = process.en
       log(allowClaude
         ? 'Real claude enabled; starts logged out. Login is stored in the temporary HOME and deleted on exit.'
         : 'Real claude disabled (refusing stub first on PATH).');
+      log('Real codex disabled (refusing stub first on PATH), in both modes.');
       log(`--remote-debugging-port=${env.DEBUG_PORT || 9223} (http://127.0.0.1:${env.DEBUG_PORT || 9223}/json)`);
     }
     log(`Launching PR #${pr} from ${worktree} (${isolated ? 'fixture HOME + DB + triggers' : 'isolated DB + triggers'})...`);
