@@ -179,6 +179,14 @@ These bounds also cover alternating IDs and large payloads. The fixed deadline
 is not extended by new events. Its timer is unreferenced, cleared on disposal, and pending counts flush
 on graceful quit. Abrupt termination can lose the final partial window.
 
+## Notices with multiple actions (#1023 item 5)
+
+`showAppNotice({ actions: [{ label, onAction }, ...] })` renders one button per
+action. Without `actions`, the existing `actionLabel`/`onAction` pair still
+renders its single button. Dismissal, action logging and `dismissOnAction` apply
+to each action. The Agents ended-job notice uses this for Respawn and Open
+transcript; it does not need the radio selection and confirmation of `appChoose`.
+
 ## Failures say what to do (#709)
 
 A failure shown to the user says what failed, then what to do, in one short

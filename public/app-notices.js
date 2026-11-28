@@ -156,15 +156,17 @@ function showAppNotice(options) {
   text.className = 'app-notice-message';
   text.textContent = typeof message === 'function' ? message(members) : message;
   notice.append(text);
-  if (actionLabel && typeof onAction === 'function') {
+  const actions = options.actions || [{ label: actionLabel, onAction }];
+  for (const { label, onAction: runAction } of actions) {
+    if (!label || typeof runAction !== 'function') continue;
     const action = document.createElement('button');
     action.type = 'button';
     action.className = 'app-notice-action';
-    action.textContent = actionLabel;
+    action.textContent = label;
     action.addEventListener('click', () => {
       if (appNoticeEntries.get(id)?.notice !== notice) return;
       if (dismissOnAction) clearAppNotice(id, { reason: `action:${action.textContent.trim()}` });
-      onAction();
+      runAction();
     });
     notice.append(action);
   }

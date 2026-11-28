@@ -778,7 +778,17 @@ function initAgentsView() {
       const row = e.target.closest('.agents-row');
       if (!row) return;
       const entry = agentsRoster.find(x => agentsEntryKey(x) === row.dataset.key);
-      if (entry && agentVerbAvailability(entry, agentsDaemonReachable).attach) attachBgAgent(entry);
+      if (!entry) return;
+      const availability = agentVerbAvailability(entry, agentsDaemonReachable);
+      if (availability.attach) attachBgAgent(entry);
+      else if (entry.kind === 'background' && !agentJobIsLive(entry) && ['stopped', 'done', 'failed'].includes(entry.state)) {
+        const actions = [];
+        if (availability.respawn && !agentsPendingVerbs.has(agentsEntryKey(entry))) {
+          actions.push({ label: 'Respawn', onAction: () => runAgentVerb('respawn', entry) });
+        }
+        actions.push({ label: 'Open transcript', onAction: () => runAgentVerb('transcript', entry) });
+        showAppNotice({ id: 'agents-ended-job', message: 'This job has ended.', actions });
+      }
     });
     viewer.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;

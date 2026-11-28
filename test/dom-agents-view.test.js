@@ -10,6 +10,7 @@ const { loadAppFunctions } = require('./app-source');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const HTML = `<!DOCTYPE html><html><body>
+  <div id="app-notices"></div>
   <div id="placeholder"></div>
   <div id="terminal-area"><div id="terminal-header"></div><div id="grid-viewer"></div><div id="terminals"></div></div>
   <div id="stats-viewer"></div><div id="memory-viewer"></div><div id="jsonl-viewer"></div>
@@ -123,11 +124,12 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
     appConfirm: async () => true,
   };
   for (const [k, v] of Object.entries(g)) Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'node_modules', 'morphdom', 'dist', 'morphdom-umd.js'), 'utf8'), dom.getInternalVMContext(), { filename: path.join(PUBLIC, '../node_modules/morphdom/dist/morphdom-umd.js') });
+  evalFile(dom, require.resolve('morphdom/dist/morphdom-umd.js'));
   evalFile(dom, path.join(PUBLIC, 'utils.js'));
   evalFile(dom, path.join(PUBLIC, 'session-state.js'));
   evalFile(dom, path.join(PUBLIC, 'stop-session-ui.js'));
   evalFile(dom, path.join(PUBLIC, 'memory-workfiles-view.js'));
+  evalFile(dom, path.join(PUBLIC, 'app-notices.js'));
   evalFile(dom, path.join(PUBLIC, 'agents-view.js'));
   if (settingsPanel) {
     evalFile(dom, path.join(PUBLIC, 'setting-defaults.js'));
@@ -1258,11 +1260,88 @@ test('a double click on a working or blocked row attaches, with the same options
   assert.deepEqual({ ...ctx.calls.opened[1][1] }, { type: 'attach', jobId: 'dddddddd', cwd: '/w/d' });
 });
 
-test('a double click does nothing on a finished row, an external session, a header or a button', async (t) => {
+for (const state of ['stopped', 'done', 'failed']) {
+  test(`ended ${state} double click offers Respawn and Open transcript through the existing actions`, async t => {
+    const h = setup(); t.after(() => h.destroy());
+    const entry = { ...ROSTER[1], state };
+    h.setSnapshot({ roster: [entry, ROSTER[0]], daemonReachable: true });
+    await h.window.showAgentsView();
+    const row = () => h.document.querySelector('.agents-row[data-key="bg:bbbbbbbb"]');
+    row().click();
+    assert.equal(h.document.querySelector('.agents-row.selected').dataset.key, 'bg:bbbbbbbb');
+    assert.equal(h.document.querySelector('.app-notice'), null, 'single click only selects');
+    assert.deepEqual(h.calls.verbs, []);
+    dblclick(h, row());
+    assert.equal(h.document.querySelector('.app-notice-message')?.textContent, 'This job has ended.', 'ended job notice is visible');
+    const actions = () => [...h.document.querySelectorAll('.app-notice-action')];
+    assert.deepEqual(actions().map(button => button.textContent), ['Respawn', 'Open transcript']);
+    assert.equal(h.document.querySelector('[data-verb="respawn"]').disabled, false);
+    h.document.querySelector('.agents-row[data-key="bg:aaaaaaaa"]').click();
+    actions()[0].click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.calls.verbs, [['respawn', entry.id]], 'Respawn targets the ended job even after selection changes');
+    assert.equal(h.document.querySelector('.app-notice'), null);
+    assert.deepEqual(h.calls.opened, []);
+    assert.deepEqual(h.calls.jsonl, []);
+    h.window.api.bgAgentVerb = async (verb, id) => {
+      h.calls.verbs.push([verb, id]);
+      return { ok: true, sessionId: 'resolved-transcript' };
+    };
+    dblclick(h, row().querySelector('.agents-row-state'));
+    actions()[1].click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.calls.verbs, [['respawn', entry.id], ['transcript', entry.id]]);
+    assert.deepEqual(h.calls.jsonl.map(session => session.sessionId), ['resolved-transcript']);
+    assert.deepEqual(h.calls.opened, [], 'transcript is read-only, never attach or resume');
+  });
+}
+
+for (const [reason, overrides, daemonReachable] of [
+  ['conversation is running', { conversationPid: 42 }, true],
+  ['daemon is unavailable', {}, false],
+]) {
+  test(`ended job offers only Open transcript when ${reason}`, async t => {
+    const h = setup(); t.after(() => h.destroy());
+    const entry = { ...ROSTER[1], ...overrides };
+    h.setSnapshot({ roster: [entry], daemonReachable });
+    await h.window.showAgentsView();
+    h.document.querySelector('.agents-row').click();
+    assert.equal(h.document.querySelector('[data-verb="respawn"]').disabled, true);
+    dblclick(h, h.document.querySelector('.agents-row'));
+    assert.equal(h.document.querySelector('.app-notice-message')?.textContent, 'This job has ended.', 'ended job notice is visible');
+    const actions = [...h.document.querySelectorAll('.app-notice-action')];
+    assert.deepEqual(actions.map(button => button.textContent), ['Open transcript']);
+    actions[0].click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.calls.verbs, [['transcript', entry.id]]);
+    assert.deepEqual(h.calls.jsonl.map(session => session.sessionId), [entry.sessionId]);
+  });
+}
+
+test('a hosted done job still attaches and shows no ended notice', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  const entry = { ...ROSTER[1], hosted: true };
+  h.setSnapshot({ roster: [entry], daemonReachable: true });
+  await h.window.showAgentsView();
+  dblclick(h, h.document.querySelector('.agents-row'));
+  assert.equal(h.calls.opened[0][0].sessionId, entry.sessionId);
+  assert.deepEqual({ ...h.calls.opened[0][1] }, { type: 'attach', jobId: entry.id, cwd: entry.cwd });
+  assert.equal(h.document.querySelector('.app-notice'), null);
+});
+
+test('an unhosted job of unknown outcome does not claim to have ended', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  h.setSnapshot({ roster: [{ ...ROSTER[1], state: 'working' }], daemonReachable: true });
+  await h.window.showAgentsView();
+  dblclick(h, h.document.querySelector('.agents-row'));
+  assert.equal(h.document.querySelector('.app-notice'), null);
+  assert.deepEqual(h.calls.opened, []);
+});
+
+test('a double click does nothing on an external session, a header or a button', async (t) => {
   const ctx = setup({ storage: {} }); t.after(() => ctx.destroy());
   ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
   await ctx.window.showAgentsView();
-  dblclick(ctx, ctx.document.querySelector('.agents-row[data-key="bg:bbbbbbbb"]'));
   dblclick(ctx, ctx.document.querySelector('.agents-row[data-key="int:s-i"]'));
   dblclick(ctx, ctx.document.querySelector('.agents-group-header'));
   ctx.document.querySelector('.agents-row[data-key="bg:aaaaaaaa"]').click();

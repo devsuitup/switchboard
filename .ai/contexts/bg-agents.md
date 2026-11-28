@@ -86,6 +86,26 @@ failure returns `ok: false, ended: false`. An uncertain verb result is never
 automatically retried. A4c2b must retain admission and incarnation ownership
 through this composition and detach the pinned attachment only after death.
 
+## Ended-job double click (#1023 item 5)
+
+The Agents row double-click handler keeps the existing attach path for hosted
+jobs. An unhosted background job in stopped, done or failed state instead shows
+`This job has ended.` through `showAppNotice`, with Respawn and Open transcript
+actions. Respawn follows `agentVerbAvailability` and the detail control’s pending
+state; both actions call `runAgentVerb` for the clicked entry, even if selection
+changes. Main-process respawn guards and transcript resolution stay authoritative.
+The existing availability predicate does not require a sessionId for Respawn;
+this notice preserves that rule. Open transcript retains the existing transcript
+availability guard. Unknown unhosted outcomes do not claim the job has ended.
+Single clicks still only select.
+
+`showAppNotice` accepts multiple action buttons; its legacy single-action API
+is unchanged. It fits this short actionable notice without the radio choices
+and extra confirmation step of `appChoose`. `test/dom-agents-view.test.js` loads
+the real notice helper and Agents source, stubbing IPC, terminal opening and the
+read-only viewer boundary. It covers stopped/done-dead/failed, both action routes,
+selection changes, unavailable Respawn and hosted done attaching normally.
+
 ## Key files
 
 | File | Role |
