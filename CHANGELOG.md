@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- On Windows, a project you deleted no longer reappears in the sidebar when its sessions recorded its folder under a short spelling such as `C:\Users\JEAN-B~1\...`, and adding it back with **Add project** under that spelling shows it again. (#1304)
+
 ## v0.1.0-beta.5 — 2026-11-28
 
 ### Fixed

@@ -29,6 +29,7 @@ function handler(name, deps) {
     activeSessions: new Map(), cliSessionState: { getSidebarDescriptors: () => [] },
     os: { homedir: () => '/home/test' },
     ipcMain: { handle: (_name, fn) => { captured = fn; } },
+    require: require('node:module').createRequire(path.join(__dirname, '../main.js')),
   });
   if (name === 'delete-worktree') {
     for (const functionName of ['checkDeleteWorktree', 'worktreeGit', 'worktreeDeletionStatus']) {

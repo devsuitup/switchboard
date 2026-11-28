@@ -1105,7 +1105,7 @@ const workflowNames = new Map();
 
 function getProjectsProjection() { return projectsProjection; }
 
-function buildProjectsFromCache(showArchived) {
+function buildProjectsFromCache(showArchived, { longPath = null } = {}) {
   projectsProjection = { facts: {}, removedInputs: {} };
   const metaMap = getAllMeta(true);
   const cachedRows = scopedConversationRows(getAllCached());
@@ -1131,7 +1131,7 @@ function buildProjectsFromCache(showArchived) {
     return workflowNames.get(file).title;
   };
   const global = getSetting('global') || {};
-  const hidden = require('./archived-projects').groupedHiddenMatcher(global.hiddenProjects, global.hiddenProjectScopes);
+  const hidden = require('./archived-projects').groupedHiddenMatcher(global.hiddenProjects, global.hiddenProjectScopes, longPath);
 
   // Group by projectPath, not on-disk folder name. Multiple ~/.claude/projects/<folder>/
   // directories can resolve to the same projectPath (Claude Code's folder-name encoding
@@ -1213,7 +1213,7 @@ function buildProjectsFromCache(showArchived) {
       sdkOnlyProjectKeys.add(groupKey(alias, groupingPath));
       continue;
     }
-    if (global.hiddenProjects?.length && hidden(alias, groupingPath, { runtime: row.runtime, folder: row.folder, cwd: row.runtime === 'codex' ? row.projectPath : null })) { exclude(row, 'hidden-project'); continue; }
+    if (global.hiddenProjects?.length && hidden(alias, groupingPath, { runtime: row.runtime, folder: row.folder, cwd: row.projectPath })) { exclude(row, 'hidden-project'); continue; }
     const meta = metadataFor(row.sessionId);
     const children = mergedChildrenByParent.get(row.sessionId) || [];
     const orderedChildren = [...children].sort((a, b) =>

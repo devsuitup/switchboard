@@ -3252,7 +3252,113 @@ keeps its existing path-wide cache deletion and, with the same helper, removes
 every local hide entry whose `visibilityPath` equals the removed path's,
 whatever its scope, with its kind, scope and archive time under the stored key
 (#1304); a hide entry spelled differently from the path no longer outlives the
-worktree. Global Settings already rereads and spreads the latest global
+worktree.
+
+On Windows, hidden matching also resolves 8.3 short spellings (`JEAN-B~1`,
+`RUNNER~1`) to their long form before comparing (#1304 item 2, decided
+2026-11-28). Linux and macOS make no new filesystem call: both helpers in
+`src/main/shared/long-path.js` return `null` there.
+
+Where realpath runs, and never on main's event loop:
+
+- **Projects query worker** (`workers/projects-query.js`, a worker thread):
+  one `createLongPathResolver()` per request, shared by its two
+  `buildProjectsFromCache(showArchived, { longPath })` builds, calling
+  `fs.realpathSync.native`. `buildProjectsFromCache` without `longPath` (the
+  writer's `compute` on main, for example Archive folder) keeps the plain
+  comparison and resolves nothing.
+- **Writer worker** (`session-index-commands.js`, run by
+  `workers/session-index-writer.js`): re-add, unhide and worktree cleanup each
+  build a fresh synchronous resolver.
+- **Main, asynchronously**: `writer.applyAndPersistArchived`
+  (`session-index-writer.js`), at the start of each of its retry attempts,
+  awaits `settleLongPathForms` (`fs.promises.realpath`, libuv threadpool) over
+  the local hide entries, each local project path, its worktree parent and its
+  sessions' `cwd`/`recordedCwd`. Settling works in at most three rounds per
+  attempt: each round rereads the current settings and resolves every
+  candidate not yet resolved with at most four `realpath` calls in flight, and retries once,
+  in the next round, a candidate whose resolution failed. It stops early at a
+  round with nothing left to resolve, and returns only the forms of paths in
+  its last read. After the await, the writer reads the
+  candidates once more, keeps only the forms of paths in that read, and runs
+  the synchronous filter; there is no await between that final read and the
+  filter, which reads the settings itself in the same turn. So a hide entry
+  added while an earlier round was pending is resolved in a later round, and an
+  alias that appears while another resolution is pending is caught by its
+  retry, within the three rounds. A path still unresolved after the last round,
+  or first seen in the final read, compares as typed, so a short spelling may stay visible until the next
+  pass. The synchronous pass `archive.applyAndPersistArchived` gets a lookup
+  over the kept forms (`longPathLookup`), which never touches the filesystem; a
+  path missing from them keeps the plain comparison.
+  `delete-worktree` (`main.js`) awaits `longPathForms` before Git removes the
+  directory, over the path being deleted and every local hide entry containing
+  `~` (not only those under the deleted path's parent, whose spelling may
+  itself differ), and passes the map to `writer.cleanupWorktree(path, log,
+  longForms)`; the worker looks it up first and falls back to its own resolver.
+  A hide entry stored under the worktree's short leaf therefore clears when the
+  deletion uses the long spelling.
+  Main's archive-workflow identity (`archiveProjectIdentity` through
+  `normalizeProjectPath`) already called `fs.realpathSync.native` per project
+  before this change and still does; this matching adds no synchronous call
+  there.
+
+Each resolver or precomputed map lives for one call (one projects request, one
+writer command, one assembly attempt, one deletion) and is never reused by a
+later call, so a folder created or removed between calls is seen by the next
+one. Within a call it resolves each distinct path once, or twice for a failed
+resolution during an assembly attempt. Its size is bounded by the distinct
+paths of that call; an assembly attempt also caps its rounds at three and
+retains only forms of paths in its latest candidate read, so settings that keep
+gaining new short paths cannot extend it. Keys are the spelling with
+separators, trailing slash and case normalized. Only a path containing `~` is
+resolved. A missing path is resolved through its deepest existing ancestor
+that still contains `~`, keeping the missing tail as spelled, so a removed
+worktree under a short-spelled home still expands; a path that cannot be
+resolved keeps its current normalization and is never an error. Remote
+(`alias::`) paths are never resolved.
+
+`visibilityPath` takes the resolver as an optional third argument;
+`longVisibilityPath(resolver)` wraps it for `projectHiddenMatcher`, which hands
+it to `sessionUnderPath` for hidden worktree groups and keeps bare entries
+matching remote hosts. A Claude worktree folder grouped under its repository
+carries the repository as `cwd` (the cache pass now passes `row.projectPath`
+for Claude rows as the assembled sessions already did) and the worktree only in
+its encoded folder name. When the folder name extends the encoded `cwd`,
+`sessionUnderPath` swaps that encoded prefix for the encoded long form of the
+`cwd` and compares the result with the encoded long form of the hide entry,
+under the same worktree-suffix rule as the plain comparison.
+
+What is not covered:
+
+- **Short names without `~`.** Windows generates `NAME~N` aliases, but
+  `SetFileShortNameW` can assign any 8.3 name; such a name is not resolved.
+- **Links.** `realpath` also follows junctions and symbolic links. A path that
+  contains `~` and crosses a junction collapses to the junction's target, so
+  it no longer matches a hide entry spelled through the junction; a path
+  without `~` is never resolved, so its links are untouched.
+- **A removed short segment with nothing carried.** When a worktree whose own
+  directory name is the short segment is gone and no long form was captured
+  before removal, the ancestor walk keeps that segment short. `delete-worktree`
+  captures the deleted path and every stored `~` hide entry; other removals do
+  not.
+- **Plain comparisons kept:** the renderer's pending-session reinjection
+  (`public/app.js` `isProjectHidden` while reinserting pending sessions) and
+  its other checks, which cannot touch the filesystem; `file-lists.js`
+  (Memory lists); `trigger-actions.js`; the projection diagnostics after
+  assembly (`main.js` get-projects); `buildProjectsFromCache` run on main;
+  background descriptors built outside the project-cache pass, which hands
+  them its own matcher; and encoded transcript folder names whose prefix is
+  not the session's `cwd`. `main.js`'s settings-archive and schedule checks
+  compare `normalizeProjectPath` (realpath) results already.
+
+`test/visibility-long-path.test.js` feeds a fake short-to-long map on every OS
+and, on Windows, real 8.3 spellings of directories under `os.tmpdir()`
+(skipped when the volume has 8.3 names disabled): the cache pass with the row
+shape the cache stores, main's assembly with no synchronous realpath from the
+matching modules, cleanup after removal, and the `delete-worktree` handler.
+`test/long-path.test.js` covers both helpers with injected realpath functions.
+
+Global Settings already rereads and spreads the latest global
 record on Save, preserving scopes alongside archive state without a new form
 field.
 

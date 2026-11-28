@@ -73,7 +73,7 @@ function* targetUnits(name, args) {
     const folder = require('../encode-project-path').encodeProjectPath(args[0]);
     yield* units('deleteCachedFolder', [folder]);
     yield* units('deleteSearchFolder', [folder]);
-    yield () => { commands.cleanupWorktree(args[0]); return ids.length; };
+    yield () => { commands.cleanupWorktree(args[0], args[1]); return ids.length; };
   } else if (['upsertCachedSessions', 'setCachedEntrypoints', 'setCachedCustomTitles'].includes(name)) {
     for (const row of args[0]) yield Object.assign(() => db[name]([row]), { producerCommand: name, producerArgs: [[row]] });
   } else if (name === 'certifyFullReads') {

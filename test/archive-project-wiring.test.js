@@ -69,7 +69,7 @@ test('preload: both bridges forward their arguments', () => {
 });
 
 test('delete-worktree: clears the archived entry of the removed worktree', () => {
-  assert.match(handlerBody('delete-worktree'), /await writer\.cleanupWorktree\(normalizedPath, log\)/);
+  assert.match(handlerBody('delete-worktree'), /await writer\.cleanupWorktree\(normalizedPath, log, longForms\)/);
   assert.match(read('session-index-commands.js'), /clearArchivedEntry\(db.getSetting, db.setSetting, null, projectPath\)/);
 });
 
