@@ -40,7 +40,7 @@ test('P4 an attach tab detaches once without asking and offers Undo', async t =>
   assert.deepEqual(h.calls.stopped, ['s1']);
   assert.equal(h.window.activePtyIds.has('s1'), false);
   assert.ok(h.undo(), 'Detach offers Undo');
-  assert.match(h.undo().parentElement.textContent, /keeps running/);
+  assert.match(h.undo().closest('.app-notice').textContent, /keeps running/);
 });
 
 test('Undo reattaches with the job id and cwd captured before detach even after the entry disappears', async t => {
@@ -162,7 +162,7 @@ test('Undo with not running reports still detaching when the old entry remains o
   const h = setup(t);
   h.window.api.stopSession = async () => ({ ok: false, error: 'not running' });
   await h.app.detachSession('s1');
-  const noticeId = h.undo().parentElement.dataset.noticeId;
+  const noticeId = h.undo().closest('.app-notice').dataset.noticeId;
   h.undo().click();
   await settle();
   assert.equal(h.entry.closed, false);
@@ -231,7 +231,7 @@ test('Undo clears progress and keeps only the Attach background failure when reo
 test('Undo bounds an unresolved detach wait and reports still detaching without reopening', async t => {
   const h = setup(t);
   await h.app.detachSession('s1');
-  const noticeId = h.undo().parentElement.dataset.noticeId;
+  const noticeId = h.undo().closest('.app-notice').dataset.noticeId;
   h.undo().click();
   await settle();
   assert.match(h.document.querySelector('#app-notices [role="status"]').textContent, /Reattaching/);

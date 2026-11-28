@@ -374,7 +374,7 @@ test('NIT removing group members recomputes severity and the one error action', 
   const h = setup({ savedSet: ['a', 'b', 'c'].map(sessionId => ({ sessionId, projectPath: '/p', bg: true })), liveIds: [] });
   t.after(() => h.dom.window.close());
   h.dom.window.api.restoreBackgroundJob = async id => id === 'c'
-    ? { action: 'retire', reason: 'ended queue' }
+    ? { action: 'refuse', jobId: '1234abcd', reason: 'Job 1234abcd (blocked): worker is not live', workerGone: true }
     : { action: 'refuse', jobId: '1234abcd', reason: 'stopped', recovery: 'respawn' };
   await h.restore();
   vm.runInContext("clearAppNotice('Restore:local:a')", h.ctx);
@@ -394,6 +394,7 @@ test('1191 ended background job releases its saved slots with an informational m
   await h.persist();
   const notice = h.dom.window.document.querySelector('#app-notices .app-notice');
   assert.ok(notice, 'ended job is reported once');
+  assert.equal(notice.dataset.noticeId, 'Restore:ended');
   assert.equal(notice.getAttribute('role'), 'status');
   assert.match(notice.textContent, /name-x.*\/px.*1234abcd.*ended/);
   assert.deepEqual(h.settings.global.openWorkingSet, []);
@@ -751,7 +752,9 @@ for (const missing of [true, false]) {
     await h.persist();
     assert.equal(h.settings.global.openWorkingSet.some(item => item.bg), !missing);
     if (missing) {
-      assert.match(h.dom.window.document.querySelector('.app-notice-message').textContent, /background job no longer exists/i);
+      const ended = h.dom.window.document.querySelector('[data-notice-id="Restore:ended"]');
+      assert.equal(ended.querySelector('.app-notice-title').textContent, '1 ended background job was removed from your open sessions.');
+      assert.match(ended.querySelector('.app-notice-details-body').textContent, /name-x.*background job no longer exists/i);
       let checked = 0;
       h.dom.window.api.getSessionLiveElsewhere = async () => { checked++; return LIVE; };
       h.dom.window.appConfirm = async () => false;
@@ -836,7 +839,10 @@ for (const failure of ['refusal', 'rejection', 'missing result']) {
     const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:background"]');
     assert.ok(notice, 'background restore failure persists');
     assert.equal(notice.getAttribute('role'), 'alert');
-    assert.match(notice.textContent, /name-x.*\/px.*(?:background attach unavailable|no result).*sidebar/);
+    assert.equal(notice.querySelector('.app-notice-title').textContent, 'Could not reattach name-x.');
+    assert.match(notice.querySelector('.app-notice-details-body').textContent, /name-x.*\/px.*(?:background attach unavailable|no result)/);
+    assert.match(notice.querySelector('.app-notice-body').textContent, /sidebar/);
+    assert.equal(notice.dataset.kind, 'error');
     assert.ok(notice.querySelector('.app-notice-dismiss'));
     assert.match(notice.textContent, /Agents view.*retry attaching/);
     assert.equal(vm.runInContext('openSessions.has("x")', h.ctx), false);
@@ -1192,4 +1198,81 @@ test('1277 a poll whose later reply is another transient kind makes no request p
   assert.deepEqual(h.openTerminalCalls.filter(id => id === 'x'), [], 'no terminal opens for x');
   assert.match(h.dom.window.document.querySelector('#app-notices').textContent, /worker liveness unknown/);
   assert.equal(logs.filter(line => /session=x .*outcome=refuse attempts=2$/.test(line)).length, 1);
+});
+
+test('1023 a background job whose worker is gone is an expiring info notice that keeps its Respawn', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true, attachJobId: '1234abcd' }], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  h.dom.window.api.restoreBackgroundJob = async () => ({ action: 'refuse', jobId: '1234abcd', recovery: 'respawn', workerGone: true,
+    reason: 'Job 1234abcd (blocked): blocked job was not respawned automatically' });
+  await h.restore();
+  const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:background"]');
+  assert.ok(notice);
+  assert.equal(notice.dataset.kind, 'info');
+  assert.equal(notice.getAttribute('role'), 'status');
+  assert.ok(notice.querySelector('.app-notice-expiry'), 'an expected state expires');
+  assert.equal(notice.querySelector('.app-notice-action')?.textContent, 'Respawn');
+  assert.doesNotMatch(notice.querySelector('.app-notice-title').textContent, /1234abcd|\/px/, 'no id or path in the title');
+  assert.match(notice.querySelector('.app-notice-details-body').textContent, /1234abcd.*blocked job was not respawned/);
+  await h.persist();
+  assert.deepEqual(h.settings.global.openWorkingSet.map(item => item.sessionId), ['x'], 'a job that is not ended stays saved');
+});
+
+test('1023 a real background restore failure stays a lasting error', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true, attachJobId: '1234abcd' }], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  h.dom.window.api.restoreBackgroundJob = async () => ({ action: 'refuse', jobId: '1234abcd', reason: 'Job 1234abcd (working): daemon unavailable' });
+  await h.restore();
+  const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:background"]');
+  assert.equal(notice.dataset.kind, 'error');
+  assert.equal(notice.querySelector('.app-notice-expiry'), null);
+});
+
+test('1023 automatic restore drops stopped jobs from the working set and reports them in one grouped line', async t => {
+  const savedSet = ['x', 'y'].map(sessionId => ({ sessionId, projectPath: '/p' + sessionId, bg: true, attachJobId: sessionId + '234abcd' }));
+  const h = setup({ savedSet, liveIds: [] });
+  t.after(() => h.dom.window.close());
+  const verbs = [];
+  h.dom.window.api.bgAgentVerb = async (...args) => { verbs.push(args); return { ok: true }; };
+  h.dom.window.api.restoreBackgroundJob = async id => ({ action: 'refuse', jobId: id + '234abcd', recovery: 'respawn', workerGone: true, ended: true,
+    reason: `Job ${id}234abcd (stopped): stopped job was not respawned automatically` });
+  await h.restore();
+  assert.equal(h.dom.window.document.querySelector('[data-notice-id="Restore:background"]'), null, 'an ended job is not a restore failure');
+  const notices = h.dom.window.document.querySelectorAll('#app-notices .app-notice');
+  assert.equal(notices.length, 1, 'both ended jobs share one notice');
+  const notice = notices[0];
+  assert.equal(notice.dataset.noticeId, 'Restore:ended');
+  assert.equal(notice.dataset.kind, 'info');
+  assert.ok(notice.querySelector('.app-notice-expiry'));
+  assert.equal(notice.querySelector('.app-notice-title').textContent, '2 ended background jobs were removed from your open sessions.');
+  const details = notice.querySelector('.app-notice-details');
+  assert.equal(details.open, false);
+  assert.match(details.textContent, /name-x[\s\S]*name-y/);
+  assert.equal(vm.runInContext('skippedWorkingSetEntries.size', h.ctx), 0);
+  await h.persist();
+  assert.deepEqual(h.settings.global.openWorkingSet, [], 'ended jobs leave the saved working set');
+  assert.deepEqual(verbs, [], 'nothing is respawned');
+  assert.deepEqual(h.openTerminalCalls, []);
+});
+
+test('1023 a successful Respawn verb followed by failed attachment must remain an error', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true, attachJobId: '1234abcd' }], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  const calls = [];
+  h.dom.window.api.bgAgentVerb = async (...args) => { calls.push(['verb', ...args]); return { ok: true }; };
+  h.dom.window.api.restoreBackgroundJob = async (_id, options) => {
+    calls.push(['restore', options?.attachOnly === true]);
+    return options?.attachOnly
+      ? { action: 'refuse', jobId: '1234abcd', workerGone: true, reason: 'Job 1234abcd (blocked): worker is not live — not attached' }
+      : { action: 'refuse', jobId: '1234abcd', recovery: 'respawn', workerGone: true, reason: 'Job 1234abcd (blocked): blocked job was not respawned automatically' };
+  };
+  await h.restore();
+  h.dom.window.document.querySelector('[data-notice-id="Restore:background"] .app-notice-action').click();
+  for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls.filter(call => call[0] === 'verb').length, 1);
+  const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:background"]');
+  assert.ok(notice);
+  assert.equal(notice.getAttribute('role'), 'alert');
+  assert.equal(notice.dataset.kind, 'error');
+  assert.equal(notice.querySelector('.app-notice-expiry'), null);
 });

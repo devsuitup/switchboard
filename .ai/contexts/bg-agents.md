@@ -205,10 +205,16 @@ call Respawn.
 
 Background restore outcomes share one persistent `Restore:background` notice
 with one Dismiss (#1191). Its members retain session name/id, cwd, job id and
-final reason. A later successful open removes its member through the existing
-`clearAppNotice` member handling; an empty group disappears. An ended queued
-job is an informational member and is released from the saved working set.
-Other retirement remains silent. With one failed member, Attach remains available
+final reason, shown under Details. A later successful open removes its member through the existing
+`clearAppNotice` member handling; an empty group disappears. A refusal whose
+worker is dead (`workerGone: true`, set by main on both dead-worker refusals)
+is an informational, expiring member unless this preparation respawned. Main
+also sets `ended: true` there when the job state is `stopped` or `done`; an
+automatic restore (not interactive, not attach-only, no respawn, usable first
+state) then releases the entry like `retire` and reports it in the separate
+`Restore:ended` info notice, with an ended queued job (`retire` with a reason)
+and a missing job record (#1023). Dead `done` jobs still go through automatic
+respawn first (#796). Other retirement remains silent. With one failed member, Attach remains available
 after descriptor loss or a respawn whose worker still cannot be attached, and
 Respawn remains available for an explicit stopped/blocked recovery. The strongest
 action and the fact that Respawn occurred survive transient attach-only failures.

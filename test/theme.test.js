@@ -173,7 +173,8 @@ test('light tokens cover chrome and dark token expansion preserves every origina
   for (const [key, value] of Object.entries({ '--surface-chrome': '#f3f3f7', '--surface-sunken': '#ffffff', '--text': '#1c1c28', '--accent': '#5a63e6' })) {
     assert.equal(light[key], value, key + ' uses the light palette');
   }
-  for (const [key, value] of Object.entries(light).filter(([key]) => key !== '--control-color-scheme')) assert.match(value, /^(#[\da-f]{3,6}|rgba?\([\d., ]+\))$/i, key + ' has a valid light color');
+  for (const [key, value] of Object.entries(light).filter(([key]) => !['--control-color-scheme', '--notice-shadow'].includes(key))) assert.match(value, /^(#[\da-f]{3,6}|rgba?\([\d., ]+\))$/i, key + ' has a valid light color');
+  assert.match(light['--notice-shadow'], /^0 4px 16px rgba\([\d., ]+\)$/, '--notice-shadow is a box shadow with a light color');
   const tokens = rootTokens(css);
   for (const [key, value] of Object.entries(baseline.tokens)) assert.equal(tokens[key], value, key);
   const expanded = resolveCssVars(css.replace(/:root(?:\[data-theme="light"\])?\s*\{[^}]+\}/g, ''), tokens).replace(/\s+/g, '').replace(/0\.10\)/g, '0.1)');

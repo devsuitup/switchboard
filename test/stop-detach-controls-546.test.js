@@ -686,7 +686,7 @@ test('B2 remote Detach calls only stopSession without confirmation and Undo foll
   assert.equal(h.entry.detachRequested, true);
   const undo = h.document.querySelector('.app-notice-action');
   assert.equal(undo?.textContent, 'Undo');
-  assert.match(undo.parentElement.textContent, /keeps running on Build server/);
+  assert.match(undo.closest('.app-notice').textContent, /keeps running on Build server/);
   undo.click();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(opened.length, 1);

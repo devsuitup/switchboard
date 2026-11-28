@@ -13,7 +13,8 @@ After a restart or reboot, startup restore reopens only background jobs whose
 attach tabs were saved, including tabs opened from the Agents view: a live
 worker is attached, a dead working, done, running or failed job is respawned as
 the same job and then attached, and a dead blocked or stopped job is never
-restarted automatically (its notice offers **Respawn**). The restore modes,
+restarted automatically: a blocked job's notice offers **Respawn**, and a
+stopped job is removed from your open sessions and counted in one notice. The restore modes,
 notices, retries and recovery actions are described in
 [Session Restore — Background sessions](session-restore.md#background-sessions).
 

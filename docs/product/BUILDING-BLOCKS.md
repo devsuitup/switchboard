@@ -236,9 +236,13 @@ focus) with a form body.
   `clearAppNotice(id)` removes it and cancels its timeout. Reusing an id
   updates only that notice in its existing stack position, retains its original
   return focus and cancels its previous timeout.
-- **Anatomy.** Plain-text message, optional text action button, and `Dismiss`.
-  A fixed `#app-notices` container stacks notices at the bottom right with
-  wrapping text and scrolls when they exceed the available height.
+- **Anatomy.** A severity bar and icon from `kind` (`data-kind`), a title
+  (the message's first line), an optional body (the rest), an optional
+  collapsed Details (`details`), action buttons (the first is primary) and an
+  × Dismiss. Expiring notices drain a 2px line along the bottom. A fixed
+  `#app-notices` container stacks notices at the bottom right with
+  wrapping text, shows at most three and folds older ones into a "+N more"
+  pill (#1023; [app-dialogs context](../../.ai/contexts/app-dialogs.md#notice-layout-and-severity-1023-item-2)).
   It is an empty, persistent `aria-live="polite"` region in `index.html`.
   The main-process error group uses `aria-live="off"` to keep count and recency
   updates quiet; its inner `role="alert"` span announces new error ids.

@@ -187,6 +187,62 @@ renders its single button. Dismissal, action logging and `dismissOnAction` apply
 to each action. The Agents ended-job notice uses this for Respawn and Open
 transcript; it does not need the radio selection and confirmation of `appChoose`.
 
+## Notice layout and severity (#1023 item 2)
+
+`showAppNotice` sets `data-kind` to its `kind` (`info` by default, `error`,
+`undo`, `warning`, `ok`). The kind drives a 3px left bar and an icon
+(`--info`, `--danger`, `--warning`, `--ok`); the border is the neutral
+`--control-border` and the shadow the `--notice-shadow` token (one value per
+theme). The ARIA role and the expiry still follow the kind as before.
+
+The message is split at its first newline: the first line is the title
+(`.app-notice-title`, the outcome in one short sentence), the rest the body
+(`.app-notice-body`). Both stay inside `.app-notice-message`, separated by
+the newline itself, so its `textContent` is the caller's message unchanged
+and `reportAppNotice` logs the same text as before. The optional `details`
+option (a string, or a function of `members` recomputed on every rebuild)
+renders a collapsed `<details class="app-notice-details">` after the
+message: ids, paths and raw reasons go there, never in the title. Details is
+outside `.app-notice-message`, so it is not logged; callers whose details
+matter for the log put them in `logText`. A rebuild keeps Details open if
+the user opened it. The main-process error group re-renders its message with
+`renderAppNoticeMessage` on merge.
+
+The head row holds the icon, the message and Dismiss, an × button with
+`aria-label="Dismiss"` and no text. Action buttons sit in `.app-notice-actions`
+below; the first carries `app-notice-primary`. Focus restore after a rebuild
+matches buttons and the Details toggle by class (ignoring
+`app-notice-primary`, so a secondary action promoted to first keeps focus),
+then by `aria-label` or text, then falls back to the first of that class. The main-process error announcement is inserted before the first
+button in that button's parent.
+
+An expiring notice (not `error`, not `persistent`) carries
+`.app-notice-expiry`, a 2px line whose CSS animation lasts `--notice-expiry`
+(the timeout in ms, set on the notice). The existing pause/resume sets
+`data-paused` while hovered or focused, which pauses the animation; errors
+and persistent notices have no line.
+
+At most three notices are visible (`APP_NOTICE_STACK_LIMIT`).
+`layoutAppNotices` runs after every show, replacement and removal: older
+notices get `hidden` and a `.app-notice-more` pill ("+N more") at the top of
+the stack expands them all. The stack stays expanded until it holds three or
+fewer, then folds again. Folded notices keep their timers.
+
+Background restore uses two groups. `Restore:background` keeps refusals and
+attach failures: a member whose refusal says the worker is dead
+(`workerGone` from `restore-background-job`, without a respawn in this
+preparation or in the Respawn that started it, passed as `afterRespawn`) is
+`info`; anything else is `error`. The group is persistent
+only while it holds an error; with no error, the sole member with an action
+keeps it. `Restore:ended` is one info line for jobs dropped from the working
+set at automatic restore ("N ended background jobs were removed from your
+open sessions."), with each job under Details. The exit-background failure
+names the count in its title and each session's reason under Details.
+
+Tests: `test/dom-app-notices.test.js` (`1023 …`),
+`test/restore-live-elsewhere.test.js` (`1023 …`), `test/bg-agents-ipc.test.js`
+(`1023 …`).
+
 ## Failures say what to do (#709)
 
 A failure shown to the user says what failed, then what to do, in one short

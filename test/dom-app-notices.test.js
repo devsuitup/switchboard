@@ -76,7 +76,8 @@ test('error notices stay after 20 seconds, announce as alerts and dismiss on req
   assert.ok(notice);
   assert.equal(notice.getAttribute('role'), 'alert');
   const dismiss = notice.querySelector('button');
-  assert.equal(dismiss.textContent, 'Dismiss');
+  assert.equal(dismiss.getAttribute('aria-label'), 'Dismiss');
+  assert.ok(dismiss.classList.contains('app-notice-dismiss'));
   dismiss.click();
   assert.equal(document.querySelector('[data-notice-id="failure"]'), null);
 });
@@ -338,3 +339,104 @@ for (const rebuild of ['replacement', 'member removal']) {
     assert.ok(document.querySelector('.app-notice'), 'restored focus must keep expiry paused');
   });
 }
+
+test('1023 the kind is set on the notice element', t => {
+  const { window, document } = setup(t);
+  window.showAppNotice({ id: 'e', kind: 'error', message: 'Failed.' });
+  window.showAppNotice({ id: 'i', message: 'Saved.' });
+  window.showAppNotice({ id: 'u', kind: 'undo', message: 'Archived.', actionLabel: 'Undo', onAction() {} });
+  assert.deepEqual([...document.querySelectorAll('.app-notice')].map(notice => notice.dataset.kind), ['error', 'info', 'undo']);
+  window.showAppNotice({ id: 'i', kind: 'error', message: 'Now failed.' });
+  assert.equal(document.querySelector('[data-notice-id="i"]').dataset.kind, 'error', 'a replacement carries its own kind');
+});
+
+test('1023 only an expiring notice carries the drain line, which pauses with the timer', t => {
+  const { window, document } = setup(t);
+  window.showAppNotice({ id: 'info', message: 'Saved.' });
+  window.showAppNotice({ id: 'undo', kind: 'undo', message: 'Archived.', actionLabel: 'Undo', onAction() {} });
+  window.showAppNotice({ id: 'error', kind: 'error', message: 'Failed.' });
+  window.showAppNotice({ id: 'kept', message: 'Moving.', persistent: true });
+  const notice = id => document.querySelector(`[data-notice-id="${id}"]`);
+  assert.ok(notice('info').querySelector('.app-notice-expiry'));
+  assert.equal(notice('info').style.getPropertyValue('--notice-expiry'), '15000ms');
+  assert.equal(notice('undo').style.getPropertyValue('--notice-expiry'), '10000ms');
+  assert.equal(notice('error').querySelector('.app-notice-expiry'), null, 'an error never expires, so it has no line');
+  assert.equal(notice('kept').querySelector('.app-notice-expiry'), null, 'a persistent notice has no line');
+  notice('info').dispatchEvent(new window.MouseEvent('mouseenter'));
+  assert.equal(notice('info').dataset.paused, 'true');
+  notice('info').dispatchEvent(new window.MouseEvent('mouseleave'));
+  assert.equal(notice('info').dataset.paused, undefined);
+});
+
+test('1023 at most three notices show; older ones fold into a +N more pill that expands them', t => {
+  const { window, document } = setup(t);
+  for (const id of ['a', 'b', 'c', 'd', 'e']) window.showAppNotice({ id, kind: 'error', message: `Failure ${id}` });
+  const visible = () => [...document.querySelectorAll('#app-notices > .app-notice')].filter(el => !el.hidden).map(el => el.dataset.noticeId);
+  assert.deepEqual(visible(), ['c', 'd', 'e'], 'the newest three stay visible');
+  const pill = document.querySelector('#app-notices > .app-notice-more');
+  assert.ok(pill);
+  assert.equal(pill.textContent, '+2 more');
+  assert.equal(pill.getAttribute('aria-expanded'), 'false');
+  window.clearAppNotice('e');
+  assert.deepEqual(visible(), ['b', 'c', 'd']);
+  assert.equal(document.querySelector('.app-notice-more').textContent, '+1 more');
+  document.querySelector('.app-notice-more').click();
+  assert.deepEqual(visible(), ['a', 'b', 'c', 'd']);
+  assert.equal(document.querySelector('.app-notice-more'), null);
+  window.showAppNotice({ id: 'f', kind: 'error', message: 'Failure f' });
+  window.showAppNotice({ id: 'g', kind: 'error', message: 'Failure g' });
+  assert.equal(visible().length, 6, 'the stack stays expanded while more than three are shown');
+  for (const id of ['a', 'b', 'c']) window.clearAppNotice(id);
+  assert.deepEqual(visible(), ['d', 'f', 'g']);
+  window.showAppNotice({ id: 'h', kind: 'error', message: 'Failure h' });
+  assert.deepEqual(visible(), ['f', 'g', 'h'], 'dropping to three folds the stack again');
+  assert.equal(document.querySelector('.app-notice-more').textContent, '+1 more');
+});
+
+test('1023 the first line is the title, the rest the body, and technical detail is collapsed', t => {
+  const { window, document } = setup(t);
+  window.showAppNotice({ id: 'd', kind: 'error', message: 'Could not stop Nightly audit.\nCheck the connection, then retry.',
+    details: members => members.map(member => member.text).join('\n'), members: [{ id: 'm1', text: '8c41f0a2 at /srv' }, { id: 'm2', text: 'ssh: timed out' }],
+    actionLabel: 'Retry', onAction() {} });
+  const notice = document.querySelector('[data-notice-id="d"]');
+  assert.equal(notice.querySelector('.app-notice-title').textContent, 'Could not stop Nightly audit.');
+  assert.equal(notice.querySelector('.app-notice-body').textContent, 'Check the connection, then retry.');
+  assert.equal(notice.querySelector('.app-notice-message').textContent, 'Could not stop Nightly audit.\nCheck the connection, then retry.',
+    'the message text, which is logged, is unchanged');
+  const details = notice.querySelector('details.app-notice-details');
+  assert.ok(details);
+  assert.equal(details.open, false, 'Details starts collapsed');
+  assert.equal(details.querySelector('summary').textContent, 'Details');
+  assert.equal(details.querySelector('.app-notice-details-body').textContent, '8c41f0a2 at /srv\nssh: timed out');
+  assert.equal(notice.querySelector('.app-notice-message').contains(details), false, 'Details is not part of the logged message');
+  details.open = true;
+  window.clearAppNotice('m2');
+  const rebuilt = document.querySelector('[data-notice-id="d"] details.app-notice-details');
+  assert.equal(rebuilt.querySelector('.app-notice-details-body').textContent, '8c41f0a2 at /srv');
+  assert.equal(rebuilt.open, true, 'a rebuild keeps Details open once the user opened it');
+  window.showAppNotice({ id: 'plain', message: 'Saved.' });
+  const plain = document.querySelector('[data-notice-id="plain"]');
+  assert.equal(plain.querySelector('.app-notice-body'), null);
+  assert.equal(plain.querySelector('.app-notice-details'), null);
+  assert.equal(plain.querySelector('.app-notice-action'), null);
+  assert.equal(plain.querySelector('.app-notice-dismiss').getAttribute('aria-label'), 'Dismiss');
+});
+
+test('1023 the first action is primary and the others are secondary', t => {
+  const { window, document } = setup(t);
+  window.showAppNotice({ id: 'multi', message: 'This job has ended.', actions: [{ label: 'Respawn', onAction() {} }, { label: 'Open transcript', onAction() {} }] });
+  const actions = [...document.querySelectorAll('.app-notice-action')];
+  assert.deepEqual(actions.map(button => button.classList.contains('app-notice-primary')), [true, false]);
+});
+
+test('1023 the surviving secondary action now styled primary must keep focus', t => {
+  const { window, document } = setup(t);
+  const transcript = { label: 'Open transcript', onAction() {} };
+  window.showAppNotice({ id: 'ended', message: 'This job has ended.', actions: [{ label: 'Respawn', onAction() {} }, transcript] });
+  document.querySelectorAll('.app-notice-action')[1].focus();
+  window.showAppNotice({ id: 'ended', message: 'This job has ended.', actions: [transcript] });
+  assert.equal(document.activeElement.tagName, 'BUTTON');
+  assert.equal(document.activeElement.textContent, 'Open transcript');
+  t.mock.timers.tick(20_000);
+  assert.ok(document.querySelector('[data-notice-id="ended"]'), 'restored focus keeps expiry paused');
+});

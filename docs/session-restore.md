@@ -42,7 +42,9 @@ restore** starts nothing, including for the remembered active background tab.
 A live worker is attached. A working, done, running or failed job proven dead is respawned as the same job,
 with the same conversation and name, then attached, unless a live continuation holds it. Background restore never
 opens an interactive `--resume` tab or sends `/bg`. A stopped job is not
-respawned automatically, and neither is a dead blocked job: its notice offers **Respawn**, which checks
+respawned automatically: at startup it is removed from your open sessions, and one notice says how many
+ended jobs were removed, with their names under **Details**. Its conversation stays in the sidebar. A dead
+blocked job is not respawned either: a notice that goes away by itself offers **Respawn**, which checks
 worker liveness and continuations again before restarting it; a deleted, unowned continuation does not prevent
 recovery.
 
@@ -53,8 +55,8 @@ ids instead of choosing one. After respawn, Switchboard waits up to 15 seconds
 for the job's live background descriptor. If none appears, **Respawned, not
 attached** offers **Attach**, which retries attachment without respawning again.
 An attachment error displays the backend message and leaves the worker running.
-If the job record no longer exists, its background entry is released with a
-notice; a later sidebar click follows the normal resume checks, including
+If the job record no longer exists, its background entry is released and
+counted in the same ended-jobs notice; a later sidebar click follows the normal resume checks, including
 protection for a conversation running elsewhere. Background preparations run
 two at a time, keep their saved slots while pending, and do not delay interactive
 tabs or working-set saves.
@@ -68,7 +70,8 @@ one opens behind it without taking the focus. The tab order still follows the
 saved order once every tab is open.
 
 Temporary background attachment failures are retried at startup and collected
-in one dismissible notice with recovery actions. Only the first attempt may
+in one notice with recovery actions; it stays until dismissed when one of them
+failed, and goes away by itself when every job only lost its worker. Only the first attempt may
 respawn a job; every retry only attaches, so a job is never restarted twice.
 While the job's state file says it is still starting, Switchboard keeps
 retrying the attachment about once a second for up to 30 seconds from the first

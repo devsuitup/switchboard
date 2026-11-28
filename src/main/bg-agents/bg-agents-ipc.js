@@ -289,8 +289,9 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       }
       if (check.workerLiveness !== 'live' && check.workerLiveness !== 'dead') return refuse('worker liveness unknown — not respawned');
       if (check.workerLiveness === 'dead') {
-        if (attachOnly) return refuse('worker is not live — not attached');
-        if (!['working', 'done', 'running', 'failed'].includes(check.state)) return refuse(check.state + ' job was not respawned automatically', 'respawn');
+        const gone = { workerGone: true, ...(['stopped', 'done'].includes(check.state) ? { ended: true } : {}) };
+        if (attachOnly) return { ...refuse('worker is not live — not attached'), ...gone };
+        if (!['working', 'done', 'running', 'failed'].includes(check.state)) return { ...refuse(check.state + ' job was not respawned automatically', 'respawn'), ...gone };
         const result = await respawnForHandoff(job);
         if (result.ok && !result.attached && job.state === 'done' && tasks?.valid && tasks.queued > 0) {
           const after = await bgAgents.conversationCheck(job.id, { workerLiveness: 'all' });

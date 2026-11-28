@@ -766,3 +766,22 @@ test('#1276 manual respawn of a job whose project is unknown is refused', async 
   assert.match(result.error, /project/i);
   assert.equal(h.seen.some(call => call[0] === 'respawn'), false);
 });
+
+for (const [state, attachOnly, ended] of [['stopped', false, true], ['blocked', false, false], ['done', true, true], ['working', true, false]]) {
+  test(`1023 restore marks a dead ${state} worker as gone${ended ? ' and the job as ended' : ''} (attachOnly=${attachOnly})`, async t => {
+    const h = restoreFixture(t, { state });
+    const result = await h.restore('s1', attachOnly ? { attachOnly: true } : undefined);
+    assert.equal(result.action, 'refuse');
+    assert.equal(result.workerGone, true);
+    assert.equal(result.ended, ended ? true : undefined);
+    assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), []);
+  });
+}
+
+test('1023 an unknown worker liveness is neither gone nor ended', async t => {
+  const h = restoreFixture(t, { state: 'stopped', liveness: 'unknown' });
+  const result = await h.restore();
+  assert.equal(result.action, 'refuse');
+  assert.equal(result.workerGone, undefined);
+  assert.equal(result.ended, undefined);
+});

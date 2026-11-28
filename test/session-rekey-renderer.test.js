@@ -70,7 +70,7 @@ const inventory = {
   'agents-view.js': { bgAgentSessionIds: 'snapshot', bgActivityEntries: 'snapshot', bgActivityUpdatedAt: 'snapshot', agentsRoster: 'snapshot',
     agentsCollapsedGroups: 'unkeyed', agentsPendingVerbs: 'operation', agentsInFlightVerbs: 'operation', agentsVerbErrors: 'operation',
     AGENTS_GROUP_MODES: 'constant', AGENT_STATE_META: 'constant' },
-  'app-notices.js': { appNoticeEntries: 'unkeyed', transientNoticeEntries: 'unkeyed' },
+  'app-notices.js': { appNoticeEntries: 'unkeyed', transientNoticeEntries: 'unkeyed', APP_NOTICE_ICON_SHAPES: 'constant' },
   'app.js': { openSessions: moved('rekeySessionTab'), pendingSessions: moved('rekeySessionTab'), sessionMap: moved(...ENV),
     activePtyIds: moved(...ENV), lastActivityTime: moved(...ENV), sandboxedSessions: moved(...ENV), ptyGenerations: moved(...ENV),
     pendingOpens: moved(...ENV), skippedWorkingSetEntries: moved(...ENV), restoreSavedIndex: moved(...ENV), openingSessions: moved(...ENV),
