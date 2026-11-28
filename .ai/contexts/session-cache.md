@@ -3248,8 +3248,11 @@ spelling (lowercase on Windows), and an exact-string removal left a re-added
 Windows project hidden (#1188). Only equality counts: a hidden worktree group
 that hides the added path as a descendant stays, so adding one child does not
 reveal its siblings or the group. Worktree cleanup
-keeps its existing path-wide cache deletion and removes the stored path mark
-and its scope. Global Settings already rereads and spreads the latest global
+keeps its existing path-wide cache deletion and, with the same helper, removes
+every local hide entry whose `visibilityPath` equals the removed path's,
+whatever its scope, with its kind, scope and archive time under the stored key
+(#1304); a hide entry spelled differently from the path no longer outlives the
+worktree. Global Settings already rereads and spreads the latest global
 record on Save, preserving scopes alongside archive state without a new form
 field.
 
