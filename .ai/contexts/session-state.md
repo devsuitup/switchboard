@@ -474,7 +474,17 @@ process tree (the renderer's `session-live-elsewhere` returns null whenever a
 PTY is here, so it cannot answer this; unknown refuses). After the scan it
 checks the session object is still the same and runs every check again, then
 records the id in its `restarted` set and calls `stopLocalSession`, in the same
-tick (finding 2). A missing descriptor does not refuse: a CLI hung before its
+tick (finding 2). Input invalidates the attempt even when the composer is
+empty again (PR #1319 review r2): `handleTerminalInput`
+(`src/main/terminals/terminal-input.js`) bumps `session.inputSeq` on every
+chunk written to the PTY, the attempt captures it before the scan and refuses
+`input-during-attempt` if it moved, since a typed and submitted prompt
+leaves `pending` at 0 and its `busy` may not have reached the descriptor cache
+yet. Before the scan, `NO_CLI_RESTART_QUIET_MS` (10 s) refuses `recent-input`
+when the composer's `lastInputAt` is that recent: a submitted prompt reaches
+the descriptor as `busy` and the transcript as an open turn within a few
+seconds, and 10 s covers that with margin while costing nothing to a CLI that
+never connected, whose user is not typing into it. A missing descriptor does not refuse: a CLI hung before its
 UI may never write one. A process that appears between the scan and the stop
 is not seen there; the reopen's own guard still catches it. The renderer waits
 for `applyProcessExit` to resolve the entry's `closedWaiters` (bounded by

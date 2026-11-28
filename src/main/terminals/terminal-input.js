@@ -15,6 +15,7 @@ const { writePty } = require('./pty-ops');
 function handleTerminalInput(activeSessions, sessionId, data, now) {
   const session = activeSessions.get(sessionId);
   if (session && !session.exited) {
+    session.inputSeq = (session.inputSeq || 0) + 1;
     if (session.composerState) {
       for (const part of String(data).split(/([\r\n\x03])/)) {
         if (!part) continue;

@@ -328,7 +328,8 @@ same run of the app, a reload of the window included.
 
 The restart is skipped, and Switchboard does not try it again by itself, when
 the conversation's turn is running or its state is unknown, when the prompt
-holds text you have not sent, when Claude reports itself working or waiting
+holds text you have not sent, when you typed in that terminal in the last
+10 seconds or while the restart was being decided, when Claude reports itself working or waiting
 for an answer, when another process runs the same conversation, or when any of
 these cannot be checked. Switchboard checks the prompt, Claude's state and the
 connection and stops the terminal in one step, so text typed or a prompt sent

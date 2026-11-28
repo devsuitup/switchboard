@@ -3,7 +3,9 @@
 
 const { isComposerEmpty } = require('./composer-state');
 
-function createNoCliRestart({ sessions, getStatus, getMcpState, liveElsewhereChecked, stop }) {
+const NO_CLI_RESTART_QUIET_MS = 10000;
+
+function createNoCliRestart({ sessions, getStatus, getMcpState, liveElsewhereChecked, stop, now = Date.now }) {
   const restarted = new Set();
   const key = sessionId => String(sessionId).toLowerCase();
 
@@ -24,13 +26,16 @@ function createNoCliRestart({ sessions, getStatus, getMcpState, liveElsewhereChe
     const session = sessions.get(sessionId);
     const before = refusal(session, sessionId);
     if (before) return { ok: false, reason: before };
+    if (now() - (session.composerState?.lastInputAt || 0) < NO_CLI_RESTART_QUIET_MS) return { ok: false, reason: 'recent-input' };
+    const inputSeq = session.inputSeq || 0;
     let live;
     try { live = await liveElsewhereChecked(session.realSessionId || sessionId); } catch { live = null; }
     if (!live || live.known !== true) return { ok: false, reason: 'live-unknown' };
     if (live.live) return { ok: false, reason: 'live-elsewhere' };
     if (sessions.get(sessionId) !== session) return { ok: false, reason: 'changed' };
-    const now = refusal(session, sessionId);
-    if (now) return { ok: false, reason: now };
+    if ((session.inputSeq || 0) !== inputSeq) return { ok: false, reason: 'input-during-attempt' };
+    const after = refusal(session, sessionId);
+    if (after) return { ok: false, reason: after };
     restarted.add(key(sessionId));
     stop(session, sessionId);
     return { ok: true };
@@ -39,4 +44,4 @@ function createNoCliRestart({ sessions, getStatus, getMcpState, liveElsewhereChe
   return { restart, spent: sessionId => restarted.has(key(sessionId)) };
 }
 
-module.exports = { createNoCliRestart };
+module.exports = { createNoCliRestart, NO_CLI_RESTART_QUIET_MS };
