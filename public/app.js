@@ -156,29 +156,37 @@ const cliLiveness = createCliLiveness({
 window.addEventListener('online', () => cliLiveness.online());
 window.addEventListener('offline', () => cliLiveness.offline());
 
+async function armCliLiveness(sessionId) {
+  let reply = null;
+  try { reply = await window.api.noCliRestartSpent(sessionId); } catch { reply = null; }
+  cliLiveness.expect(sessionId, { restartSpent: reply?.ok !== true || reply.spent !== false });
+}
+
+function noCliRestartIdentity(entry) {
+  return JSON.stringify([[...openSessions].filter(([, open]) => open === entry).map(([id]) => id),
+    entry.session?.sessionId, entry.session?.headSessionId || null, [...(entry.session?.mergedMemberIds || [])].sort()]);
+}
+
 async function restartSessionWithoutCli(sessionId) {
   const entry = openSessions.get(sessionId);
   if (!entry || entry.closed || entry.attach || entry.session?.remoteAlias || !activePtyIds.has(sessionId)) return false;
-  if (localPtyStates.get(sessionId)?.snapshot().busy) return false;
-  let input = null, live;
-  try { input = await window.api.getSessionInputPending(sessionId); } catch { return false; }
-  if (input?.ok !== true || input.pending !== false) return false;
-  try { live = await window.api.getSessionLiveElsewhere(sessionId); } catch { return false; }
-  if (live != null || openSessions.get(sessionId) !== entry || entry.closed) return false;
+  const projected = storedActivitySnapshot(sessionId);
+  if (projected?.headTurn !== 'closed' || projected.busy !== false || projected.attention) return false;
+  const identity = noCliRestartIdentity(entry);
   const wasActive = activeSessionId === sessionId;
   const closed = new Promise(resolve => { (entry.closedWaiters ||= []).push(resolve); });
   let stopped;
-  try { stopped = await window.api.stopSession(sessionId); } catch { return false; }
-  if (!stopped || stopped.ok === false) return false;
+  try { stopped = await window.api.restartNoCliSession(sessionId); } catch { return false; }
+  if (stopped?.ok !== true) return false;
   let timer;
   const exited = await Promise.race([closed.then(() => true),
     new Promise(resolve => { timer = setTimeout(() => resolve(false), CLI_RESTART_EXIT_WAIT_MS); })]);
   clearTimeout(timer);
-  if (!exited) return false;
-  cliLiveness.expect(sessionId);
+  if (!exited || openSessions.get(sessionId) !== entry || noCliRestartIdentity(entry) !== identity) return false;
+  cliLiveness.expect(sessionId, { restartSpent: true });
   try {
-    await openSession({ ...entry.session, sessionId, headSessionId: sessionId, mergedMemberIds: [] }, undefined, {
-      automatic: true, fromRestore: true, live: null, continuationResolved: true, activate: wasActive, activeFrom: activeSessionId,
+    await openSession(sessionMap.get(sessionId) || entry.session, undefined, {
+      automatic: true, fromRestore: true, activate: wasActive, activeFrom: activeSessionId,
     });
   } finally {
     cliLiveness.settle(sessionId);
@@ -628,7 +636,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         let opened;
         if (window.isDeletedProjectRestoreTarget?.(item)) continue;
         let blockedBy;
-        if (typeof cliLiveness !== 'undefined') cliLiveness.expect(s.sessionId);
+        if (typeof armCliLiveness === 'function') await armCliLiveness(s.sessionId);
         try {
           opened = await openSession(s, undefined, {
             automatic: true, fromRestore: true, live, continuationResolved: true, chosenPart: keptChoice, allowBgAttach: s.sessionId !== originalId || item.bg === true, ...showWhenOpened(item),

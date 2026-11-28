@@ -435,13 +435,18 @@ version, is not established. No live network-down run was made.
 **The tracker.** `public/cli-liveness.js` (`createCliLiveness`, dual-mode,
 pure, injected timers and `isOnline`) holds one state per session id:
 `expected` → `waiting` → `no-cli` → `restarting`. `runRestore` calls
-`expect(id)` just before its `openSession` of an interactive resume and
-`settle(id)` after it, so only restored opens are watched; the open result's
+`armCliLiveness(id)` just before its `openSession` of an interactive resume
+and `settle(id)` after it, so only restored opens are watched.
+`armCliLiveness` first asks main `no-cli-restart-spent`; anything but
+`{ok: true, spent: false}` arms with `restartSpent`, so a window reload cannot
+reset the budget and an unanswered question never grants a restart. The open
+result's
 `listening` (through `setSessionMcpState`) arms `CLI_LIVENESS_NO_CLI_MS`
 (60 s: the CLI's 30-second lock scan plus its 5-second policy wait, with margin,
 against 3 to 6 s seen in the field). Any other MCP state (`connected`, `off`,
-`failed`) or `exited(id)` from `applyProcessExit` drops the state, except
-while `restarting`. Codex rows, attaches and sessions with emulation off never
+`failed`) or `exited(id)` from `applyProcessExit` drops the state; while
+`restarting` only `connected` does, which cancels the restart (main refuses a
+connected session in the same tick it would stop it). Codex rows, attaches and sessions with emulation off never
 get `listening`, so they are never armed.
 
 **The restart.** On `no-cli`, one restart per session id per app run
@@ -455,14 +460,32 @@ read the same Chromium network-change notifier. Its known limit: a link up
 without internet (NetworkManager `CONNECTED_LOCAL`, which preceded launch in
 the incident) is already online, so the timeout carries that case.
 `restartSessionWithoutCli` (`public/app.js`) refuses when the entry is gone,
-closed, an attach, remote, or busy, when `session-input-pending` (main,
-`inputPendingReply` over the PTY's `composerState`) does not answer
-`{ok: true, pending: false}`, or when `session-live-elsewhere` is non-null or
-throws. It then calls `stop-session`, waits for `applyProcessExit` to resolve
-the entry's `closedWaiters` (bounded by `CLI_RESTART_EXIT_WAIT_MS`, 10 s, a
-ref'd timer), re-arms with `expect`, and reopens through `openSession` with
-`automatic`, `fromRestore`, `live: null` and `continuationResolved`, the same
-resume path a click on an exited row takes. No new spawn path exists.
+closed, an attach or remote, or when the projected state
+(`storedActivitySnapshot`, the head-turn projection of
+`session-status-projection.js`) is not `headTurn: 'closed'` with `busy: false`
+and no attention: an unknown turn refuses, and the local-pty adapter's own
+`busy` is never read alone (PR #1319 review, finding 1). It never stops the PTY
+itself: `restart-no-cli-session` (`src/main/terminals/no-cli-restart.js`)
+refuses on `spent`, unsent prompt text (`composerState`), a descriptor status
+`busy` or `waiting`, a `connected` bridge, or another live process for the
+conversation, then awaits `cliSessionState.liveElsewhereChecked(id, () => false,
+ptyPids)`, which scans the session descriptors excluding this PTY's own
+process tree (the renderer's `session-live-elsewhere` returns null whenever a
+PTY is here, so it cannot answer this; unknown refuses). After the scan it
+checks the session object is still the same and runs every check again, then
+records the id in its `restarted` set and calls `stopLocalSession`, in the same
+tick (finding 2). A missing descriptor does not refuse: a CLI hung before its
+UI may never write one. A process that appears between the scan and the stop
+is not seen there; the reopen's own guard still catches it. The renderer waits
+for `applyProcessExit` to resolve the entry's `closedWaiters` (bounded by
+`CLI_RESTART_EXIT_WAIT_MS`, 10 s, a ref'd timer), then aborts unless the entry
+is still the one under `id` with the same id, head and merged members
+(`noCliRestartIdentity`, finding 4). It re-arms with `restartSpent` and reopens
+`sessionMap.get(id)` through `openSession` with `automatic` and `fromRestore`
+only: no `live` (the reopen runs `guardResume`'s own live-elsewhere check,
+finding 3) and no forced continuation fields. No new spawn path exists.
+`guardResume` treats a failed live query as not live; that is its existing
+behaviour, not changed here.
 
 **The display.** Not a rung of `renderSessionIcon`: `noCliIcon`
 (`public/session-activity-dom.js`) replaces the winning rung with the `stale`
@@ -484,9 +507,13 @@ session from the saved set, as any stop would.
 
 Evidence: `test/cli-liveness-776.test.js` (tracker, fake timers),
 `test/restore-no-cli-776.test.js` (shipped `runRestore`, `openSession`,
-`applyProcessExit` and `restartSessionWithoutCli` in jsdom),
-`test/dom-no-cli-776.test.js` (sidebar slot and lifecycle words),
-`test/session-input-pending-776.test.js` (`inputPendingReply`).
+`guardResume`, `applyProcessExit` and `restartSessionWithoutCli` in jsdom),
+`test/restart-no-cli-776.test.js` (the restart against the real head-turn
+projection: open or unknown turn, connection during the call, re-key and
+merged-member change during shutdown, reopen flags, main's budget),
+`test/no-cli-restart-main-776.test.js` (main's check-and-stop, including input,
+turn, connection and PTY replacement during the process scan),
+`test/dom-no-cli-776.test.js` (sidebar slot and lifecycle words).
 
 ## Conversation head turn and the single spinner (#625)
 

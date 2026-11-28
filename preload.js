@@ -39,7 +39,8 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('trigger-session-action', listener);
   },
   getSessionLiveElsewhere: (id) => ipcRenderer.invoke('session-live-elsewhere', id),
-  getSessionInputPending: (id) => ipcRenderer.invoke('session-input-pending', id),
+  restartNoCliSession: (id) => ipcRenderer.invoke('restart-no-cli-session', id),
+  noCliRestartSpent: (id) => ipcRenderer.invoke('no-cli-restart-spent', id),
   getSessionContinuations: (id) => ipcRenderer.invoke('session-continuations', id),
   getSessionsLiveElsewhere: (ids) => ipcRenderer.invoke('sessions-live-elsewhere', ids),
   getActiveTerminals: () => ipcRenderer.invoke('get-active-terminals'),

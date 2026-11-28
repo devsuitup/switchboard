@@ -375,9 +375,4 @@ function noteUserInput(state, data, now) {
   return finish();
 }
 
-function inputPendingReply(session) {
-  if (!session || session.exited || !session.composerState) return { ok: false };
-  return { ok: true, pending: !isComposerEmpty(session.composerState) };
-}
-
-module.exports = { createComposerState, noteUserInput, isComposerEmpty, inputPendingReply, MAX_PARTIAL };
+module.exports = { createComposerState, noteUserInput, isComposerEmpty, MAX_PARTIAL };

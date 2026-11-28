@@ -217,3 +217,36 @@ test('the no-CLI delay outlasts the CLI\'s 30-second IDE search and the restart 
   assert.equal(CLI_LIVENESS_NO_CLI_MS, 60000);
   assert.equal(CLI_LIVENESS_RESTART_TIMEOUT_MS, 300000);
 });
+
+test('GIVEN main reports the restart already spent WHEN the session is armed and gets no CLI THEN it is reported and never restarted', async () => {
+  const h = harness();
+  h.tracker.expect('s1', { restartSpent: true });
+  h.tracker.mcpState('s1', 'listening');
+  await h.advance(h.NO_CLI + h.RESTART * 2);
+  h.tracker.online();
+  await h.flush();
+  assert.equal(h.tracker.isNoCli('s1'), true);
+  assert.equal(h.tracker.status('s1').restartPending, false);
+  assert.deepEqual(h.restarts, []);
+});
+
+test('GIVEN a restart in progress WHEN the CLI connects THEN the state clears at once', async () => {
+  const { createCliLiveness } = require(MODULE);
+  const timers = [];
+  const changes = [];
+  const tracker = createCliLiveness({
+    setTimer: fn => { timers.push(fn); return timers.length; },
+    clearTimer: () => {},
+    onChange: id => changes.push(id),
+    restart: () => new Promise(() => {}),
+  });
+  tracker.expect('s1');
+  tracker.mcpState('s1', 'listening');
+  timers.shift()();
+  timers.shift()();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(tracker.isNoCli('s1'), true);
+  tracker.mcpState('s1', 'connected');
+  assert.equal(tracker.isNoCli('s1'), false);
+  assert.deepEqual(changes, ['s1', 's1']);
+});

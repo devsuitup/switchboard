@@ -24,7 +24,8 @@ function createCliLiveness({ setTimer = setTimeout, clearTimer = clearTimeout, i
     if (noCli(previous) !== noCli(next)) onChange(sessionId);
   }
 
-  function expect(sessionId) {
+  function expect(sessionId, { restartSpent = false } = {}) {
+    if (restartSpent) restarted.add(sessionId);
     replace(sessionId, { phase: 'expected', timer: null, offlineSeen: false });
   }
 
@@ -40,7 +41,7 @@ function createCliLiveness({ setTimer = setTimeout, clearTimer = clearTimeout, i
 
   function mcpState(sessionId, value) {
     const state = sessions.get(sessionId);
-    if (!state || state.phase === 'restarting') return;
+    if (!state || state.phase === 'restarting' && value !== 'connected') return;
     if (value !== 'listening') {
       replace(sessionId, null);
       return;

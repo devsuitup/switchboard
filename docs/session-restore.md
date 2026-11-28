@@ -324,13 +324,21 @@ again, and otherwise **5 minutes** after the session was shown as having no
 CLI. The restarted session is watched again; if its CLI still does not connect,
 it is shown as having no CLI once more, its tooltip now reads *stop it, then
 click it to start it again*, and nothing restarts it a second time during the
-same run of the app.
+same run of the app, a reload of the window included.
 
-The restart is skipped, and counts as the one restart, when the prompt holds
-text you have not sent, when a turn is running, when the session is live in
-another process, or when any of these cannot be checked. A CLI that connects
-late clears the state and cancels the pending restart. A terminal that exits
-on its own clears it too.
+The restart is skipped, and Switchboard does not try it again by itself, when
+the conversation's turn is running or its state is unknown, when the prompt
+holds text you have not sent, when Claude reports itself working or waiting
+for an answer, when another process runs the same conversation, or when any of
+these cannot be checked. Switchboard checks the prompt, Claude's state and the
+connection and stops the terminal in one step, so text typed or a prompt sent
+just before is never lost. A CLI that connects late, even while the restart is
+being decided, clears the state and cancels the restart. A terminal that exits
+on its own clears it too. If the conversation moved to a new id while the
+terminal was stopping (a `/clear` or a fork), nothing is reopened; open it
+from the sidebar. The reopen runs the usual check for a session live in
+another process, so a conversation you resumed elsewhere meanwhile is not
+reopened here.
 
 Only sessions reopened by a restore are watched, and only those with an IDE
 bridge: Codex sessions, background attaches, remote sessions, sessions started

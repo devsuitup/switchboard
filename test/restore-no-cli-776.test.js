@@ -37,7 +37,6 @@ function setup({ savedSet = [], mcpState = 'listening' } = {}) {
   vm.runInContext(read('cli-liveness.js'), ctx, { filename: path.join(__dirname, '../public/cli-liveness.js') });
   const settings = { global: { restoreOnStartup: 'auto', openWorkingSet: savedSet } };
   const calls = [];
-  const input = { value: { ok: true, pending: false } };
   const live = { value: null };
   dom.window.api = {
     getSessionContinuations: async () => ({ candidates: [], unresolved: false, continued: false }),
@@ -45,9 +44,10 @@ function setup({ savedSet = [], mcpState = 'listening' } = {}) {
     setSetting: async (key, value) => { settings[key] = JSON.parse(JSON.stringify(value)); },
     getSessionLiveElsewhere: async (id) => { calls.push(['live', id]); if (live.value instanceof Error) throw live.value; return live.value; },
     getSessionsLiveElsewhere: async () => ({}),
-    getSessionInputPending: async (id) => { calls.push(['input', id]); if (input.value instanceof Error) throw input.value; return input.value; },
-    stopSession: async (id) => {
+    noCliRestartSpent: async () => ({ ok: true, spent: false }),
+    restartNoCliSession: async (id) => {
       calls.push(['stop', id]);
+      live.value = live.afterStop ?? live.value;
       if (stopExits.value) setTimeout(() => vm.runInContext(`applyProcessExit(${JSON.stringify(id)}, null, null, true)`, ctx), 0);
       return { ok: true };
     },
@@ -110,6 +110,7 @@ function setup({ savedSet = [], mcpState = 'listening' } = {}) {
     function schedulePersistWorkingSet() {}
     function pollActiveSessions() {}
     function sessionItemEl() { return null; }
+    function storedActivitySnapshot() { return { headTurn: 'closed', busy: false, attention: false }; }
   `, ctx);
   loadAppFunctions(ctx, {
     functions: ['rowSessionIds', 'rowHeadId', 'rowOpenId'], sourcePath: path.join(__dirname, '../public/session-activity-dom.js'),
@@ -118,7 +119,7 @@ function setup({ savedSet = [], mcpState = 'listening' } = {}) {
     'restoreIndexingDone', 'continuationRetryCancelled', 'openingSessions', 'dormantWorkingSet', 'CLI_RESTART_EXIT_WAIT_MS']), ctx);
   loadAppFunctions(ctx, { functions: ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'openSession', 'openSessionNow', 'clearDormantRow',
     'dormantRowIds', 'syncDormantRow', 'indexedRowOf', 'applyProcessExit',
-    ...['restartSessionWithoutCli'].filter(name => APP_SRC.includes(`function ${name}(`))] });
+    ...['restartSessionWithoutCli', 'armCliLiveness', 'noCliRestartIdentity'].filter(name => APP_SRC.includes(`function ${name}(`))] });
   ctx.restoreSavedIndexFrom = savedSet;
   vm.runInContext('restoreSavedIndex = new Map(restoreSavedIndexFrom.map((item, index) => [item.sessionId, index]));', ctx);
   for (const item of savedSet) {
@@ -144,7 +145,7 @@ function setup({ savedSet = [], mcpState = 'listening' } = {}) {
   const settleAll = async () => { for (let i = 0; i < 50; i++) await new Promise(resolve => setTimeout(resolve, 1)); };
   const noCli = (id) => vm.runInContext(`cliLiveness.isNoCli(${JSON.stringify(id)})`, ctx);
   const { CLI_LIVENESS_NO_CLI_MS: NO_CLI, CLI_LIVENESS_RESTART_TIMEOUT_MS: RESTART } = require('../public/cli-liveness');
-  return { dom, ctx, calls, input, live, stopExits, restore, advance, settleAll, noCli, NO_CLI, RESTART };
+  return { dom, ctx, calls, live, stopExits, restore, advance, settleAll, noCli, NO_CLI, RESTART };
 }
 
 const SAVED = [{ sessionId: 'a', projectPath: '/pa' }];
@@ -203,26 +204,16 @@ test('GIVEN a restored session without CLI WHEN the restart fires THEN it is sto
   assert.equal(h.calls.filter(c => c[0] === 'stop').length, 1, 'never a second restart');
 });
 
-for (const [name, arrange] of [
-  ['the prompt holds unsent input', h => { h.input.value = { ok: true, pending: true }; }],
-  ['the unsent-input check cannot answer', h => { h.input.value = { ok: false }; }],
-  ['the unsent-input check fails', h => { h.input.value = new Error('ipc down'); }],
-  ['the session is live elsewhere', h => { h.live.value = { pid: 4242, cwd: '/elsewhere' }; }],
-  ['the live-elsewhere check fails', h => { h.live.value = new Error('ipc down'); }],
-  ['the session is busy', h => { vm.runInContext('localPtyStates.set("a", { snapshot: () => ({ busy: true }) })', h.ctx); }],
-]) {
-  test(`GIVEN a restored session without CLI WHEN ${name} THEN it is not restarted and keeps its no-CLI state`, async t => {
-    const h = setup({ savedSet: SAVED });
-    t.after(() => h.dom.window.close());
-    await h.restore();
-    arrange(h);
-    await h.advance(h.NO_CLI + h.RESTART);
-    await h.settleAll();
-    assert.deepEqual(h.calls.filter(c => c[0] === 'stop'), []);
-    assert.equal(h.noCli('a'), true);
-    assert.equal(vm.runInContext('cliLiveness.status("a").restartPending', h.ctx), false);
-  });
-}
+test('GIVEN another process resumed the conversation while the stop ran WHEN the session is reopened THEN the reopen guard skips it', async t => {
+  const h = setup({ savedSet: SAVED });
+  t.after(() => h.dom.window.close());
+  await h.restore();
+  h.live.afterStop = { pid: 4242, cwd: '/elsewhere', startedAt: 1 };
+  await h.advance(h.NO_CLI + h.RESTART);
+  await h.settleAll();
+  assert.deepEqual(h.calls.filter(c => ['stop', 'open'].includes(c[0])), [['open', 'a', false], ['stop', 'a']]);
+  assert.ok(h.calls.some(c => c[0] === 'live' && c[1] === 'a'), 'the reopen asked whether the session is live elsewhere');
+});
 
 test('GIVEN a stop whose PTY never reports its exit WHEN the wait runs out THEN the session is not reopened', async t => {
   const h = setup({ savedSet: SAVED });
