@@ -2247,12 +2247,12 @@ async function handleSendToBackground(_event, sessionId, options, signal) {
     schedule: (fn, ms) => { const timer = setTimeout(fn, ms); if (typeof timer.unref === 'function') timer.unref(); },
     kill: entry => killPty(entry, sessionId),
     checkContinuations: async (id, _entry, validate) => {
-      const approved = new Set(), asked = new Map(), stoppedIds = [];
+      const approved = new Set(), asked = new Map(), stoppedIds = [], previousWorkers = new Map();
       let stopsConfirmed = false;
       const cancel = (reason, stopError = false, declined = false) => ({ declined: declined && !stopError && !stoppedIds.length, cancelled: reason
         + (stoppedIds.length ? ' Stop acknowledged: ' + stoppedIds.join(', ') + '.' : ''), stopError });
       for (;;) {
-        const continuation = await bgAgents.continuationJobCheck(id);
+        const continuation = await bgAgents.continuationJobCheck(id, { previousWorkers });
         const owners = continuation.jobs || (continuation.known && continuation.job ? [continuation.job] : []);
         if (stoppedIds.length && (!continuation.known || owners.length || continuation.unknownJobs?.length)) {
           return cancel('The old job was asked to stop, but background ownership is still unresolved ('
@@ -2261,18 +2261,24 @@ async function handleSendToBackground(_event, sessionId, options, signal) {
         }
         if (stoppedIds.length && !stopsConfirmed) {
           const pending = new Set(stoppedIds), deadline = Date.now() + 5000;
+          let lastLiveness;
+          const timedOut = () => cancel(lastLiveness === 'live'
+            ? 'The old job did not stop in time; this session stays in the foreground.'
+            : 'Switchboard could not confirm that the old job ended; this session stays in the foreground.', true);
           while (pending.size) {
             for (const jobId of pending) {
+              if (Date.now() >= deadline) return timedOut();
               let check;
-              try { check = await bgAgents.conversationCheck(jobId, { workerLiveness: 'all' }); }
+              try { check = await bgAgents.conversationCheck(jobId, { workerLiveness: 'all', previousWorker: previousWorkers.get(jobId), freshWorker: true }); }
               catch { check = null; }
+              lastLiveness = check?.workerLiveness;
               const refusal = validate();
               if (refusal || signal?.aborted) return cancel(refusal || 'The background handoff was cancelled. This session stays in the foreground.', true);
-              if (check?.known && (check.state === 'stopped' || check.state === 'failed' || check.workerLiveness === 'dead')) pending.delete(jobId);
+              if (check?.known && check.workerLiveness !== 'live' && (check.state === 'stopped' || check.state === 'failed' || check.workerLiveness === 'dead')) pending.delete(jobId);
             }
             if (!pending.size) break;
             const remaining = deadline - Date.now();
-            if (remaining <= 0) return cancel('The old job did not stop in time; this session stays in the foreground.', true);
+            if (remaining <= 0) return timedOut();
             await new Promise(resolve => setTimeout(resolve, Math.min(250, remaining)));
           }
           stopsConfirmed = true;
@@ -2305,6 +2311,7 @@ async function handleSendToBackground(_event, sessionId, options, signal) {
               const refusal = validate();
               if (refusal || signal?.aborted) return cancel(refusal || 'The background handoff was cancelled.', stoppedIds.length > 0, !refusal && signal?.aborted);
               if (check.known && check.workerLiveness === 'dead') continue;
+              if (check.workerLiveness === 'live' && check.workerIdentity) previousWorkers.set(job.id, check.workerIdentity);
               stopped = await unsubscribeBgAgents.runStop(job.id);
             } catch (error) { stopped = { ok: false, error: error.message || String(error) }; }
             if (!stopped?.ok) return cancel('Could not stop old background job ' + job.id + ': ' + (stopped?.error || 'no successful stop result') + '. This session stays in the foreground.', true);

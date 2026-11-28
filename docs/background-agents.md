@@ -216,7 +216,10 @@ If an older background job belongs to the same conversation and Switchboard
 cannot tell whether it is running, a question names the session and
 old job. **Stop the old job** requests its stop, then checks again before moving
 the session; if stopping fails or another job remains unresolved, the session
-stays in the foreground and the reason is shown. Partial failures list the
+stays in the foreground and the reason is shown. A completed job may still have
+a running worker; Switchboard waits for evidence that it ended. If that cannot
+be confirmed, the message says so rather than claiming the worker is still
+running. Partial failures list the
 stops already acknowledged. If a fresh check proves the old job dead, it needs
 no stop; if it proves a live owner, the move is refused. **Keep it
 and continue** leaves the old job alone and moves the session anyway, which

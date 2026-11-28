@@ -433,7 +433,7 @@ function continuationChoiceFixture(t, { choice = 'cancel', stop = { ok: true }, 
     runExitHandoffs: require('../src/main/app/session-exit').runExitHandoffs,
   });
   h.ctx.log.info = text => logs.push(text);
-  h.ctx.bgAgents.conversationCheck = async () => ({ known: true, sessionIds: ['prior'], state: stops.length ? 'stopped' : 'done', workerLiveness: 'unknown' });
+  h.ctx.bgAgents.conversationCheck = async id => ({ known: true, sessionIds: ['prior'], state: 'done', workerLiveness: stops.includes(id) ? 'dead' : 'unknown' });
   h.ctx.bgAgents.continuationJobCheck = async id => id === 'OLD' && !stops.length
     ? { known: false, reason: 'worker liveness unknown for continuation job adb1224f',
       unknownJobs: [{ id: 'adb1224f', name: 'harness-dev', sessionId: 'prior', state: 'done' }] }
@@ -842,7 +842,7 @@ function stoppedWorkerFixture(t, evidence) {
     samples.push([id, options.workerLiveness]);
     return evidence(samples.length, h);
   };
-  return { ...h, samples, waits };
+  return { ...h, samples, waits, advance: ms => { time += ms; } };
 }
 
 test('#1340 stop ACK with a live worker waits for dead evidence before /bg', async t => {
@@ -882,3 +882,136 @@ for (const state of ['stopped', 'failed']) {
     assert.deepEqual(h.writes, ['/bg', '\r']);
   });
 }
+
+function realStoppedWorkerFixture(t, { after = 'absent', before = 'live' } = {}) {
+  const h = stoppedWorkerFixture(t, () => null);
+  const fs = require('node:fs');
+  const bg = require('../src/main/bg-agents/bg-agents');
+  const jobsDir = path.join(h.root, 'jobs'), rosterPath = path.join(h.root, 'roster.json');
+  const id = 'adb1224f', sid = '11111111-1111-4111-8111-111111111111';
+  const procStart = String((BigInt(Date.now()) + 11644473600000n) * 10000n);
+  fs.mkdirSync(path.join(jobsDir, id), { recursive: true });
+  fs.writeFileSync(path.join(jobsDir, id, 'state.json'), JSON.stringify({ id, sessionId: sid, state: 'done', updatedAt: new Date().toISOString() }));
+  fs.writeFileSync(rosterPath, JSON.stringify({ proto: 1, supervisorPid: 43, updatedAt: new Date().toISOString(),
+    workers: before === 'live' ? { [id]: { pid: 42, procStart } } : {} }));
+  const probes = [];
+  fs.appendFileSync(h.transcript, JSON.stringify({ type: 'continued-in', sessionId: 'OLD', continuedInSessionId: sid }) + '\n');
+  bg.init({ jobsDir, homeDir: h.root, daemonRosterPath: rosterPath,
+    resolveTranscriptPath: id => id === 'old' ? h.transcript : null, cliSessionState: {
+    refreshProcessTable: async options => { probes.push(options); if (h.stops.length && after === 'throw') throw new Error('probe failed'); },
+    readAllDescriptors: () => before === 'descriptor' && !h.stops.length ? [{ kind: 'bg', jobId: id, sessionId: sid }] : [],
+    readWorkerProcessEvidence: () => ({ processTableFresh: !h.stops.length || after !== 'stale', observedAt: Date.now(),
+      tableEntry: pid => pid === 43 ? { created: procStart } : pid === 42 && (!h.stops.length || after === 'same' || after === 'reused')
+        ? { created: h.stops.length && after === 'reused' ? String(BigInt(procStart) + 10000000n) : procStart } : undefined }),
+  } });
+  t.after(() => bg.stop());
+  h.ctx.bgAgents.conversationCheck = bg.conversationCheck;
+  return { ...h, probes, bg };
+}
+
+for (const after of ['absent', 'reused']) {
+  test('#1340 r2 done worker identity ' + after + ' in fresh table proves end with supervisor alive', async t => {
+    const h = realStoppedWorkerFixture(t, { after });
+    const initial = h.ctx.bgAgents.continuationJobCheck;
+    h.ctx.bgAgents.continuationJobCheck = (id, options) => h.stops.length ? h.bg.continuationJobCheck(id, options) : initial(id);
+    const result = await h.handleSendToBackground({}, 'tab');
+    assert.equal(result.ok, true, 'a formerly live done worker that ended must permit /bg: ' + result.error);
+    assert.deepEqual(h.writes, ['/bg', '\r']);
+    assert.ok(h.probes.slice(1).every(probe => probe.force), 'post-stop evidence must request a fresh process table');
+  });
+}
+
+for (const options of [{ after: 'stale' }, { after: 'throw' }, { before: 'unknown' }, { before: 'descriptor' }]) {
+  test('#1340 r2 cannot confirm end with ' + JSON.stringify(options), async t => {
+    const h = realStoppedWorkerFixture(t, options);
+    const result = await h.handleSendToBackground({}, 'tab');
+    assert.equal(result.code, 'cancelled');
+    assert.match(result.error, /Switchboard could not confirm that the old job ended; this session stays in the foreground\./);
+    assert.deepEqual(h.writes, []);
+  });
+}
+
+test('#1340 r2 the same worker identity surviving Stop remains live', async t => {
+  const h = realStoppedWorkerFixture(t, { after: 'same' });
+  const result = await h.handleSendToBackground({}, 'tab');
+  assert.equal(result.code, 'cancelled');
+  assert.match(result.error, /The old job did not stop in time/);
+  assert.deepEqual(h.writes, []);
+});
+
+for (const state of ['stopped', 'failed']) {
+  test('#1340 r2 ' + state + ' must not override a live worker sample', async t => {
+    const h = stoppedWorkerFixture(t, () => ({ known: true, state, workerLiveness: 'live' }));
+    const result = await h.handleSendToBackground({}, 'tab');
+    assert.equal(result.code, 'cancelled', 'a terminal state cannot overrule live worker evidence');
+    assert.deepEqual(h.writes, []);
+  });
+}
+
+function twoStoppedJobs(h) {
+  h.ctx.bgAgents.continuationJobCheck = async () => h.stops.length < 2
+    ? { known: false, unknownJobs: [{ id: 'adb1224f' }, { id: 'cccccccc' }] } : { known: true, job: null };
+}
+
+test('#1340 r2 deadline is checked before every sample, including the next id', async t => {
+  const h = stoppedWorkerFixture(t, () => {
+    h.advance(5001);
+    return { known: true, state: 'done', workerLiveness: 'live' };
+  });
+  twoStoppedJobs(h);
+  h.ctx.bgAgents.conversationCheck = async (id, options) => {
+    if (h.stops.length < 2) return { known: true, state: 'done', workerLiveness: 'live' };
+    h.samples.push([id, options.workerLiveness]);
+    h.advance(5001);
+    return { known: true, state: 'done', workerLiveness: 'live' };
+  };
+  const result = await h.handleSendToBackground({}, 'tab');
+  assert.equal(h.samples.length, 1, 'no second sample may start after the five-second deadline');
+  assert.equal(result.code, 'cancelled');
+  assert.match(result.error, /Stop acknowledged: adb1224f, cccccccc/);
+  assert.deepEqual(h.writes, []);
+});
+
+test('#1340 r2 a poll wake at the deadline does not start another sample', async t => {
+  const h = stoppedWorkerFixture(t, () => ({ known: true, state: 'done', workerLiveness: 'live' }));
+  await h.handleSendToBackground({}, 'tab');
+  assert.equal(h.samples.length, 20, 'sample at t=5000 is outside the polling bound');
+});
+
+for (const change of ['abort', 'validate refusal', 'throw']) {
+  test('#1340 r2 poll cancels on ' + change, async t => {
+    const controller = new AbortController();
+    const h = stoppedWorkerFixture(t, () => {
+      if (change === 'abort') controller.abort();
+      if (change === 'validate refusal') h.session.realSessionId = 'rebound';
+      if (change === 'throw') throw new Error('conversation unavailable');
+      return { known: true, state: 'done', workerLiveness: 'dead' };
+    });
+    const result = await h.handleSendToBackground({}, 'tab', undefined, controller.signal);
+    assert.equal(result.code, 'cancelled');
+    assert.equal(result.stopError, true);
+    assert.deepEqual(h.writes, []);
+    assert.match(result.error, /Stop acknowledged: adb1224f/);
+    if (change === 'throw') assert.match(result.error, /Switchboard could not confirm that the old job ended/);
+    else assert.equal(h.samples.length, 1, 'abort and validation refusal stop polling immediately');
+  });
+}
+
+test('#1340 r2 two stopped ids both need proof and proven ids are not sampled again', async t => {
+  const h = stoppedWorkerFixture(t, () => null);
+  twoStoppedJobs(h);
+  h.ctx.bgAgents.conversationCheck = async (id, options) => {
+    if (h.stops.length < 2) return { known: true, state: 'done', workerLiveness: 'live' };
+    h.samples.push([id, options.workerLiveness]);
+    return { known: true, state: 'done', workerLiveness: id === 'adb1224f' || h.samples.length >= 3 ? 'dead' : 'live' };
+  };
+  const write = h.ctx.writePty;
+  h.ctx.writePty = (entry, text) => {
+    assert.equal(h.samples.length, 3, 'both jobs must be proved ended before /bg');
+    return write(entry, text);
+  };
+  const result = await h.handleSendToBackground({}, 'tab');
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(h.samples.map(sample => sample[0]), ['adb1224f', 'cccccccc', 'cccccccc']);
+  assert.deepEqual(h.writes, ['/bg', '\r']);
+});

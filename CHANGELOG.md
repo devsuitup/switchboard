@@ -11,7 +11,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Quit and window close no longer ask for confirmation when only idle Claude sessions are open, startup restore is enabled and Switchboard tracks no running background work; unsaved file edits still ask, and Restart to update keeps its background option. (#1023)
 
 ### Fixed
-- Moving a session to the background after choosing **Stop the old job** now waits for evidence that the old job ended. If it does not stop in time, the session stays in the foreground with an explanation. (#1340)
+- Moving a session to the background after choosing **Stop the old job** now waits for evidence that the old job ended. If the worker is still running at the deadline, the session stays in the foreground; if its end cannot be confirmed, Switchboard explains that uncertainty. (#1340)
 - Double-clicking an ended job in Agents now offers **Respawn** when available and **Open transcript** when a transcript exists, instead of silently doing nothing. If an action becomes unavailable before you click, the notice explains why. (#1023)
 - On Windows, a project you deleted no longer reappears in the sidebar when its sessions recorded its folder under a short spelling such as `C:\Users\JEAN-B~1\...`, and adding it back with **Add project** under that spelling shows it again. (#1304)
 

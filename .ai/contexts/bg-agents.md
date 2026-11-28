@@ -1596,21 +1596,53 @@ failed stop cancels with its reason, never as a user decline. Success is only
 a CLI acknowledgement. After the stop sequence, continuationJobCheck runs
 again: no /bg unless the graph is known and contains neither owners nor unknown
 jobs. #1340 additionally requires positive end evidence for every stopped job
-id: conversationCheck(id, { workerLiveness: 'all' }) must return a known state
-of stopped/failed or workerLiveness dead. A done job whose worker is live only
-in the roster/process table can have no descriptor and therefore no hosted
-owner; an empty ownership recheck is not proof that this worker ended.
-Main samples immediately, then every 250 ms for up to five seconds while any
-stopped id lacks proof. Proven ids need no further polling. It revalidates the
-foreground tab and batch cancellation after each sample, and checks ownership
-again after all stopped ids are proved ended. The separate handoff confirmation
-deadline starts only after the question, stop and this verification complete.
-If the bound expires, the move returns cancelled, not declined, with
-"The old job did not stop in time; this session stays in the foreground."
-The failure notice includes the acknowledged ids. Otherwise unresolved
-ownership cancels with its reason. Partial failure lists every
-prior stop acknowledgement without claiming unverified worker death. The stop
-port does not atomically pin the worker incarnation; see Guarded stop ports above.
+id. A known stopped/failed state after an acknowledged Stop is accepted only
+when that sample's workerLiveness is not live. This is an action-scoped handoff
+policy: stopped/failed acknowledges a terminated turn after the requested stop,
+and /bg only moves the foreground session. It is not proof of process death for
+project deletion (Guarded stop ports above), nor permission to ignore a worker
+already respawned while state.json still says stopped/failed (the descriptor
+publication race above). Done is never terminal evidence here: an idle worker
+can survive it unchanged.
+
+Before Stop, conversationCheck returns workerIdentity only when the real
+classifier's roster/process-table comparison proves that worker live: job id,
+pid and procStart. Main retains it only for this handoff. Subsequent checks force
+a process-table refresh. A fresh table (processTableFresh true) with no process
+for that pid, or a different creation time under the classifier's existing
+FILETIME tolerance, proves the observed incarnation ended. A current live
+worker or descriptor wins over this absence proof. A failed/stale table or a
+pid with unreadable creation time cannot prove absence. Descriptor-only liveness
+without a known roster/process identity supplies no such proof. The job file
+must still match the sampled state/session before dead evidence is returned.
+The remembered identities also accompany the ownership rechecks, which reread
+the graph and process evidence rather than treating the earlier proof as a
+permanent exclusion. No new process-death rule is enabled for deletion or
+other callers without that handoff history.
+
+A done job whose worker is live only in the roster/process table can have no
+descriptor and therefore no hosted owner; an empty ownership recheck is not
+proof that this worker ended. Main samples immediately, then every 250 ms for
+up to five seconds while any stopped id lacks proof. The deadline is checked
+before each individual sample, including the next id in the same pass and the
+first sample after a wait. Proven ids need no further polling. The five seconds
+bound sample starts, not an in-flight read: one already-started sample can
+overshoot by the process-table probe timeout (currently 15 seconds). The fresh
+post-stop check uses a single sample; it does not add the classifier's delayed
+supervisor confirmation. Ownership graph rechecks and Stop itself are outside
+this polling budget. Main revalidates the foreground tab and batch cancellation
+after each sample, and checks ownership again after all stopped ids are proved
+ended. The separate handoff confirmation deadline starts only after the question,
+stop and this verification complete.
+
+If the bound expires, the move returns cancelled, not declined. Only a last
+sample classified live says "The old job did not stop in time; this session
+stays in the foreground." Otherwise it says "Switchboard could not confirm
+that the old job ended; this session stays in the foreground." The failure
+notice includes the acknowledged ids. Otherwise unresolved ownership cancels
+with its reason. Partial failure lists every prior stop acknowledgement without
+claiming unverified worker death. The stop port does not atomically pin the
+worker incarnation; see Guarded stop ports above.
 
 Keep approves only the displayed job ids, then traverses again. Newly found
 unknown ids require another question; known live owners still refuse. Each job

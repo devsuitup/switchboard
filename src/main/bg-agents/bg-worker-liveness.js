@@ -1,6 +1,6 @@
 'use strict';
 
-const { procStartMatches } = require('../cli/proc-start');
+const { procStartMatches, toCreated } = require('../cli/proc-start');
 
 const WINDOWS_FILETIME_RE = /^\d{17,19}$/;
 const timestamp = value => typeof value === 'number' && Number.isFinite(value) ? value
@@ -54,4 +54,18 @@ function classifyWorkerLiveness(job, sample, confirmation) {
   return sameRoster && missingSupervisor(job, sample) && missingSupervisor(job, confirmation) ? 'dead' : 'unknown';
 }
 
-module.exports = { classifyWorkerLiveness, liveWorkerDescriptor, workerTimestamp: timestamp };
+function liveWorkerIdentity(job, sample) {
+  if (workerObservation(job, { ...sample, descriptors: [] }) !== 'live') return undefined;
+  const worker = sample.roster.workers[job.daemonShort ?? job.id];
+  return { jobId: job.id, pid: worker.pid, procStart: worker.procStart };
+}
+
+function workerIdentityEnded(job, worker, sample) {
+  if (!worker || worker.jobId !== job.id || !Number.isInteger(worker.pid) || worker.pid <= 0
+    || typeof worker.procStart !== 'string' || !WINDOWS_FILETIME_RE.test(worker.procStart)
+    || !sample?.processTableFresh || typeof sample.tableEntry !== 'function') return false;
+  const entry = sample.tableEntry(worker.pid);
+  return !entry || toCreated(entry.created) !== null && !procStartMatches(entry.created, worker.procStart);
+}
+
+module.exports = { classifyWorkerLiveness, liveWorkerDescriptor, liveWorkerIdentity, workerIdentityEnded, workerTimestamp: timestamp };
