@@ -102,6 +102,7 @@ export interface SessionIndexWriter {
   fenceProjectDeletion(input: DeletionReference & { expectedProjectEpoch: number }): Promise<ProjectDeletionState>;
   rekeySessionMeta(fromId: string, toId: string): Promise<void>;
   completeRepairFolders(folders: string[]): Promise<void>;
+  pruneUndeclaredRepairFolders(folders: string[]): Promise<string[]>;
   withCache(cache: Cache): SessionIndexWriter;
   measurements(): Promise<Array<{ rows: number; bytes: number; ms: number; statements: number[] }>>;
   initializeCache(ctx: Omit<Parameters<Cache['init']>[0], 'db' | 'writer'>): void;
