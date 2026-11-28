@@ -1558,11 +1558,12 @@ owners before uncertainty; respawn and strict stop still refuse known:false.
 #1295 asks **Stop the old job**, **Keep it and continue**, or **Cancel** while
 holding the tab input lock. Stop rechecks foreground eligibility and the exact
 tab/conversation binding before each stop, including after fresh ownership
-reads. When conversationCheck establishes fresh live/dead liveness, no stop is
-issued for that job: the continuation recheck admits a dead job and refuses a
-live owner. Strict stop is not used here because its delete guard includes the
-resume parent, which is this foreground tab's live PTY. Unknown liveness retains
-the existing checked ordinary stop port. Its success is only
+reads. Fresh dead liveness skips the stop and proceeds to the continuation
+recheck. Fresh live liveness, including a done job's idle worker, and unknown
+liveness use the existing checked ordinary stop port. Its checks cover only
+the job's sessionIds, not the resume parent in this foreground tab. Strict stop
+is not used here because its delete guard includes that parent's live PTY. A
+failed stop cancels with its reason, never as a user decline. Success is only
 a CLI acknowledgement. After the stop sequence, continuationJobCheck runs
 again: no /bg unless the graph is known and contains neither owners nor unknown
 jobs. Otherwise the move cancels with the reason. Partial failure lists every
@@ -1570,7 +1571,9 @@ prior stop acknowledgement without claiming unverified worker death. The stop
 port does not atomically pin the worker incarnation; see Guarded stop ports above.
 
 Keep approves only the displayed job ids, then traverses again. Newly found
-unknown ids require another question; known live owners still refuse. A failed
+unknown ids require another question; known live owners still refuse. Each job
+can appear in at most two questions per handoff. If its liveness keeps changing
+and it would need a third question, the move cancels with an explicit reason. A failed
 recheck without identifiable jobs cancels after consent. Unknown traversal
 without any identified job at the initial check retains the historical info
 log and proceed policy. User Cancel or an unanswered/cancelled question returns
@@ -1597,7 +1600,9 @@ multiple owners and a proven owner before a later uncertain tail;
 `bg-duplicate-1020` tests for torn tails and uncertain sibling jobs in both
 directory orders. New #1295 r2 tests cover deeper live/unknown continuations,
 post-stop rechecks, consent scoped to job ids, eligibility before stopping,
-fresh live/dead rechecks with the real checkStop parent-PTY refusal, partial stop
+fresh live/dead rechecks with the real checkStop parent-PTY refusal, the ordinary
+stop of a live done worker (ACK before /bg, failure and exception), the per-job
+re-ask limit, partial stop
 errors, IPC option filtering, late answers,
 timeout after display and batch abort/external exit. The batch Cancel test has
 a second row initially busy. A single renderer Send also reaches the shipped

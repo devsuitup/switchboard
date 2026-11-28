@@ -607,12 +607,12 @@ for (const liveness of ['dead', 'live']) {
     assert.equal(strict.ok, false);
     assert.match(strict.error, /session is still running in this window/);
     const result = await h.handleSendToBackground({}, 'tab');
-    assert.equal(liveness === 'dead' ? result.ok : result.code, liveness === 'dead' ? true : 'refused',
+    assert.equal(liveness === 'dead' ? result.ok : result.code, liveness === 'dead' ? true : 'cancelled',
       'fresh liveness must reach the ownership recheck instead of the parent PTY stop guard');
     assert.ok(checks >= 2);
-    assert.deepEqual(h.stops, [], 'known live or dead workers must not receive a stop verb in this flow');
+    assert.deepEqual(h.stops, liveness === 'dead' ? [] : [['stop', 'adb1224f']], 'only a fresh dead worker skips the ordinary stop');
     assert.deepEqual(h.writes, liveness === 'dead' ? ['/bg', '\r'] : []);
-    if (liveness === 'live') assert.match(result.error, /already runs in background job adb1224f/);
+    if (liveness === 'live') assert.match(result.error, /ownership is still unresolved.*adb1224f/);
   });
 }
 
@@ -764,4 +764,65 @@ test('#1295 N3 Keep recheck refuses a roster-only live owner beside the approved
   assert.match(result.error, /cccccccc/);
   assert.equal(h.questions.length, 1);
   assert.deepEqual(h.writes, []);
+});
+
+for (const outcome of ['success', 'failure', 'throw']) {
+  test('#1295 r4 M1 Stop waits for the ordinary stop of a fresh live done worker: ' + outcome, async t => {
+    const h = continuationChoiceFixture(t, { choice: 'stop' });
+    const initial = h.ctx.bgAgents.continuationJobCheck;
+    let checks = 0, releaseStop;
+    const stopResult = new Promise(resolve => { releaseStop = resolve; });
+    t.after(() => releaseStop());
+    h.ctx.bgAgents.continuationJobCheck = async id => ++checks === 1 ? initial(id) : { known: true, job: null };
+    const samples = [];
+    h.ctx.bgAgents.conversationCheck = async (id, options) => {
+      samples.push([id, options.workerLiveness]);
+      return { known: true, state: 'done', sessionIds: ['prior'], continuationSessionIds: ['prior', 'OLD'],
+        workerLiveness: 'live', hosted: false };
+    };
+    h.ctx.bgAgents.liveJobCheck = () => ({ known: true, job: null });
+    h.ctx.bgAgents.runVerb = async (...args) => {
+      h.stops.push(args);
+      await stopResult;
+      if (outcome === 'throw') throw new Error('stop unavailable');
+      return outcome === 'success' ? { ok: true } : { ok: false, error: 'worker cannot be stopped' };
+    };
+    const ports = require('../src/main/bg-agents/bg-agents-ipc').init({ ipcMain: h.ipcMain,
+      bgAgents: h.ctx.bgAgents, activeSessions: h.ctx.activeSessions, cliSessionState: h.ctx.cliSessionState,
+      sessionHasPty: h.ctx.sessionHasPty, ptyPids: h.ctx.ptyPids, getMainWindow: () => null, log: h.ctx.log });
+    t.after(ports);
+    h.ctx.unsubscribeBgAgents = ports;
+    const pending = h.batch();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.stops, [['stop', 'adb1224f']], 'Stop must call the ordinary stop even when the fresh live job is done');
+    assert.deepEqual(samples, [['adb1224f', 'all'], ['adb1224f', false]], 'the handoff samples liveness, then the ordinary stop checks only the job conversations');
+    assert.equal(checks, 1, 'ownership must not be rechecked before the stop result');
+    assert.deepEqual(h.writes, [], '/bg must wait for the stop to succeed');
+    releaseStop();
+    const [result] = await pending;
+    assert.equal(h.questions.length, 1);
+    if (outcome === 'success') {
+      assert.equal(result.ok, true);
+      assert.equal(checks, 2, 'a successful stop must still recheck background ownership');
+      assert.deepEqual(h.writes, ['/bg', '\r']);
+    } else {
+      assert.equal(result.code, 'cancelled', 'a failed stop must not be reported as a user decline');
+      assert.equal(result.stopError, true);
+      assert.match(result.error, /Could not stop old background job adb1224f: (worker cannot be stopped|stop unavailable)/);
+      assert.deepEqual(h.writes, []);
+    }
+  });
+}
+
+test('#1295 r4 a flapping job gets only one re-ask within a handoff', async t => {
+  const h = continuationChoiceFixture(t, { choice: 'stop' });
+  h.ctx.bgAgents.conversationCheck = async () => ({ known: true, state: 'done', workerLiveness: 'dead' });
+  h.control.choose = () => h.questions.length <= 2 ? { choice: 'stop' } : null;
+  const [result] = await h.batch();
+  assert.equal(h.questions.length, 2, 'the same unknown job must not be asked about more than twice');
+  assert.equal(result.code, 'cancelled');
+  assert.match(result.error, /adb1224f.*keeps changing.*foreground/);
+  assert.deepEqual(h.stops, []);
+  assert.deepEqual(h.writes, []);
+  assert.equal(h.ipcMain.listenerCount('bg-continuation-choice-answer'), 0);
 });

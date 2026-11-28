@@ -2244,7 +2244,7 @@ async function handleSendToBackground(_event, sessionId, options, signal) {
     schedule: (fn, ms) => { const timer = setTimeout(fn, ms); if (typeof timer.unref === 'function') timer.unref(); },
     kill: entry => killPty(entry, sessionId),
     checkContinuations: async (id, _entry, validate) => {
-      const approved = new Set(), stoppedIds = [];
+      const approved = new Set(), asked = new Map(), stoppedIds = [];
       const cancel = (reason, stopError = false, declined = false) => ({ declined: declined && !stopError && !stoppedIds.length, cancelled: reason
         + (stoppedIds.length ? ' Stop acknowledged: ' + stoppedIds.join(', ') + '.' : ''), stopError });
       for (;;) {
@@ -2259,6 +2259,9 @@ async function handleSendToBackground(_event, sessionId, options, signal) {
         if (signal?.aborted) return cancel('The background handoff was cancelled. This session stays in the foreground.', false, true);
         const jobs = (continuation.unknownJobs || []).filter(job => !approved.has(job.id));
         if (jobs.length) {
+          const repeated = jobs.find(job => asked.get(job.id) >= 2);
+          if (repeated) return cancel('The status of old background job ' + repeated.id + ' keeps changing. This session stays in the foreground. Check the Agents view before retrying.');
+          for (const job of jobs) asked.set(job.id, (asked.get(job.id) || 0) + 1);
           const choice = await require('./src/main/bg-agents/bg-handoff').askContinuationChoice({
             ipcMain, window: mainWindow, sessionId, jobs, signal,
           });
@@ -2278,7 +2281,7 @@ async function handleSendToBackground(_event, sessionId, options, signal) {
               const check = await bgAgents.conversationCheck(job.id, { workerLiveness: 'all' });
               const refusal = validate();
               if (refusal || signal?.aborted) return cancel(refusal || 'The background handoff was cancelled.', stoppedIds.length > 0, !refusal && signal?.aborted);
-              if (check.known && ['live', 'dead'].includes(check.workerLiveness)) continue;
+              if (check.known && check.workerLiveness === 'dead') continue;
               stopped = await unsubscribeBgAgents.runStop(job.id);
             } catch (error) { stopped = { ok: false, error: error.message || String(error) }; }
             if (!stopped?.ok) return cancel('Could not stop old background job ' + job.id + ': ' + (stopped?.error || 'no successful stop result') + '. This session stays in the foreground.', true);
