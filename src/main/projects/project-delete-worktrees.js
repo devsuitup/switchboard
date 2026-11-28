@@ -4,6 +4,7 @@ const path = require('node:path');
 const deletion = require('../../../worktree-delete');
 const { PROJECT_DELETE_WORKTREE_INSPECTION_TIMEOUT_MS } = require('../../../public/setting-defaults');
 const { canonicalPath, fail } = require('./project-delete-identity');
+const { armDeadlineTimer } = require('./project-delete-timer');
 
 function createProjectDeleteWorktrees({ runGit, readActivity, startProcessReads = () => {}, now = Date.now }) {
   const check = budget => {
@@ -11,19 +12,15 @@ function createProjectDeleteWorktrees({ runGit, readActivity, startProcessReads 
   };
   async function bounded(read, budget) {
     check(budget);
-    let timer;
+    let cancelTimer;
     try {
       const result = await Promise.race([Promise.resolve().then(read), new Promise((_, reject) => {
-        const arm = () => {
-          timer = setTimeout(() => now() >= budget.deadline
-            ? reject(fail('DISCOVERY_TIMEOUT', 'Worktree not inspected: inventory time budget exhausted. Reopen Delete to retry.'))
-            : arm(), Math.max(1, budget.deadline - now()));
-        };
-        arm();
+        cancelTimer = armDeadlineTimer({ deadline: budget.deadline, now, signal: budget.signal },
+          () => reject(fail('DISCOVERY_TIMEOUT', 'Worktree not inspected: inventory time budget exhausted. Reopen Delete to retry.')));
       })]);
       check(budget);
       return result;
-    } finally { clearTimeout(timer); }
+    } finally { cancelTimer?.(); }
   }
   async function preview(project, budget, prepareProcessReads = () => {}) {
     if (project.alias !== null) throw fail('WORKTREE_UNAVAILABLE', 'Remote worktree removal is unavailable.');

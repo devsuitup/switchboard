@@ -1,6 +1,7 @@
 'use strict';
 
 const { fail } = require('./project-delete-identity');
+const { armDeadlineTimer } = require('./project-delete-timer');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const scopes = new AsyncLocalStorage();
 
@@ -30,7 +31,7 @@ function createDiscoveryBounds({ now = Date.now, schedule = setTimeout, cancel =
     const pending = budget.pendingPorts ||= new Map(), key = Symbol(port);
     const detail = { port, startedAt, boundMs, key, parent: scopes.getStore() };
     pending.set(key, detail);
-    let timer, abort, accepted = false, work;
+    let cancelTimer, accepted = false, work;
     try {
       if (budget.signal?.aborted || boundMs <= 0) throw discoveryTimeout(budget, now, detail);
       work = Promise.resolve().then(() => {
@@ -38,16 +39,14 @@ function createDiscoveryBounds({ now = Date.now, schedule = setTimeout, cancel =
         return scopes.run(key, fn);
       });
       const value = await Promise.race([work, new Promise((_, reject) => {
-        abort = () => reject(discoveryTimeout(budget, now, detail));
-        budget.signal?.addEventListener('abort', abort, { once: true });
-        timer = schedule(() => reject(discoveryTimeout(budget, now, detail)), boundMs);
+        cancelTimer = armDeadlineTimer({ deadline: startedAt + boundMs, now, signal: budget.signal, schedule, cancel },
+          () => reject(discoveryTimeout(budget, now, detail)));
       })]);
       if (budget.signal?.aborted || now() >= startedAt + boundMs) throw discoveryTimeout(budget, now, detail);
       accepted = true;
       return value;
     } finally {
-      if (abort) budget.signal?.removeEventListener('abort', abort);
-      cancel(timer);
+      cancelTimer?.();
       if (budget.portElapsed) budget.portElapsed.set(port, Math.max(budget.portElapsed.get(port) || 0, now() - startedAt));
       pending.delete(key);
       if (dispose && work && !accepted) void work.then(dispose, () => {}).catch(() => {});

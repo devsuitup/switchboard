@@ -699,3 +699,27 @@ test('E preview shares one Claude roster and path resolution across sibling work
   assert.equal(descriptors, 1, 'session inventory is read once');
   assert.equal(Math.max(...resolutions.values()), 1, 'paths resolve once per inventory');
 });
+
+test('abort ends a pending worktree timer wait even when the budget clock is frozen', async () => {
+  const controller = new AbortController();
+  let entered, answer, watchdog, outcome;
+  const started = new Promise(resolve => { entered = resolve; });
+  const adapter = implementation.createProjectDeleteWorktrees({ now: () => 0,
+    runGit: () => { entered(); return new Promise(resolve => { answer = resolve; }); },
+    readActivity: async () => ({ complete: true, sessions: [], jobs: [], candidates: [] }),
+  });
+  const pending = adapter.preview({ alias: null, projectPath: process.cwd() },
+    { signal: controller.signal, deadline: 30.5, limit: 128 }).then(
+    value => { outcome = { value }; }, error => { outcome = { error }; });
+  try {
+    await started;
+    controller.abort();
+    await Promise.race([pending, new Promise(resolve => { watchdog = setTimeout(resolve, 100); })]);
+    assert.equal(outcome?.error?.code, 'DISCOVERY_TIMEOUT', 'abort must settle a frozen-clock worktree wait');
+    assert.match(outcome.error.message, /not inspected/i);
+  } finally {
+    clearTimeout(watchdog);
+    answer('');
+    await pending;
+  }
+});

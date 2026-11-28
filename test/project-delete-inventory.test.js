@@ -447,9 +447,9 @@ test('A4c1 transcript identity mismatch cannot be verified from cwd alone', supp
 
 test('A4c1 a timed-out file-open port closes its late handle with an injected timer', supported, async t => {
   const timers = new Set(), io = Object.create(fs.promises);
-  let entered, release, closed = 0;
+  let entered, release, closed = 0, time = 0;
   const opened = new Promise(resolve => { entered = resolve; });
-  const h = await setup(t, { fs: io,
+  const h = await setup(t, { fs: io, now: () => time,
     schedule(fn) { const timer = { fn }; timers.add(timer); return timer; },
     cancel(timer) { timers.delete(timer); } });
   const b = budget(); await h.inventory.readSnapshot(b);
@@ -457,6 +457,7 @@ test('A4c1 a timed-out file-open port closes its late handle with an injected ti
   const pending = h.inventory.inspectRetainedFiles([h.schedule], b);
   await opened;
   assert.equal(timers.size, 1);
+  time = b.deadline;
   [...timers][0].fn();
   await assert.rejects(pending, { code: 'DISCOVERY_TIMEOUT' });
   release({ async close() { closed++; } });

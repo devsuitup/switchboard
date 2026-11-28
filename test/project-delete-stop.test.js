@@ -545,3 +545,28 @@ for (const kind of ['job', 'remote']) test(kind + ' attachment removed during de
   assert.equal(result.ok, true, 'already removed attachment does not invalidate death evidence');
   assert.equal(f.effects.some(e => e.startsWith('detach:')), false, 'already detached attachment must not be closed again');
 });
+
+test('an early stop timer accepts evidence before the budget clock expires', async () => {
+  const f = fixture();
+  let origin, readTimer;
+  f.ports.now = () => origin === undefined ? 0 : 59960.5 + (Date.now() - origin) * 0.1;
+  f.ports.schedule = setTimeout;
+  f.ports.cancel = clearTimeout;
+  const adapter = f.adapter(), prepared = await adapter.preflight(f.request);
+  assert.equal(prepared.ok, true);
+  const read = f.ports.readTarget;
+  let first = true;
+  f.ports.readTarget = async target => {
+    if (first) {
+      first = false;
+      await new Promise(resolve => { readTimer = setTimeout(resolve, 80); });
+    }
+    return read(target);
+  };
+  origin = Date.now();
+  try {
+    const result = await adapter.stop(prepared);
+    assert.equal(result.ok, true, 'stop must not report STOP_TIMEOUT while its injected clock has budget remaining');
+    assert.deepEqual(f.effects, ['stop:target-0']);
+  } finally { clearTimeout(readTimer); }
+});

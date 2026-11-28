@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
+- Deleting a project no longer reports an exhausted time budget or a stop timeout while time remains. (#1328)
 - A Claude session restored at launch whose CLI never connects to Switchboard, as happened when the network was still down, is no longer shown as if it were running normally: after a minute its sidebar dot turns into a dash and its tooltip says **No CLI connected**. Switchboard restarts it once by itself, as soon as the network is back or five minutes later at the latest, unless the prompt holds text you have not sent, a turn is running or the session is open in another process; if it still has no CLI, its tooltip asks you to stop it and click it to start it again. Codex sessions are not concerned. (#776)
 
 ## v0.1.0-beta.4 — 2026-11-27
