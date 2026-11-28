@@ -49,6 +49,8 @@ contextBridge.exposeInMainWorld('api', {
   exitBackground: (id, detail, ids) => ipcRenderer.invoke('exit-background', id, detail, ids),
   exitBackgroundCancel: (id, detail) => ipcRenderer.send('exit-background-cancel', id, detail),
   onExitBackgroundProgress: callback => ipcRenderer.on('exit-background-progress', (_event, attempt, progress) => callback(attempt, progress)),
+  onBgContinuationChoice: callback => ipcRenderer.on('bg-continuation-choice', (_event, token, sessionId, jobs) => callback(token, sessionId, jobs)),
+  answerBgContinuationChoice: (token, choice) => ipcRenderer.send('bg-continuation-choice-answer', token, choice),
   onBgHandoffNotice: (callback) => ipcRenderer.on('bg-handoff-notice', (_event, sessionId, message) => callback(sessionId, message)),
   // see .ai/contexts/bg-agents.md
   getBgAgents: () => ipcRenderer.invoke('get-bg-agents'),

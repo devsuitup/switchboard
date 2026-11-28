@@ -2247,6 +2247,23 @@ async function handleSendToBackground(_event, sessionId, options) {
       const continuation = await bgAgents.continuationJobCheck(id);
       const owners = continuation.jobs || (continuation.known && continuation.job ? [continuation.job] : []);
       if (owners.length) return { refuse: 'This conversation already runs in background job' + (owners.length > 1 ? 's ' : ' ') + owners.map(job => job.id).join(', ') + '. Open it from the sidebar instead.' };
+      if (continuation.unknownJobs?.length) {
+        const choice = await require('./src/main/bg-agents/bg-handoff').askContinuationChoice({
+          ipcMain, window: mainWindow, sessionId, jobs: continuation.unknownJobs, signal: options?.signal,
+        });
+        if (choice === 'cancel' || options?.signal?.aborted || activeSessions.get(sessionId) !== session) {
+          log.info(`[bg-handoff] ${id} unknown continuation cancelled (user cancelled or renderer unavailable)`);
+          return { cancelled: 'The session stays in the foreground because its old background job was not resolved.' };
+        }
+        if (choice === 'stop') for (const job of continuation.unknownJobs) {
+          let stopped;
+          try { stopped = await unsubscribeBgAgents.runStop(job.id); }
+          catch (error) { stopped = { ok: false, error: error.message || String(error) }; }
+          if (!stopped?.ok) return { cancelled: `Could not stop old background job ${job.id}: ${stopped?.error || 'no successful stop result'}. This session stays in the foreground.` };
+        }
+        if (options?.signal?.aborted) return { cancelled: 'The background handoff was cancelled. This session stays in the foreground.' };
+        return null;
+      }
       if (!continuation.known) log.info(`[bg-handoff] ${id} continuation liveness unknown (${continuation.reason}); /bg goes ahead`);
       return null;
     },
@@ -2263,7 +2280,7 @@ ipcMain.handle('send-session-to-background', handleSendToBackground);
 async function runExitBackgroundBatch(ids, opts) {
   return runExitHandoffs(ids, {
     ...opts,
-    send: id => handleSendToBackground(null, id),
+    send: id => handleSendToBackground(null, id, { signal: opts?.signal }),
     status: id => {
       const record = activeSessions.get(id);
       return record && cliSessionState.getStatus(record.realSessionId || id)?.status;

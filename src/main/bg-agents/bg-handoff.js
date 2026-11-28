@@ -104,6 +104,7 @@ async function sendToBackground(sessionId, deps) {
     const recheck = backgroundRefusal({ ...session, backgrounding: false }, deps.getStatus(oldId), { force });
     if (recheck || !bound() || deps.now() >= deadline) return { ok: false, code: 'refused', error: recheck || 'The tab changed or its handoff deadline passed. Check the terminal, then try again.' };
     const held = deps.checkContinuations ? await deps.checkContinuations(oldId, session) : null;
+    if (held?.cancelled) return { ok: false, code: 'cancelled', error: held.cancelled };
     if (held?.refuse) return { ok: false, code: 'refused', error: held.refuse };
     const afterCheck = backgroundRefusal({ ...session, backgrounding: false }, deps.getStatus(oldId), { force });
     if (afterCheck || !bound() || deps.now() >= deadline) return { ok: false, code: 'refused', error: afterCheck || 'The tab changed or its handoff deadline passed. Check the terminal, then try again.' };
@@ -169,4 +170,32 @@ async function sendToBackground(sessionId, deps) {
   }
 }
 
-module.exports = { backgroundRefusal, createContinuationReader, findHandoff, cancellationIn, holdBackgroundExit, sendToBackground, BG_HANDOFF_TIMEOUT_MS, BG_HANDOFF_EXIT_TIMEOUT_MS };
+function askContinuationChoice({ ipcMain, window, sessionId, jobs, signal, timeoutMs = BG_HANDOFF_TIMEOUT_MS }) {
+  const wc = window?.webContents;
+  if (!window || window.isDestroyed() || !wc || wc.isDestroyed() || wc.isCrashed() || signal?.aborted) return Promise.resolve('cancel');
+  return new Promise(resolve => {
+    const token = require('node:crypto').randomUUID();
+    let settled = false, timer;
+    const finish = choice => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      ipcMain.removeListener('bg-continuation-choice-answer', answer);
+      for (const event of ['destroyed', 'render-process-gone', 'did-start-navigation']) wc.removeListener(event, cancel);
+      signal?.removeEventListener('abort', cancel);
+      resolve(choice);
+    };
+    const cancel = () => finish('cancel');
+    const answer = (event, id, choice) => {
+      if (id !== token || event.sender !== wc || event.senderFrame !== wc.mainFrame) return;
+      finish(['stop', 'keep'].includes(choice) ? choice : 'cancel');
+    };
+    ipcMain.on('bg-continuation-choice-answer', answer);
+    for (const event of ['destroyed', 'render-process-gone', 'did-start-navigation']) wc.on(event, cancel);
+    signal?.addEventListener('abort', cancel, { once: true });
+    timer = setTimeout(cancel, timeoutMs);
+    try { wc.send('bg-continuation-choice', token, sessionId, jobs); } catch { cancel(); }
+  });
+}
+
+module.exports = { askContinuationChoice, backgroundRefusal, createContinuationReader, findHandoff, cancellationIn, holdBackgroundExit, sendToBackground, BG_HANDOFF_TIMEOUT_MS, BG_HANDOFF_EXIT_TIMEOUT_MS };

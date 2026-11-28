@@ -558,3 +558,23 @@ for (const other of ['cccccccc', '0000cccc']) {
     assert.deepEqual((result.jobs || []).map(job => job.id), ['bbbbbbbb'], 'an uncertain sibling job must not erase the owner proven for the same continuation');
   });
 }
+
+for (const liveness of ['unknown', 'live', 'dead']) {
+  test('#1295 continuation check identifies the old job when worker liveness is ' + liveness, async t => {
+    const h = fixture(t);
+    h.fork();
+    if (liveness !== 'live') h.descriptors.length = 0;
+    if (liveness === 'unknown') fs.writeFileSync(path.join(h.root, 'daemon', 'roster.json'), line({ proto: 1, updatedAt: new Date().toISOString(), workers: {} }));
+    const jobFile = path.join(h.root, 'jobs', 'bbbbbbbb', 'state.json');
+    fs.writeFileSync(jobFile, line({ ...JSON.parse(fs.readFileSync(jobFile)), name: 'harness-dev' }));
+    const result = await bg.continuationJobCheck(SID);
+    if (liveness === 'unknown') {
+      assert.equal(result.known, false);
+      assert.deepEqual(result.unknownJobs, [{ id: 'bbbbbbbb', name: 'harness-dev', sessionId: NEXT, state: 'working' }], 'unknown workers must carry the job identity for the renderer question');
+    } else {
+      assert.equal(result.known, true);
+      assert.equal(result.job?.id || null, liveness === 'live' ? 'bbbbbbbb' : null);
+      assert.equal(result.unknownJobs, undefined);
+    }
+  });
+}

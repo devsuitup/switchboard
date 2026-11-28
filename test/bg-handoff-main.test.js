@@ -402,3 +402,106 @@ test('the shipped handler refuses /bg when an uncertain check still names the li
   assert.match(result.error, /background job bbbbbbbb\./);
   assert.deepEqual(h.writes, [], 'a later uncertain tail must not discard the proven live owner and submit /bg');
 });
+
+function continuationChoiceFixture(t, { choice = 'cancel', stop = { ok: true }, renderer = true } = {}) {
+  const { EventEmitter } = require('node:events');
+  const h = ipcSetup(t);
+  const ipcMain = new EventEmitter(), handlers = new Map(), sent = [], questions = [], stops = [];
+  ipcMain.handle = (name, handler) => handlers.set(name, handler);
+  const wc = new EventEmitter();
+  const win = new EventEmitter();
+  Object.assign(win, { isDestroyed: () => false, webContents: wc });
+  Object.assign(wc, { isDestroyed: () => false, isCrashed: () => false, mainFrame: {}, send(channel, ...args) {
+    sent.push([channel, ...args]);
+    if (channel === 'bg-continuation-choice') void receive?.(...args);
+  } });
+  let receive;
+  const rendererContext = vm.createContext({ window: { api: {
+    onBgContinuationChoice: fn => { receive = fn; },
+    answerBgContinuationChoice: (token, answer) => ipcMain.emit('bg-continuation-choice-answer', { sender: wc, senderFrame: wc.mainFrame }, token, answer),
+  } }, openSessions: new Map([['tab', { session: { sessionId: 'OLD', name: 'harness-dev' } }]]), sessionMap: new Map(),
+  appChoose: async question => { questions.push(question); return choice === 'cancel' ? null : { choice }; } });
+  loadAppFunctions(rendererContext, { functions: ['initExitBackgroundControl'] }).initExitBackgroundControl();
+  const logs = [];
+  Object.assign(h.ctx, { ipcMain, mainWindow: renderer ? win : null,
+    unsubscribeBgAgents: { runStop: async id => { stops.push(id); if (stop instanceof Error) throw stop; return stop; } },
+    runExitHandoffs: require('../src/main/app/session-exit').runExitHandoffs,
+  });
+  h.ctx.log.info = text => logs.push(text);
+  h.ctx.bgAgents.continuationJobCheck = async id => id === 'OLD'
+    ? { known: false, reason: 'worker liveness unknown for continuation job adb1224f',
+      unknownJobs: [{ id: 'adb1224f', name: 'harness-dev', sessionId: 'prior', state: 'done' }] }
+    : { known: true, job: null };
+  const { runExitBackgroundBatch } = loadAppFunctions(h.ctx, { functions: ['runExitBackgroundBatch'], sourcePath: path.join(__dirname, '../main.js') });
+  const guard = require('../src/main/app/unsaved-guard').createUnsavedGuard({ ipcMain,
+    inventory: () => ({ rows: [...h.ctx.activeSessions.keys()].map(id => ({ id, type: 'session', background: 'ready' })), counts: {}, remote: {} }),
+    background: runExitBackgroundBatch,
+    setTimeoutFn: () => ({}), clearTimeoutFn() {},
+  });
+  t.after(() => guard.invalidate());
+  const batch = async (ids = ['tab']) => {
+    void guard.approveQuit(win);
+    const [, checkId, , detail] = sent.find(row => row[0] === 'unsaved-check');
+    ipcMain.emit('unsaved-check-ack', { sender: wc }, checkId);
+    return handlers.get('exit-background')({ sender: wc }, checkId, detail, ids);
+  };
+  return { ...h, batch, ipcMain, wc, sent, questions, stops, logs };
+}
+
+for (const choice of ['stop', 'keep', 'cancel']) {
+  test('#1295 exit-background IPC asks before /bg and applies ' + choice, async t => {
+    const h = continuationChoiceFixture(t, { choice });
+    const results = await h.batch();
+    assert.equal(h.questions.length, 1, 'unknown continuation must ask exactly once before /bg');
+    const question = h.questions[0];
+    assert.deepEqual(Array.from(question.options, option => option.label), ['Stop the old job', 'Keep it and continue']);
+    assert.match(JSON.stringify(question.messageParts), /harness-dev.*adb1224f/);
+    assert.equal(results[0].ok, choice !== 'cancel');
+    assert.deepEqual(h.stops, choice === 'stop' ? ['adb1224f'] : []);
+    assert.deepEqual(h.writes, choice === 'cancel' ? [] : ['/bg', '\r']);
+    if (choice === 'cancel') assert.equal(results[0].code, 'cancelled');
+    assert.equal(h.session.backgrounding, false);
+    assert.equal(h.ipcMain.listenerCount('bg-continuation-choice-answer'), 0);
+  });
+}
+
+for (const stop of [{ ok: false, error: 'worker cannot be verified' }, new Error('stop unavailable')]) {
+  test('#1295 a failed stop cancels this session and explains why: ' + (stop.error || stop.message), async t => {
+    const h = continuationChoiceFixture(t, { choice: 'stop', stop });
+    const [result] = await h.batch();
+    assert.deepEqual(h.stops, ['adb1224f'], 'Stop must use the existing checked background job stop');
+    assert.equal(result.code, 'cancelled');
+    assert.match(result.error, /Could not stop.*adb1224f/);
+    assert.match(result.error, /worker cannot be verified|stop unavailable/);
+    assert.deepEqual(h.writes, []);
+  });
+}
+
+test('#1295 cancelling one session leaves it foreground and still sends the next batch session', async t => {
+  const h = continuationChoiceFixture(t);
+  h.ctx.activeSessions.set('second', { ...h.session, realSessionId: 'SECOND' });
+  require('node:fs').writeFileSync(path.join(h.root, h.folder, 'SECOND.jsonl'), '{}\n');
+  const perSessionWrites = [];
+  h.ctx.writePty = (entry, text) => {
+    perSessionWrites.push([entry.realSessionId, text]);
+    if (text === '\r') {
+      require('node:fs').appendFileSync(path.join(h.root, h.folder, entry.realSessionId + '.jsonl'), JSON.stringify({ type: 'continued-in', sessionId: entry.realSessionId, continuedInSessionId: 'new' }) + '\n');
+      h.descriptors().push({ kind: 'bg', sessionId: 'new', jobId: '1234abcd' });
+    }
+    return true;
+  };
+  h.ctx.cliSessionState.getStatus = () => ({ status: 'idle' });
+  const results = await h.batch(['tab', 'second']);
+  assert.equal(results[0].code, 'cancelled');
+  assert.equal(results[1].ok, true);
+  assert.deepEqual(perSessionWrites, [['SECOND', '/bg'], ['SECOND', '\r']]);
+  assert.equal(h.ctx.activeSessions.has('tab'), true);
+});
+
+test('#1295 without a renderer an unknown continuation is cancelled and logged', async t => {
+  const h = continuationChoiceFixture(t, { renderer: false });
+  const [result] = await h.batch();
+  assert.equal(result.code, 'cancelled');
+  assert.deepEqual(h.writes, []);
+  assert.ok(h.logs.some(line => /cancel/i.test(line)));
+});

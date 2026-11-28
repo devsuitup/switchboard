@@ -2131,9 +2131,9 @@ async function recoverExitBackground(batch) {
   }));
   const message = batch.saveError
     ? 'The moved sessions run in the background, but Switchboard could not save them for the next start, so it stayed open: ' + batch.saveError
-    : `Switchboard stayed open. ${confirmed.length} of ${batch.entries.size} sessions moved to the background; nothing was stopped.` + (failures.length ? '\n' + failures.map(row => exitBackgroundFailure(row.name, row.result)).join('\n') : '');
+    : `Switchboard stayed open. ${confirmed.length} of ${batch.entries.size} sessions moved to the background.` + (failures.length ? '\n' + failures.map(row => exitBackgroundFailure(row.name, row.result)).join('\n') : '');
   const logText = batch.saveError ? message
-    : `Switchboard stayed open. ${confirmed.length} of ${batch.entries.size} sessions moved to the background; nothing was stopped.` + (failures.length ? '\n' + failures.map(row => exitBackgroundFailure(row.id.slice(0, 8), row.result)).join('\n') : '');
+    : `Switchboard stayed open. ${confirmed.length} of ${batch.entries.size} sessions moved to the background.` + (failures.length ? '\n' + failures.map(row => exitBackgroundFailure(row.id.slice(0, 8), row.result)).join('\n') : '');
   showAppNotice({ id: 'exit-background-failure', kind: 'error', message, logText,
     sessions: [...batch.entries.values()].map(row => ({ sessionId: row.id, name: row.name })) });
 }
@@ -2172,6 +2172,27 @@ function clearExternalExitBackground() {
 window.clearExternalExitBackground = clearExternalExitBackground;
 
 function initExitBackgroundControl() {
+  window.api.onBgContinuationChoice?.(async (token, sessionId, jobs) => {
+    let choice = 'cancel';
+    try {
+      const session = openSessions.get(sessionId)?.session || sessionMap.get(sessionId) || { sessionId };
+      const label = session.name || session.aiTitle || session.summary || sessionId;
+      const messageParts = [
+        ['Before moving ', { session, label }, ' to the background, Switchboard found an older background job for this conversation and cannot tell whether its worker is still running.'],
+        ...jobs.map(job => ['Old job: ', { session: { sessionId: job.sessionId }, label: job.name || job.id }, ' (' + job.id + ').']),
+        ['Cancel keeps this session in the foreground. Other sessions in the batch continue.'],
+      ];
+      const result = await appChoose({ title: 'Old background job may still be running', messageParts,
+        sessions: [session, ...jobs.map(job => ({ sessionId: job.sessionId, name: job.name }))],
+        options: [
+          { id: 'stop', label: 'Stop the old job', detail: 'Stop the listed old job, then move this session to the background. If stopping fails, this session stays in the foreground.' },
+          { id: 'keep', label: 'Keep it and continue', detail: 'Leave the old job as it is and move this session to the background. This may create another job with the same name and split message delivery.' },
+        ], selectedId: 'stop', confirmLabel: 'Continue' });
+      if (result && ['stop', 'keep'].includes(result.choice)) choice = result.choice;
+    } catch {} finally {
+      window.api.answerBgContinuationChoice(token, choice);
+    }
+  });
   window.api.onExitBackgroundProgress?.((attempt, event) => {
     const batch = exitBackgroundAttempts.get(attempt);
     const row = batch?.entries.get(event.id);

@@ -212,6 +212,16 @@ If a live continuation already runs in the background, the move is refused
 with a pointer to the sidebar, leaving this tab untouched. The button does
 not exit and respawn an old job.
 
+If an older background job belongs to the same conversation and Switchboard
+cannot tell whether its worker is running, a question names the session and
+old job. **Stop the old job** stops it before moving the session; if stopping
+fails, the session stays in the foreground and the error is shown. **Keep it
+and continue** leaves the old job alone and moves the session anyway, which
+may create another job and split message delivery. **Cancel** keeps this
+session in the foreground while the other sessions in a move batch continue.
+This question also applies when moving sessions before an update or exit.
+Without a renderer able to answer, the affected session is not moved.
+
 An unconfirmed move displays a notice with what to check. If the terminal
 has exited, open the conversation from the sidebar to check where it runs.
 If attaching fails after the move, the session still runs in the background;

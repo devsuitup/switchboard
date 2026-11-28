@@ -428,8 +428,10 @@ async function conversationCheck(id, { workerLiveness = true } = {}) {
 async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = new Map() } = {}) {
   const pending = [sessionId], seen = new Set(), owners = new Map();
   const evidence = new Map(workerLiveness);
+  const unknownJobs = [];
   // see .ai/contexts/bg-agents.md ("Continuations already hosted")
-  const unknown = reason => ({ known: false, reason, ...(owners.size ? { jobs: [...owners.values()] } : {}) });
+  const unknown = reason => ({ known: false, reason, ...(owners.size ? { jobs: [...owners.values()] } : {}),
+    ...(unknownJobs.length ? { unknownJobs } : {}) });
   while (pending.length) {
     const id = pending.shift().toLowerCase();
     if (seen.has(id)) continue;
@@ -449,7 +451,11 @@ async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = 
         const candidate = { ...job, id: jobId, sessionId: sid };
         const liveness = await workerEvidence(candidate, true);
         if (liveness === 'live' && isHostedJob(candidate, liveDescriptors(), liveness)) owners.set(jobId, { id: jobId, state: job?.state, sessionId: id });
-        if (liveness !== 'live' && liveness !== 'dead') { uncertain ??= 'worker liveness unknown for continuation job ' + jobId; continue; }
+        if (liveness !== 'live' && liveness !== 'dead') {
+          unknownJobs.push({ id: jobId, name: job?.name || roster.find(entry => entry.id === jobId)?.name || '', sessionId: id, state: job?.state });
+          uncertain ??= 'worker liveness unknown for continuation job ' + jobId;
+          continue;
+        }
         evidence.set(jobId, liveness);
       }
       if (uncertain) return unknown(uncertain);
