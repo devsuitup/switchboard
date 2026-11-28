@@ -609,6 +609,7 @@ for (const value of ['0', '', undefined, '1']) {
     assert.equal(fs.readFileSync(path.join(setup.home, '.claude', '.credentials.json'), 'utf8'), 'private sentinel');
     const banner = setup.messages.join('\n');
     assert.match(banner, enabled ? /Real claude enabled/ : /Real claude disabled/);
+    assert.match(banner, /Real codex disabled \(refusing stub first on PATH\)/);
     if (enabled) assert.match(banner, /starts logged out.*login.*temporary HOME.*deleted on exit/i);
   });
 }
@@ -837,7 +838,7 @@ for (const allowClaude of ['0', '1']) {
       TERM: 'xterm-256color', LANG: 'C', LC_ALL: 'C', DISPLAY: ':99', WAYLAND_DISPLAY: 'wayland-test',
       XDG_RUNTIME_DIR: setup.home, NODE_OPTIONS: '', NO_PROXY: 'localhost,127.0.0.1' };
     const env = { ...setup.env, ...runtime, ...credentials, ...proxies, ISOLATED: '1', ALLOW_CLAUDE: allowClaude,
-      DEBUG_PORT: '9334' };
+      CODEX_HOME: path.join(setup.home, 'inherited-codex'), DEBUG_PORT: '9334' };
     const original = { ...env };
     let launched = false;
     let prepared = false;
@@ -860,6 +861,10 @@ for (const allowClaude of ['0', '1']) {
         for (const key of ['APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
           'SWITCHBOARD_DATA_DIR', 'SWITCHBOARD_TRIGGERS_DIR', 'GIT_CONFIG_GLOBAL']) {
           assert.ok(launchEnv[key].startsWith(launchEnv.HOME + path.sep), key);
+        }
+        assert.ok(launchEnv.CODEX_HOME.startsWith(launchEnv.HOME + path.sep), 'CODEX_HOME must be under disposable HOME');
+        for (const stub of ['codex', 'codex.cmd', 'codex.ps1']) {
+          assert.ok(fs.existsSync(path.join(launchEnv.HOME, 'bin', stub)), `Codex refusing stub must exist: ${stub}`);
         }
         assert.equal(launchEnv.GIT_CONFIG_NOSYSTEM, '1');
         assert.equal(fs.readdirSync(path.join(launchEnv.HOME, '.claude', 'projects')).length, 2);

@@ -20,9 +20,15 @@ runtime services.
 Test-pr installs refusing Codex stubs (shell, cmd, PowerShell) in its first
 PATH entry. `ALLOW_CLAUDE=1` omits only the Claude stub, keeping Codex refused
 and the temporary home isolation intact. E2E fixtures do not install stubs.
+Their drop rule matches the `CLAUDE` and `GIT_` prefixes and the exact names
+`CODEX_HOME`, `HISTFILE` and `ELECTRON_RUN_AS_NODE` case-insensitively.
 
 `test/launcher-env.test.js` covers both builders, inherited/unset and mixed-case
 Codex homes, default-mode preservation, and stub lookup with both Claude modes.
+`buildLaunch` does not take `allowClaude`; only stub installation varies with
+that option. `test/test-pr.test.js` checks the `main()` launch environment
+and Codex stub files in both isolated Claude modes, including an inherited
+`CODEX_HOME` sentinel outside the disposable home.
 This is a unit boundary: live launchers, Electron and Playwright remain CI
 validation, not part of this local proof. See `docs/testing-a-pr.md` and
 `docs/e2e.md`. Developer tooling only: no-changelog.

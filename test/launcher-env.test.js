@@ -16,7 +16,6 @@ function temporaryHome(t) {
 
 const launchers = [
   ['test-pr', (home, env) => buildLaunch({ pr: 1314, isolated: true, tempHome: home, env }).env],
-  ['test-pr with ALLOW_CLAUDE', (home, env) => buildLaunch({ pr: 1314, isolated: true, allowClaude: true, tempHome: home, env }).env],
   ['e2e fixtures', isolatedEnv],
 ];
 

@@ -95,9 +95,11 @@ and the absence of new Unicode directories in the checkout after teardown.
 - **Isolated.** The `launch` fixture in `e2e/fixtures.js` gives each test its
   own temporary `HOME` (and `USERPROFILE`), its own `SWITCHBOARD_DATA_DIR` and
   `SWITCHBOARD_TRIGGERS_DIR`, and a git identity. It drops every inherited
-  `CLAUDE*` and `GIT_*` variable (`GIT_DIR`, `GIT_WORK_TREE` or
-  `GIT_INDEX_FILE` would point git at another repository), plus `HISTFILE`
-  and `ELECTRON_RUN_AS_NODE`. Build the fixture projects with `makeRepo` / `makePlainDir` before
+  variable whose name starts with `CLAUDE` or `GIT_`, plus the exact names
+  `HISTFILE` and `ELECTRON_RUN_AS_NODE`, all matched case-insensitively
+  (including lowercase and mixed-case spellings). Inherited `GIT_DIR`,
+  `GIT_WORK_TREE` or `GIT_INDEX_FILE` would point git at another repository.
+  Build the fixture projects with `makeRepo` / `makePlainDir` before
   calling `launch()`, because the app reads them at startup. See
   [Live testing](live-testing.md) for why each of these is needed.
   It also replaces `CODEX_HOME` with `<temporary HOME>/.codex`, removing
