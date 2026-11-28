@@ -51,7 +51,7 @@ const POLICIES = {
   snapshot: 'replaced from a project, daemon or schedule snapshot that already names current ids',
   events: 'written from main or remote events that carry the id they observe',
   operation: 'held by one in-flight operation and released under the id it took',
-  archiveLock: 'row, group and project archives capture the session ids before awaiting and release those ids, so a re-key mid-archive unlocks the original transcript',
+  archiveLock: 'row, group, older rows and project archives capture the session ids before awaiting and release those ids, so a re-key mid-archive unlocks the original transcript',
   noPty: 'held only for ids without a local PTY; a re-keyed tab has one, so the PTY takeover already emptied it',
   exitRecord: 'describes the PTY that ended under that id; opening the new id forgets its own record',
   view: 'accessor object over localPtyStates with no storage of its own',
