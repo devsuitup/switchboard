@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
-- Moving a session to the background now asks whether to stop or keep an older job for the same conversation when Switchboard cannot tell if it is still running; Cancel keeps that session in the foreground while the rest of the batch continues. (#1295)
+- Moving a session to the background now asks whether to stop or keep an older job for the same conversation when Switchboard cannot tell if it is still running; Stop checks again before moving, and Cancel quietly keeps that session in the foreground while the rest of the batch continues. Cancelled questions close, and waiting for a choice does not shorten the move’s confirmation time. (#1295)
 
 ## v0.1.0-beta.5 — 2026-11-28
 

@@ -45,6 +45,7 @@ function openChoiceDialog({
   returnFocus,
   fallbackFocus = null,
   closeWith = null,
+  onShown = null,
   onChange = null,
   planDetails = null,
   planUnavailable = null,
@@ -321,6 +322,7 @@ function openChoiceDialog({
     closeOpenChoiceDialog = close;
     if (closeWith) closeWith.then(close, () => {});
     if (onChange) void refreshPlan(currentValues());
+    onShown?.();
     (initialFocus === 'cancel' || (onChange && confirmBtn.disabled && !cancelBtn.hidden) ? cancelBtn : confirmBtn).focus();
   });
 }

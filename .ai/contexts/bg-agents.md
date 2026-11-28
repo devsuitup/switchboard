@@ -1535,44 +1535,69 @@ a `!` command runs in the foreground. Tests: T31–T31e.
 
 **Continuations already hosted.** Before writing, main asks
 `bgAgents.continuationJobCheck(oldId)` through the `checkContinuations` port.
-Known live owners (`jobs` or a known single `job`) still refuse before any
-PTY write, including owners found before a later read becomes uncertain.
-Known-dead continuations still allow the ordinary handoff. Respawn and strict
-stop continue refusing every `known: false` result.
+A known live continuation refuses before any PTY write: otherwise /bg forks a
+second job from the older transcript (#1020), which the CLI does not prevent.
+Known-dead continuations still permit the ordinary handoff. Historically,
+unknown liveness went ahead with an info log because typed /bg did, and the
+unknown-liveness refusal was the main reason the button failed where typing
+worked. #1295 narrows that policy when an uncertain job can be identified.
 
-For a matching continuation job whose worker liveness is unknown (#1295),
-`continuationJobCheck` now also returns `unknownJobs` with job id, name,
-conversation id and state. Main holds the tab input lock and sends a
-`bg-continuation-choice` request. `initExitBackgroundControl` in the renderer
-uses the existing queued `appChoose` helper: one question per affected
-session, naming the session and the old jobs. Its choices are **Stop the old
-job**, **Keep it and continue**, and the dialog's **Cancel** button. Stop awaits
-`unsubscribeBgAgents.runStop(job.id)`, the existing checked background-job
-stop port; only `ok: true` permits the subsequent `/bg`. A refusal, missing
-result or exception returns `cancelled` with the stop error, displayed through
-the existing single-session failure notice or batch progress/recovery notice.
-This uses the ordinary stop policy, including its #1090 conversation/worker
-checks, not project deletion's strict stop mode. A successful ordinary stop
-is a CLI acknowledgement, not independent proof of worker death.
+Every proven live owner is retained immediately, including when a later
+transcript is torn or unreadable. All jobs for each continuation are sampled
+to the end, in either directory order, before unknown liveness is reported.
+An uncertain job cannot hide a live sibling. Traversal also reads that
+continuation's own transcript and continues through deeper continuations:
+S -> C1 unknown -> C2 live must retain C2. The synchronous liveJobCheck fallback
+is skipped for a continuation containing an uncertain sampled job, preserving
+its classification. The result carries `jobs` for established owners and
+`unknownJobs` for uncertain jobs (id, name, conversation id, state). Main checks
+owners before uncertainty; respawn and strict stop still refuse known:false.
 
-Keep explicitly permits the existing behavior and warns that another job may
-split message delivery. Cancel writes nothing and keeps the session in the
-foreground; its `cancelled` result does not abort other rows in the batch.
-Both the single action and the update/exit batch use this same main handler.
-The batch forwards its abort signal to the question. The question accepts only
-its request token from the originating window's main frame; navigation,
-renderer loss, a missing renderer, failed delivery, abort or no answer within
-two minutes resolves as Cancel. Main logs this cancellation. The ordinary
-post-check eligibility and tab identity checks still precede any PTY write.
-An unknown traversal without an identified uncertain worker keeps its previous
-log-and-proceed behavior; it cannot offer a job-specific Stop choice.
+#1295 asks **Stop the old job**, **Keep it and continue**, or **Cancel** while
+holding the tab input lock. Stop rechecks foreground eligibility and the exact
+tab/conversation binding before each stop, including after fresh ownership
+reads. When conversationCheck can establish live/dead liveness, it prefers
+runStop with strict:true, expected sessionIds and its own two-minute deadline,
+and requires ended:true. Strict stop cannot admit unknown liveness (#1090);
+that case retains the existing checked ordinary stop port. Its success is only
+a CLI acknowledgement. After the stop sequence, continuationJobCheck runs
+again: no /bg unless the graph is known and contains neither owners nor unknown
+jobs. Otherwise the move cancels with the reason. Partial failure lists every
+prior stop acknowledgement without claiming unverified worker death. Neither
+port atomically pins the worker incarnation; see Guarded stop ports above.
 
-Tests: `bg-handoff-main` drives the real `exit-background` handler, shipped
-main functions, renderer callback and production handoff with PTY/stop ports
-stubbed. It covers all three answers, stop failure/exception, batch continuation
-and no renderer. `bg-duplicate-1020` verifies live/dead classification stays
-unchanged and unknown liveness carries the old job identity, while retaining
-its existing tests for known owners before an uncertain tail or sibling job.
+Keep approves only the displayed job ids, then traverses again. Newly found
+unknown ids require another question; known live owners still refuse. A failed
+recheck without identifiable jobs cancels after consent. Unknown traversal
+without any identified job at the initial check retains the historical info
+log and proceed policy. Cancel keeps the session foreground and returns
+cancelled, so a busy sibling row in an exit batch can still move later. A plain
+Cancel is quiet in the single action; stop failures carry stopError and retain
+the existing failure notice. Both action paths use the same main handler.
+
+Only force is accepted from IPC options. The batch signal is a separate
+internal argument, excluded by the IPC wrapper. Questions authenticate the
+request token, sending window and main frame for answers and shown events.
+The renderer acknowledges only when the queued dialog is mounted; its own
+120-second timeout starts then. Main sends bg-continuation-choice-cancel with
+the token on timeout, batch abort, external exit or renderer loss. closeWith
+settles a queued question or closes its mounted dialog; renderer sends no stale
+answer. Abort is immediate even for queued questions. The handoff's separate
+two-minute confirmation deadline starts after all questions and stops finish.
+
+Pre-write boundary guards retained from the retired bg-recovery-1020fix suite:
+`bg-handoff` T29/T30; `bg-handoff-main` tests for live owners, unknown liveness,
+multiple owners and a proven owner before a later uncertain tail;
+`bg-duplicate-1020` tests for torn tails and uncertain sibling jobs in both
+directory orders. New #1295 r2 tests cover deeper live/unknown continuations,
+post-stop rechecks, consent scoped to job ids, eligibility before stopping,
+strict-stop selection, partial stop errors, IPC option filtering, late answers,
+timeout after display and batch abort/external exit. The batch Cancel test has
+a second row initially busy. A single renderer Send also reaches the shipped
+main and handoff functions. `send-to-background-renderer` exercises the actual
+queued dialogs, their open/queued cancellation, shown acknowledgements,
+concise copy and quiet Cancel. All use plain Node/VM and external PTY/CLI ports;
+no running Electron or daemon is covered.
 
 ### Exit handoff batch (#546, H1)
 

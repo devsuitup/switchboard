@@ -2172,25 +2172,33 @@ function clearExternalExitBackground() {
 window.clearExternalExitBackground = clearExternalExitBackground;
 
 function initExitBackgroundControl() {
+  const questions = new Map();
+  window.api.onBgContinuationChoiceCancel?.(token => {
+    const cancel = questions.get(token);
+    questions.delete(token);
+    cancel?.(null);
+  });
   window.api.onBgContinuationChoice?.(async (token, sessionId, jobs) => {
     let choice = 'cancel';
+    const closeWith = new Promise(resolve => questions.set(token, resolve));
     try {
       const session = openSessions.get(sessionId)?.session || sessionMap.get(sessionId) || { sessionId };
       const label = session.name || session.aiTitle || session.summary || sessionId;
       const messageParts = [
-        ['Before moving ', { session, label }, ' to the background, Switchboard found an older background job for this conversation and cannot tell whether its worker is still running.'],
+        [{ session, label }, ' has an older background job that may still be running.'],
         ...jobs.map(job => ['Old job: ', { session: { sessionId: job.sessionId }, label: job.name || job.id }, ' (' + job.id + ').']),
         ['Cancel keeps this session in the foreground. Other sessions in the batch continue.'],
       ];
       const result = await appChoose({ title: 'Old background job may still be running', messageParts,
         sessions: [session, ...jobs.map(job => ({ sessionId: job.sessionId, name: job.name }))],
         options: [
-          { id: 'stop', label: 'Stop the old job', detail: 'Stop the listed old job, then move this session to the background. If stopping fails, this session stays in the foreground.' },
-          { id: 'keep', label: 'Keep it and continue', detail: 'Leave the old job as it is and move this session to the background. This may create another job with the same name and split message delivery.' },
-        ], selectedId: 'stop', confirmLabel: 'Continue' });
+          { id: 'stop', label: 'Stop the old job', detail: 'Stop it, check that it ended, then move this session to the background.' },
+          { id: 'keep', label: 'Keep it and continue', detail: 'Continue with another job that may share the same name and receive different messages.' },
+        ], selectedId: 'stop', confirmLabel: 'Continue', closeWith,
+        onShown: () => window.api.showBgContinuationChoice(token) });
       if (result && ['stop', 'keep'].includes(result.choice)) choice = result.choice;
     } catch {} finally {
-      window.api.answerBgContinuationChoice(token, choice);
+      if (questions.delete(token)) window.api.answerBgContinuationChoice(token, choice);
     }
   });
   window.api.onExitBackgroundProgress?.((attempt, event) => {
@@ -2237,6 +2245,7 @@ async function sendSessionToBackground(sessionId) {
       if (openSessions.get(sessionId) !== oldEntry) return;
       result = await window.api.sendSessionToBackground(sessionId, { force: true });
     }
+    if (result?.code === 'cancelled' && !result.stopError) return;
     if (!result?.ok) throw new Error(result?.error || 'The handoff backend is unavailable or returned no result');
     destination = { ...source, sessionId: result.sessionId };
     clearAppNotice(sessionActionNoticeId('Send to background', source));

@@ -429,6 +429,7 @@ async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = 
   const pending = [sessionId], seen = new Set(), owners = new Map();
   const evidence = new Map(workerLiveness);
   const unknownJobs = [];
+  let uncertain = null;
   // see .ai/contexts/bg-agents.md ("Continuations already hosted")
   const unknown = reason => ({ known: false, reason, ...(owners.size ? { jobs: [...owners.values()] } : {}),
     ...(unknownJobs.length ? { unknownJobs } : {}) });
@@ -441,7 +442,6 @@ async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = 
       let names;
       try { names = fs.readdirSync(jobsDir); }
       catch (err) { if (err.code !== 'ENOENT') return unknown('cannot read background jobs'); names = []; }
-      let uncertain = null;
       for (const jobId of names.filter(name => JOB_ID_RE.test(name) && name !== excludeJobId)) {
         let job;
         try { job = parseJobState(fs.readFileSync(path.join(jobsDir, jobId, 'state.json'), 'utf8')); } catch {}
@@ -458,10 +458,11 @@ async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = 
         }
         evidence.set(jobId, liveness);
       }
-      if (uncertain) return unknown(uncertain);
-      const owner = liveJobCheck(id, { workerLiveness: evidence, excludeJobId });
-      if (!owner.known) return unknown(owner.reason);
-      if (owner.job) owners.set(owner.job.id, { ...owner.job, sessionId: id });
+      if (!unknownJobs.some(job => job.sessionId === id)) {
+        const owner = liveJobCheck(id, { workerLiveness: evidence, excludeJobId });
+        if (!owner.known) uncertain ??= owner.reason;
+        if (owner.job) owners.set(owner.job.id, { ...owner.job, sessionId: id });
+      }
     }
     const file = resolveTranscriptPath?.(id);
     if (!file) continue;
@@ -471,6 +472,7 @@ async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = 
     if (!ids) return unknown('cannot read conversation continuations for ' + id);
     pending.push(...ids);
   }
+  if (uncertain) return unknown(uncertain);
   if (owners.size > 1) return unknown('multiple live continuation jobs; check the Agents view');
   return { known: true, job: owners.values().next().value || null };
 }
