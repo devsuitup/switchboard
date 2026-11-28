@@ -934,6 +934,25 @@ async function confirmSessionExit(detail, changed) {
     return session?.name || session?.aiTitle || session?.summary || '';
   };
   const moving = exitBackgroundRows(snapshot);
+  let nothingLost = false;
+  try {
+    nothingLost = ['quit', 'close'].includes(action) && !snapshot.unknown && moving.length === snapshot.rows.length
+      && moving.every(row => row.background === 'ready' && !row.reason
+        && (openSessions.get(row.id)?.session?.runtime || 'claude') === 'claude'
+        && !window.taskRegistry.background(row.id)
+        && (typeof activeSubagentsByParent === 'undefined' || !activeSubagentsByParent.get(row.id)?.size))
+      && ((await window.api.getSetting('global'))?.restoreOnStartup || SETTING_DEFAULTS.restoreOnStartup) !== 'off';
+  } catch {
+    nothingLost = false;
+  }
+  if (nothingLost) {
+    try {
+      window.api.logUiNotice?.({ event: 'action', kind: 'info', id: 'session-exit-skip', source: 'session-exit',
+        text: 'Exit dialog skipped: only idle Claude sessions eligible for the selected startup restore mode; no tracked work would be lost.' })?.catch?.(() => {});
+    } catch {}
+
+    return 'stop';
+  }
   const stopping = snapshot.rows.filter(row => !moving.includes(row));
   const words = rows => {
     const parts = ['session', 'plain', 'panel'].map(type => {

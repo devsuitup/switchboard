@@ -18,7 +18,9 @@ start any session.
 | **Restore on click** | Nothing is started; the sessions are marked in the sidebar, and each is resumed when you click it — see [Restore on click](#restore-on-click) |
 | **Restore automatically** | The sessions are reopened without asking |
 
-The setting is read at launch; a change applies from the next start.
+The setting is read at launch for restoration. Quit/Exit and window close also
+read its current value: changing it to **Don't restore** keeps the exit question
+even when restoration was enabled at startup.
 
 ## What is saved
 
@@ -181,16 +183,27 @@ ask about unsaved edits; main sends `exit-flush` instead, and the renderer
 writes the set without waiting for an answer. That write is best effort:
 Windows may end the app before it lands. Main also starts a coalesced, bounded,
 non-destructive drain without closing the database or stopping PTYs/services.
-A query expires after 60 s; user Quit, X and Restart always ask independently
-of this external approval, including within that window.
+A query expires after 60 s; user Quit, X and Restart always run their own exit
+checks independently of this external approval, including within that window.
 
 User Quit (Exit on Windows), Restart to update and window close ask about
-unsaved edits first, then name the local work that will stop in a separate
-Stop/Cancel question. Only both approvals permit the final renderer write.
-A late reload-to-exit upgrade also asks before writing. On macOS, Dock Quit
+unsaved edits first. Quit/Exit and window close then proceed without another
+question when only idle Claude sessions are open, no tracked subagent or
+background task is running, and the current startup restore setting is not
+**Don't restore**. Switchboard saves the same restore list as ordinary Quit;
+the selected mode controls whether those sessions resume automatically, after
+accepting the startup question, or on click. It records why it skipped the
+exit question in the log. Plain terminals, panel shells, busy turns, running
+subagents, background Bash tasks and uncertain background work keep the
+Stop/Cancel question. This decision relies on what Switchboard tracks. Work
+it cannot see in an idle session, such as a Monitor or a session-only cron,
+ends when you quit. Restart to update keeps its Stop/Move/Cancel question, including the
+option to move sessions to the background. The final renderer write follows
+the required approvals.
+A late reload-to-exit upgrade also runs these checks before writing. On macOS, Dock Quit
 and logout arrive as untagged external before-quit events: with no unsaved
 edits they can stop local sessions without the Stop question. JB accepted
-this residual on 2026-10-21; app-menu Cmd+Q asks. Force termination bypasses
+this residual on 2026-10-21; app-menu Cmd+Q uses the normal exit checks. Force termination bypasses
 questions and flushing. Scheduled children are outside this inventory, with
 no guarantee of survival across every OS exit.
 

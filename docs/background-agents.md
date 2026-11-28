@@ -242,6 +242,11 @@ same continuation and metadata persistence as the toolbar action.
 Quit (Exit on Windows), Restart to update and window close offer **Move to
 background** for eligible sessions, alongside Stop and Cancel. The dialog
 names what moves and what stops, including plain terminals and panel shells.
+Quit/Exit and window close skip this dialog when only idle, resumable Claude
+sessions remain, with no running subagent or other work at risk. Those sessions
+are saved for normal restore, without moving them to the background. Unsaved
+file edits still ask separately. Restart to update keeps the dialog and its
+Move to background and update action even for idle sessions.
 A working session waits up to ten minutes for its turn to end; Cancel remains
 available. A session with only a shell command running moves without waiting.
 A session that needs an answer during that wait fails immediately. The progress notice also points to a terminal
