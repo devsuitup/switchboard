@@ -452,7 +452,7 @@ test('C6 Move lists busy, subagents, refusal and shells, counts only eligible ro
     ];
     ctx.calls.check(300, 'quit', exitDetail('quit', rows)); await flush();
     const d = ctx.window.document.querySelector('.choice-dialog');
-    assert.equal(d.querySelector('.choice-dialog-secondary')?.textContent, 'Move to background and quit');
+    assert.equal(d.querySelector('.choice-dialog-secondary')?.textContent, 'Move to background, stop the rest and quit');
     assert.ok([...d.querySelectorAll('.choice-dialog-body p')].some(p => p.textContent === 'Move to background: 1 session'));
     assert.ok([...d.querySelectorAll('.choice-dialog-body p')].some(p => p.textContent === 'Stops after moving: 2 sessions, 1 plain terminal and 1 panel shell'));
     assert.match(d.textContent, /waits for its turn to end \(up to 10 minutes\)/);
@@ -647,14 +647,14 @@ test('A2 named exit question covers each intent and platform, identities and hon
       ctx.calls.check(200, 'quit', exitDetail(action)); await flush();
       const d = ctx.window.document.querySelector('.choice-dialog');
       assert.ok(d, 'local work must be named before approving the exit');
-      assert.equal(d.querySelector('.choice-dialog-body p').textContent, 'Choose an option below, or Cancel to keep Switchboard open.');
+      assert.equal(d.querySelector('.choice-dialog-body p').textContent, 'Move to background: 1 session');
       assert.equal(d.querySelector('.choice-dialog-confirm').textContent, 'Stop and ' + (action === 'update' ? 'update' : action === 'close' ? 'close' : platform === 'win32' ? 'exit' : 'quit'));
-      assert.ok(d.textContent.includes('Moved sessions keep running in the background. They are saved for the next start.'));
+      assert.equal([...d.querySelectorAll('.choice-dialog-body p')].find(p => p.textContent.startsWith('Moved sessions')).textContent, "Moved sessions keep running in the background. They can reopen at the next start according to your startup restore setting, unless it is set to Don't restore.");
       const verb = action === 'update' ? 'restart to update' : action === 'close' ? platform === 'darwin' ? 'close the window' : 'close Switchboard' : platform === 'win32' ? 'exit' : 'quit';
-      assert.equal(d.querySelector('h2').textContent, `${verb[0].toUpperCase() + verb.slice(1)}?`);
+      assert.equal(d.querySelector('h2').textContent, `Stop 1 session and ${verb}?`);
       assert.match(d.textContent, /<img src=x>.*project.*session/);
       assert.equal(d.querySelector('img'), null, 'names are text');
-      assert.match(d.textContent, new RegExp(`Stop and ${action === 'update' ? 'update' : action === 'close' ? 'close' : platform === 'win32' ? 'exit' : 'quit'} ends 1 session, idle or working, and anything running in them\\. Conversations are kept and can be resumed\\.`));
+      assert.equal([...d.querySelectorAll('.choice-dialog-body p')].find(p => p.textContent.startsWith('Stop and')).textContent, `Stop and ${action === 'update' ? 'update' : action === 'close' ? 'close' : platform === 'win32' ? 'exit' : 'quit'} ends 1 session, idle or working, and anything running in it. Conversations are kept and can be resumed.`);
       assert.match(d.textContent, /1 session attached here is detached/);
       assert.match(d.textContent, /2 sessions from vps keep running on vps/);
       const label = action === 'update' ? 'update' : action === 'close' ? 'close' : platform === 'win32' ? 'exit' : 'quit';
@@ -1098,7 +1098,7 @@ test('a window close with nothing unsaved asks to close Switchboard; Cancel, Ent
   try {
     ctx.calls.check(1, 'close');
     await flush();
-    assert.equal(closeDialog().querySelector('#choice-dialog-title').textContent, 'Close Switchboard?');
+    assert.equal(closeDialog().querySelector('#choice-dialog-title').textContent, 'Stop 1 session and close Switchboard?');
     assert.equal(document.activeElement, closeDialog().querySelector('.choice-dialog-cancel'), 'Cancel has the focus');
     key('Enter');
     await flush();
@@ -1134,7 +1134,7 @@ test('a window close while another choice dialog is open cancels that one and as
     await flush();
     assert.equal(other, null, 'the other dialog ends as a cancel, so nothing it offered is done');
     assert.equal(document.querySelectorAll('.choice-dialog').length, 1);
-    assert.equal(document.querySelector('#choice-dialog-title').textContent, 'Close Switchboard?');
+    assert.equal(document.querySelector('#choice-dialog-title').textContent, 'Stop 1 session and close Switchboard?');
     assert.deepEqual(ctx.calls.answers, [], 'the close is not answered before the user decides');
     document.querySelector('.choice-dialog-cancel').click();
     await flush();
@@ -1293,7 +1293,7 @@ test('the close question on macOS says the app stays in the Dock', async () => {
   try {
     ctx.calls.check(1, 'close');
     await flush();
-    assert.equal(ctx.window.document.querySelector('#choice-dialog-title').textContent, 'Close the window?');
+    assert.equal(ctx.window.document.querySelector('#choice-dialog-title').textContent, 'Stop 1 session and close the window?');
     assert.match(ctx.window.document.querySelector('.choice-dialog').textContent, /stays in the Dock/);
   } finally { ctx.destroy(); }
 });
@@ -1677,3 +1677,29 @@ for (const [startup, current] of [['off', 'off'], ['auto', 'off'], ['off', 'auto
     }
   });
 }
+
+for (const [scenario, rows, total, ending] of [
+  ['session', [{ id: 'one', type: 'session' }], '1 session', 'Stop and quit ends 1 session, idle or working, and anything running in it. Conversations are kept and can be resumed.'],
+  ['plain', [{ id: 'plain', type: 'plain' }], '1 plain terminal', 'Stop and quit ends 1 plain terminal and anything running in it.'],
+  ['panel', [{ id: 'panel', type: 'panel', owner: 'owner' }], '1 panel shell', 'Stop and quit ends 1 panel shell and anything running in it.'],
+  ['unknown', [], 'local work', 'Stop and quit ends local work and anything running in it.'],
+]) {
+  for (const field of ['title', 'ending']) test('1023 exit ' + scenario + ' pins ' + field, async t => {
+    const ctx = setup();
+    t.after(() => ctx.destroy());
+    const detail = exitDetail('quit', rows);
+    if (scenario === 'unknown') detail.snapshot.unknown = true;
+    ctx.calls.check(1700, 'quit', detail); await flush();
+    const dialog = ctx.window.document.querySelector('.choice-dialog');
+    if (field === 'title') assert.equal(dialog.querySelector('h2').textContent, 'Stop ' + total + ' and quit?');
+    else assert.equal([...dialog.querySelectorAll('.choice-dialog-body p')].find(p => p.textContent.startsWith('Stop and')).textContent, ending);
+  });
+}
+
+test('1023 moved sessions explain conditional startup restore', async t => {
+  const ctx = setup();
+  t.after(() => ctx.destroy());
+  ctx.calls.check(1701, 'quit', exitDetail()); await flush();
+  const paragraphs = [...ctx.window.document.querySelectorAll('.choice-dialog-body p')];
+  assert.equal(paragraphs.find(p => p.textContent.startsWith('Moved sessions')).textContent, "Moved sessions keep running in the background. They can reopen at the next start according to your startup restore setting, unless it is set to Don't restore.");
+});

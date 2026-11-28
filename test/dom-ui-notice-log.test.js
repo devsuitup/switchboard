@@ -308,8 +308,12 @@ for (const scenario of ['plain', 'mixed', 'unknown', 'moving-only', 'untitled'])
     ? ['Switchboard could not list the local work that will stop.', ...rows.map(rowText)]
     : rows.includes(moving) ? ['Move to background: 1 session', rowText(moving),
       ...(rows.length > 1 ? ['Stops after moving: 1 session, 1 plain terminal and 1 panel shell', ...rows.filter(row => row !== moving).map(rowText)] : [])] : rows.map(rowText);
-  expectedRows.unshift('Choose an option below, or Cancel to keep Switchboard open.');
-  assert.deepEqual(paragraphs.slice(0, expectedRows.length).map(p => p.textContent), expectedRows, 'row offsets preserve headings and the exact row order');
+  const total = scenario === 'plain' ? '1 plain terminal' : ['untitled', 'moving-only'].includes(scenario) ? '1 session' : '2 sessions, 1 plain terminal and 1 panel shell';
+  expectedRows.push(scenario === 'plain' ? 'Stop and close ends 1 plain terminal and anything running in it.'
+    : 'Stop and close ends ' + total + ', idle or working, and anything running in ' + (rows.length === 1 ? 'it' : 'them') + '. Conversations are kept and can be resumed.');
+  if (rows.includes(moving) && scenario !== 'unknown') expectedRows.push("Moved sessions keep running in the background. They can reopen at the next start according to your startup restore setting, unless it is set to Don't restore.");
+  assert.deepEqual(paragraphs.map(p => p.textContent), expectedRows, 'row offsets preserve every exact paragraph');
+  assert.equal(document.querySelector('h2').textContent, 'Stop ' + total + ' and close Switchboard?');
   if (rows.includes(moving)) {
     assert.ok(paragraphs.find(p => p.textContent.startsWith('"PRIVATE EXIT LABEL"')).querySelector('[data-log-session="abcdef12"]'));
     if (rows.includes(panel)) assert.ok(paragraphs.find(p => p.textContent.startsWith('Panel shell')).querySelector('[data-log-session="abcdef12"]'));
@@ -318,7 +322,11 @@ for (const scenario of ['plain', 'mixed', 'unknown', 'moving-only', 'untitled'])
   await pending;
   assert.equal(lines.length, 2);
   for (const line of lines) {
-    assert.equal(typeof line.text, 'string', 'session-exit keeps its dialog text');
+    assert.equal(line.title, 'Stop ' + total + ' and close Switchboard?');
+    const moveLabel = scenario === 'moving-only' ? 'Move to background and close' : scenario === 'mixed' ? 'Move to background, stop the rest and close' : null;
+    assert.equal(line.text, ['Stop ' + total + ' and close Switchboard?', '×', '',
+      ...expectedRows.map(text => text.replaceAll('PRIVATE EXIT LABEL', 'abcdef12')), '', 'Cancel',
+      ...(moveLabel ? [moveLabel] : []), 'Stop and close', '', ''].join('\n'));
     if (rows.includes(plain)) assert.match(line.text, /Plain terminal · beta · 12345678/);
     if (rows.includes(untitled)) assert.match(line.text, /Untitled conversation · gamma · fedcba98/);
     if (rows.includes(panel)) assert.match(line.text, /Panel shell of "abcdef12" · 87654321/);
@@ -627,31 +635,36 @@ for (const action of ['quit', 'close', 'update']) test('1023 exit progress gives
   assert.equal(notice.querySelector('.app-notice-title').textContent, 'Moving sessions to the background.');
   const verb = action === 'quit' ? 'exit' : action;
   assert.equal(notice.querySelector('.app-notice-body').textContent,
-    'Wait while Switchboard prepares to ' + verb + '. 0 of 3 confirmed.\nPRIVATE PROGRESS LABEL waits for its turn to end\nPRIVATE CONFIRM LABEL asks you to confirm in its terminal\nPRIVATE FAILED LABEL: RAW_EXIT_ERROR /repo/failure');
+    'Switchboard is preparing to ' + verb + '. Check the sessions below. 0 of 3 confirmed.\nPRIVATE PROGRESS LABEL waits for its turn to end\nPRIVATE CONFIRM LABEL asks you to confirm in its terminal\nPRIVATE FAILED LABEL: RAW_EXIT_ERROR /repo/failure');
   assert.equal(notice.querySelector('.app-notice-action').textContent, 'Cancel');
   assert.equal(notice.dataset.kind, 'info');
   assert.equal(lines.at(-1).text,
-    'Moving sessions to the background.\nWait while Switchboard prepares to ' + verb + '. 0 of 3 confirmed.\nabcdef12 waits for its turn to end\nfedcba98 asks you to confirm in its terminal\n12345678: RAW_EXIT_ERROR /repo/failure');
+    'Moving sessions to the background.\nSwitchboard is preparing to ' + verb + '. Check the sessions below. 0 of 3 confirmed.\nabcdef12 waits for its turn to end\nfedcba98 asks you to confirm in its terminal\n12345678: RAW_EXIT_ERROR /repo/failure');
 });
 
-for (const scenario of ['failed', 'save-error', 'all-moved']) test('1023 exit recovery keeps names visible and identifiers in the log: ' + scenario, async t => {
+for (const [platform, action, verb] of [['win32', 'quit', 'Exit'], ['linux', 'quit', 'Quit'], ['darwin', 'close', 'Close'], ['linux', 'update', 'Update']])
+  for (const scenario of ['failed', 'save-error', 'all-moved', 'all-moved-attached']) test('1023 exit recovery keeps names visible and identifiers in the log: ' + scenario + ' ' + verb, async t => {
   const { window, document, context } = setup(t);
   const lines = connectSink(t, window);
   window.releaseExitState = () => {};
-  window.attachBackgroundContinuation = async () => {};
+  window.api.platform = platform;
+  const attaches = [];
+  window.attachBackgroundContinuation = async (...args) => { attaches.push(args); };
   loadAppFunctions(context, { functions: ['recoverExitBackground', 'exitBackgroundFailure'], declarations: ['exitHandoffs', 'exitBackgroundAttempts'] });
   const row = { id: 'abcdef12-session', name: 'PRIVATE RECOVERY LABEL', entry: {},
     result: scenario === 'failed' ? { ok: false, error: 'RAW_EXIT_ERROR /repo/failure' } : { ok: true, sessionId: 'fedcba98-session' } };
-  const batch = { detail: { attempt: 7 }, entries: new Map([[row.id, row]]) };
+  if (scenario === 'all-moved-attached') window.openSessions.set(row.result.sessionId, row.entry);
+  const batch = { detail: { attempt: 7, action }, entries: new Map([[row.id, row]]) };
   if (scenario === 'save-error') batch.saveError = 'RAW_SAVE_ERROR /repo/save';
   await window.recoverExitBackground(batch);
+  assert.equal(attaches.length, scenario === 'all-moved-attached' ? 1 : 0);
   const notice = document.querySelector('[data-notice-id="exit-background-failure"]');
   assert.equal(notice.querySelector('.app-notice-title').textContent, 'Switchboard stayed open.');
   const instruction = scenario === 'failed'
     ? 'Check Details for each session, then try again or stop it. 1 of 1 sessions could not move to the background.'
     : scenario === 'save-error'
       ? 'Check the save error in Details before trying again. Moved sessions keep running in the background.'
-      : 'You can try again when you are ready. 1 of 1 sessions moved to the background.';
+      : verb + ' again when you are ready. 1 of 1 sessions moved to the background and keep running there.';
   assert.equal(notice.querySelector('.app-notice-body').textContent, instruction + '\nSessions: PRIVATE RECOVERY LABEL');
   assert.equal(notice.querySelector('details').open, false);
   const detail = scenario === 'failed' ? 'PRIVATE RECOVERY LABEL: RAW_EXIT_ERROR /repo/failure'

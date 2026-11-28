@@ -245,9 +245,12 @@ same continuation and metadata persistence as the toolbar action.
 
 Quit (Exit on Windows), Restart to update and window close offer **Move to
 background and quit/exit/update/close** for eligible sessions, alongside Stop
-and Cancel. The question is short, such as **Exit?** or **Restart to update?**.
-The body lists **Move to background** and **Stops after moving**, with counts
-and session names. Plain terminals and panel shells stop after the moves.
+and Cancel. If other sessions or shells will stop, the button reads **Move to
+background, stop the rest and quit/exit/update/close**. The question names what
+will stop, such as **Stop 2 sessions and exit?** or **Stop 1 session and restart
+to update?**. The body lists **Move to background** and **Stops after moving**,
+with counts and session names. Everything else stops after the moves, including
+plain terminals and panel shells.
 **Stop and exit** ends all listed local processes, idle or working, and their
 running commands. Conversations remain available to resume. **Cancel** keeps
 Switchboard open.
@@ -261,8 +264,8 @@ available. A session with only a shell command running moves without waiting.
 A session that needs an answer during that wait fails immediately. The progress notice also points to a terminal
 when Claude asks you to confirm Background or Stay after a move starts.
 
-Progress starts with **Moving sessions to the background.**, then the wait
-instruction and confirmation count. On success, Switchboard saves the moved
+Progress starts with **Moving sessions to the background.**, then a prompt
+to check the sessions below and the confirmation count. On success, Switchboard saves the moved
 sessions for the next start, following the startup restore setting. If any
 move or the save fails, **Switchboard stayed open.** gives the next step and
 keeps session names visible, with failure reasons under **Details**.

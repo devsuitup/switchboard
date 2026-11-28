@@ -130,16 +130,19 @@ mode starts nothing by itself and the entry has no row to click.
 
 ## Closing the app
 
-The exit question uses a short title such as **Exit?** or **Close Switchboard?**.
+The exit question names what will stop, such as **Stop 2 sessions and exit?**
+or **Stop 1 session and close Switchboard?**.
 Choose **Stop and exit** to end all listed local processes, whether idle or
 working, including commands running in them. Conversations are kept for resume.
 **Cancel** keeps Switchboard open. The labels follow the action you requested:
 exit, quit, close or update.
 
 Quit, Restart to update and window close can move eligible conversations to
-the background before stopping the remaining local work. **Move to background
-and exit** lists eligible sessions under **Move to background** and the rest
-under **Stops after moving**, including plain terminals and panel shells.
+the background before stopping the remaining local work. The dialog lists
+eligible sessions under **Move to background** and the rest under **Stops after
+moving**, including plain terminals and panel shells. The button reads **Move
+to background and exit**, or **Move to background, stop the rest and exit**
+when other local work will stop.
 Switchboard waits
 up to ten minutes for a working conversation to finish its turn, with Cancel
 available throughout. Confirmed moves keep their tab positions and are saved

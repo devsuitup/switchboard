@@ -961,7 +961,7 @@ async function confirmSessionExit(detail, changed) {
     }).filter(Boolean);
     return parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts.at(-1) : parts[0];
   };
-  const message = ['Choose an option below, or Cancel to keep Switchboard open.'];
+  const message = [];
   if (snapshot.unknown) message.push('Switchboard could not list the local work that will stop.');
   const rowParts = new Map();
   const describe = row => {
@@ -991,13 +991,14 @@ async function confirmSessionExit(detail, changed) {
   } else {
     message.push(...snapshot.rows.map(describe));
   }
-  message.push(sessions > 0 ? 'Stop and ' + label + ' ends ' + total + ', idle or working, and anything running in them. Conversations are kept and can be resumed.' : 'Stop and ' + label + ' ends ' + total + ' and anything running in them.');
+  const pronoun = sessions + plain + panels > 1 ? 'them' : 'it';
+  message.push(sessions > 0 ? 'Stop and ' + label + ' ends ' + total + ', idle or working, and anything running in ' + pronoun + '. Conversations are kept and can be resumed.' : 'Stop and ' + label + ' ends ' + total + ' and anything running in ' + pronoun + '.');
   if (attached) message.push(count(attached, 'session') + ' attached here ' + (attached === 1 ? 'is' : 'are') + ' detached and ' + (attached === 1 ? 'keeps' : 'keep') + ' running in the background.');
   for (const [alias, n] of Object.entries(snapshot.remote)) if (n) message.push(count(n, 'session') + ' from ' + alias + (n === 1 ? ' keeps' : ' keep') + ' running on ' + alias + '.');
-  if (moving.length) message.push('Moved sessions keep running in the background. They are saved for the next start.');
+  if (moving.length) message.push("Moved sessions keep running in the background. They can reopen at the next start according to your startup restore setting, unless it is set to Don't restore.");
   if (mac && action === 'close') message.push('Switchboard stays in the Dock.');
   const listedRows = moving.length ? [...moving, ...stopping] : snapshot.rows;
-  const firstRow = snapshot.unknown ? 2 : 1;
+  const firstRow = snapshot.unknown ? 1 : 0;
   const messageParts = [...message];
   let offset = firstRow;
   if (moving.length) offset++;
@@ -1005,10 +1006,10 @@ async function confirmSessionExit(detail, changed) {
     if (moving.length && row === stopping[0]) offset++;
     messageParts[offset++] = rowParts.get(row);
   }
-  const result = await showChoiceDialog({ title: verb[0].toUpperCase() + verb.slice(1) + '?', message, messageParts,
+  const result = await showChoiceDialog({ title: 'Stop ' + total + ' and ' + verb + '?', message, messageParts,
     sessions: [...rowParts.values()].flat(Infinity).filter(part => part?.session).map(part => part.session),
     confirmLabel: 'Stop and ' + label, initialFocus: 'cancel', danger: true,
-    secondaryAction: moving.length ? { id: 'background', label: 'Move to background and ' + label, danger: stopping.length > 0 } : null,
+    secondaryAction: moving.length ? { id: 'background', label: 'Move to background' + (stopping.length ? ', stop the rest and ' : ' and ') + label, danger: stopping.length > 0 } : null,
     returnFocus: document.activeElement, replace: true, closeWith: changed && changed.then(() => null) });
   return result === null ? false : result.action === 'background' ? 'background' : 'stop';
 }

@@ -275,15 +275,25 @@ Otherwise local work asks Stop/Move/Cancel when sessions can move, or Stop/Cance
 focused; Enter on Cancel, Escape, the backdrop and × cancel.
 The named question replaces the generic close question and uses the existing
 queued `showChoiceDialog` with danger styling and text-only names.
-The title is just the intent: "Exit?", "Quit?", "Close Switchboard?",
-"Close the window?" or "Restart to update?". The first body line is
-"Choose an option below, or Cancel to keep Switchboard open." Counts moved
-out of the title and Move button into the body: "Move to background: …"
-and "Stops after moving: …". The button reads "Move to background and
-exit/quit/close/update". The Stop description explicitly covers idle and
-working sessions and their running commands, with conversations kept for
-resume. A successful move saves sessions for next start; whether they
-reattach automatically still depends on startup restore settings.
+The title names all local work that Stop would end: "Stop <total> and <verb>?",
+with "local work" when the inventory has no counts. There is no introductory
+body line: unknown inventory precedes the rows, otherwise the first row or
+"Move to background: …" starts the body. "Stops after moving: …" separates
+remaining rows when present. Row markers use offset 0 (1 for unknown inventory),
+plus one for each heading. Both DOM tests pin the exact paragraphs; the notice
+log test also pins the redacted text and title.
+The Move button reads "Move to background and exit/quit/close/update", or
+"Move to background, stop the rest and exit/quit/close/update" when any rows stop.
+The Stop description says "idle or working" and that conversations are kept for
+resume only when the session count is positive. Running commands are covered in
+both branches, with "it" for one item or "local work" and "them" for several items.
+Moved sessions keep running; their next-start reopening follows the startup
+restore setting (automatic, after Restore, on click, or none for Don't restore).
+Progress asks the user to check the rows below, which can request confirmation
+in a terminal. Recovery with all moves confirmed says "Switchboard stayed open."
+and "Exit/Quit/Close/Update again when you are ready", with the moved count and
+continued background execution. It does not promise attachment: recovery skips
+entries no longer open here, and the attach operation can fail.
 
 The inventory walks `activeSessions`, deduplicates process aliases, includes
 idle and busy local sessions, plain terminals and hidden panel shells, and
