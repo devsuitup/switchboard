@@ -3286,7 +3286,7 @@ Where realpath runs, and never on main's event loop:
   added while an earlier round was pending is resolved in a later round, and an
   alias that appears while another resolution is pending is caught by its
   retry, within the three rounds. A path still unresolved after the last round,
-  or first seen in the final read, compares as typed and shows until the next
+  or first seen in the final read, compares as typed, so a short spelling may stay visible until the next
   pass. The synchronous pass `archive.applyAndPersistArchived` gets a lookup
   over the kept forms (`longPathLookup`), which never touches the filesystem; a
   path missing from them keeps the plain comparison.
