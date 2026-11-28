@@ -310,3 +310,9 @@ test('CLI reports tag failure, success and Git errors with distinct exit codes',
   assert.equal(error.code, 2);
   assert.match(error.out, /Git unavailable/);
 });
+
+test('real Git: a file larger than one MiB is read whole', t => {
+  const repo = repoFixture(t);
+  const sha = repo.commit('big.txt', 'x'.repeat(2 * 1024 * 1024), 'big file');
+  assert.equal(repo.readers.readFileAt(sha, 'big.txt').length, 2 * 1024 * 1024);
+});

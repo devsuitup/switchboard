@@ -3,6 +3,8 @@
 'use strict';
 
 const { execFileSync } = require('node:child_process');
+
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 const { isDeepStrictEqual } = require('node:util');
 
 const BUMP_FILES = new Set(['CHANGELOG.md', 'package.json', 'package-lock.json']);
@@ -65,7 +67,7 @@ function checkReleaseProvenance({ base, head, listCommits, readCommit, readFileA
 }
 
 function createGitReaders({ cwd, env } = {}) {
-  const git = args => execFileSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const git = args => execFileSync('git', args, { cwd, env, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'pipe'] });
   const lines = text => text.split(/\r?\n/).filter(Boolean);
   const resolve = ref => git(['rev-parse', '--verify', '--end-of-options', ref + '^{commit}']).trim();
   return {
