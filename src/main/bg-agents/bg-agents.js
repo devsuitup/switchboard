@@ -453,10 +453,11 @@ async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = 
         try { job = parseJobState(fs.readFileSync(path.join(jobsDir, jobId, 'state.json'), 'utf8')); } catch {}
         const sid = job?.sessionId || roster.find(entry => entry.id === jobId)?.sessionId;
         if (sid?.toLowerCase() !== id) continue;
-        if (['stopped', 'failed'].includes(job?.state)) continue;
+        if (['stopped', 'failed'].includes(job?.state) && !stoppedJobIds.has(jobId)) continue;
         const candidate = { ...job, id: jobId, sessionId: sid };
         const { liveness } = await workerEvidence(candidate, true, { previousWorker: previousWorkers.get(jobId), fresh: previousWorkers.has(jobId) });
         if (liveness === 'live' && stoppedJobIds.has(jobId)) return unknown('worker for stopped job ' + jobId + ' is live again');
+        if (['stopped', 'failed'].includes(job?.state)) continue;
         if (liveness === 'live' && isHostedJob(candidate, liveDescriptors(), liveness)) owners.set(jobId, { id: jobId, state: job?.state, sessionId: id });
         if (liveness !== 'live' && liveness !== 'dead') {
           unknownJobs.push({ id: jobId, name: job?.name || roster.find(entry => entry.id === jobId)?.name || '', sessionId: id, state: job?.state });
