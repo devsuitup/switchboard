@@ -123,6 +123,7 @@ test('worker and direct project views have identical projection facts; build ide
     ...require('../session-name'),
     canonicalPath: require('../src/main/projects/project-delete-identity').canonicalPath,
     isProjectHidden: require('../public/worktree-nesting').isProjectHidden,
+    createLongPathResolver: require('../src/main/shared/long-path').createLongPathResolver,
   });
   vm.runInContext(source.slice(start, end), context, { filename });
   const actual = await context.build({ id: 42 });

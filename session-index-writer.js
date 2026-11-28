@@ -13,9 +13,20 @@ const { createWriterWorkerClient } = require('./session-index-writer-client');
 const { createCacheEffects } = require('./cache-effects');
 const { projectArchiveWorkflows, archiveProjectIdentity } = require('./src/main/projects/project-archive-workflow');
 const { worktreeParentPath } = require('./public/worktree-nesting');
+const { settleLongPathForms, pruneLongPathForms, longPathLookup } = require('./src/main/shared/long-path');
 const { stable } = require('./src/main/projects/project-delete-identity');
 const { SESSION_CONTENT_INDEX_VERSION, fullIndexConfig, rowWitness, folderReadWitness, observation, startupFolderPath, startupTouchedIds, startupInventoryMatches } = require('./src/main/session-index/full-read-state');
 const { randomUUID } = require('node:crypto');
+
+function archiveLongPathCandidates(projects, global) {
+  const values = (global.hiddenProjects || []).filter(entry => typeof entry === 'string' && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}::/.test(entry));
+  for (const project of projects || []) {
+    if (project.remoteAlias) continue;
+    values.push(project.projectPath, worktreeParentPath(project.projectPath));
+    for (const session of project.sessions || []) values.push(session.cwd, session.recordedCwd);
+  }
+  return values;
+}
 
 function createSessionIndexWriter(options = {}, cache = require('./session-cache')) {
   const mirror = new Map();
@@ -399,6 +410,9 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       await ready;
       let kept;
       for (let attempt = 0; ; attempt++) {
+        const candidates = () => archiveLongPathCandidates(projects, backend.getSetting('global') || {});
+        const settled = await settleLongPathForms(candidates);
+        const longPath = longPathLookup(pruneLongPathForms(settled, candidates()));
         const archived = backend.getSetting('archivedProjects') || {};
         const snapshot = { archivedProjects: archived, hiddenProjects: (backend.getSetting('global') || {}).hiddenProjects || [],
           hiddenProjectScopes: (backend.getSetting('global') || {}).hiddenProjectScopes || {},
@@ -412,7 +426,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         kept = archive.applyAndPersistArchived(copies, showArchived, {
           getSetting: key => updates.has(key) ? updates.get(key) : backend.getSetting(key),
           setSetting: (key, value) => updates.set(key, value),
-          scheduleName: () => null,
+          scheduleName: () => null, longPath,
         });
         if (!updates.has('archivedProjects')) break;
         const lease = workflows.current();
@@ -483,7 +497,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       deps.notify();
       return { ok: true };
     },
-    async cleanupWorktree(projectPath) { return request('cleanupWorktree', projectPath); },
+    async cleanupWorktree(projectPath, _log, longForms = null) { return request('cleanupWorktree', projectPath, longForms); },
     async remapProjectTranscripts(args) {
       await request('recordRemap', args.folder, args.newPath);
       remapProjectTranscripts({ ...args, getSetting: () => null, setSetting() {} });

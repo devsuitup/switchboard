@@ -506,7 +506,7 @@ receipts and status/replay recovery are deliberately not added in step 1.
 | beginArchive / completeArchive | Current archive/offer merge, then guarded completion after schedule file effects; conflicts report partial effects |
 | undoArchiveProjectFolders | Validate all archive timestamps, remove entries and restore consumed prior offers in one transaction; ACK only the exact `disabledByArchive` file lists for main to re-enable outside SQL |
 | beginOffer / completeOffer / dismissReenableOffer | Current offer selection; completion compares the selected offer before changing it and reports conflicts explicitly |
-| cleanupWorktree | Worker selects current matching rows, deletes in bounded units, then merges visibility/archive cleanup: every local hide entry equal to the path under `visibilityPath` goes, under its stored key |
+| cleanupWorktree | Worker selects current matching rows, deletes in bounded units, then merges visibility/archive cleanup: every local hide entry equal to the path under `visibilityPath` (8.3 short spellings resolved on Windows, first from the long forms main captured before removal) goes, under its stored key |
 | dropRemoteFolder / completeRepairFolders | Bounded folder/cache/metrics/FTS deletion and current repair-list subtraction |
 | addRepairFolders | Repair-list union (a remote folder whose bridge evidence was unknown), emitted by cache-effects for an added `bridge_uuid_reindex_folders` key |
 | pruneUndeclaredRepairFolders | Repair-list subtraction limited to keys whose alias is not an enabled host in the worker's own `global.remoteHosts`; not a folder producer, so deletion ownership does not bind it |
