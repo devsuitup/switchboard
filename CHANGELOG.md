@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.1.0-beta.5 — 2026-11-28
+
 ### Fixed
 - When **Archive folder** could not stop a session and you archived that session again from its own row while the folder was still stopping another one, the row's **Archive** button no longer becomes clickable again before its archive has finished. The original transcript of a session forked or cleared while an **Archive** of older sessions was waiting for you can now be archived without reloading. (#1301)
 - Removing a worktree no longer leaves its project hidden when the hide mark was stored under a different spelling of the path, such as another letter case on Windows, so a worktree created again at that path shows in the sidebar. (#1304)
