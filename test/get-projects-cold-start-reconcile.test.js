@@ -284,9 +284,9 @@ test('a repair cleanup that keeps failing warns once per distinct code until a s
   await handler(null, false);
   await handler(null, false);
   assert.equal(deferred().length, 3, 'after a successful cleanup the same code is logged again');
-  assert.equal(outcomes.length, 0);
-});
-
+  assert.equal(outcomes.length, 0);
+});
+
 test('code-less cleanup failures with varying messages share one warning (#1311)', async () => {
   const settings = new Map([
     ['global', { remoteHosts: [] }],
