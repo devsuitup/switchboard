@@ -93,7 +93,7 @@ test('PR5b R2 empty folder archives immediately with timestamped folder Undo', a
   await pending;
   assert.equal(ctx.calls[0][0], 'folder');
   assert.ok(undo(ctx));
-  assert.doesNotMatch(undo(ctx).parentElement.textContent, /stay stopped/);
+  assert.doesNotMatch(undo(ctx).closest('.app-notice').textContent, /stay stopped/);
   undo(ctx).click();
   await settle();
   assert.deepEqual(ctx.calls[1], ['undoFolder', [{ projectPath: '/p', folderKey: '-p' }], 123]);
@@ -120,10 +120,10 @@ test('PR5b Q5 Undo restores this click only, counts disabled schedules and names
   answer(ctx);
   await pending;
   assert.ok(undo(ctx), 'confirmed Archive offers Undo');
-  assert.match(undo(ctx).parentElement.textContent, /stay stopped/);
-  assert.match(undo(ctx).parentElement.textContent, /1 schedule turned off; Undo turns them back on. See the Schedules tab/);
-  assert.doesNotMatch(undo(ctx).parentElement.textContent, /X/);
-  assert.match(undo(ctx).parentElement.textContent, /\/p\/\.claude\/worktrees\/w/);
+  assert.match(undo(ctx).closest('.app-notice').textContent, /stay stopped/);
+  assert.match(undo(ctx).closest('.app-notice').textContent, /1 schedule turned off; Undo turns them back on. See the Schedules tab/);
+  assert.doesNotMatch(undo(ctx).closest('.app-notice').textContent, /X/);
+  assert.match(undo(ctx).closest('.app-notice').textContent, /\/p\/\.claude\/worktrees\/w/);
   undo(ctx).click();
   await settle();
   assert.deepEqual(ctx.calls, [
@@ -249,7 +249,7 @@ test('PR5b review R2 empty folder points to Schedules with the count that stays 
   await archive(ctx);
   assert.equal(ctx.document.querySelector('.modal-overlay'), null);
   assert.ok(undo(ctx));
-  assert.match(undo(ctx).parentElement.textContent, /1 schedule stays enabled; see the Schedules tab/);
+  assert.match(undo(ctx).closest('.app-notice').textContent, /1 schedule stays enabled; see the Schedules tab/);
 });
 
 for (const remembered of ['0', '1']) {

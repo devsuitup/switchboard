@@ -226,7 +226,7 @@ test('Undo does not claim a process stayed stopped when it exited during confirm
   answer(ctx, true);
   await pending;
   assert.deepEqual(ctx.calls, [['archive', 'A', 1]]);
-  assert.doesNotMatch(undo(ctx).parentElement.textContent, /stay stopped/);
+  assert.doesNotMatch(undo(ctx).closest('.app-notice').textContent, /stay stopped/);
 });
 
 test('Undo does not claim a stopped process when Archive only detached a tab', async t => {
@@ -238,7 +238,7 @@ test('Undo does not claim a stopped process when Archive only detached a tab', a
   answer(ctx, true);
   await pending;
   assert.deepEqual(ctx.calls, [['detach', 'A'], ['archive', 'A', 1]]);
-  assert.doesNotMatch(undo(ctx).parentElement.textContent, /stay stopped/);
+  assert.doesNotMatch(undo(ctx).closest('.app-notice').textContent, /stay stopped/);
 });
 
 test('group Undo restores exactly the rows archived by this click', async t => {
@@ -261,7 +261,7 @@ test('Q3 confirmed Archive offers Undo saying stopped processes stay stopped', a
   await pending;
   assert.deepEqual(ctx.calls, [['stop', 'A'], ['archive', 'A', 1]]);
   assert.ok(undo(ctx), 'confirmed Archive still offers Undo');
-  assert.match(undo(ctx).parentElement.textContent, /stay stopped/);
+  assert.match(undo(ctx).closest('.app-notice').textContent, /stay stopped/);
   undo(ctx).click();
   await settle();
   assert.deepEqual(ctx.calls, [['stop', 'A'], ['archive', 'A', 1], ['archive', 'A', 0]]);
@@ -320,7 +320,7 @@ test('Q3 group Undo warns when a row stopped one part before another stop failed
   await pending;
   assert.deepEqual(ctx.calls, [['stop', 'A'], ['stop', 'C'], ['archive', 'B', 1]]);
   assert.ok(undo(ctx));
-  assert.match(undo(ctx).parentElement.textContent, /stay stopped/);
+  assert.match(undo(ctx).closest('.app-notice').textContent, /stay stopped/);
   undo(ctx).click();
   await settle();
   assert.deepEqual(ctx.calls, [['stop', 'A'], ['stop', 'C'], ['archive', 'B', 1], ['archive', 'B', 0]]);
