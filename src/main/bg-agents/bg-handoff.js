@@ -21,9 +21,9 @@ function backgroundRefusal(session, status, { force = false } = {}) {
   if (session.sandbox) return 'This session runs in the sandbox; the background worker would run outside it.';
   if (session.preLaunch) return 'This session was started through a pre-launch command, which the background worker would not run.';
   if (session.backgrounding) return 'This session is already moving to the background.';
-  if (!isComposerEmpty(session.composerState)) return 'The prompt holds text you have not sent. Send it or clear it, then try again.';
+  if (!isComposerEmpty(session.composerState)) return 'Send or clear the unsent text, then try again.';
   if (!status) return 'Switchboard cannot read this session’s state. Wait for its state to appear, then try again.';
-  if (status === 'waiting') return 'Claude is waiting for an answer in the terminal. Answer it, then try again.';
+  if (status === 'waiting') return 'Answer Claude in the terminal, then try again.';
   if (status === 'busy' && !force) return 'Claude is working. Send to background once it is idle.';
   return null;
 }

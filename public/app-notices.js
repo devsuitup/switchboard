@@ -119,13 +119,14 @@ function sessionActionLabel(session) {
   return name || (session?.sessionId ? session.sessionId.slice(0, 8) : 'a background session');
 }
 
-function showSessionActionFailure(operation, session, error, recovery, onRetry, { headline = `${operation} failed`, kind = 'error', sessions = [session], logReason } = {}) {
+function showSessionActionFailure(operation, session, error, recovery, onRetry, { headline = `${operation} failed`, kind = 'error', sessions = [session], logReason, message, details } = {}) {
   const reason = error?.message || error || 'The backend is unavailable or returned no result';
   showAppNotice({
     id: sessionActionNoticeId(operation, session), kind, sessions,
     logText: sessions.length <= 1 || logReason !== undefined
       ? `${headline} for ${sessionActionDescription(session, { log: true })}: ${logReason ?? reason}.${recovery ? ' ' + recovery : ''}` : undefined,
-    message: `${headline} for ${sessionActionDescription(session)}: ${reason}.${recovery ? ' ' + recovery : ''}`,
+    message: message ?? `${headline} for ${sessionActionDescription(session)}: ${reason}.${recovery ? ' ' + recovery : ''}`,
+    details,
     actionLabel: onRetry ? 'Retry' : undefined, onAction: onRetry, dismissOnAction: false,
   });
 }

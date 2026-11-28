@@ -402,6 +402,13 @@ Native `confirm`, `alert`, and `prompt` (bare or on `window`, `globalThis`, or `
 
 ## Background continuation question lifecycle (#1295)
 
+Send to background (#1023 item 4) supplies `message` and `details` to
+`showSessionActionFailure`: the message holds a short title and the refusal
+reason after a newline; Details holds the session identity and path. Existing
+callers keep their default wording. The diagnostic log retains the reason,
+identity and recovery text. The busy confirmation puts the interruption in
+its title, with the background continuation and Cancel advice in its body.
+
 appChoose forwards closeWith and onShown to the shared choice dialog. onShown
 fires after mounting; queued questions do not acknowledge display. closeWith
 uses enqueueModalQuestion settleWith before mounting and closes the dialog

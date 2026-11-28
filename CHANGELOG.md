@@ -8,6 +8,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Moving a session to the background now asks whether to stop or keep an older job for the same conversation when Switchboard cannot tell if it is still running; Stop checks again before moving, and Cancel quietly keeps that session in the foreground while the rest of the batch continues. Cancellations from Claude and refusals after a choice still show their reason; Keep also checks for live jobs known only from the Agents list. Cancelled questions close, and waiting for a choice does not shorten the move’s confirmation time. (#1295)
 
 ### Changed
+
+- Send to background uses shorter confirmations and refusals, with session details kept out of the first line. (#1023)
 - Notices are easier to read: each one shows its outcome on the first line, colors and an icon tell errors from information, technical details sit behind a collapsed **Details**, a line along the bottom shows when it will go away, and at most three show at once, with older ones behind **+N more**. (#1023)
 - At startup, background jobs that had stopped are removed from your open sessions and counted in one notice that goes away by itself, instead of a lasting error. A job whose worker is gone gets a notice that goes away by itself and still offers **Respawn**. (#1023)
 - Quit and window close no longer ask for confirmation when only idle Claude sessions are open, startup restore is enabled and Switchboard tracks no running background work; unsaved file edits still ask, and Restart to update keeps its background option. (#1023)

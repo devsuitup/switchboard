@@ -1508,6 +1508,14 @@ id) in attributes through `agentsEscapeAttr`, which also escapes `"` and `'`:
 
 ## Send to background
 
+Item 4 of #1023 keeps the handoff decisions unchanged and shortens the copy.
+The busy question leads with “Sending now stops the running command.”;
+its body says Claude ends the turn in the background, and that Cancel only
+closes the question (the user sends again when Claude is idle; nothing is queued). Unsent-text and awaited-answer refusals give one direct instruction.
+The renderer puts refusal reasons in the notice body and session identity/path
+in collapsed Details. The #1295 question puts the session and old-job labels
+after its plain opening sentence; option labels and the Stop default stay unchanged.
+
 A tab whose harness has `capabilities.bgJobs === false` (Codex) gets the
 action disabled with a reason naming the CLI; see cli-harnesses.md
 ("Capabilities in the renderer"). Main still refuses it if it arrives.
@@ -1546,8 +1554,8 @@ early in the job, not a duplicated side effect.
 Rule derived from that measurement: `backgroundRefusal(session, status,
 { force })` keeps refusing `waiting` (the Enter would answer the open dialog;
 M4 case 2, not re-measured) and an unknown status, with or without `force`. `busy` without `force` returns `{ ok: false, code: 'busy' }`
-and writes nothing; the renderer then asks once ("Send to background now?",
-naming the interrupted tool, Send now / Cancel) and retries with
+and writes nothing; the renderer then asks once ("Sending now stops the running command.",
+Send now / Cancel) and retries with
 `{ force: true }` through the same IPC (`send-session-to-background`,
 `sendSessionToBackground(id, { force })`). With `force`, `/bg` is submitted
 during the turn and the 300 ms post-write check no longer withholds Enter on
@@ -1762,7 +1770,7 @@ remote tabs, sandboxed and pre-launch-command sessions, duplicate handoffs,
 unsubmitted composer text, unknown CLI state and open dialogs (`waiting`)
 before writing. Busy without `force` returns `code: 'busy'`
 ("Claude is working. Send to background once it is idle."); the renderer then
-asks "Send to background now?" and retries with `force` (see "Busy
+asks "Sending now stops the running command." and retries with `force` (see "Busy
 sessions"). Running subagents require an `appConfirm` warning first;
 cancel writes nothing. Composer input, busy (without `force`) or a dialog appearing during the
 300 ms text-to-Enter gap withholds Enter and names the residue to check. No
