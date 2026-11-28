@@ -100,9 +100,11 @@ and the absence of new Unicode directories in the checkout after teardown.
   `PROMPT_COMMAND` and `INPUTRC`, all
   matched case-insensitively (including lowercase and mixed-case spellings).
   `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME`
-  point inside the temporary `HOME`, so a plain terminal's shell does not read
-  the user's own shell startup files (system-wide ones such as `/etc/profile`
-  still run). Inherited `GIT_DIR`,
+  point inside the temporary `HOME`, so a plain terminal's shell finds its
+  startup files (`~/.bashrc`, `~/.zshrc`, …) in the temporary `HOME` rather
+  than the user's. This is not a sandbox: system-wide startup files such as
+  `/etc/profile` still run, and other inherited shell variables (`SHELLOPTS`,
+  `PS4`, `PS1`, …) pass through unchanged. Inherited `GIT_DIR`,
   `GIT_WORK_TREE` or `GIT_INDEX_FILE` would point git at another repository.
   Build the fixture projects with `makeRepo` / `makePlainDir` before
   calling `launch()`, because the app reads them at startup. See
