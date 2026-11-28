@@ -114,6 +114,28 @@ test('slow unselected status leaves a metadata plan with uninspected rows', asyn
   assert.equal(result.plan.refusals.length, 0);
 });
 
+test('a status timer that fires before the budget clock reaches the deadline starts no further status', async t => {
+  const f = gitFixture(t), p = planning([]), origin = Date.now();
+  p.deps.readSnapshot = async () => ({ complete: true, initialScanComplete: true, revision: '1',
+    projects: [{ alias: null, projectPath: f.root, folderKeys: [] }], declaredHosts: [] });
+  const calls = [];
+  p.deps.worktrees = implementation.createProjectDeleteWorktrees({
+    now: () => origin + (Date.now() - origin) * 0.8,
+    runGit: async args => {
+      calls.push(args);
+      if (args.includes('list')) return [f.root, f.target, f.kept].map(dir => `worktree ${dir}\nHEAD abc\n\n`).join('');
+      if (args.includes('rev-parse')) return path.join(f.root, 'absent-lock');
+      return new Promise(() => {});
+    }, readActivity: async () => ({ complete: true, sessions: [], jobs: [], candidates: [] }),
+  });
+  const result = await createProjectDeletePlanner({ ...p.deps, timeoutMs: 1000 }).preview({
+    projectPath: f.root, options, worktrees: [],
+  });
+  assert.equal(result.ok, true);
+  for (const row of result.plan.worktrees.filter(row => !row.main)) assert.match(row.reason, /not inspected/i);
+  assert.equal(calls.filter(args => args.includes('status')).length, 1, 'a timer early on the budget clock must not start another status');
+});
+
 for (const selected of [false, true]) test(`three-second status gets the ${selected ? 'selected' : 'unselected'} inspection budget`, async t => {
   const f = gitFixture(t), p = planning([]), deletion = require('../worktree-delete');
   let time = 0;

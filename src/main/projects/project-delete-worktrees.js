@@ -14,8 +14,12 @@ function createProjectDeleteWorktrees({ runGit, readActivity, startProcessReads 
     let timer;
     try {
       const result = await Promise.race([Promise.resolve().then(read), new Promise((_, reject) => {
-        timer = setTimeout(() => reject(fail('DISCOVERY_TIMEOUT', 'Worktree not inspected: inventory time budget exhausted. Reopen Delete to retry.')),
-          Math.max(1, budget.deadline - now()));
+        const arm = () => {
+          timer = setTimeout(() => now() >= budget.deadline
+            ? reject(fail('DISCOVERY_TIMEOUT', 'Worktree not inspected: inventory time budget exhausted. Reopen Delete to retry.'))
+            : arm(), Math.max(1, budget.deadline - now()));
+        };
+        arm();
       })]);
       check(budget);
       return result;
