@@ -86,6 +86,35 @@ failure returns `ok: false, ended: false`. An uncertain verb result is never
 automatically retried. A4c2b must retain admission and incarnation ownership
 through this composition and detach the pinned attachment only after death.
 
+## Ended-job double click (#1023 item 5)
+
+The Agents row double-click handler keeps the existing attach path for hosted
+jobs. An unhosted background job in stopped, done or failed state instead shows
+`This job has ended.` through `showAppNotice`, with Respawn and Open transcript
+actions only when available. While a verb is pending or in flight for the job,
+neither action is offered and the notice says an action is already in progress.
+Respawn follows `agentVerbAvailability`. Open transcript requires a sessionId and
+`transcriptAvailable !== false`, like the detail pane. With neither action and no
+verb running, the notice says the job has ended and its transcript is not available yet.
+`runEndedAgentVerb` resolves the current roster entry by key on each action,
+rechecks availability and pending/in-flight state, then calls `runAgentVerb`.
+Local and backend refusals appear in the same notice, including after selection
+changes. Main-process respawn guards and transcript resolution stay authoritative.
+Respawn still does not require a sessionId. Unknown unhosted working/blocked/running
+rows do nothing on double click. Single clicks still only select.
+
+`showAppNotice` accepts multiple action buttons; its legacy single-action API
+is unchanged. It fits this short actionable notice without the radio choices
+and extra confirmation step of `appChoose`. `test/dom-agents-view.test.js` loads
+the real notice helper and Agents source, stubbing IPC, terminal opening and the
+read-only viewer boundary. It covers stopped/done-dead/failed, both action routes,
+selection changes, unavailable actions, stale roster/pending state, backend refusals,
+notice replacement and hosted done attaching normally. Multi-action notice rebuilds
+restore focus by button class and label, keeping Open transcript focused instead
+of selecting the first action, and fall back to the first button of the same class
+when the label changed (a single-action notice re-shown as Respawn then Attach);
+its paused expiry is preserved.
+
 ## Key files
 
 | File | Role |

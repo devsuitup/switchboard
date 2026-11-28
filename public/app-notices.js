@@ -142,7 +142,8 @@ function showAppNotice(options) {
   if (options.memberOptions) options = { ...options, ...options.memberOptions(options.members) };
   const { id, kind = 'info', message, members, actionLabel, onAction, dismissOnAction = true, dismissible = true, persistent = false } = options;
   clearTimeout(previous?.timer);
-  const focusedButton = previous?.notice.contains(document.activeElement) ? document.activeElement.className : null;
+  const focusedButton = previous?.notice.contains(document.activeElement)
+    ? { className: document.activeElement.className, label: document.activeElement.textContent } : null;
   const container = document.getElementById('app-notices');
   const notice = document.createElement('div');
   if (id !== undefined) notice.dataset.noticeId = id;
@@ -156,15 +157,17 @@ function showAppNotice(options) {
   text.className = 'app-notice-message';
   text.textContent = typeof message === 'function' ? message(members) : message;
   notice.append(text);
-  if (actionLabel && typeof onAction === 'function') {
+  const actions = options.actions || [{ label: actionLabel, onAction }];
+  for (const { label, onAction: runAction } of actions) {
+    if (!label || typeof runAction !== 'function') continue;
     const action = document.createElement('button');
     action.type = 'button';
     action.className = 'app-notice-action';
-    action.textContent = actionLabel;
+    action.textContent = label;
     action.addEventListener('click', () => {
       if (appNoticeEntries.get(id)?.notice !== notice) return;
       if (dismissOnAction) clearAppNotice(id, { reason: `action:${action.textContent.trim()}` });
-      onAction();
+      runAction();
     });
     notice.append(action);
   }
@@ -215,6 +218,9 @@ function showAppNotice(options) {
     notice.addEventListener('mouseleave', () => { hovered = false; resume(); });
     resume();
   }
-  if (focusedButton) [...notice.querySelectorAll('button')].find(button => button.className === focusedButton)?.focus();
+  if (focusedButton) {
+    const buttons = [...notice.querySelectorAll('button')].filter(button => button.className === focusedButton.className);
+    (buttons.find(button => button.textContent === focusedButton.label) || buttons[0])?.focus();
+  }
   return notice;
 }

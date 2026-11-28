@@ -261,8 +261,17 @@ failure leaves the job running and offers retry from the sidebar.
 
 Double-click a row you can attach to (a hosted working/blocked or hosted done session,
 with the daemon answering) to attach, the same as the **Attach** button in the
-detail pane. A double click on a finished or external session, on a group
-header or on a button does nothing extra.
+detail pane. Double-clicking an ended job (stopped, failed, or done without a
+live worker) shows “This job has ended.” with the available actions.
+**Respawn** is offered only when the existing Respawn control is available and
+no action is in progress. **Open transcript** is offered only when a transcript
+exists and uses the same read-only view as **Transcript**. If neither action is
+available, the notice says “This job has ended. Its transcript is not available
+yet.” without an action. Actions check availability again when clicked and show
+a short reason if they cannot proceed.
+A single click still only selects the row. A double click on an **Unknown** row
+(an unhosted working/blocked/running job), an external session, a group header
+or a button does nothing extra.
 
 An attach tab is an ordinary terminal tab running `claude attach`. Its row shows
 the green dot until Switchboard sees a turn end in that tab, then the orange

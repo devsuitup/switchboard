@@ -10,6 +10,7 @@ const { loadAppFunctions } = require('./app-source');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const HTML = `<!DOCTYPE html><html><body>
+  <div id="app-notices"></div>
   <div id="placeholder"></div>
   <div id="terminal-area"><div id="terminal-header"></div><div id="grid-viewer"></div><div id="terminals"></div></div>
   <div id="stats-viewer"></div><div id="memory-viewer"></div><div id="jsonl-viewer"></div>
@@ -123,11 +124,12 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
     appConfirm: async () => true,
   };
   for (const [k, v] of Object.entries(g)) Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'node_modules', 'morphdom', 'dist', 'morphdom-umd.js'), 'utf8'), dom.getInternalVMContext(), { filename: path.join(PUBLIC, '../node_modules/morphdom/dist/morphdom-umd.js') });
+  evalFile(dom, require.resolve('morphdom/dist/morphdom-umd.js'));
   evalFile(dom, path.join(PUBLIC, 'utils.js'));
   evalFile(dom, path.join(PUBLIC, 'session-state.js'));
   evalFile(dom, path.join(PUBLIC, 'stop-session-ui.js'));
   evalFile(dom, path.join(PUBLIC, 'memory-workfiles-view.js'));
+  evalFile(dom, path.join(PUBLIC, 'app-notices.js'));
   evalFile(dom, path.join(PUBLIC, 'agents-view.js'));
   if (settingsPanel) {
     evalFile(dom, path.join(PUBLIC, 'setting-defaults.js'));
@@ -1258,11 +1260,88 @@ test('a double click on a working or blocked row attaches, with the same options
   assert.deepEqual({ ...ctx.calls.opened[1][1] }, { type: 'attach', jobId: 'dddddddd', cwd: '/w/d' });
 });
 
-test('a double click does nothing on a finished row, an external session, a header or a button', async (t) => {
+for (const state of ['stopped', 'done', 'failed']) {
+  test(`ended ${state} double click offers Respawn and Open transcript through the existing actions`, async t => {
+    const h = setup(); t.after(() => h.destroy());
+    const entry = { ...ROSTER[1], state };
+    h.setSnapshot({ roster: [entry, ROSTER[0]], daemonReachable: true });
+    await h.window.showAgentsView();
+    const row = () => h.document.querySelector('.agents-row[data-key="bg:bbbbbbbb"]');
+    row().click();
+    assert.equal(h.document.querySelector('.agents-row.selected').dataset.key, 'bg:bbbbbbbb');
+    assert.equal(h.document.querySelector('.app-notice'), null, 'single click only selects');
+    assert.deepEqual(h.calls.verbs, []);
+    dblclick(h, row());
+    assert.equal(h.document.querySelector('.app-notice-message')?.textContent, 'This job has ended.', 'ended job notice is visible');
+    const actions = () => [...h.document.querySelectorAll('.app-notice-action')];
+    assert.deepEqual(actions().map(button => button.textContent), ['Respawn', 'Open transcript']);
+    assert.equal(h.document.querySelector('[data-verb="respawn"]').disabled, false);
+    h.document.querySelector('.agents-row[data-key="bg:aaaaaaaa"]').click();
+    actions()[0].click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.calls.verbs, [['respawn', entry.id]], 'Respawn targets the ended job even after selection changes');
+    assert.equal(h.document.querySelector('.app-notice'), null);
+    assert.deepEqual(h.calls.opened, []);
+    assert.deepEqual(h.calls.jsonl, []);
+    h.window.api.bgAgentVerb = async (verb, id) => {
+      h.calls.verbs.push([verb, id]);
+      return { ok: true, sessionId: 'resolved-transcript' };
+    };
+    dblclick(h, row().querySelector('.agents-row-state'));
+    actions()[1].click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.calls.verbs, [['respawn', entry.id], ['transcript', entry.id]]);
+    assert.deepEqual(h.calls.jsonl.map(session => session.sessionId), ['resolved-transcript']);
+    assert.deepEqual(h.calls.opened, [], 'transcript is read-only, never attach or resume');
+  });
+}
+
+for (const [reason, overrides, daemonReachable] of [
+  ['conversation is running', { conversationPid: 42 }, true],
+  ['daemon is unavailable', {}, false],
+]) {
+  test(`ended job offers only Open transcript when ${reason}`, async t => {
+    const h = setup(); t.after(() => h.destroy());
+    const entry = { ...ROSTER[1], ...overrides };
+    h.setSnapshot({ roster: [entry], daemonReachable });
+    await h.window.showAgentsView();
+    h.document.querySelector('.agents-row').click();
+    assert.equal(h.document.querySelector('[data-verb="respawn"]').disabled, true);
+    dblclick(h, h.document.querySelector('.agents-row'));
+    assert.equal(h.document.querySelector('.app-notice-message')?.textContent, 'This job has ended.', 'ended job notice is visible');
+    const actions = [...h.document.querySelectorAll('.app-notice-action')];
+    assert.deepEqual(actions.map(button => button.textContent), ['Open transcript']);
+    actions[0].click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.calls.verbs, [['transcript', entry.id]]);
+    assert.deepEqual(h.calls.jsonl.map(session => session.sessionId), [entry.sessionId]);
+  });
+}
+
+test('a hosted done job still attaches and shows no ended notice', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  const entry = { ...ROSTER[1], hosted: true };
+  h.setSnapshot({ roster: [entry], daemonReachable: true });
+  await h.window.showAgentsView();
+  dblclick(h, h.document.querySelector('.agents-row'));
+  assert.equal(h.calls.opened[0][0].sessionId, entry.sessionId);
+  assert.deepEqual({ ...h.calls.opened[0][1] }, { type: 'attach', jobId: entry.id, cwd: entry.cwd });
+  assert.equal(h.document.querySelector('.app-notice'), null);
+});
+
+test('an unhosted job of unknown outcome does not claim to have ended', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  h.setSnapshot({ roster: [{ ...ROSTER[1], state: 'working' }], daemonReachable: true });
+  await h.window.showAgentsView();
+  dblclick(h, h.document.querySelector('.agents-row'));
+  assert.equal(h.document.querySelector('.app-notice'), null);
+  assert.deepEqual(h.calls.opened, []);
+});
+
+test('a double click does nothing on an external session, a header or a button', async (t) => {
   const ctx = setup({ storage: {} }); t.after(() => ctx.destroy());
   ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
   await ctx.window.showAgentsView();
-  dblclick(ctx, ctx.document.querySelector('.agents-row[data-key="bg:bbbbbbbb"]'));
   dblclick(ctx, ctx.document.querySelector('.agents-row[data-key="int:s-i"]'));
   dblclick(ctx, ctx.document.querySelector('.agents-group-header'));
   ctx.document.querySelector('.agents-row[data-key="bg:aaaaaaaa"]').click();
@@ -1671,3 +1750,118 @@ for (const status of [null, 'busy']) {
     assert.equal(row.querySelectorAll('.session-icon--busy, .session-icon--response-ready, .session-icon--agents-busy, .session-icon--attention').length, 0);
   });
 }
+
+for (const [reason, overrides] of [
+  ['transcript unavailable', { transcriptAvailable: false }],
+  ['session missing', { sessionId: null }],
+]) {
+  for (const daemonReachable of [true, false]) {
+    test('ended notice omits transcript when ' + reason + ', daemon=' + daemonReachable, async t => {
+      const h = setup(); t.after(() => h.destroy());
+      h.setSnapshot({ roster: [{ ...ROSTER[1], ...overrides }], daemonReachable });
+      await h.window.showAgentsView();
+      dblclick(h, h.document.querySelector('.agents-row'));
+      assert.deepEqual([...h.document.querySelectorAll('.app-notice-action')].map(b => b.textContent),
+        daemonReachable ? ['Respawn'] : [], 'unavailable transcript must not be offered');
+      if (!daemonReachable) assert.equal(h.document.querySelector('.app-notice-message').textContent,
+        'This job has ended. Its transcript is not available yet.');
+    });
+  }
+}
+
+for (const [reason, overrides, daemonReachable, removed, expected] of [
+  ['worker returned', { hosted: true }, true, false, /worker is running/i],
+  ['conversation running', { conversationPid: 42 }, true, false, /conversation is running/i],
+  ['daemon unavailable', {}, false, false, /daemon is not answering/i],
+  ['job removed', {}, true, true, /no longer available/i],
+]) {
+  test('ended notice rechecks Respawn after ' + reason, async t => {
+    const h = setup(); t.after(() => h.destroy());
+    h.setSnapshot({ roster: [ROSTER[1]], daemonReachable: true });
+    await h.window.showAgentsView();
+    dblclick(h, h.document.querySelector('.agents-row'));
+    const action = h.document.querySelector('.app-notice-action');
+    h.emitChanged({ roster: removed ? [] : [{ ...ROSTER[1], ...overrides }], daemonReachable });
+    action.click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.calls.verbs, [], 'stale Respawn must not reach IPC');
+    assert.match(h.document.querySelector('.app-notice-message')?.textContent || '', expected,
+      'refusal must be visible in a notice');
+    assert.equal(h.document.querySelectorAll('.app-notice').length, 1);
+  });
+}
+
+for (const overrides of [{ transcriptAvailable: false }, { sessionId: null }]) {
+  test('ended notice rechecks transcript availability on click ' + JSON.stringify(overrides), async t => {
+    const h = setup(); t.after(() => h.destroy());
+    h.setSnapshot({ roster: [ROSTER[1]], daemonReachable: true });
+    await h.window.showAgentsView();
+    dblclick(h, h.document.querySelector('.agents-row'));
+    const action = [...h.document.querySelectorAll('.app-notice-action')][1];
+    h.emitChanged({ roster: [{ ...ROSTER[1], ...overrides }], daemonReachable: true });
+    action.click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.calls.verbs, [], 'stale transcript must not reach IPC');
+    assert.deepEqual(h.calls.jsonl, []);
+    assert.match(h.document.querySelector('.app-notice-message')?.textContent || '', /transcript is not available/i);
+  });
+}
+
+for (const openBeforePending of [false, true]) {
+  test('ended notice respects a pending verb, opened before pending=' + openBeforePending, async t => {
+    const h = setup(); t.after(() => h.destroy());
+    h.setSnapshot({ roster: [ROSTER[1]], daemonReachable: true });
+    await h.window.showAgentsView();
+    if (openBeforePending) dblclick(h, h.document.querySelector('.agents-row'));
+    let release;
+    h.window.api.bgAgentVerb = () => new Promise(resolve => { release = resolve; });
+    const pending = h.window.runAgentVerb('respawn', ROSTER[1]);
+    try {
+      if (openBeforePending) {
+        h.document.querySelector('.app-notice-action').click();
+        await new Promise(resolve => setImmediate(resolve));
+        assert.match(h.document.querySelector('.app-notice-message')?.textContent || '', /action is already in progress/i,
+          'pending refusal must stay visible');
+      } else {
+        dblclick(h, h.document.querySelector('.agents-row'));
+        assert.deepEqual([...h.document.querySelectorAll('.app-notice-action')].map(b => b.textContent), []);
+        assert.match(h.document.querySelector('.app-notice-message')?.textContent || '', /action is already in progress/i);
+      }
+    } finally {
+      release({ ok: true });
+      await pending;
+    }
+  });
+}
+
+for (const verb of ['respawn', 'transcript']) {
+  test('ended notice displays a backend ' + verb + ' refusal after selection changes', async t => {
+    const h = setup(); t.after(() => h.destroy());
+    h.setSnapshot({ roster: [ROSTER[1], ROSTER[0]], daemonReachable: true });
+    await h.window.showAgentsView();
+    dblclick(h, h.document.querySelector('[data-key="bg:bbbbbbbb"]'));
+    h.document.querySelector('[data-key="bg:aaaaaaaa"]').click();
+    h.window.api.bgAgentVerb = async () => ({ ok: false, error: 'Job changed; refresh and try again.' });
+    const label = verb === 'respawn' ? 'Respawn' : 'Open transcript';
+    [...h.document.querySelectorAll('.app-notice-action')].find(b => b.textContent === label).click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(h.document.querySelector('.app-notice-message')?.textContent || '', /Job changed; refresh and try again/,
+      'backend refusal must be visible outside the selected detail pane');
+  });
+}
+
+test('double clicking another ended job replaces the visible notice and its target', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  const other = { ...ROSTER[1], id: 'cccccccc', sessionId: 's-c' };
+  h.setSnapshot({ roster: [ROSTER[1], other], daemonReachable: true });
+  await h.window.showAgentsView();
+  dblclick(h, h.document.querySelector('[data-key="bg:bbbbbbbb"]'));
+  const oldAction = h.document.querySelector('.app-notice-action');
+  dblclick(h, h.document.querySelector('[data-key="bg:cccccccc"]'));
+  assert.equal(h.document.querySelectorAll('.app-notice').length, 1, 'ended notices replace, never stack');
+  oldAction.click();
+  assert.deepEqual(h.calls.verbs, [], 'detached notice cannot dispatch');
+  h.document.querySelector('.app-notice-action').click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(h.calls.verbs, [['respawn', other.id]]);
+});
