@@ -481,8 +481,8 @@ for (const answer of [false, true]) {
     };
     await h.app.sendSessionToBackground('old');
     assert.equal(h.confirmations.length, 1);
-    assert.equal(h.confirmations[0].title, 'Sending now will interrupt the current task.');
-    assert.equal(h.confirmations[0].message, 'Claude will finish this turn in the background. Cancel to wait for the task to finish.');
+    assert.equal(h.confirmations[0].title, 'Sending now stops the running command.');
+    assert.equal(h.confirmations[0].message, 'Claude ends this turn in the background. To avoid this, cancel and send again when Claude is idle.');
     assert.equal(h.confirmations[0].confirmLabel, 'Send now');
     assert.deepEqual(JSON.parse(JSON.stringify(calls)), answer ? [['old', null], ['old', { force: true }]] : [['old', null]]);
     assert.deepEqual(h.destroyed, []);

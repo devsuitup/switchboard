@@ -204,7 +204,7 @@ Plain terminals, Codex, remote sessions, sandboxed sessions and sessions
 started through a pre-launch command cannot use this action. An unreadable
 state also refuses the move. A running shell command, including a background
 Bash, does not: `/bg` is submitted as if you had typed it.
-While Claude is working, **Send to background now?** offers **Send now**:
+While Claude is working, Switchboard asks first (**Sending now stops the running command.**) and offers **Send now**:
 `/bg` interrupts the running tool and finishes the turn in the background.
 Switchboard also asks when subagents are running, since Claude may stop them.
 If Claude asks **Background** or **Stay** in the terminal, answer there.
