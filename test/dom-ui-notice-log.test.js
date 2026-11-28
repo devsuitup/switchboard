@@ -642,6 +642,23 @@ for (const action of ['quit', 'close', 'update']) test('1023 exit progress gives
     'Moving sessions to the background.\nSwitchboard is preparing to ' + verb + '. Check the sessions below. 0 of 3 confirmed.\nabcdef12 waits for its turn to end\nfedcba98 asks you to confirm in its terminal\n12345678: RAW_EXIT_ERROR /repo/failure');
 });
 
+for (const [platform, action, verb] of [['win32', 'quit', 'exit'], ['linux', 'quit', 'quit'], ['darwin', 'close', 'close'], ['linux', 'update', 'update']])
+  for (const [state, progress, confirmed] of [
+    ['no phase', {}, 0], ['moving', { phase: 'moving' }, 0], ['confirmed', { phase: 'done', result: { ok: true } }, 1],
+  ]) test('1023 exit progress omits the next step without row lines: ' + state + ' ' + verb, t => {
+    const { window, document, context } = setup(t);
+    const lines = connectSink(t, window);
+    window.api.platform = platform;
+    loadAppFunctions(context, { functions: ['showExitBackgroundProgress', 'exitBackgroundFailure'] });
+    window.showExitBackgroundProgress({ detail: { action }, entries: new Map([
+      ['abcdef12-session', { id: 'abcdef12-session', name: 'PRIVATE PROGRESS LABEL', ...progress }],
+    ]) });
+    const notice = document.querySelector('[data-notice-id="exit-background"]');
+    const body = 'Switchboard is preparing to ' + verb + '. ' + confirmed + ' of 1 confirmed.';
+    assert.equal(notice.querySelector('.app-notice-body').textContent, body);
+    assert.equal(lines.at(-1).text, 'Moving sessions to the background.\n' + body);
+  });
+
 for (const [platform, action, verb] of [['win32', 'quit', 'Exit'], ['linux', 'quit', 'Quit'], ['darwin', 'close', 'Close'], ['linux', 'update', 'Update']])
   for (const scenario of ['failed', 'save-error', 'all-moved', 'all-moved-attached']) test('1023 exit recovery keeps names visible and identifiers in the log: ' + scenario + ' ' + verb, async t => {
   const { window, document, context } = setup(t);

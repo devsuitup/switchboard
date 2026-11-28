@@ -2071,8 +2071,8 @@ function showExitBackgroundProgress(batch) {
   if (batch.external || batch.finished) return;
   const confirmed = [...batch.entries.values()].filter(row => row.result?.ok).length;
   const verb = batch.detail.action === 'update' ? 'update' : batch.detail.action === 'close' ? 'close' : window.api.platform === 'win32' ? 'exit' : 'quit';
-  const lines = ['Moving sessions to the background.', `Switchboard is preparing to ${verb}. Check the sessions below. ${confirmed} of ${batch.entries.size} confirmed.`];
-  const logLines = [...lines];
+  const lines = [];
+  const logLines = [];
   for (const row of batch.entries.values()) {
     if (row.result && !row.result.ok) lines.push(exitBackgroundFailure(row.name, row.result));
     else if (row.phase === 'waiting') lines.push(row.name + ' waits for its turn to end');
@@ -2082,6 +2082,9 @@ function showExitBackgroundProgress(batch) {
     else if (row.phase === 'waiting') logLines.push(id + ' waits for its turn to end');
     else if (row.phase === 'confirming') logLines.push(id + ' asks you to confirm in its terminal');
   }
+  const header = ['Moving sessions to the background.', `Switchboard is preparing to ${verb}.${lines.length ? ' Check the sessions below.' : ''} ${confirmed} of ${batch.entries.size} confirmed.`];
+  lines.unshift(...header);
+  logLines.unshift(...header);
   showAppNotice({ id: 'exit-background', kind: 'info', persistent: true, dismissible: false,
     sessions: [...batch.entries.values()].map(row => ({ sessionId: row.id, name: row.name })),
     message: lines.join('\n'), logText: logLines.join('\n'), actionLabel: 'Cancel', dismissOnAction: false,
