@@ -5,9 +5,8 @@ Electron instance, **next to** the Switchboard you use every day, without
 quitting it and without touching its database or triggers.
 
 Use `task test-pr PR=<number> ISOLATED=1` for an instance with synthetic
-sessions under a throwaway HOME, suitable for driving with a script. It does
-not isolate Codex history when `CODEX_HOME` is set in your environment: see
-[`CODEX_HOME` is inherited](#codex_home-is-inherited).
+sessions under a throwaway HOME, suitable for driving with a script. Both
+Claude and Codex history are isolated; `CODEX_HOME` is set to `<temporary HOME>/.codex`.
 The default mode keeps your real HOME and transcript history. `ISOLATED` takes
 `1` for fixture mode or `0` for the default mode; unset or empty also selects
 the default. Other values produce a usage error before any git command.
@@ -77,9 +76,8 @@ unread code safe. Read the diff first.
 ## The four isolation concerns
 
 The default mode handles the first two. Check the other two yourself.
-`ISOLATED=1` also isolates Claude sessions and projects, so real schedules are
-not discovered. Codex sessions are isolated only when `CODEX_HOME` is unset:
-see [`CODEX_HOME` is inherited](#codex_home-is-inherited).
+`ISOLATED=1` also isolates Claude and Codex sessions and projects, so real
+schedules are not discovered, even when the parent environment sets `CODEX_HOME`.
 
 ### 1. Database (`SWITCHBOARD_DATA_DIR`)
 
@@ -206,27 +204,20 @@ environment variable. Removing `SSH_AUTH_SOCK` and `SSH_AGENT_PID` therefore
 likely does not cut off access to these agents. This behavior in isolated mode
 is unverified.
 
-A refusing `claude` stub is placed **first on PATH**, with shell, `.cmd` and
-PowerShell forms. Opening a synthetic session cannot start the real command
-through normal PATH lookup; it prints `claude is disabled in isolated test-pr
-mode` and exits. The rest of PATH remains available for git and shells.
-This guard belongs to test-pr; it does not change the end-to-end fixtures'
-environment handling (issue #438). There is no such stub for `codex`.
+Refusing `claude` and `codex` stubs are placed **first on PATH**, with shell,
+`.cmd` and PowerShell forms. Normal PATH lookup prints `<command> is disabled
+in isolated test-pr mode` and exits with status 1. The rest of PATH remains
+available for git and shells. These stubs belong to test-pr; the end-to-end
+fixtures do not install command stubs (issue #438).
 
-#### `CODEX_HOME` is inherited
+Both this mode and the end-to-end fixtures replace inherited `CODEX_HOME`,
+including differently cased names, with `<temporary HOME>/.codex`. Codex
+transcripts and authentication files therefore resolve within the disposable
+home, even though the Codex integration is enabled by default.
 
-Isolated mode replaces `HOME`, `USERPROFILE` and the XDG and `AppData`
-directories, but passes `CODEX_HOME` through unchanged (`scripts/test-pr.js`).
-Switchboard reads Codex rollouts from `CODEX_HOME` before the home directory,
-and the Codex integration is on by default. When your environment sets
-`CODEX_HOME`, the fixture instance therefore lists your real Codex sessions and
-the projects they ran in, next to the synthetic ones.
-Unset `CODEX_HOME` in the shell that runs `task test-pr … ISOLATED=1`; with it
-unset, Codex history is read from the temporary HOME, which holds none.
-
-Set `ALLOW_CLAUDE=1` with `ISOLATED=1` to omit the stub and use the real
-`claude` from the original PATH. The temporary HOME, fixtures and environment
-sanitization remain in effect. A logged-out start is guaranteed only on Windows
+Set `ALLOW_CLAUDE=1` with `ISOLATED=1` to omit only the Claude stub and use
+the real `claude` from the original PATH. The Codex stub remains first on PATH.
+The temporary HOME, fixtures and environment sanitization remain in effect. A logged-out start is guaranteed only on Windows
 and Linux: the first launch asks for a login, which is stored in the temporary
 HOME and deleted on exit. On macOS, the CLI's OAuth login lives in the Keychain,
 independent of HOME, so an existing login can remain available. No credentials
@@ -242,7 +233,7 @@ including the logged-out behavior with managed settings present, is unverified.
 On Windows, both launch modes treat PATH names case-insensitively and pass a
 single `PATH` key to the child. If both `Path` and `PATH` exist, the exact `PATH`
 value takes precedence. On POSIX, the original `PATH` supplies command lookup
-(with the stub prepended when disabled); `Path` and `path` remain untouched.
+(with the stub directory prepended in isolated mode); `Path` and `path` remain untouched.
 
 Both `ISOLATED` and `ALLOW_CLAUDE` accept only `0`, `1`, empty or unset;
 other values fail before any git command. `ALLOW_CLAUDE` defaults to `0`.

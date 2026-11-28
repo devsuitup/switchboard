@@ -10,30 +10,7 @@ const { test: base, expect, _electron: electron } = require('@playwright/test');
 const APP_DIR = path.resolve(__dirname, '..');
 const CLOSE_TIMEOUT_MS = 10_000;
 
-const GIT_IDENTITY = {
-  GIT_AUTHOR_NAME: 'Fixture',
-  GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
-  GIT_COMMITTER_NAME: 'Fixture',
-  GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
-};
-
-const DROPPED_ENV = /^(CLAUDE|GIT_)|^(ELECTRON_RUN_AS_NODE|HISTFILE)$/;
-
-function isolatedEnv(home) {
-  const data = path.join(home, '.switchboard-e2e');
-  const inherited = Object.fromEntries(Object.entries(process.env)
-    .filter(([k]) => !DROPPED_ENV.test(k)));
-  return {
-    ...inherited,
-    HOME: home,
-    USERPROFILE: home,
-    XDG_CONFIG_HOME: path.join(home, '.config'),
-    SWITCHBOARD_DATA_DIR: data,
-    SWITCHBOARD_TRIGGERS_DIR: path.join(data, 'triggers'),
-    GIT_CONFIG_NOSYSTEM: '1',
-    ...GIT_IDENTITY,
-  };
-}
+const { isolatedEnv } = require('../scripts/launcher-env');
 
 function writeTranscript(home, projectPath) {
   const sid = '00000000-0000-4000-8000-' + String(Math.floor(Math.random() * 1e12)).padStart(12, '0');
