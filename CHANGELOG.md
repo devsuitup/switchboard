@@ -6,6 +6,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - When **Archive folder** could not stop a session and you archived that session again from its own row while the folder was still stopping another one, the row's **Archive** button no longer becomes clickable again before its archive has finished. The original transcript of a session forked or cleared while an **Archive** of older sessions was waiting for you can now be archived without reloading. (#1301)
+- Removing a worktree no longer leaves its project hidden when the hide mark was stored under a different spelling of the path, such as another letter case on Windows, so a worktree created again at that path shows in the sidebar. (#1304)
 - Deleting a project no longer reports an exhausted time budget or a stop timeout while time remains. (#1328)
 - A Claude session restored at launch whose CLI never connects to Switchboard, as happened when the network was still down, is no longer shown as if it were running normally: after a minute its sidebar dot turns into a dash and its tooltip says **No CLI connected**. Switchboard restarts it once by itself, as soon as the network is back or five minutes later at the latest, unless the prompt holds text you have not sent, a turn is running or the session is open in another process; if it still has no CLI, its tooltip asks you to stop it and click it to start it again. Codex sessions are not concerned. (#776)
 

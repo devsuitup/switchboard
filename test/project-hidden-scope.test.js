@@ -230,3 +230,27 @@ test('Add project clears equal entries under any spelling with their stored keys
     assert.deepEqual(Object.keys(after[key]), [sibling, remote], key + ' must use the stored string key');
   }
 });
+
+test('worktree cleanup clears equal entries under any spelling with their stored keys and keeps unrelated entries', async t => {
+  const h = storage(t, {});
+  const removed = path.join(h.dir, 'MixedCaseWorktree');
+  fs.mkdirSync(removed);
+  const entry = process.platform === 'win32' ? removed.toLowerCase() : removed + '/';
+  const alternate = removed.replaceAll('\\', '/') + '/';
+  const sibling = path.join(h.dir, 'unrelated');
+  const remote = 'box::' + removed;
+  const entries = [entry, alternate, sibling, remote];
+  const fields = { hiddenProjects: entries, hiddenProjectKinds: {}, hiddenProjectScopes: {}, hiddenProjectArchivedAt: {} };
+  for (const value of entries) {
+    fields.hiddenProjectKinds[value] = value === entry ? 'delete' : 'archive';
+    fields.hiddenProjectScopes[value] = { alias: value === remote ? 'box' : null };
+    fields.hiddenProjectArchivedAt[value] = 123;
+  }
+  h.db.setSetting('global', fields);
+  await h.writer.cleanupWorktree(removed);
+  const after = h.db.getSetting('global');
+  assert.deepEqual(after.hiddenProjects, [sibling, remote]);
+  for (const key of ['hiddenProjectKinds', 'hiddenProjectScopes', 'hiddenProjectArchivedAt']) {
+    assert.deepEqual(Object.keys(after[key]), [sibling, remote], key + ' must use the stored string key');
+  }
+});
