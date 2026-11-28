@@ -489,7 +489,7 @@ for (const code of ['needs-answer', 'busy-timeout', 'failed', 'unknown']) test(`
     assert.equal(ctx.calls.attaches[0][0], 'one-bg');
     assert.equal(vm.runInContext('exitingApp', ctx.context), false);
     const text = ctx.window.document.getElementById('app-notices').textContent;
-    assert.match(text, /Switchboard stayed open. 1 of 2 sessions moved to the background; nothing was stopped/);
+    assert.match(text, /Switchboard stayed open. 1 of 2 sessions moved to the background\.\n/);
     assert.match(text, /two:/);
     assert.match(text, code === 'needs-answer' ? /needs an answer/ : code === 'busy-timeout' ? /still working after 10 minutes/ : /backend broke/);
     assert.equal(ctx.calls.saves.length, 0);
