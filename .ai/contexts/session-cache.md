@@ -3252,7 +3252,34 @@ keeps its existing path-wide cache deletion and, with the same helper, removes
 every local hide entry whose `visibilityPath` equals the removed path's,
 whatever its scope, with its kind, scope and archive time under the stored key
 (#1304); a hide entry spelled differently from the path no longer outlives the
-worktree. Global Settings already rereads and spreads the latest global
+worktree.
+
+On Windows these main- and worker-side comparisons also resolve 8.3 short
+spellings (`JEAN-B~1`, `RUNNER~1`) to their long form first (#1304 item 2,
+decided 2026-11-28): `groupedHiddenMatcher` (`archived-projects.js`, used by
+the project-cache pass and `applyAndPersistArchived`, hidden-repository marks
+included) and the writer's re-add, unhide and worktree-cleanup matching
+(`session-index-commands.js`). `createLongPathResolver`
+(`src/main/shared/long-path.js`) returns `null` off Windows, so Linux and macOS
+make no new filesystem call. On Windows it calls `fs.realpathSync.native` only
+for a path containing `~` (a generated short name always does), cached under
+the spelling with separators, trailing slash and case normalized. A path that
+cannot be resolved (missing worktree, deleted project) keeps its current
+normalization and is never an error. Remote (`alias::`) paths are never
+resolved. The cache is per call: each matcher or writer command builds a fresh
+resolver, so a project-list pass resolves each distinct path once, needs no
+bound (its size is that pass's distinct paths) and cannot serve a stale answer
+after a folder is created or removed between passes. `visibilityPath` takes the
+resolver as an optional third argument; `longVisibilityPath(resolver)` wraps it
+for `projectHiddenMatcher`, which hands it to `sessionUnderPath` for hidden
+worktree groups and keeps bare entries matching remote hosts. The renderer
+(`public/app.js` pending groups) cannot touch the filesystem and keeps the
+plain comparison, as do the other `projectHiddenMatcher` callers (file lists,
+the trigger resolver, background descriptors built outside the project-cache
+pass, which hands them its own matcher) and encoded transcript folder names.
+`test/visibility-long-path.test.js` feeds a fake short-to-long map on every OS
+and, on Windows, a real 8.3 spelling of a directory under `os.tmpdir()`
+(skipped when the volume has 8.3 names disabled). Global Settings already rereads and spreads the latest global
 record on Save, preserving scopes alongside archive state without a new form
 field.
 

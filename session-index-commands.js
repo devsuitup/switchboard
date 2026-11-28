@@ -4,7 +4,8 @@ const archive = require('./archived-projects');
 const { scheduleRegistry } = require('./src/main/schedules/schedule-runner');
 const { whatsNewOnStartup } = require('./src/main/app/changelog');
 const { migrateSchedulesTabDefault } = require('./src/main/schedules/schedules-tab-migration');
-const { isProjectHidden, visibilityPath } = require('./public/worktree-nesting');
+const { isProjectHidden, longVisibilityPath } = require('./public/worktree-nesting');
+const { createLongPathResolver } = require('./src/main/shared/long-path');
 const { createHash } = require('node:crypto');
 const path = require('node:path');
 const { archiveProjectIdentity: projectIdentity } = require('./src/main/projects/project-archive-workflow');
@@ -115,10 +116,10 @@ function createSessionRequestCommands(db) {
   };
 }
 
-function localHiddenEntriesEqualTo(global, projectPath, admits = () => true) {
-  const target = visibilityPath(projectPath);
+function localHiddenEntriesEqualTo(global, projectPath, admits = () => true, normalize = longVisibilityPath(createLongPathResolver())) {
+  const target = normalize(projectPath);
   return (global.hiddenProjects || []).filter(entry => typeof entry === 'string' && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}::/.test(entry)
-    && visibilityPath(entry) === target && admits(entry));
+    && normalize(entry) === target && admits(entry, normalize));
 }
 
 function fieldsWithoutHiddenEntries(global, matched) {
@@ -264,7 +265,7 @@ function createWriterCommands(db) {
       reopen([{ alias, projectPath }], proof);
       archive.clearArchivedEntry(db.getSetting, db.setSetting, alias, projectPath);
       const global = db.getSetting('global') || {};
-      if (!isProjectHidden([entry], alias, projectPath, global.hiddenProjectScopes)) return;
+      if (!isProjectHidden([entry], alias, projectPath, global.hiddenProjectScopes, longVisibilityPath(createLongPathResolver()))) return;
       const kinds = { ...global.hiddenProjectKinds };
       delete kinds[entry];
       const fields = { hiddenProjects: (global.hiddenProjects || []).filter(p => p !== entry), hiddenProjectKinds: kinds };
@@ -281,7 +282,7 @@ function createWriterCommands(db) {
     revealAddedProject(projectPath, proof) {
       reopen([{ alias: null, projectPath }], proof);
       const global = db.getSetting('global') || {};
-      const matched = localHiddenEntriesEqualTo(global, projectPath, entry => isProjectHidden([entry], null, projectPath, global.hiddenProjectScopes));
+      const matched = localHiddenEntriesEqualTo(global, projectPath, (entry, normalize) => isProjectHidden([entry], null, projectPath, global.hiddenProjectScopes, normalize));
       if (matched.length) patch(fieldsWithoutHiddenEntries(global, matched));
       archive.clearArchivedEntry(db.getSetting, db.setSetting, null, projectPath);
     },
