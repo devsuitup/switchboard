@@ -91,10 +91,11 @@ through this composition and detach the pinned attachment only after death.
 The Agents row double-click handler keeps the existing attach path for hosted
 jobs. An unhosted background job in stopped, done or failed state instead shows
 `This job has ended.` through `showAppNotice`, with Respawn and Open transcript
-actions only when available. Respawn follows `agentVerbAvailability` and excludes
-pending/in-flight verbs. Open transcript requires a sessionId and
-`transcriptAvailable !== false`, like the detail pane. With neither action,
-the notice says the job has ended and its transcript is not available yet.
+actions only when available. While a verb is pending or in flight for the job,
+neither action is offered and the notice says an action is already in progress.
+Respawn follows `agentVerbAvailability`. Open transcript requires a sessionId and
+`transcriptAvailable !== false`, like the detail pane. With neither action and no
+verb running, the notice says the job has ended and its transcript is not available yet.
 `runEndedAgentVerb` resolves the current roster entry by key on each action,
 rechecks availability and pending/in-flight state, then calls `runAgentVerb`.
 Local and backend refusals appear in the same notice, including after selection
@@ -110,7 +111,9 @@ read-only viewer boundary. It covers stopped/done-dead/failed, both action route
 selection changes, unavailable actions, stale roster/pending state, backend refusals,
 notice replacement and hosted done attaching normally. Multi-action notice rebuilds
 restore focus by button class and label, keeping Open transcript focused instead
-of selecting the first action; its paused expiry is preserved.
+of selecting the first action, and fall back to the first button of the same class
+when the label changed (a single-action notice re-shown as Respawn then Attach);
+its paused expiry is preserved.
 
 ## Key files
 
