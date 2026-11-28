@@ -32,6 +32,7 @@ function loadProjectActionHandlers(overrides = {}) {
     activeSessions: new Map(),
     spawnChild: spawnFromExec(overrides.execFile),
     getKnownProjectPaths: () => new Set(['/repo']),
+    getSetting: () => null,
     _isKnownProjectRoot: (candidate, known) => known.includes(candidate),
     ...overrides,
   });

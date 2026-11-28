@@ -251,3 +251,84 @@ test('Windows: worktree cleanup uses the long form carried from before removal w
   await h.writer.cleanupWorktree(shortTree, { warn() {} }, forms);
   assert.deepEqual(h.db.getSetting('global').hiddenProjects, [], 'the carried long form must match the long hide entry');
 });
+
+function fakeAsyncRealpath(t, resolve) {
+  const original = fs.promises.realpath;
+  fs.promises.realpath = async value => {
+    const long = await resolve(String(value).split(path.sep).join('/'));
+    if (long === null) throw Object.assign(new Error('ENOENT: ' + value), { code: 'ENOENT' });
+    return long;
+  };
+  t.after(() => { fs.promises.realpath = original; });
+}
+
+test('Windows: archive assembly resolves a short hide entry added while its long forms were being computed', {
+  skip: process.platform !== 'win32' && 'long forms are computed only on Windows',
+}, async t => {
+  const s = spellings(t);
+  if (!s) { t.skip('8.3 aliases are disabled on this Windows volume'); return; }
+  const project = 'C:/Fake/JEAN-B~1/proj', entry = 'C:/Fake/JEANBA~1/proj', long = 'C:/Fake/Jean-Baptiste/proj';
+  const h = settingsWriter(s.dir, { hiddenProjects: [] });
+  fakeAsyncRealpath(t, async value => {
+    if (value === project) {
+      h.db.setSetting('global', { hiddenProjects: [entry], hiddenProjectKinds: { [entry]: 'archive' } });
+      return long;
+    }
+    return value === entry ? long : null;
+  });
+  const kept = await h.writer.applyAndPersistArchived([{ remoteAlias: null, projectPath: project, sessions: [] }], true);
+  assert.deepEqual(kept, [], 'the first pass must resolve the hide entry added during precompute');
+});
+
+test('Windows: archive assembly hides a project whose short alias appeared while another resolution was pending', {
+  skip: process.platform !== 'win32' && 'long forms are computed only on Windows',
+}, async t => {
+  const s = spellings(t);
+  if (!s) { t.skip('8.3 aliases are disabled on this Windows volume'); return; }
+  const alias = 'C:/Fake/JEAN-B~1/a', other = 'C:/Fake/JEAN-B~1/b';
+  const h = settingsWriter(s.dir, { hiddenProjects: ['C:/Fake/Jean-Baptiste/a'] });
+  let aliasExists = false;
+  fakeAsyncRealpath(t, async value => {
+    if (value === alias) return aliasExists ? 'C:/Fake/Jean-Baptiste/a' : null;
+    if (value === other) {
+      await new Promise(resolve => setImmediate(resolve));
+      aliasExists = true;
+      return 'C:/Fake/Jean-Baptiste/b';
+    }
+    return null;
+  });
+  const kept = await h.writer.applyAndPersistArchived([
+    { remoteAlias: null, projectPath: alias, sessions: [] }, { remoteAlias: null, projectPath: other, sessions: [] }], true);
+  assert.deepEqual(kept.map(p => p.projectPath), [other], 'an alias created during precompute must be hidden in the same pass');
+});
+
+test('Windows: delete-worktree by long path clears a hide entry stored under the short leaf', {
+  skip: process.platform !== 'win32' && '8.3 short names exist only on Windows',
+}, async t => {
+  const s = spellings(t);
+  if (!s) { t.skip('8.3 aliases are disabled on this Windows volume'); return; }
+  const repo = s.long.split(path.sep).join('/') + '/repo';
+  const target = repo + '/.claude/worktrees/a-long-worktree-name';
+  fs.mkdirSync(target, { recursive: true });
+  const shortTarget = shortSpelling(target);
+  if (path.basename(shortTarget).toLowerCase() === 'a-long-worktree-name') { t.skip('the worktree directory has no 8.3 alias'); return; }
+  const h = settingsWriter(s.dir, { hiddenProjects: [shortTarget], hiddenProjectKinds: { [shortTarget]: 'archive' } });
+  const handlers = require('./project-action-harness').loadProjectActionHandlers({
+    getKnownProjectPaths: () => [repo], localGitEnv: require('../src/main/changes/git-changes-runner').localGitEnv,
+    os: { homedir: () => s.long }, cliSessionState: { getSidebarDescriptors: () => [] },
+    getSetting: key => h.db.getSetting(key),
+    execFile(_cmd, args, _options, cb) {
+      if (args.includes('rev-parse')) return cb(null, target + '/.git\n', '');
+      if (args.includes('status')) return cb(null, '', '');
+      if (args.includes('list')) return cb(null, `worktree ${repo}\nHEAD def\n\nworktree ${target}\nHEAD abc\nbranch refs/heads/topic\n\n`, '');
+      if (args.includes('ls-files')) return cb(null, '', '');
+      if (args.includes('remove')) fs.rmSync(target, { recursive: true });
+      cb(null, '', '');
+    },
+    writer: h.writer, log: { info() {}, warn() {} }, notifyRendererProjectsChanged() {},
+  });
+  const shown = await handlers.get('worktree-status')(null, target);
+  assert.equal((await handlers.get('delete-worktree')(null, target, shown)).ok, true);
+  assert.equal(fs.existsSync(target), false, 'the fixture must have removed the directory');
+  assert.deepEqual(h.db.getSetting('global').hiddenProjects, [], 'cleanup must clear a stored short leaf when deletion was requested by long path');
+});

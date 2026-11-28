@@ -55,6 +55,25 @@ async function longPathForms(values, { platform = process.platform, realpath = f
   return forms;
 }
 
+async function settleLongPathForms(readValues, { platform = process.platform, realpath = fs.promises.realpath } = {}) {
+  if (platform !== 'win32') return null;
+  const forms = {}, tries = new Map();
+  for (;;) {
+    const pending = new Map();
+    for (const value of readValues() || []) {
+      if (!shortCandidate(value)) continue;
+      const key = formKey(value);
+      if (!Object.hasOwn(forms, key) && !pending.has(key) && (tries.get(key) || 0) < 2) pending.set(key, value);
+    }
+    if (!pending.size) return forms;
+    await Promise.all([...pending].map(async ([key, value]) => {
+      tries.set(key, (tries.get(key) || 0) + 1);
+      const long = await longForm(value, realpath);
+      if (long !== null) forms[key] = long;
+    }));
+  }
+}
+
 function longPathLookup(forms, fallback = null) {
   if (!forms && !fallback) return null;
   return value => {
@@ -64,4 +83,4 @@ function longPathLookup(forms, fallback = null) {
   };
 }
 
-module.exports = { createLongPathResolver, longPathForms, longPathLookup };
+module.exports = { createLongPathResolver, longPathForms, settleLongPathForms, longPathLookup };

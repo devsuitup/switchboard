@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createLongPathResolver, longPathForms, longPathLookup } = require('../src/main/shared/long-path');
+const { createLongPathResolver, longPathForms, settleLongPathForms, longPathLookup } = require('../src/main/shared/long-path');
 
 test('GIVEN a non-Windows platform WHEN a resolver is requested THEN there is none and realpath is never called', () => {
   for (const platform of ['linux', 'darwin']) {
@@ -79,4 +79,22 @@ test('GIVEN precomputed forms WHEN a lookup is asked THEN it answers from them a
   assert.equal(withFallback('C:/Users/JEAN-B~1/b'), 'fallback');
   assert.equal(withFallback('C:/plain'), 'C:/plain');
   assert.deepEqual(asked, ['C:/Users/JEAN-B~1/b']);
+});
+
+test('GIVEN Windows WHEN forms are settled THEN values appearing during a round are resolved and a miss is retried once', async () => {
+  const values = ['C:/A~1'];
+  const calls = [];
+  const forms = await settleLongPathForms(() => values, { platform: 'win32', realpath: async value => {
+    calls.push(value);
+    if (value === 'C:/A~1') { values.push('C:/B~1'); return 'C:/Along'; }
+    throw new Error('missing');
+  } });
+  assert.deepEqual(forms, { 'c:/a~1': 'C:\\Along' });
+  assert.deepEqual(calls, ['C:/A~1', 'C:/B~1', 'C:/B~1'], 'a value added mid-round is resolved and its miss retried exactly once');
+});
+
+test('GIVEN a non-Windows platform WHEN forms are settled THEN nothing is read or resolved', async () => {
+  let reads = 0;
+  assert.equal(await settleLongPathForms(() => { reads++; return ['/x~1']; }, { platform: 'linux', realpath: async () => '/y' }), null);
+  assert.equal(reads, 0);
 });

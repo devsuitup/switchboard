@@ -3271,24 +3271,38 @@ Where realpath runs, and never on main's event loop:
   `workers/session-index-writer.js`): re-add, unhide and worktree cleanup each
   build a fresh synchronous resolver.
 - **Main, asynchronously**: `writer.applyAndPersistArchived`
-  (`session-index-writer.js`) awaits `longPathForms` (`fs.promises.realpath`,
-  libuv threadpool) over the local hide entries, each local project path, its
-  worktree parent and its sessions' `cwd`/`recordedCwd`, then hands the
-  synchronous pass `archive.applyAndPersistArchived` a lookup over that
-  precomputed map (`longPathLookup`), which never touches the filesystem; a
-  path missing from the map keeps the plain comparison. `delete-worktree`
-  (`main.js`) awaits `longPathForms([normalizedPath])` before Git removes the
-  directory and passes the map to `writer.cleanupWorktree(path, log,
+  (`session-index-writer.js`), at the start of each of its retry attempts,
+  awaits `settleLongPathForms` (`fs.promises.realpath`, libuv threadpool) over
+  the local hide entries, each local project path, its worktree parent and its
+  sessions' `cwd`/`recordedCwd`. Settling works in rounds: each round rereads
+  the current settings, resolves every candidate not yet resolved, and retries
+  once, in the next round, a candidate whose resolution failed; it returns only
+  from a round with nothing left to resolve, which needs no await. The settings
+  snapshot that attempt filters is therefore read in the same synchronous span
+  as the last candidate list: a hide entry added during an await is resolved
+  before filtering, and an alias that appears while another resolution is
+  pending is caught by its retry. An alias that appears after its retry shows
+  until the next pass. The synchronous pass `archive.applyAndPersistArchived`
+  gets a lookup over that map (`longPathLookup`), which never touches the
+  filesystem; a path missing from the map keeps the plain comparison.
+  `delete-worktree` (`main.js`) awaits `longPathForms` before Git removes the
+  directory, over the path being deleted and every local hide entry containing
+  `~` (not only those under the deleted path's parent, whose spelling may
+  itself differ), and passes the map to `writer.cleanupWorktree(path, log,
   longForms)`; the worker looks it up first and falls back to its own resolver.
+  A hide entry stored under the worktree's short leaf therefore clears when the
+  deletion uses the long spelling.
   Main's archive-workflow identity (`archiveProjectIdentity` through
   `normalizeProjectPath`) already called `fs.realpathSync.native` per project
   before this change and still does; this matching adds no synchronous call
   there.
 
 Each resolver or precomputed map lives for one call (one projects request, one
-writer command, one assembly, one deletion): it resolves each distinct path
-once, needs no bound (its size is that call's distinct paths) and cannot serve
-a stale answer after a folder is created or removed. Keys are the spelling with
+writer command, one assembly attempt, one deletion): it resolves each distinct
+path once, or twice for a failed resolution during an assembly attempt, needs
+no bound (its size is that call's distinct paths) and is never reused by a
+later call, so a folder created or removed between calls is seen by the next
+one. Keys are the spelling with
 separators, trailing slash and case normalized. Only a path containing `~` is
 resolved. A missing path is resolved through its deepest existing ancestor
 that still contains `~`, keeping the missing tail as spelled, so a removed
@@ -3318,7 +3332,8 @@ What is not covered:
 - **A removed short segment with nothing carried.** When a worktree whose own
   directory name is the short segment is gone and no long form was captured
   before removal, the ancestor walk keeps that segment short. `delete-worktree`
-  captures it; other removals do not.
+  captures the deleted path and every stored `~` hide entry; other removals do
+  not.
 - **Plain comparisons kept:** the renderer's pending-session reinjection
   (`public/app.js` `isProjectHidden` while reinserting pending sessions) and
   its other checks, which cannot touch the filesystem; `file-lists.js`
