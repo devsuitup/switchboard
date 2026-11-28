@@ -40,7 +40,7 @@ function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = proces
   if (!Number.isInteger(Number(port)) || Number(port) < 1 || Number(port) > 65535) throw new Error('Debug port must be an integer from 1 to 65535');
   if (!tempHome) throw new Error('Isolated mode requires a temporary home');
   const inherited = Object.fromEntries(Object.entries(env).filter(([key, value]) =>
-    key !== 'PATH' && !/^(CLAUDE|GIT_|ANTHROPIC_|AWS_)|^(CODEX_HOME|HOME|USERPROFILE|HOMEDRIVE|HOMEPATH|APPDATA|LOCALAPPDATA|XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_CACHE_HOME|ORIGINAL_PATH|ELECTRON_RUN_AS_NODE|HISTFILE|GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|SSH_AUTH_SOCK|SSH_AGENT_PID|OPENAI_API_KEY|GOOGLE_APPLICATION_CREDENTIALS)$/i.test(key) &&
+    key !== 'PATH' && !/^(CLAUDE|GIT_|ANTHROPIC_|AWS_)|^(CODEX_HOME|HOME|USERPROFILE|HOMEDRIVE|HOMEPATH|APPDATA|LOCALAPPDATA|XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_CACHE_HOME|XDG_STATE_HOME|ZDOTDIR|BASH_ENV|ENV|PROMPT_COMMAND|INPUTRC|ORIGINAL_PATH|ELECTRON_RUN_AS_NODE|HISTFILE|GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|SSH_AUTH_SOCK|SSH_AGENT_PID|OPENAI_API_KEY|GOOGLE_APPLICATION_CREDENTIALS)$/i.test(key) &&
     !/_(TOKEN|API_KEY|APIKEY|SECRET|SECRET_KEY|PASSWORD|PAT)$/i.test(key) &&
     !/(PASSWORD|TOKEN)$|^MYSQL_PWD$/i.test(key) &&
     !/^(GLAB_|GITLAB_|AZURE_)|^DOCKER_AUTH_CONFIG$/i.test(key) &&
@@ -58,6 +58,7 @@ function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = proces
       XDG_CONFIG_HOME: path.join(tempHome, '.config'),
       XDG_DATA_HOME: path.join(tempHome, '.local', 'share'),
       XDG_CACHE_HOME: path.join(tempHome, '.cache'),
+      XDG_STATE_HOME: path.join(tempHome, '.local', 'state'),
       PATH: path.join(tempHome, 'bin') + path.delimiter + originalPath,
       SWITCHBOARD_DATA_DIR: fixtureData,
       SWITCHBOARD_TRIGGERS_DIR: path.join(fixtureData, 'triggers'),
@@ -75,7 +76,7 @@ const GIT_IDENTITY = {
   GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
 };
 
-const DROPPED_ENV = /^(CLAUDE|GIT_)|^(CODEX_HOME|ELECTRON_RUN_AS_NODE|HISTFILE)$/i;
+const DROPPED_ENV = /^(CLAUDE|GIT_)|^(CODEX_HOME|ELECTRON_RUN_AS_NODE|HISTFILE|ZDOTDIR|BASH_ENV|ENV|PROMPT_COMMAND|INPUTRC|XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_CACHE_HOME|XDG_STATE_HOME)$/i;
 
 function isolatedEnv(home, env = process.env) {
   const data = path.join(home, '.switchboard-e2e');
@@ -87,6 +88,9 @@ function isolatedEnv(home, env = process.env) {
     USERPROFILE: home,
     CODEX_HOME: path.join(home, '.codex'),
     XDG_CONFIG_HOME: path.join(home, '.config'),
+    XDG_DATA_HOME: path.join(home, '.local', 'share'),
+    XDG_CACHE_HOME: path.join(home, '.cache'),
+    XDG_STATE_HOME: path.join(home, '.local', 'state'),
     SWITCHBOARD_DATA_DIR: data,
     SWITCHBOARD_TRIGGERS_DIR: path.join(data, 'triggers'),
     GIT_CONFIG_NOSYSTEM: '1',

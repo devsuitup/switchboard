@@ -45,6 +45,36 @@ for (const [name, buildEnv] of launchers) {
   }
 }
 
+for (const [name, buildEnv] of launchers) {
+  test(name + ' drops inherited shell startup variables and points XDG roots at the disposable home', t => {
+    const home = temporaryHome(t);
+    const outside = path.join(home, 'inherited-state');
+    const inherited = Object.freeze({
+      ZDOTDIR: outside, BASH_ENV: path.join(outside, 'bashenv'), ENV: path.join(outside, 'shenv'),
+      PROMPT_COMMAND: '. ' + path.join(outside, '.bashrc'), INPUTRC: path.join(outside, '.inputrc'),
+      zdotdir: outside, XDG_STATE_HOME: outside, XDG_DATA_HOME: outside, XDG_CACHE_HOME: outside,
+      XDG_CONFIG_HOME: outside, KEEP_ME: 'retained',
+    });
+    const env = buildEnv(home, inherited);
+    for (const key of ['ZDOTDIR', 'BASH_ENV', 'ENV', 'PROMPT_COMMAND', 'INPUTRC']) {
+      assert.deepEqual(Object.keys(env).filter(k => k.toUpperCase() === key), [], key + ' must be dropped');
+    }
+    assert.equal(env.XDG_STATE_HOME, path.join(home, '.local', 'state'));
+    assert.equal(env.XDG_DATA_HOME, path.join(home, '.local', 'share'));
+    assert.equal(env.XDG_CACHE_HOME, path.join(home, '.cache'));
+    assert.equal(env.XDG_CONFIG_HOME, path.join(home, '.config'));
+    assert.equal(env.KEEP_ME, 'retained');
+  });
+}
+
+test('default launch keeps the caller shell startup variables', t => {
+  const home = temporaryHome(t);
+  const env = Object.freeze({ ZDOTDIR: path.join(home, 'z'), BASH_ENV: path.join(home, 'b') });
+  const out = buildLaunch({ pr: 1314, home, env }).env;
+  assert.equal(out.ZDOTDIR, env.ZDOTDIR);
+  assert.equal(out.BASH_ENV, env.BASH_ENV);
+});
+
 test('default launch preserves the caller Codex home', t => {
   const home = temporaryHome(t);
   const env = Object.freeze({ CODEX_HOME: path.join(home, 'inherited-state') });

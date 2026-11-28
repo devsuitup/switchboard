@@ -96,8 +96,15 @@ and the absence of new Unicode directories in the checkout after teardown.
   own temporary `HOME` (and `USERPROFILE`), its own `SWITCHBOARD_DATA_DIR` and
   `SWITCHBOARD_TRIGGERS_DIR`, and a git identity. It drops every inherited
   variable whose name starts with `CLAUDE` or `GIT_`, plus the exact names
-  `HISTFILE` and `ELECTRON_RUN_AS_NODE`, all matched case-insensitively
-  (including lowercase and mixed-case spellings). Inherited `GIT_DIR`,
+  `HISTFILE`, `ELECTRON_RUN_AS_NODE`, `ZDOTDIR`, `BASH_ENV`, `ENV`,
+  `PROMPT_COMMAND` and `INPUTRC`, all
+  matched case-insensitively (including lowercase and mixed-case spellings).
+  `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME`
+  point inside the temporary `HOME`, so a plain terminal's shell finds its
+  startup files (`~/.bashrc`, `~/.zshrc`, …) in the temporary `HOME` rather
+  than the user's. This is not a sandbox: system-wide startup files such as
+  `/etc/profile` still run, and other inherited shell variables (`SHELLOPTS`,
+  `PS4`, `PS1`, …) pass through unchanged. Inherited `GIT_DIR`,
   `GIT_WORK_TREE` or `GIT_INDEX_FILE` would point git at another repository.
   Build the fixture projects with `makeRepo` / `makePlainDir` before
   calling `launch()`, because the app reads them at startup. See
