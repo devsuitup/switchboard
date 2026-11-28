@@ -696,7 +696,8 @@ for (const failure of ['CLI cancellation', 'Keep refusal', 'Stop refusal', 'Stop
     const failures = [];
     let result;
     Object.assign(h.rendererContext, { backgroundActionReason: () => null, activeSubagentsByParent: new Map(),
-      updateTerminalHeader() {}, showSessionActionFailure: (...args) => failures.push(args) });
+      updateTerminalHeader() {}, showSessionActionFailure: (...args) => failures.push(args),
+      sessionActionDescription: session => session?.name || session?.sessionId || 'session' });
     h.rendererContext.window.api.sendSessionToBackground = async (id, options) => (result = await h.handleSendToBackground({}, id, options));
     if (failure === 'CLI cancellation') {
       h.ctx.bgAgents.continuationJobCheck = async () => ({ known: true, job: null });
