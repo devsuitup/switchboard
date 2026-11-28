@@ -99,7 +99,7 @@ function setup() {
     return el;
   };
 
-  for (const f of ['modal-stack.js', 'viewer-toolbar.js', 'viewer-panel.js', 'splitter.js', 'session-state.js', 'session-status-projection.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'choice-dialog.js', 'file-panel.js', 'touched-files-view.js']) {
+  for (const f of ['setting-defaults.js', 'task-registry.js', 'modal-stack.js', 'viewer-toolbar.js', 'viewer-panel.js', 'splitter.js', 'session-state.js', 'session-status-projection.js', 'session-activity-dom.js', 'session-activity.js', 'shortcuts.js', 'header-controls.js', 'tool-bar.js', 'choice-dialog.js', 'file-panel.js', 'touched-files-view.js']) {
     const sourcePath = f === 'file-panel.js' && process.env.EXIT_FILE_PANEL_SOURCE || path.join(PUBLIC_DIR, f);
     vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), dom.getInternalVMContext(), { filename: sourcePath });
   }
@@ -1318,7 +1318,7 @@ for (const reason of ['quit', 'close', 'reload']) {
     const ctx = setup();
     try {
       loadAppDialogs(ctx);
-      for (const f of ['setting-defaults.js', 'dialogs.js']) {
+      for (const f of ['dialogs.js']) {
         const filename = path.join(PUBLIC_DIR, f);
         vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx.context, { filename });
       }
@@ -1550,10 +1550,10 @@ for (const action of ['quit', 'close']) test(`#1023 idle resumable sessions skip
   assert.equal(logs.length, 1);
   assert.equal(logs[0].event, 'action');
   assert.equal(logs[0].source, 'session-exit');
-  assert.match(logs[0].text, /exit.*dialog.*skipped.*idle.*resumable/i, 'the log explains why the dialog was skipped');
+  assert.match(logs[0].text, /exit.*dialog.*skipped.*idle.*restore.*no tracked work/i, 'the log explains why the dialog was skipped');
 });
 
-for (const loss of ['plain terminal', 'panel shell', 'busy turn', 'subagent', 'refused session', 'unknown inventory', 'Codex session', 'renderer refusal']) test(`#1023 ${loss} keeps the exit dialog`, async t => {
+for (const loss of ['plain terminal', 'panel shell', 'busy turn', 'subagent', 'background Bash', 'backgroundUnknown', 'refused session', 'unknown inventory', 'Codex session', 'renderer refusal']) test(`#1023 ${loss} keeps the exit dialog`, async t => {
   const ctx = setup();
   t.after(() => ctx.destroy());
   const detail = idleExit(ctx);
@@ -1561,6 +1561,14 @@ for (const loss of ['plain terminal', 'panel shell', 'busy turn', 'subagent', 'r
   if (loss === 'panel shell') detail.snapshot.rows.push({ id: 'panel', type: 'panel', owner: 'one' });
   if (loss === 'busy turn') Object.assign(detail.snapshot.rows[1], { background: 'busy', canBackground: false, reason: 'Claude is working.' });
   if (loss === 'subagent') ctx.window.activeSubagentsByParent = new Map([['two', new Set(['child'])]]);
+  if (loss === 'background Bash' || loss === 'backgroundUnknown') {
+    ctx.window.taskRegistry.applySnapshot({ parentSessionId: 'two', revision: 1, known: true,
+      backgroundUnknown: loss === 'backgroundUnknown',
+      tasks: loss === 'background Bash' ? [{ id: 'shell1', kind: 'bash', terminal: false, at: 1 }] : [] });
+    ctx.window.activeSubagentsByParent = ctx.window.taskRegistry.agentView;
+    assert.equal(ctx.window.activeSubagentsByParent.has('two'), false, 'background shell work is absent from the agent view');
+    assert.equal(ctx.window.taskRegistry.background('two'), true);
+  }
   if (loss === 'refused session') Object.assign(detail.snapshot.rows[1], { background: 'refused', canBackground: false, reason: 'The prompt holds text you have not sent.' });
   if (loss === 'unknown inventory') detail.snapshot.unknown = true;
   if (loss === 'Codex session') ctx.window.openSessions.get('two').session.runtime = 'codex';
@@ -1615,3 +1623,38 @@ for (const choice of ['cancel', 'save', 'discard']) test(`#1023 idle quit still 
   assert.equal(ctx.calls.writes.length, choice === 'cancel' ? 0 : 1);
   if (choice === 'save') assert.equal(ctx.disk.get(A), 'x0\nmine');
 });
+
+for (const [startup, current] of [['off', 'off'], ['auto', 'off'], ['off', 'auto']]) {
+  test('#1023 restore mode ' + startup + ' at startup then ' + current + ' at quit uses the current setting', async t => {
+    const ctx = setup();
+    t.after(() => ctx.destroy());
+    const detail = idleExit(ctx);
+    let settings = { restoreOnStartup: startup };
+    ctx.window.api.getSetting = async key => {
+      assert.equal(key, 'global');
+      return settings;
+    };
+    loadAppFunctions(ctx.context, { functions: ['restoreWorkingSet'], declarations: ['restoreMode'] });
+    ctx.window.createRestorePlanner = () => ({ isSettled: () => true });
+    ctx.window.tickRestorePlanner = async () => {};
+    ctx.window.api.getIndexingState = async () => ({ finished: false });
+    await ctx.window.restoreWorkingSet();
+    assert.equal(vm.runInContext('restoreMode', ctx.context), startup);
+    settings = { restoreOnStartup: current };
+    const checking = ctx.calls.check(1027, 'quit', detail);
+    await flush();
+    const question = ctx.window.document.querySelector('.choice-dialog');
+    if (current === 'off') {
+      assert.ok(question, 'restore mode ' + startup + ' at startup then off at quit must keep the exit dialog');
+      assert.deepEqual(ctx.calls.answers, []);
+      assert.deepEqual(ctx.calls.writes, []);
+      question.querySelector('.choice-dialog-cancel').click();
+      await checking;
+      assert.deepEqual(ctx.calls.answers, [{ id: 1027, proceed: false }]);
+    } else {
+      assert.equal(question, null, 'enabling restore after startup allows an idle quit without the dialog');
+      await checking;
+      assert.deepEqual(ctx.calls.answers, [{ id: 1027, proceed: true }]);
+    }
+  });
+}

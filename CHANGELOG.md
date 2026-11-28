@@ -7,8 +7,10 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### New
 - Moving a session to the background now asks whether to stop or keep an older job for the same conversation when Switchboard cannot tell if it is still running; Stop checks again before moving, and Cancel quietly keeps that session in the foreground while the rest of the batch continues. Cancellations from Claude and refusals after a choice still show their reason; Keep also checks for live jobs known only from the Agents list. Cancelled questions close, and waiting for a choice does not shorten the move’s confirmation time. (#1295)
 
+### Changed
+- Quit and window close no longer ask for confirmation when only idle Claude sessions are open, startup restore is enabled and Switchboard tracks no running background work; unsaved file edits still ask, and Restart to update keeps its background option. (#1023)
+
 ### Fixed
-- Quit and window close no longer ask for confirmation when only idle, resumable Claude sessions are open; unsaved file edits and work that would be lost still ask, and Restart to update keeps its background option. (#1023)
 - On Windows, a project you deleted no longer reappears in the sidebar when its sessions recorded its folder under a short spelling such as `C:\Users\JEAN-B~1\...`, and adding it back with **Add project** under that spelling shows it again. (#1304)
 
 ## v0.1.0-beta.5 — 2026-11-28

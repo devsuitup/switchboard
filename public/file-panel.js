@@ -937,10 +937,12 @@ async function confirmSessionExit(detail, changed) {
   if (['quit', 'close'].includes(action) && !snapshot.unknown && moving.length === snapshot.rows.length
     && moving.every(row => row.background === 'ready' && !row.reason
       && (openSessions.get(row.id)?.session?.runtime || 'claude') === 'claude'
-      && (typeof activeSubagentsByParent === 'undefined' || !activeSubagentsByParent.get(row.id)?.size))) {
+      && !window.taskRegistry.background(row.id)
+      && (typeof activeSubagentsByParent === 'undefined' || !activeSubagentsByParent.get(row.id)?.size))
+    && ((await window.api.getSetting('global'))?.restoreOnStartup || SETTING_DEFAULTS.restoreOnStartup) !== 'off') {
     try {
       window.api.logUiNotice?.({ event: 'action', kind: 'info', id: 'session-exit-skip', source: 'session-exit',
-        text: 'Exit dialog skipped: only idle, resumable Claude sessions; no work would be lost.' })?.catch?.(() => {});
+        text: 'Exit dialog skipped: only idle Claude sessions eligible for the selected startup restore mode; no tracked work would be lost.' })?.catch?.(() => {});
     } catch {}
 
     return 'stop';

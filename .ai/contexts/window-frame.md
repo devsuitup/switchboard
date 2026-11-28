@@ -255,13 +255,21 @@ move and resize the window: `Super`+drag on GNOME, `Alt`+`F7`/`Alt`+`F8`, or
 User menu Quit (Exit on Windows), Restart to update and window close enter
 one attempt in `src/main/app/session-exit.js` through `src/main/app/unsaved-guard.js`. Unsaved edits
 first ask Save/Discard/Cancel. For user Quit/Exit and window close, the session
-question is skipped when every inventoried row is a ready, resumable Claude
-session, with no refusal or running subagent. The existing snapshot and renderer
-eligibility/subagent state supply this decision; there is no extra probe.
-Unknown inventory, plain terminals, panel shells, busy turns, other runtimes
-and any existing refusal keep the question. A skipped question returns the same
+question is skipped when every inventoried row is a ready Claude session,
+with no refusal, running subagent or background work reported by
+`taskRegistry.background(row.id)` (including Bash tasks and `backgroundUnknown`).
+The current global `restoreOnStartup` setting is read at quit time; `off`
+keeps the question even if restoration was enabled at startup. The selected
+mode controls restoration: automatically, after startup consent, or on click.
+The decision uses the existing inventory and renderer tracking, without an
+extra CLI probe. Work Switchboard cannot see in an idle session, such as a
+Monitor or a session-only cron, ends with the quit. Unknown inventory, plain
+terminals, panel shells, busy turns, other runtimes and any existing refusal
+keep the question. A skipped question returns the same
 `stop` choice as ordinary Quit, preserving the flush and restore list, and logs
 the reason through `logUiNotice` as a `session-exit` action.
+The skip path is unit-tested only in `test/dom-file-panel-unsaved-guard.test.js`;
+there is no e2e coverage because it needs a real idle CLI descriptor.
 Restart to update retains its question, including Move to background and update.
 Otherwise local work asks Stop/Move/Cancel when sessions can move, or Stop/Cancel. Cancel stays
 focused; Enter on Cancel, Escape, the backdrop and × cancel.

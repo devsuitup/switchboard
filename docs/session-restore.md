@@ -18,7 +18,9 @@ start any session.
 | **Restore on click** | Nothing is started; the sessions are marked in the sidebar, and each is resumed when you click it — see [Restore on click](#restore-on-click) |
 | **Restore automatically** | The sessions are reopened without asking |
 
-The setting is read at launch; a change applies from the next start.
+The setting is read at launch for restoration. Quit/Exit and window close also
+read its current value: changing it to **Don't restore** keeps the exit question
+even when restoration was enabled at startup.
 
 ## What is saved
 
@@ -186,11 +188,16 @@ checks independently of this external approval, including within that window.
 
 User Quit (Exit on Windows), Restart to update and window close ask about
 unsaved edits first. Quit/Exit and window close then proceed without another
-question when only idle, resumable Claude sessions are open and no subagent is
-running. Switchboard saves the same restore list as ordinary Quit, and records
-why it skipped the question in the log. Plain terminals, panel shells, busy
-turns, running subagents and work whose state is uncertain keep the Stop/Cancel
-question. Restart to update keeps its Stop/Move/Cancel question, including the
+question when only idle Claude sessions are open, no tracked subagent or
+background task is running, and the current startup restore setting is not
+**Don't restore**. Switchboard saves the same restore list as ordinary Quit;
+the selected mode controls whether those sessions resume automatically, after
+accepting the startup question, or on click. It records why it skipped the
+exit question in the log. Plain terminals, panel shells, busy turns, running
+subagents, background Bash tasks and uncertain background work keep the
+Stop/Cancel question. This decision relies on what Switchboard tracks. Work
+it cannot see in an idle session, such as a Monitor or a session-only cron,
+ends when you quit. Restart to update keeps its Stop/Move/Cancel question, including the
 option to move sessions to the background. The final renderer write follows
 the required approvals.
 A late reload-to-exit upgrade also runs these checks before writing. On macOS, Dock Quit
