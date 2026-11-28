@@ -330,7 +330,8 @@ function showAppNotice(options) {
     resume();
   }
   if (focusedButton) {
-    const controls = [...notice.querySelectorAll('button, summary')].filter(control => control.className === focusedButton.className);
+    const stableClass = className => className.split(' ').filter(name => name && name !== 'app-notice-primary').join(' ');
+    const controls = [...notice.querySelectorAll('button, summary')].filter(control => stableClass(control.className) === stableClass(focusedButton.className));
     (controls.find(control => appNoticeControlLabel(control) === focusedButton.label) || controls[0])?.focus();
   }
   return notice;

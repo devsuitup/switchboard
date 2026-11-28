@@ -428,3 +428,15 @@ test('1023 the first action is primary and the others are secondary', t => {
   const actions = [...document.querySelectorAll('.app-notice-action')];
   assert.deepEqual(actions.map(button => button.classList.contains('app-notice-primary')), [true, false]);
 });
+
+test('1023 the surviving secondary action now styled primary must keep focus', t => {
+  const { window, document } = setup(t);
+  const transcript = { label: 'Open transcript', onAction() {} };
+  window.showAppNotice({ id: 'ended', message: 'This job has ended.', actions: [{ label: 'Respawn', onAction() {} }, transcript] });
+  document.querySelectorAll('.app-notice-action')[1].focus();
+  window.showAppNotice({ id: 'ended', message: 'This job has ended.', actions: [transcript] });
+  assert.equal(document.activeElement.tagName, 'BUTTON');
+  assert.equal(document.activeElement.textContent, 'Open transcript');
+  t.mock.timers.tick(20_000);
+  assert.ok(document.querySelector('[data-notice-id="ended"]'), 'restored focus keeps expiry paused');
+});

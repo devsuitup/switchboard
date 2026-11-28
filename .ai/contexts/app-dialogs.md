@@ -211,8 +211,9 @@ the user opened it. The main-process error group re-renders its message with
 The head row holds the icon, the message and Dismiss, an × button with
 `aria-label="Dismiss"` and no text. Action buttons sit in `.app-notice-actions`
 below; the first carries `app-notice-primary`. Focus restore after a rebuild
-matches buttons and the Details toggle by class, then by `aria-label` or
-text. The main-process error announcement is inserted before the first
+matches buttons and the Details toggle by class (ignoring
+`app-notice-primary`, so a secondary action promoted to first keeps focus),
+then by `aria-label` or text, then falls back to the first of that class. The main-process error announcement is inserted before the first
 button in that button's parent.
 
 An expiring notice (not `error`, not `persistent`) carries
@@ -230,7 +231,8 @@ fewer, then folds again. Folded notices keep their timers.
 Background restore uses two groups. `Restore:background` keeps refusals and
 attach failures: a member whose refusal says the worker is dead
 (`workerGone` from `restore-background-job`, without a respawn in this
-preparation) is `info`; anything else is `error`. The group is persistent
+preparation or in the Respawn that started it, passed as `afterRespawn`) is
+`info`; anything else is `error`. The group is persistent
 only while it holds an error; with no error, the sole member with an action
 keeps it. `Restore:ended` is one info line for jobs dropped from the working
 set at automatic restore ("N ended background jobs were removed from your

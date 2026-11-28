@@ -1254,3 +1254,25 @@ test('1023 automatic restore drops stopped jobs from the working set and reports
   assert.deepEqual(verbs, [], 'nothing is respawned');
   assert.deepEqual(h.openTerminalCalls, []);
 });
+
+test('1023 a successful Respawn verb followed by failed attachment must remain an error', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true, attachJobId: '1234abcd' }], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  const calls = [];
+  h.dom.window.api.bgAgentVerb = async (...args) => { calls.push(['verb', ...args]); return { ok: true }; };
+  h.dom.window.api.restoreBackgroundJob = async (_id, options) => {
+    calls.push(['restore', options?.attachOnly === true]);
+    return options?.attachOnly
+      ? { action: 'refuse', jobId: '1234abcd', workerGone: true, reason: 'Job 1234abcd (blocked): worker is not live — not attached' }
+      : { action: 'refuse', jobId: '1234abcd', recovery: 'respawn', workerGone: true, reason: 'Job 1234abcd (blocked): blocked job was not respawned automatically' };
+  };
+  await h.restore();
+  h.dom.window.document.querySelector('[data-notice-id="Restore:background"] .app-notice-action').click();
+  for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls.filter(call => call[0] === 'verb').length, 1);
+  const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:background"]');
+  assert.ok(notice);
+  assert.equal(notice.getAttribute('role'), 'alert');
+  assert.equal(notice.dataset.kind, 'error');
+  assert.equal(notice.querySelector('.app-notice-expiry'), null);
+});

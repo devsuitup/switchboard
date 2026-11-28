@@ -688,7 +688,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
 }
 
 
-async function prepareBackgroundRestore(session, item, { attachOnly = false, interactive = false, onRefused,
+async function prepareBackgroundRestore(session, item, { attachOnly = false, interactive = false, onRefused, afterRespawn = false,
   pause = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   const RESTORE_BACKGROUND_VERB_RECONCILE_DESCRIPTOR_CHECK_TIMEOUT_MS = 120000;
   const RESTORE_BACKGROUND_TRANSITIONAL_STATE_MS = 30000;
@@ -696,7 +696,7 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
   let attempts = 0;
   let live;
   let recovery;
-  let respawned = false;
+  let respawned = afterRespawn;
   let unusableFirst = false;
   let polling = false;
   let pollStarted = false;
@@ -821,7 +821,7 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
         if (!verb?.ok) { report(verb?.error || 'Respawn returned no result', 'Respawn', () => retry(true)); return null; }
       } catch (err) { report(err.message || String(err), 'Respawn', () => retry(true)); return null; }
     }
-    return prepareBackgroundRestore(session, item, { attachOnly: true });
+    return prepareBackgroundRestore(session, item, { attachOnly: true, afterRespawn: respawn === true });
   };
   const retry = async respawn => {
     const background = await recover(respawn);
