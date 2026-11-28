@@ -1479,6 +1479,7 @@ let projectsRetryTimer = null;
 let projectsRetryRunning = false;
 let projectsRetryFailures = 0;
 let projectsReconcileStreak = null;
+const projectsRepairCleanupDeferred = new Set();
 
 // see .ai/contexts/session-cache.md ("A reconcile that loses to writes")
 function projectsReconcileInterval() {
@@ -1546,8 +1547,16 @@ async function getProjectsSnapshot(showArchived, retry = false, { logConflict = 
       });
       // see .ai/contexts/session-cache.md ("Bridge history divergence")
       if (declared.length !== repairFolders.length) {
-        try { await writer.pruneUndeclaredRepairFolders(repairFolders.filter(folder => !declared.includes(folder))); }
-        catch (error) { log.warn(`[projects] repair cleanup for undeclared hosts deferred: ${error.code || error.message}`); }
+        try {
+          await writer.pruneUndeclaredRepairFolders(repairFolders.filter(folder => !declared.includes(folder)));
+          projectsRepairCleanupDeferred.clear();
+        } catch (error) {
+          const key = error.code || 'UNCODED';
+          if (!projectsRepairCleanupDeferred.has(key)) {
+            projectsRepairCleanupDeferred.add(key);
+            log.warn(`[projects] repair cleanup for undeclared hosts deferred: ${error.code || error.message}`);
+          }
+        }
       }
     }
     const needsPopulate = !isInitialScanComplete() || (!repairPending && (!isCachePopulated() || !isSearchIndexPopulated()));
