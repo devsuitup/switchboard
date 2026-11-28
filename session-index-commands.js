@@ -5,7 +5,7 @@ const { scheduleRegistry } = require('./src/main/schedules/schedule-runner');
 const { whatsNewOnStartup } = require('./src/main/app/changelog');
 const { migrateSchedulesTabDefault } = require('./src/main/schedules/schedules-tab-migration');
 const { isProjectHidden, longVisibilityPath } = require('./public/worktree-nesting');
-const { createLongPathResolver } = require('./src/main/shared/long-path');
+const { createLongPathResolver, longPathLookup } = require('./src/main/shared/long-path');
 const { createHash } = require('node:crypto');
 const path = require('node:path');
 const { archiveProjectIdentity: projectIdentity } = require('./src/main/projects/project-archive-workflow');
@@ -208,7 +208,7 @@ function createWriterCommands(db) {
       db.setSetting('global', global);
       return global;
     },
-    cleanupWorktree(projectPath) {
+    cleanupWorktree(projectPath, longForms = null) {
       let removed = 0;
       for (const row of db.getAllCached()) {
         if (row.projectPath !== projectPath) continue;
@@ -217,7 +217,7 @@ function createWriterCommands(db) {
         removed++;
       }
       const global = db.getSetting('global') || {};
-      const matched = localHiddenEntriesEqualTo(global, projectPath);
+      const matched = localHiddenEntriesEqualTo(global, projectPath, undefined, longVisibilityPath(longPathLookup(longForms, createLongPathResolver())));
       if (matched.length) {
         const fields = fieldsWithoutHiddenEntries(global, matched);
         if (!global.hiddenProjectKinds) delete fields.hiddenProjectKinds;

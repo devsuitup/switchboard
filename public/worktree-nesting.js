@@ -51,10 +51,15 @@ function sessionUnderPath(session, projectPath, alias = null, longPath = null) {
   if (typeof folder !== 'string') return false;
   const bare = folder.replace(/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}::/, '');
   const encode = typeof module !== 'undefined' && module.exports ? module.require('../encode-project-path').encodeProjectPath : encodeProjectPath;
-  const encoded = encode(projectPath.replace(/[/\\]+$/, ''));
+  const trim = value => value.replace(/[/\\]+$/, '');
   const normalize = value => visibilityPath(value, alias);
-  return normalize(bare) === normalize(encoded) || ['--worktrees-', '--claude-worktrees-', '--work-files-worktrees-']
-    .some(suffix => normalize(bare).startsWith(normalize(encoded + suffix)));
+  const folderUnder = (name, encoded) => normalize(name) === normalize(encoded) || ['--worktrees-', '--claude-worktrees-', '--work-files-worktrees-']
+    .some(suffix => normalize(name).startsWith(normalize(encoded + suffix)));
+  if (folderUnder(bare, encode(trim(projectPath)))) return true;
+  if (alias || typeof longPath !== 'function' || typeof session.cwd !== 'string') return false;
+  const base = encode(trim(session.cwd));
+  if (!normalize(bare).startsWith(normalize(base))) return false;
+  return folderUnder(encode(trim(longPath(session.cwd))) + bare.slice(base.length), encode(trim(longPath(projectPath))));
 }
 
 function isProjectHidden(hiddenProjects, alias, projectPath, hiddenProjectScopes = {}, normalize = visibilityPath) {

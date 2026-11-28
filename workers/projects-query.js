@@ -7,6 +7,7 @@ const cache = require('../session-cache');
 const { applySessionName, establishTranscriptBaseline } = require('../session-name');
 const { canonicalPath } = require('../src/main/projects/project-delete-identity');
 const { isProjectHidden } = require('../public/worktree-nesting');
+const { createLongPathResolver } = require('../src/main/shared/long-path');
 const db = new Database(workerData.dbPath, { readonly: true, fileMustExist: true });
 db.pragma('busy_timeout = 5000');
 
@@ -108,9 +109,10 @@ async function build(message) {
     parentPort.postMessage({ id: message.id, progress: { effects: effects.splice(0), keptLiveRows } });
     publishedLiveRows = new Map(keptLiveRows);
   } });
-  const defaultProjects = visible(cache.buildProjectsFromCache(false));
+  const longPath = createLongPathResolver();
+  const defaultProjects = visible(cache.buildProjectsFromCache(false, { longPath }));
   const defaultProjection = cache.getProjectsProjection();
-  const allProjects = visible(cache.buildProjectsFromCache(true));
+  const allProjects = visible(cache.buildProjectsFromCache(true, { longPath }));
   const allProjection = cache.getProjectsProjection();
   const projection = { buildId: message.id, facts: { ...defaultProjection.facts, ...allProjection.facts },
     removedInputs: { ...defaultProjection.removedInputs, ...allProjection.removedInputs } };

@@ -1233,10 +1233,11 @@ ipcMain.handle('delete-worktree', async (_event, worktreePath, shown) => {
   if (!check.ok) return check;
   const { normalizedPath, parentRepo } = check;
   try {
+    const longForms = await require('./src/main/shared/long-path').longPathForms([normalizedPath]);
     const result = await worktreeDelete.removeWorktree(normalizedPath, parentRepo, shown,
       () => worktreeDeletionStatus(normalizedPath, parentRepo), worktreeGit);
     if (!result.ok) return result;
-    const removed = await writer.cleanupWorktree(normalizedPath, log);
+    const removed = await writer.cleanupWorktree(normalizedPath, log, longForms);
     log.info(`[delete-worktree] removed=${normalizedPath} sessions=${removed}`);
     notifyRendererProjectsChanged('worktree-deleted');
     return { ok: true, removed };

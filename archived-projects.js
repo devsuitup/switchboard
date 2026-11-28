@@ -6,7 +6,6 @@ const { joinFolderKey, parseFolderKey } = require('./src/main/remote/remote-host
 const { encodeProjectPath } = require('./encode-project-path');
 const { resolveWorktreePath } = require('./derive-project-path');
 const { worktreeParentPath, isHiddenRepositoryWorktree, projectHiddenMatcher, visibilityPath, longVisibilityPath, sessionUnderPath } = require('./public/worktree-nesting');
-const { createLongPathResolver } = require('./src/main/shared/long-path');
 const { scheduleFields, scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter, skipMissedRunsOf } = require('./src/main/schedules/schedule-runner');
 
 const SETTING_KEY = 'archivedProjects';
@@ -21,7 +20,7 @@ function archivedEntry(alias, projectPath) {
 
 const entryOf = (project) => archivedEntry(project.remoteAlias || null, project.projectPath);
 
-function groupedHiddenMatcher(hiddenProjects, scopes, longPath = createLongPathResolver()) {
+function groupedHiddenMatcher(hiddenProjects, scopes, longPath = null) {
   return projectHiddenMatcher(hiddenProjects, scopes, longVisibilityPath(longPath));
 }
 
@@ -147,10 +146,9 @@ function retireArchivedEntries(getSetting, setSetting, archived, entries) {
  * hidden on its host (`hiddenRepository`) and each project holding a re-enable
  * offer.
  */
-function applyAndPersistArchived(projects, showArchived, { getSetting, setSetting, scheduleName = readScheduleName }) {
+function applyAndPersistArchived(projects, showArchived, { getSetting, setSetting, scheduleName = readScheduleName, longPath = null }) {
   const global = getSetting('global') || {};
   const hidden = global.hiddenProjects || [];
-  const longPath = createLongPathResolver();
   const hiddenMatcher = groupedHiddenMatcher(hidden, global.hiddenProjectScopes, longPath);
   const archived = getSetting(SETTING_KEY) || {};
   projects = projects.flatMap(project => {
