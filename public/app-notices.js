@@ -1,6 +1,14 @@
 // see docs/product/BUILDING-BLOCKS.md (B8)
 const appNoticeEntries = new Map();
 const transientNoticeEntries = new WeakMap();
+const APP_NOTICE_STACK_LIMIT = 3;
+let appNoticeStackExpanded = false;
+const APP_NOTICE_ICON_SHAPES = {
+  info: [['circle', { cx: '8', cy: '8', r: '6.5' }], ['path', { d: 'M8 7.2v4M8 4.8v.1', 'stroke-linecap': 'round' }]],
+  error: [['path', { d: 'M8 1.8l6.6 11.6H1.4z', 'stroke-linejoin': 'round' }], ['path', { d: 'M8 6.3v3.4M8 11.6v.1', 'stroke-linecap': 'round' }]],
+  ok: [['circle', { cx: '8', cy: '8', r: '6.5' }], ['path', { d: 'M5.2 8.2l2 2 3.6-4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }]],
+  dismiss: [['path', { d: 'M1 1l8 8M9 1l-8 8' }]],
+};
 
 window.trackUiNotice = function (element, source, options = {}) {
   if (transientNoticeEntries.has(element)) { transientNoticeEntries.get(element)(options); return; }
@@ -65,7 +73,7 @@ window.api?.onMainProcessError?.(notice => {
   };
   if (previous) {
     previous.options = options;
-    previous.notice.querySelector('.app-notice-message').textContent = options.message(members);
+    renderAppNoticeMessage(previous.notice.querySelector('.app-notice-message'), options.message(members));
     reportAppNotice('merge', options, previous.notice);
   }
   const group = previous?.notice || showAppNotice(options);
@@ -75,7 +83,8 @@ window.api?.onMainProcessError?.(notice => {
     announcement.className = 'app-notice-announcement';
     announcement.setAttribute('role', 'alert');
     announcement.setAttribute('aria-atomic', 'true');
-    group.insertBefore(announcement, group.querySelector('button'));
+    const first = group.querySelector('button');
+    (first?.parentNode || group).insertBefore(announcement, first);
   }
   if (!existing) announcement.textContent = notice.message;
 });
@@ -104,6 +113,12 @@ function sessionActionDescription(session, { log = false } = {}) {
   return `${identity} at ${location}`;
 }
 
+function sessionActionLabel(session) {
+  const rawName = session?.name || session?.aiTitle || session?.summary;
+  const name = typeof cleanDisplayName === 'function' ? cleanDisplayName(rawName) : rawName;
+  return name || (session?.sessionId ? session.sessionId.slice(0, 8) : 'a background session');
+}
+
 function showSessionActionFailure(operation, session, error, recovery, onRetry, { headline = `${operation} failed`, kind = 'error', sessions = [session], logReason } = {}) {
   const reason = error?.message || error || 'The backend is unavailable or returned no result';
   showAppNotice({
@@ -123,6 +138,7 @@ function clearAppNotice(id, { membersOnly = false, exceptGroup, reason = 'cleare
     const restoreFocus = entry.notice.contains(document.activeElement);
     entry.notice.remove();
     appNoticeEntries.delete(id);
+    layoutAppNotices();
     if (restoreFocus && entry.returnFocus?.isConnected) entry.returnFocus.focus();
   }
   for (const [groupId, group] of [...appNoticeEntries]) {
@@ -134,75 +150,170 @@ function clearAppNotice(id, { membersOnly = false, exceptGroup, reason = 'cleare
   }
 }
 
+function appNoticeSvg(shape, className, viewBox) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('class', className);
+  svg.setAttribute('viewBox', viewBox);
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  for (const [tag, attributes] of APP_NOTICE_ICON_SHAPES[shape]) {
+    const part = document.createElementNS(ns, tag);
+    for (const [name, value] of Object.entries(attributes)) part.setAttribute(name, value);
+    svg.append(part);
+  }
+  return svg;
+}
+
+function renderAppNoticeMessage(element, message) {
+  const value = message == null ? '' : String(message);
+  const split = value.indexOf('\n');
+  const title = document.createElement('span');
+  title.className = 'app-notice-title';
+  title.textContent = split < 0 ? value : value.slice(0, split);
+  if (split < 0) { element.replaceChildren(title); return; }
+  const body = document.createElement('span');
+  body.className = 'app-notice-body';
+  body.textContent = value.slice(split + 1);
+  element.replaceChildren(title, '\n', body);
+}
+
+function appNoticeControlLabel(control) {
+  return control.getAttribute('aria-label') || control.textContent;
+}
+
+function layoutAppNotices() {
+  const container = document.getElementById('app-notices');
+  if (!container) return;
+  const notices = [...container.children].filter(element => element.classList.contains('app-notice'));
+  if (notices.length <= APP_NOTICE_STACK_LIMIT) appNoticeStackExpanded = false;
+  const folded = appNoticeStackExpanded ? 0 : notices.length - APP_NOTICE_STACK_LIMIT;
+  notices.forEach((notice, index) => { notice.hidden = index < folded; });
+  let pill = [...container.children].find(element => element.classList.contains('app-notice-more'));
+  if (folded <= 0) { pill?.remove(); return; }
+  if (!pill) {
+    pill = document.createElement('button');
+    pill.type = 'button';
+    pill.className = 'app-notice-more';
+    pill.setAttribute('aria-expanded', 'false');
+    pill.addEventListener('click', () => {
+      const firstFolded = [...container.children].find(element => element.classList.contains('app-notice') && element.hidden);
+      appNoticeStackExpanded = true;
+      layoutAppNotices();
+      firstFolded?.querySelector('button, summary')?.focus();
+    });
+    container.prepend(pill);
+  }
+  pill.textContent = `+${folded} more`;
+}
+
 function showAppNotice(options) {
   const previous = appNoticeEntries.get(options.id);
   if (options.mergeMembers) {
     options = { ...options, members: [...new Map([...(previous?.options.members || []), ...options.members].map(member => [member.id, member])).values()] };
   }
   if (options.memberOptions) options = { ...options, ...options.memberOptions(options.members) };
-  const { id, kind = 'info', message, members, actionLabel, onAction, dismissOnAction = true, dismissible = true, persistent = false } = options;
+  const { id, kind = 'info', message, details, members, actionLabel, onAction, dismissOnAction = true, dismissible = true, persistent = false } = options;
   clearTimeout(previous?.timer);
   const focusedButton = previous?.notice.contains(document.activeElement)
-    ? { className: document.activeElement.className, label: document.activeElement.textContent } : null;
+    ? { className: document.activeElement.className, label: appNoticeControlLabel(document.activeElement) } : null;
+  const detailsOpen = previous?.notice.querySelector('.app-notice-details')?.open === true;
   const container = document.getElementById('app-notices');
   const notice = document.createElement('div');
   if (id !== undefined) notice.dataset.noticeId = id;
   notice.className = 'app-notice';
+  notice.dataset.kind = kind;
   notice.setAttribute('role', id === 'main-process-errors' ? 'group' : kind === 'error' ? 'alert' : 'status');
   if (id === 'main-process-errors') {
     notice.setAttribute('aria-live', 'off');
     notice.setAttribute('aria-label', 'Application errors');
   }
+  const head = document.createElement('div');
+  head.className = 'app-notice-head';
+  head.append(appNoticeSvg(kind === 'error' || kind === 'warning' ? 'error' : kind === 'ok' ? 'ok' : 'info', 'app-notice-icon', '0 0 16 16'));
   const text = document.createElement('span');
   text.className = 'app-notice-message';
-  text.textContent = typeof message === 'function' ? message(members) : message;
-  notice.append(text);
+  renderAppNoticeMessage(text, typeof message === 'function' ? message(members) : message);
+  head.append(text);
+  notice.append(head);
+  const detailsText = typeof details === 'function' ? details(members) : details;
+  if (detailsText) {
+    const disclosure = document.createElement('details');
+    disclosure.className = 'app-notice-details';
+    disclosure.open = detailsOpen;
+    const summary = document.createElement('summary');
+    summary.className = 'app-notice-details-toggle';
+    summary.textContent = 'Details';
+    const body = document.createElement('div');
+    body.className = 'app-notice-details-body';
+    body.textContent = detailsText;
+    disclosure.append(summary, body);
+    notice.append(disclosure);
+  }
+  const actionRow = document.createElement('div');
+  actionRow.className = 'app-notice-actions';
   const actions = options.actions || [{ label: actionLabel, onAction }];
   for (const { label, onAction: runAction } of actions) {
     if (!label || typeof runAction !== 'function') continue;
     const action = document.createElement('button');
     action.type = 'button';
-    action.className = 'app-notice-action';
+    action.className = actionRow.childElementCount ? 'app-notice-action' : 'app-notice-action app-notice-primary';
     action.textContent = label;
     action.addEventListener('click', () => {
       if (appNoticeEntries.get(id)?.notice !== notice) return;
       if (dismissOnAction) clearAppNotice(id, { reason: `action:${action.textContent.trim()}` });
       runAction();
     });
-    notice.append(action);
+    actionRow.append(action);
   }
+  if (actionRow.childElementCount) notice.append(actionRow);
   if (dismissible) {
     const dismiss = document.createElement('button');
     dismiss.type = 'button';
     dismiss.className = 'app-notice-dismiss';
-    dismiss.textContent = 'Dismiss';
+    dismiss.setAttribute('aria-label', 'Dismiss');
+    dismiss.title = 'Dismiss';
+    dismiss.append(appNoticeSvg('dismiss', 'app-notice-dismiss-icon', '0 0 10 10'));
     dismiss.addEventListener('click', () => {
       if (appNoticeEntries.get(id)?.notice !== notice) return;
       const onDismiss = appNoticeEntries.get(id).options.onDismiss;
       clearAppNotice(id, { reason: 'user' });
       onDismiss?.();
     });
-    notice.append(dismiss);
+    head.append(dismiss);
   }
   notice.addEventListener('mousedown', event => {
     if (event.target.closest('button')) event.preventDefault();
   });
   const entry = { notice, timer: null, returnFocus: previous ? previous.returnFocus : document.activeElement, options };
+  const expires = kind !== 'error' && !persistent;
+  let remaining = kind === 'undo' ? 10_000 : 15_000;
+  if (expires) {
+    notice.style.setProperty('--notice-expiry', `${remaining}ms`);
+    const line = document.createElement('div');
+    line.className = 'app-notice-expiry';
+    line.setAttribute('aria-hidden', 'true');
+    notice.append(line);
+  }
   if (previous) previous.notice.replaceWith(notice);
   else container.append(notice);
   appNoticeEntries.set(id, entry);
+  layoutAppNotices();
   reportAppNotice(previous ? options.mergeMembers ? 'merge' : 'replace' : 'show', options, notice);
-  if (kind !== 'error' && !persistent) {
-    let remaining = kind === 'undo' ? 10_000 : 15_000;
+  if (expires) {
     let started;
     let focused = false;
     let hovered = false;
     const resume = () => {
       if (focused || hovered || !notice.isConnected) return;
+      delete notice.dataset.paused;
       started = Date.now();
       entry.timer = setTimeout(() => clearAppNotice(id, { reason: 'expired' }), remaining);
     };
     const pause = () => {
+      notice.dataset.paused = 'true';
       if (entry.timer === null) return;
       clearTimeout(entry.timer);
       entry.timer = null;
@@ -219,8 +330,8 @@ function showAppNotice(options) {
     resume();
   }
   if (focusedButton) {
-    const buttons = [...notice.querySelectorAll('button')].filter(button => button.className === focusedButton.className);
-    (buttons.find(button => button.textContent === focusedButton.label) || buttons[0])?.focus();
+    const controls = [...notice.querySelectorAll('button, summary')].filter(control => control.className === focusedButton.className);
+    (controls.find(control => appNoticeControlLabel(control) === focusedButton.label) || controls[0])?.focus();
   }
   return notice;
 }

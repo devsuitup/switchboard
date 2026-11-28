@@ -374,7 +374,7 @@ test('H2b re-ask then Stop requires a checked save of the earlier moves', async 
     ctx.window.document.querySelector('.choice-dialog-confirm').click(); await flush();
     assert.equal(ctx.calls.answers.at(-1).proceed, false, 'Stop must fail when the moved working set cannot be saved');
     assert.equal(ctx.calls.attaches.length, 2);
-    assert.match(ctx.window.document.querySelector('[data-notice-id="exit-background-failure"]').textContent, /could not save them.*disk full after re-ask/);
+    assert.match(ctx.window.document.querySelector('[data-notice-id="exit-background-failure"]').textContent, /could not save the moved sessions[\s\S]*disk full after re-ask/);
   } finally { ctx.destroy(); }
 });
 
@@ -494,7 +494,7 @@ for (const code of ['needs-answer', 'busy-timeout', 'failed', 'unknown']) test(`
     assert.equal(ctx.calls.attaches[0][0], 'one-bg');
     assert.equal(vm.runInContext('exitingApp', ctx.context), false);
     const text = ctx.window.document.getElementById('app-notices').textContent;
-    assert.match(text, /Switchboard stayed open. 1 of 2 sessions moved to the background\.\n/);
+    assert.match(text, /Switchboard stayed open: 1 of 2 sessions could not move to the background\.\n/);
     assert.match(text, /two:/);
     assert.match(text, code === 'needs-answer' ? /needs an answer/ : code === 'busy-timeout' ? /still working after 10 minutes/ : /backend broke/);
     assert.equal(ctx.calls.saves.length, 0);
@@ -569,7 +569,7 @@ for (const error of ['disk', 'unread', 'timeout']) test(`checked save ${error} r
     assert.equal(ctx.calls.attaches.length, 2);
     assert.equal(vm.runInContext('exitingApp', ctx.context), false, 'recovery must release the 10 second hold');
     assert.equal(vm.runInContext('exitingAppTimer', ctx.context), null);
-    assert.match(ctx.window.document.getElementById('app-notices').textContent, /could not save them for the next start/);
+    assert.match(ctx.window.document.getElementById('app-notices').textContent, /could not save the moved sessions for the next start/);
   } finally { ctx.destroy(); }
 });
 

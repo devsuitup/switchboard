@@ -752,18 +752,43 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
   if (unusableFirst && !respawned && result?.action === 'refuse' && !result.recovery && typeof result.jobId === 'string' && result.jobId
     && /worker is not live/i.test(result.reason || '')) result = { ...result, recovery: 'respawn' };
   const id = sessionActionNoticeId('Restore', session);
+  const nextStep = 'Check the Agents view. Open a conversation from the sidebar to retry attaching or resume an ended session.';
+  const jobLine = (reason, log) => `${sessionActionDescription(session, { log })}, job ${result?.jobId || item.attachJobId || 'unknown'}: ${reason}`;
   const report = (reason, actionLabel, onAction, kind = 'error') => {
-    const member = { id, kind, actionLabel, onAction, session, logText: `${sessionActionDescription(session, { log: true })}, job ${result?.jobId || item.attachJobId || 'unknown'}: ${reason}`, text: `${sessionActionDescription(session)}, job ${result?.jobId || item.attachJobId || 'unknown'}: ${reason}` };
+    const member = { id, kind, actionLabel, onAction, session, label: sessionActionLabel(session), logText: jobLine(reason, true), text: jobLine(reason, false) };
     showAppNotice({ id: 'Restore:background',
       members: [member], mergeMembers: true, persistent: true,
       memberOptions: members => {
         const errors = members.filter(value => value.kind === 'error');
-        return { kind: errors.length ? 'error' : 'info', actionLabel: errors.length === 1 ? errors[0].actionLabel : undefined,
-          onAction: errors.length === 1 ? errors[0].onAction : undefined };
+        const actionable = errors.length ? errors : members.filter(value => value.onAction);
+        return { kind: errors.length ? 'error' : 'info', persistent: errors.length > 0,
+          actionLabel: actionable.length === 1 ? actionable[0].actionLabel : undefined,
+          onAction: actionable.length === 1 ? actionable[0].onAction : undefined };
       },
-      message: current => `Background session restore: ${current.map(value => value.text).join('; ')}. Check the Agents view. Open a conversation from the sidebar to retry attaching or resume an ended session.`,
-      logText: current => `Background session restore: ${current.map(value => value.logText).join('; ')}. Check the Agents view. Open a conversation from the sidebar to retry attaching or resume an ended session.`,
+      message: current => {
+        const gone = current.every(value => value.kind !== 'error');
+        const title = current.length === 1
+          ? gone ? `The background worker of ${current[0].label} is gone.` : `Could not reattach ${current[0].label}.`
+          : gone ? `The background workers of ${current.length} sessions are gone.` : `Could not reattach ${current.length} background sessions.`;
+        return `${title}\n${nextStep}`;
+      },
+      details: current => current.map(value => value.text).join('\n'),
+      logText: current => `Background session restore: ${current.map(value => value.logText).join('; ')}. ${nextStep}`,
       dismissOnAction: false });
+  };
+  const reportEnded = reason => {
+    showAppNotice({ id: 'Restore:ended', kind: 'info', mergeMembers: true,
+      members: [{ id: sessionActionNoticeId('Restore-ended', session), session, logText: jobLine(reason, true), text: jobLine(reason, false) }],
+      message: current => current.length === 1
+        ? '1 ended background job was removed from your open sessions.\nIts conversation stays in the sidebar.'
+        : `${current.length} ended background jobs were removed from your open sessions.\nTheir conversations stay in the sidebar.`,
+      details: current => current.map(value => value.text).join('\n'),
+      logText: current => `Ended background jobs removed from the open sessions: ${current.map(value => value.logText).join('; ')}.` });
+  };
+  const release = () => {
+    skippedWorkingSetEntries.delete(item.sessionId);
+    clearDormantRow(item.sessionId);
+    restoreInFlight.delete(item.sessionId);
   };
   const logFailure = outcome => {
     const logId = value => String(value || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 100);
@@ -775,14 +800,20 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
     return null;
   }
   if (result?.action === 'retire') {
-    skippedWorkingSetEntries.delete(item.sessionId);
-    clearDormantRow(item.sessionId);
-    restoreInFlight.delete(item.sessionId);
+    release();
     clearAppNotice(id);
-    if (result.reason) report(result.reason, undefined, undefined, 'info');
+    if (result.reason) reportEnded(result.reason);
     schedulePersistWorkingSet();
     return interactive ? { retired: true } : null;
   }
+  if (!interactive && !onRefused && !attachOnly && !respawned && !unusableFirst && result?.action === 'refuse' && result.ended === true) {
+    release();
+    clearAppNotice(id);
+    reportEnded(result.reason);
+    schedulePersistWorkingSet();
+    return null;
+  }
+  const refusalKind = result?.action === 'refuse' && result.workerGone === true && !respawned ? 'info' : 'error';
   const recover = async respawn => {
     if (respawn) {
       try {
@@ -810,17 +841,15 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false, int
   }
   if (result?.action === 'respawned-not-attached') report('Respawned, not attached: no live background descriptor within 15 seconds', 'Attach', () => retry(false));
   else if (result?.missing === true) {
-    skippedWorkingSetEntries.delete(item.sessionId);
-    clearDormantRow(item.sessionId);
-    restoreInFlight.delete(item.sessionId);
-    report('The background job no longer exists. Open the conversation from the sidebar to resume it');
+    release();
+    reportEnded('The background job no longer exists. Open the conversation from the sidebar to resume it');
     schedulePersistWorkingSet();
   }
-  else if (result?.recovery === 'respawn') report(result.reason, 'Respawn', () => retry(true));
+  else if (result?.recovery === 'respawn') report(result.reason, 'Respawn', () => retry(true), refusalKind);
   else if (recovery && result?.action === 'refuse' && /worker liveness unknown|background descriptor|worker is not live/i.test(result.reason || '')) {
-    report(`${respawned ? 'Respawned, not attached: ' : ''}${result.reason}`, recovery === 'respawn' ? 'Respawn' : 'Attach', () => retry(recovery === 'respawn'));
+    report(`${respawned ? 'Respawned, not attached: ' : ''}${result.reason}`, recovery === 'respawn' ? 'Respawn' : 'Attach', () => retry(recovery === 'respawn'), refusalKind);
   }
-  else report(result?.reason || 'The background restore backend is unavailable or returned no result');
+  else report(result?.reason || 'The background restore backend is unavailable or returned no result', undefined, undefined, refusalKind);
   return null;
 }
 
@@ -2129,12 +2158,16 @@ async function recoverExitBackground(batch) {
     row.entry.backgroundAttach = attachBackgroundContinuation(row.entry, row.result);
     return row.entry.backgroundAttach;
   }));
+  const lines = name => [...failures.map(row => exitBackgroundFailure(name(row), row.result)),
+    ...(confirmed.length ? ['Moved: ' + confirmed.map(name).join(', ')] : [])].join('\n');
   const message = batch.saveError
-    ? 'The moved sessions run in the background, but Switchboard could not save them for the next start, so it stayed open: ' + batch.saveError
-    : `Switchboard stayed open. ${confirmed.length} of ${batch.entries.size} sessions moved to the background.` + (failures.length ? '\n' + failures.map(row => exitBackgroundFailure(row.name, row.result)).join('\n') : '');
-  const logText = batch.saveError ? message
-    : `Switchboard stayed open. ${confirmed.length} of ${batch.entries.size} sessions moved to the background.` + (failures.length ? '\n' + failures.map(row => exitBackgroundFailure(row.id.slice(0, 8), row.result)).join('\n') : '');
-  showAppNotice({ id: 'exit-background-failure', kind: 'error', message, logText,
+    ? 'Switchboard stayed open: it could not save the moved sessions for the next start.\nThey keep running in the background. Details has the save error.'
+    : failures.length
+      ? `Switchboard stayed open: ${failures.length} of ${batch.entries.size} sessions could not move to the background.\nDo what Details says for each one, then quit again. Or stop them.`
+      : `Switchboard stayed open. ${confirmed.length} of ${batch.entries.size} sessions moved to the background.`;
+  const details = batch.saveError || lines(row => row.name);
+  const logText = `${message}\n${batch.saveError || lines(row => row.id.slice(0, 8))}`;
+  showAppNotice({ id: 'exit-background-failure', kind: 'error', message, details, logText,
     sessions: [...batch.entries.values()].map(row => ({ sessionId: row.id, name: row.name })) });
 }
 

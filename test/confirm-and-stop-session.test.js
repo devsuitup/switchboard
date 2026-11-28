@@ -75,7 +75,7 @@ test('a failed stop retains a persistent actionable alert without an expiry time
     assert.ok(notice, 'stop failure must be visible outside the hover-only button');
     assert.match(notice.textContent, /s1.*vps.*ssh: connection refused/);
     assert.match(notice.textContent, /retry|try again/i);
-    assert.equal(notice.querySelector('.app-notice-dismiss').textContent, 'Dismiss');
+    assert.equal(notice.querySelector('.app-notice-dismiss').getAttribute('aria-label'), 'Dismiss');
     assert.deepEqual(timers, []);
   });
 });
