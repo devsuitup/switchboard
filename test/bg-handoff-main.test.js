@@ -906,7 +906,7 @@ function realStoppedWorkerFixture(t, { after = 'absent', before = 'live' } = {})
   } });
   t.after(() => bg.stop());
   h.ctx.bgAgents.conversationCheck = bg.conversationCheck;
-  return { ...h, probes, bg };
+  return { ...h, probes, bg, setAfter: value => { after = value; } };
 }
 
 for (const after of ['absent', 'reused']) {
@@ -1015,3 +1015,51 @@ test('#1340 r2 two stopped ids both need proof and proven ids are not sampled ag
   assert.deepEqual(h.samples.map(sample => sample[0]), ['adb1224f', 'cccccccc', 'cccccccc']);
   assert.deepEqual(h.writes, ['/bg', '\r']);
 });
+
+
+test('#1340 r3 N1 final recheck cancels when a proved absent done worker is live again without a descriptor', async t => {
+  const h = realStoppedWorkerFixture(t);
+  const initial = h.ctx.bgAgents.continuationJobCheck;
+  h.ctx.bgAgents.continuationJobCheck = (id, options) => h.stops.length ? h.bg.continuationJobCheck(id, options) : initial(id);
+  const proof = [];
+  h.ctx.bgAgents.conversationCheck = async (id, options) => {
+    const check = await h.bg.conversationCheck(id, options);
+    if (h.stops.length) {
+      proof.push(check.workerLiveness);
+      h.setAfter('same');
+    }
+    return check;
+  };
+  const result = await h.handleSendToBackground({}, 'tab');
+  assert.deepEqual(proof, ['dead'], 'the proving sample must see the stored worker absent');
+  assert.equal(result.code, 'cancelled', 'N1: a live worker in the final recheck must cancel even without a hosted owner');
+  assert.match(result.error, /adb1224f.*live|live.*adb1224f/);
+  assert.equal(result.stopError, true);
+  assert.deepEqual(h.writes, [], 'N1: no /bg after the recheck sees a live stopped worker');
+});
+
+test('#1340 r3 N2 timeout remembers a live pending id when the last sampled id is unknown', async t => {
+  const h = stoppedWorkerFixture(t, () => null);
+  twoStoppedJobs(h);
+  h.ctx.bgAgents.conversationCheck = async (id, options) => {
+    if (h.stops.length < 2) return { known: true, state: 'done', workerLiveness: 'live' };
+    h.samples.push([id, options.workerLiveness]);
+    return { known: true, state: 'done', workerLiveness: id === 'adb1224f' ? 'live' : 'unknown' };
+  };
+  const result = await h.handleSendToBackground({}, 'tab');
+  assert.equal(result.code, 'cancelled');
+  assert.equal(h.samples.at(-1)[0], 'cccccccc');
+  assert.match(result.error, /The old job did not stop in time/, 'N2: any pending id last seen live must select the live timeout reason');
+  assert.deepEqual(h.writes, []);
+});
+
+for (const before of ['unknown', 'descriptor', 'live']) {
+  test('#1340 r3 N3 forced refresh count with pre-stop evidence ' + before, async t => {
+    const h = realStoppedWorkerFixture(t, { before });
+    const result = await h.handleSendToBackground({}, 'tab');
+    assert.equal(h.probes.filter(probe => probe?.force).length, before === 'live' ? 1 : 0,
+      'N3: only a stored worker identity warrants forced refreshes');
+    assert.equal(result.ok, before === 'live');
+    assert.deepEqual(h.writes, before === 'live' ? ['/bg', '\r'] : []);
+  });
+}

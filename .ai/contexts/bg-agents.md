@@ -1608,7 +1608,9 @@ can survive it unchanged.
 Before Stop, conversationCheck returns workerIdentity only when the real
 classifier's roster/process-table comparison proves that worker live: job id,
 pid and procStart. Main retains it only for this handoff. Subsequent checks force
-a process-table refresh. A fresh table (processTableFresh true) with no process
+a process-table refresh only for ids with a stored worker identity. Other ids
+use the ordinary cached process-table refresh; forcing it cannot prove the end
+of an unidentified incarnation. A fresh table (processTableFresh true) with no process
 for that pid, or a different creation time under the classifier's existing
 FILETIME tolerance, proves the observed incarnation ended. A current live
 worker or descriptor wins over this absence proof. A failed/stale table or a
@@ -1617,7 +1619,10 @@ without a known roster/process identity supplies no such proof. The job file
 must still match the sampled state/session before dead evidence is returned.
 The remembered identities also accompany the ownership rechecks, which reread
 the graph and process evidence rather than treating the earlier proof as a
-permanent exclusion. No new process-death rule is enabled for deletion or
+permanent exclusion. The final recheck also receives the stopped ids and refuses
+any of them whose worker is live again, including done jobs without a descriptor
+or hosted owner. Main returns cancelled with that reason and sends no /bg.
+No new process-death rule is enabled for deletion or
 other callers without that handoff history.
 
 A done job whose worker is live only in the roster/process table can have no
@@ -1628,16 +1633,17 @@ before each individual sample, including the next id in the same pass and the
 first sample after a wait. Proven ids need no further polling. The five seconds
 bound sample starts, not an in-flight read: one already-started sample can
 overshoot by the process-table probe timeout (currently 15 seconds). The fresh
-post-stop check uses a single sample; it does not add the classifier's delayed
-supervisor confirmation. Ownership graph rechecks and Stop itself are outside
+post-stop check with a stored identity uses a single sample; it does not add
+the classifier's delayed supervisor confirmation. Ownership graph rechecks and Stop itself are outside
 this polling budget. Main revalidates the foreground tab and batch cancellation
 after each sample, and checks ownership again after all stopped ids are proved
 ended. The separate handoff confirmation deadline starts only after the question,
 stop and this verification complete.
 
-If the bound expires, the move returns cancelled, not declined. Only a last
-sample classified live says "The old job did not stop in time; this session
-stays in the foreground." Otherwise it says "Switchboard could not confirm
+If the bound expires, the move returns cancelled, not declined. Main tracks
+pending ids whose latest sample was live, clearing an id when a later sample
+is not live. If any remain, it says "The old job did not stop in time; this
+session stays in the foreground." Otherwise it says "Switchboard could not confirm
 that the old job ended; this session stays in the foreground." The failure
 notice includes the acknowledged ids. Otherwise unresolved ownership cancels
 with its reason. Partial failure lists every prior stop acknowledgement without

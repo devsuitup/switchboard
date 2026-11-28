@@ -2252,7 +2252,7 @@ async function handleSendToBackground(_event, sessionId, options, signal) {
       const cancel = (reason, stopError = false, declined = false) => ({ declined: declined && !stopError && !stoppedIds.length, cancelled: reason
         + (stoppedIds.length ? ' Stop acknowledged: ' + stoppedIds.join(', ') + '.' : ''), stopError });
       for (;;) {
-        const continuation = await bgAgents.continuationJobCheck(id, { previousWorkers });
+        const continuation = await bgAgents.continuationJobCheck(id, { previousWorkers, stoppedJobIds: stopsConfirmed ? new Set(stoppedIds) : undefined });
         const owners = continuation.jobs || (continuation.known && continuation.job ? [continuation.job] : []);
         if (stoppedIds.length && (!continuation.known || owners.length || continuation.unknownJobs?.length)) {
           return cancel('The old job was asked to stop, but background ownership is still unresolved ('
@@ -2261,17 +2261,18 @@ async function handleSendToBackground(_event, sessionId, options, signal) {
         }
         if (stoppedIds.length && !stopsConfirmed) {
           const pending = new Set(stoppedIds), deadline = Date.now() + 5000;
-          let lastLiveness;
-          const timedOut = () => cancel(lastLiveness === 'live'
+          const livePending = new Set();
+          const timedOut = () => cancel(livePending.size
             ? 'The old job did not stop in time; this session stays in the foreground.'
             : 'Switchboard could not confirm that the old job ended; this session stays in the foreground.', true);
           while (pending.size) {
             for (const jobId of pending) {
               if (Date.now() >= deadline) return timedOut();
               let check;
-              try { check = await bgAgents.conversationCheck(jobId, { workerLiveness: 'all', previousWorker: previousWorkers.get(jobId), freshWorker: true }); }
+              try { check = await bgAgents.conversationCheck(jobId, { workerLiveness: 'all', previousWorker: previousWorkers.get(jobId), freshWorker: previousWorkers.has(jobId) }); }
               catch { check = null; }
-              lastLiveness = check?.workerLiveness;
+              if (check?.workerLiveness === 'live') livePending.add(jobId);
+              else livePending.delete(jobId);
               const refusal = validate();
               if (refusal || signal?.aborted) return cancel(refusal || 'The background handoff was cancelled. This session stays in the foreground.', true);
               if (check?.known && check.workerLiveness !== 'live' && (check.state === 'stopped' || check.state === 'failed' || check.workerLiveness === 'dead')) pending.delete(jobId);

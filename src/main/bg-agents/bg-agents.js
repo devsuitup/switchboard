@@ -431,7 +431,7 @@ async function conversationCheck(id, { workerLiveness = true, previousWorker, fr
     hosted: isHostedJob(identified, liveDescriptors(), evidence) };
 }
 
-async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = new Map(), previousWorkers = new Map() } = {}) {
+async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = new Map(), previousWorkers = new Map(), stoppedJobIds = new Set() } = {}) {
   const pending = [sessionId], seen = new Set(), owners = new Map();
   const evidence = new Map(workerLiveness);
   const unknownJobs = [];
@@ -456,6 +456,7 @@ async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = 
         if (['stopped', 'failed'].includes(job?.state)) continue;
         const candidate = { ...job, id: jobId, sessionId: sid };
         const { liveness } = await workerEvidence(candidate, true, { previousWorker: previousWorkers.get(jobId), fresh: previousWorkers.has(jobId) });
+        if (liveness === 'live' && stoppedJobIds.has(jobId)) return unknown('worker for stopped job ' + jobId + ' is live again');
         if (liveness === 'live' && isHostedJob(candidate, liveDescriptors(), liveness)) owners.set(jobId, { id: jobId, state: job?.state, sessionId: id });
         if (liveness !== 'live' && liveness !== 'dead') {
           unknownJobs.push({ id: jobId, name: job?.name || roster.find(entry => entry.id === jobId)?.name || '', sessionId: id, state: job?.state });
