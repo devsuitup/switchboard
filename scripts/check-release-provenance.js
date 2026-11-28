@@ -3,9 +3,9 @@
 'use strict';
 
 const { execFileSync } = require('node:child_process');
+const { isDeepStrictEqual } = require('node:util');
 
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
-const { isDeepStrictEqual } = require('node:util');
 
 const BUMP_FILES = new Set(['CHANGELOG.md', 'package.json', 'package-lock.json']);
 const DOCS = 'docs/releasing.md#the-tag-check';

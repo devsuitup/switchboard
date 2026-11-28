@@ -3,9 +3,9 @@
 'use strict';
 
 const { execFileSync } = require('child_process');
+const { parseChangelog, compareVersions } = require('../src/main/app/changelog');
 
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
-const { parseChangelog, compareVersions } = require('../src/main/app/changelog');
 
 const TAG_RE = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-beta\.([1-9]\d*))?$/;
 const ALLOWED_FINAL_FILES = ['CHANGELOG.md', 'package.json', 'package-lock.json'];
