@@ -1627,7 +1627,11 @@ The remembered identities also accompany the ownership rechecks, which reread
 the graph and process evidence rather than treating the earlier proof as a
 permanent exclusion. The final recheck also receives the stopped ids and refuses
 any of them whose worker is live again, including done jobs without a descriptor
-or hosted owner. Main returns cancelled with that reason and sends no /bg.
+or hosted owner. For these ids, stopped/failed jobs are also sampled before the
+terminal-state skip (#1345): a worker published after the accepted non-live poll
+must cancel even while state.json still says stopped/failed. A non-live terminal
+sample keeps the skip, and callers without stopped ids keep the existing skip
+without sampling. Main returns cancelled with that reason and sends no /bg.
 No new process-death rule is enabled for deletion or
 other callers without that handoff history.
 

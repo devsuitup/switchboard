@@ -906,7 +906,11 @@ function realStoppedWorkerFixture(t, { after = 'absent', before = 'live' } = {})
   } });
   t.after(() => bg.stop());
   h.ctx.bgAgents.conversationCheck = bg.conversationCheck;
-  return { ...h, probes, bg, setAfter: value => { after = value; } };
+  return { ...h, probes, bg, setAfter: value => { after = value; },
+    setState: state => {
+      const file = path.join(jobsDir, id, 'state.json');
+      fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), state }));
+    } };
 }
 
 for (const after of ['absent', 'reused']) {
@@ -1061,5 +1065,44 @@ for (const before of ['unknown', 'descriptor', 'live']) {
       'N3: only a stored worker identity warrants forced refreshes');
     assert.equal(result.ok, before === 'live');
     assert.deepEqual(h.writes, before === 'live' ? ['/bg', '\r'] : []);
+  });
+}
+
+for (const state of ['stopped', 'failed']) {
+  for (const liveAgain of [true, false]) {
+    test('#1345 final recheck of ' + state + ' job with worker ' + (liveAgain ? 'live again cancels' : 'absent permits /bg'), async t => {
+      const h = realStoppedWorkerFixture(t);
+      const initial = h.ctx.bgAgents.continuationJobCheck;
+      h.ctx.bgAgents.continuationJobCheck = (id, options) => h.stops.length ? h.bg.continuationJobCheck(id, options) : initial(id);
+      const proof = [];
+      h.ctx.bgAgents.conversationCheck = async (id, options) => {
+        if (h.stops.length) h.setState(state);
+        const check = await h.bg.conversationCheck(id, options);
+        if (h.stops.length) {
+          proof.push({ state: check.state, liveness: check.workerLiveness });
+          if (liveAgain) h.setAfter('same');
+        }
+        return check;
+      };
+      const result = await h.handleSendToBackground({}, 'tab');
+      assert.deepEqual(proof, [{ state, liveness: 'dead' }], 'the poll must accept a terminal state with a non-live sample');
+      if (liveAgain) {
+        assert.equal(result.code, 'cancelled', 'a live worker for a terminal stopped job must cancel the final recheck');
+        assert.match(result.error, /worker for stopped job adb1224f is live again/);
+        assert.equal(result.stopError, true);
+        assert.deepEqual(h.writes, [], 'no /bg beside the worker that became live again');
+      } else {
+        assert.equal(result.ok, true, result.error);
+        assert.deepEqual(h.writes, ['/bg', '\r']);
+      }
+    });
+  }
+
+  test('#1345 caller without stoppedJobIds still skips ' + state + ' jobs with live workers', async t => {
+    const h = realStoppedWorkerFixture(t);
+    h.setState(state);
+    const samples = h.probes.length;
+    assert.deepEqual(await h.bg.continuationJobCheck('OLD'), { known: true, job: null });
+    assert.equal(h.probes.length, samples, 'ordinary callers must not sample terminal jobs');
   });
 }
