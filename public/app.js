@@ -2071,7 +2071,7 @@ function showExitBackgroundProgress(batch) {
   if (batch.external || batch.finished) return;
   const confirmed = [...batch.entries.values()].filter(row => row.result?.ok).length;
   const verb = batch.detail.action === 'update' ? 'update' : batch.detail.action === 'close' ? 'close' : window.api.platform === 'win32' ? 'exit' : 'quit';
-  const lines = [`Moving ${batch.entries.size} to background before ${verb}: ${confirmed} of ${batch.entries.size} confirmed`];
+  const lines = ['Moving sessions to the background.', `Wait while Switchboard prepares to ${verb}. ${confirmed} of ${batch.entries.size} confirmed.`];
   const logLines = [...lines];
   for (const row of batch.entries.values()) {
     if (row.result && !row.result.ok) lines.push(exitBackgroundFailure(row.name, row.result));
@@ -2165,13 +2165,13 @@ async function recoverExitBackground(batch) {
   const lines = name => [...failures.map(row => exitBackgroundFailure(name(row), row.result)),
     ...(confirmed.length ? ['Moved: ' + confirmed.map(name).join(', ')] : [])].join('\n');
   const message = batch.saveError
-    ? 'Switchboard stayed open: it could not save the moved sessions for the next start.\nThey keep running in the background. Details has the save error.'
+    ? 'Switchboard stayed open.\nCheck the save error in Details before trying again. Moved sessions keep running in the background.'
     : failures.length
-      ? `Switchboard stayed open: ${failures.length} of ${batch.entries.size} sessions could not move to the background.\nDo what Details says for each one, then quit again. Or stop them.`
-      : `Switchboard stayed open. ${confirmed.length} of ${batch.entries.size} sessions moved to the background.`;
+      ? `Switchboard stayed open.\nCheck Details for each session, then try again or stop it. ${failures.length} of ${batch.entries.size} sessions could not move to the background.`
+      : `Switchboard stayed open.\nYou can try again when you are ready. ${confirmed.length} of ${batch.entries.size} sessions moved to the background.`;
   const details = batch.saveError || lines(row => row.name);
-  const logText = `${message}\n${batch.saveError || lines(row => row.id.slice(0, 8))}`;
-  showAppNotice({ id: 'exit-background-failure', kind: 'error', message, details, logText,
+  const logText = `${message}\nSessions: ${[...batch.entries.values()].map(row => row.id.slice(0, 8)).join(', ')}\n${batch.saveError || lines(row => row.id.slice(0, 8))}`;
+  showAppNotice({ id: 'exit-background-failure', kind: 'error', message: `${message}\nSessions: ${[...batch.entries.values()].map(row => row.name).join(', ')}`, details, logText,
     sessions: [...batch.entries.values()].map(row => ({ sessionId: row.id, name: row.name })) });
 }
 

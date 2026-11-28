@@ -306,8 +306,9 @@ for (const scenario of ['plain', 'mixed', 'unknown', 'moving-only', 'untitled'])
     : '"PRIVATE EXIT LABEL" · alpha · abcdef12' + (scenario === 'unknown' ? '' : ' · waits for its turn to end (up to 10 minutes)');
   const expectedRows = scenario === 'unknown'
     ? ['Switchboard could not list the local work that will stop.', ...rows.map(rowText)]
-    : rows.includes(moving) ? ['Moves to the background:', rowText(moving),
-      ...(rows.length > 1 ? ['Stops:', ...rows.filter(row => row !== moving).map(rowText)] : [])] : rows.map(rowText);
+    : rows.includes(moving) ? ['Move to background: 1 session', rowText(moving),
+      ...(rows.length > 1 ? ['Stops after moving: 1 session, 1 plain terminal and 1 panel shell', ...rows.filter(row => row !== moving).map(rowText)] : [])] : rows.map(rowText);
+  expectedRows.unshift('Choose an option below, or Cancel to keep Switchboard open.');
   assert.deepEqual(paragraphs.slice(0, expectedRows.length).map(p => p.textContent), expectedRows, 'row offsets preserve headings and the exact row order');
   if (rows.includes(moving)) {
     assert.ok(paragraphs.find(p => p.textContent.startsWith('"PRIVATE EXIT LABEL"')).querySelector('[data-log-session="abcdef12"]'));
@@ -322,7 +323,7 @@ for (const scenario of ['plain', 'mixed', 'unknown', 'moving-only', 'untitled'])
     if (rows.includes(untitled)) assert.match(line.text, /Untitled conversation · gamma · fedcba98/);
     if (rows.includes(panel)) assert.match(line.text, /Panel shell of "abcdef12" · 87654321/);
     if (rows.includes(moving)) assert.match(line.text, /"abcdef12" · alpha · abcdef12/);
-    if (rows.includes(moving) && scenario !== 'unknown') assert.match(line.text, /Moves to the background:\n"abcdef12" · alpha · abcdef12/);
+    if (rows.includes(moving) && scenario !== 'unknown') assert.match(line.text, /Move to background: 1 session\n"abcdef12" · alpha · abcdef12/);
     if (scenario === 'unknown') assert.match(line.text, /could not list the local work/);
   }
   assert.doesNotMatch(JSON.stringify(lines), /PRIVATE EXIT LABEL/);
@@ -610,4 +611,53 @@ test('preload exposes a fire-and-forget UI notice bridge', () => {
   const fn = vm.runInNewContext(match[1], { ipcRenderer: { send: (...args) => sent.push(args) } }, { filename: 'preload.js:logUiNotice' });
   assert.equal(fn({ event: 'show' }), undefined);
   assert.equal(sent[0][0], 'ui-notice-log');
+});
+
+for (const action of ['quit', 'close', 'update']) test('1023 exit progress gives a short outcome and next step for ' + action, t => {
+  const { window, document, context } = setup(t);
+  const lines = connectSink(t, window);
+  window.api.platform = 'win32';
+  loadAppFunctions(context, { functions: ['showExitBackgroundProgress', 'exitBackgroundFailure'] });
+  window.showExitBackgroundProgress({ detail: { action }, entries: new Map([
+    ['abcdef12-session', { id: 'abcdef12-session', name: 'PRIVATE PROGRESS LABEL', phase: 'waiting' }],
+    ['fedcba98-session', { id: 'fedcba98-session', name: 'PRIVATE CONFIRM LABEL', phase: 'confirming' }],
+    ['12345678-session', { id: '12345678-session', name: 'PRIVATE FAILED LABEL', result: { ok: false, error: 'RAW_EXIT_ERROR /repo/failure' } }],
+  ]) });
+  const notice = document.querySelector('[data-notice-id="exit-background"]');
+  assert.equal(notice.querySelector('.app-notice-title').textContent, 'Moving sessions to the background.');
+  const verb = action === 'quit' ? 'exit' : action;
+  assert.equal(notice.querySelector('.app-notice-body').textContent,
+    'Wait while Switchboard prepares to ' + verb + '. 0 of 3 confirmed.\nPRIVATE PROGRESS LABEL waits for its turn to end\nPRIVATE CONFIRM LABEL asks you to confirm in its terminal\nPRIVATE FAILED LABEL: RAW_EXIT_ERROR /repo/failure');
+  assert.equal(notice.querySelector('.app-notice-action').textContent, 'Cancel');
+  assert.equal(notice.dataset.kind, 'info');
+  assert.equal(lines.at(-1).text,
+    'Moving sessions to the background.\nWait while Switchboard prepares to ' + verb + '. 0 of 3 confirmed.\nabcdef12 waits for its turn to end\nfedcba98 asks you to confirm in its terminal\n12345678: RAW_EXIT_ERROR /repo/failure');
+});
+
+for (const scenario of ['failed', 'save-error', 'all-moved']) test('1023 exit recovery keeps names visible and identifiers in the log: ' + scenario, async t => {
+  const { window, document, context } = setup(t);
+  const lines = connectSink(t, window);
+  window.releaseExitState = () => {};
+  window.attachBackgroundContinuation = async () => {};
+  loadAppFunctions(context, { functions: ['recoverExitBackground', 'exitBackgroundFailure'], declarations: ['exitHandoffs', 'exitBackgroundAttempts'] });
+  const row = { id: 'abcdef12-session', name: 'PRIVATE RECOVERY LABEL', entry: {},
+    result: scenario === 'failed' ? { ok: false, error: 'RAW_EXIT_ERROR /repo/failure' } : { ok: true, sessionId: 'fedcba98-session' } };
+  const batch = { detail: { attempt: 7 }, entries: new Map([[row.id, row]]) };
+  if (scenario === 'save-error') batch.saveError = 'RAW_SAVE_ERROR /repo/save';
+  await window.recoverExitBackground(batch);
+  const notice = document.querySelector('[data-notice-id="exit-background-failure"]');
+  assert.equal(notice.querySelector('.app-notice-title').textContent, 'Switchboard stayed open.');
+  const instruction = scenario === 'failed'
+    ? 'Check Details for each session, then try again or stop it. 1 of 1 sessions could not move to the background.'
+    : scenario === 'save-error'
+      ? 'Check the save error in Details before trying again. Moved sessions keep running in the background.'
+      : 'You can try again when you are ready. 1 of 1 sessions moved to the background.';
+  assert.equal(notice.querySelector('.app-notice-body').textContent, instruction + '\nSessions: PRIVATE RECOVERY LABEL');
+  assert.equal(notice.querySelector('details').open, false);
+  const detail = scenario === 'failed' ? 'PRIVATE RECOVERY LABEL: RAW_EXIT_ERROR /repo/failure'
+    : scenario === 'save-error' ? 'RAW_SAVE_ERROR /repo/save' : 'Moved: PRIVATE RECOVERY LABEL';
+  assert.equal(notice.querySelector('.app-notice-details').textContent, 'Details' + detail);
+  assert.equal(notice.dataset.kind, 'error');
+  assert.equal(lines.at(-1).text, 'Switchboard stayed open.\n' + instruction + '\nSessions: abcdef12\n' + detail.replaceAll('PRIVATE RECOVERY LABEL', 'abcdef12'));
+  assert.doesNotMatch(JSON.stringify(lines), /PRIVATE RECOVERY LABEL/);
 });

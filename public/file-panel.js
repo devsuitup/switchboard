@@ -961,7 +961,7 @@ async function confirmSessionExit(detail, changed) {
     }).filter(Boolean);
     return parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts.at(-1) : parts[0];
   };
-  const message = [];
+  const message = ['Choose an option below, or Cancel to keep Switchboard open.'];
   if (snapshot.unknown) message.push('Switchboard could not list the local work that will stop.');
   const rowParts = new Map();
   const describe = row => {
@@ -986,18 +986,18 @@ async function confirmSessionExit(detail, changed) {
     return line;
   };
   if (moving.length) {
-    message.push('Moves to the background:', ...moving.map(describe));
-    if (stopping.length) message.push('Stops:', ...stopping.map(describe));
+    message.push('Move to background: ' + words(moving), ...moving.map(describe));
+    if (stopping.length) message.push('Stops after moving: ' + words(stopping), ...stopping.map(describe));
   } else {
     message.push(...snapshot.rows.map(describe));
   }
-  message.push(sessions > 0 ? 'Their processes end, idle or working, with anything running in them. Each conversation is kept and can be resumed.' : 'Their shells end, with anything running in them.');
+  message.push(sessions > 0 ? 'Stop and ' + label + ' ends ' + total + ', idle or working, and anything running in them. Conversations are kept and can be resumed.' : 'Stop and ' + label + ' ends ' + total + ' and anything running in them.');
   if (attached) message.push(count(attached, 'session') + ' attached here ' + (attached === 1 ? 'is' : 'are') + ' detached and ' + (attached === 1 ? 'keeps' : 'keep') + ' running in the background.');
   for (const [alias, n] of Object.entries(snapshot.remote)) if (n) message.push(count(n, 'session') + ' from ' + alias + (n === 1 ? ' keeps' : ' keep') + ' running on ' + alias + '.');
-  if (moving.length) message.push('Moved sessions keep running in the background; Switchboard reattaches them at the next start.');
+  if (moving.length) message.push('Moved sessions keep running in the background. They are saved for the next start.');
   if (mac && action === 'close') message.push('Switchboard stays in the Dock.');
   const listedRows = moving.length ? [...moving, ...stopping] : snapshot.rows;
-  const firstRow = snapshot.unknown ? 1 : 0;
+  const firstRow = snapshot.unknown ? 2 : 1;
   const messageParts = [...message];
   let offset = firstRow;
   if (moving.length) offset++;
@@ -1005,10 +1005,10 @@ async function confirmSessionExit(detail, changed) {
     if (moving.length && row === stopping[0]) offset++;
     messageParts[offset++] = rowParts.get(row);
   }
-  const result = await showChoiceDialog({ title: 'Stop ' + total + ' and ' + verb + '?', message, messageParts,
+  const result = await showChoiceDialog({ title: verb[0].toUpperCase() + verb.slice(1) + '?', message, messageParts,
     sessions: [...rowParts.values()].flat(Infinity).filter(part => part?.session).map(part => part.session),
     confirmLabel: 'Stop and ' + label, initialFocus: 'cancel', danger: true,
-    secondaryAction: moving.length ? { id: 'background', label: 'Move ' + words(moving) + ' to background' + (stopping.length ? ', stop ' + words(stopping) + ', and ' : ' and ') + label, danger: stopping.length > 0 } : null,
+    secondaryAction: moving.length ? { id: 'background', label: 'Move to background and ' + label, danger: stopping.length > 0 } : null,
     returnFocus: document.activeElement, replace: true, closeWith: changed && changed.then(() => null) });
   return result === null ? false : result.action === 'background' ? 'background' : 'stop';
 }

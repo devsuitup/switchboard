@@ -275,6 +275,15 @@ Otherwise local work asks Stop/Move/Cancel when sessions can move, or Stop/Cance
 focused; Enter on Cancel, Escape, the backdrop and × cancel.
 The named question replaces the generic close question and uses the existing
 queued `showChoiceDialog` with danger styling and text-only names.
+The title is just the intent: "Exit?", "Quit?", "Close Switchboard?",
+"Close the window?" or "Restart to update?". The first body line is
+"Choose an option below, or Cancel to keep Switchboard open." Counts moved
+out of the title and Move button into the body: "Move to background: …"
+and "Stops after moving: …". The button reads "Move to background and
+exit/quit/close/update". The Stop description explicitly covers idle and
+working sessions and their running commands, with conversations kept for
+resume. A successful move saves sessions for next start; whether they
+reattach automatically still depends on startup restore settings.
 
 The inventory walks `activeSessions`, deduplicates process aliases, includes
 idle and busy local sessions, plain terminals and hidden panel shells, and
@@ -297,8 +306,11 @@ are saved with `bg: true`. Stop keeps the unchecked save.
 
 Any failed row, Cancel, failed checked save or updater error abandons the
 whole exit, stops nothing, releases the renderer exit hold and recovers each
-confirmed job as one attach tab. Failure notices name every failed row and
-its reason. A failed attach keeps the background restore entry and sidebar
+confirmed job as one attach tab. Progress says "Moving sessions to the
+background." and recovery says "Switchboard stayed open." The next step
+and counts follow in the body, along with visible session names. Recovery
+reasons stay under Details; logs retain the short session IDs. A failed attach
+keeps the background restore entry and sidebar
 retry notice. A re-ask after success keeps marked tabs without attaching;
 `exit-attempt-invalidated` carries `{ reask: true }` for that case. A later
 Cancel recovers those tabs. Non-external upgrades wait for the batch before

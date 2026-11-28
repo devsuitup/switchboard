@@ -244,8 +244,13 @@ same continuation and metadata persistence as the toolbar action.
 ### Closing Switchboard
 
 Quit (Exit on Windows), Restart to update and window close offer **Move to
-background** for eligible sessions, alongside Stop and Cancel. The dialog
-names what moves and what stops, including plain terminals and panel shells.
+background and quit/exit/update/close** for eligible sessions, alongside Stop
+and Cancel. The question is short, such as **Exit?** or **Restart to update?**.
+The body lists **Move to background** and **Stops after moving**, with counts
+and session names. Plain terminals and panel shells stop after the moves.
+**Stop and exit** ends all listed local processes, idle or working, and their
+running commands. Conversations remain available to resume. **Cancel** keeps
+Switchboard open.
 Quit/Exit and window close skip this dialog when only idle, resumable Claude
 sessions remain, with no running subagent or other work at risk. Those sessions
 are saved for normal restore, without moving them to the background. Unsaved
@@ -256,9 +261,12 @@ available. A session with only a shell command running moves without waiting.
 A session that needs an answer during that wait fails immediately. The progress notice also points to a terminal
 when Claude asks you to confirm Background or Stay after a move starts.
 
-On success, Switchboard saves the moved sessions and attaches them at the
-next start. If any move or the save fails, Switchboard stays open, stops
-nothing, names the failure and reattaches the confirmed moves. An attach
+Progress starts with **Moving sessions to the background.**, then the wait
+instruction and confirmation count. On success, Switchboard saves the moved
+sessions for the next start, following the startup restore setting. If any
+move or the save fails, **Switchboard stayed open.** gives the next step and
+keeps session names visible, with failure reasons under **Details**.
+Switchboard stops nothing and reattaches the confirmed moves. An attach
 failure leaves the job running and offers retry from the sidebar.
 
 ## Attaching
