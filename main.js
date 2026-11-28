@@ -2218,7 +2218,7 @@ function persistBackgroundHandoff(context) {
   }
 }
 
-async function handleSendToBackground(_event, sessionId, options) {
+async function handleSendToBackground(_event, sessionId, options, signal) {
   const session = activeSessions.get(sessionId);
   const oldId = session?.realSessionId || sessionId;
   const projectFolder = session?.projectFolder, exitDrain = session?.exitDrain;
@@ -2246,12 +2246,58 @@ async function handleSendToBackground(_event, sessionId, options) {
     },
     schedule: (fn, ms) => { const timer = setTimeout(fn, ms); if (typeof timer.unref === 'function') timer.unref(); },
     kill: entry => killPty(entry, sessionId),
-    checkContinuations: async id => {
-      const continuation = await bgAgents.continuationJobCheck(id);
-      const owners = continuation.jobs || (continuation.known && continuation.job ? [continuation.job] : []);
-      if (owners.length) return { refuse: 'This conversation already runs in background job' + (owners.length > 1 ? 's ' : ' ') + owners.map(job => job.id).join(', ') + '. Open it from the sidebar instead.' };
-      if (!continuation.known) log.info(`[bg-handoff] ${id} continuation liveness unknown (${continuation.reason}); /bg goes ahead`);
-      return null;
+    checkContinuations: async (id, _entry, validate) => {
+      const approved = new Set(), asked = new Map(), stoppedIds = [];
+      const cancel = (reason, stopError = false, declined = false) => ({ declined: declined && !stopError && !stoppedIds.length, cancelled: reason
+        + (stoppedIds.length ? ' Stop acknowledged: ' + stoppedIds.join(', ') + '.' : ''), stopError });
+      for (;;) {
+        const continuation = await bgAgents.continuationJobCheck(id);
+        const owners = continuation.jobs || (continuation.known && continuation.job ? [continuation.job] : []);
+        if (stoppedIds.length && (!continuation.known || owners.length || continuation.unknownJobs?.length)) {
+          return cancel('The old job was asked to stop, but background ownership is still unresolved ('
+            + (owners.map(job => job.id).join(', ') || continuation.reason || 'unknown jobs remain')
+            + '). This session stays in the foreground.', true);
+        }
+        if (owners.length) return { refuse: 'This conversation already runs in background job' + (owners.length > 1 ? 's ' : ' ') + owners.map(job => job.id).join(', ') + '. Open it from the sidebar instead.' };
+        if (signal?.aborted) return cancel('The background handoff was cancelled. This session stays in the foreground.', false, true);
+        const jobs = (continuation.unknownJobs || []).filter(job => !approved.has(job.id));
+        if (jobs.length) {
+          const repeated = jobs.find(job => asked.get(job.id) >= 2);
+          if (repeated) return cancel('The status of old background job ' + repeated.id + ' keeps changing. This session stays in the foreground. Check the Agents view before retrying.');
+          for (const job of jobs) asked.set(job.id, (asked.get(job.id) || 0) + 1);
+          const choice = await require('./src/main/bg-agents/bg-handoff').askContinuationChoice({
+            ipcMain, window: mainWindow, sessionId, jobs, signal,
+          });
+          if (choice === 'cancel' || signal?.aborted) {
+            log.info('[bg-handoff] ' + id + ' unknown continuation cancelled (user cancelled or renderer unavailable)');
+            return cancel('The session stays in the foreground because its old background job was not resolved.', false, true);
+          }
+          const refusal = validate();
+          if (refusal) return cancel(refusal);
+          if (choice === 'keep') {
+            for (const job of jobs) approved.add(job.id);
+            continue;
+          }
+          for (const job of jobs) {
+            let stopped;
+            try {
+              const check = await bgAgents.conversationCheck(job.id, { workerLiveness: 'all' });
+              const refusal = validate();
+              if (refusal || signal?.aborted) return cancel(refusal || 'The background handoff was cancelled.', stoppedIds.length > 0, !refusal && signal?.aborted);
+              if (check.known && check.workerLiveness === 'dead') continue;
+              stopped = await unsubscribeBgAgents.runStop(job.id);
+            } catch (error) { stopped = { ok: false, error: error.message || String(error) }; }
+            if (!stopped?.ok) return cancel('Could not stop old background job ' + job.id + ': ' + (stopped?.error || 'no successful stop result') + '. This session stays in the foreground.', true);
+            stoppedIds.push(job.id);
+          }
+          continue;
+        }
+        if (!continuation.known && !continuation.unknownJobs?.length) {
+          if (approved.size) return cancel('Background ownership could not be rechecked (' + continuation.reason + '). This session stays in the foreground.');
+          log.info('[bg-handoff] ' + id + ' continuation liveness unknown (' + continuation.reason + '); /bg goes ahead');
+        }
+        return null;
+      }
     },
   });
   if (result.ok && session?.projectFolder) detectSessionTransitions(session.projectFolder);
@@ -2261,12 +2307,12 @@ async function handleSendToBackground(_event, sessionId, options) {
   }
   return result;
 }
-ipcMain.handle('send-session-to-background', handleSendToBackground);
+ipcMain.handle('send-session-to-background', (event, id, options) => handleSendToBackground(event, id, { force: options?.force === true }));
 
 async function runExitBackgroundBatch(ids, opts) {
   return runExitHandoffs(ids, {
     ...opts,
-    send: id => handleSendToBackground(null, id),
+    send: id => handleSendToBackground(null, id, undefined, opts?.signal),
     status: id => {
       const record = activeSessions.get(id);
       return record && cliSessionState.getStatus(record.realSessionId || id)?.status;

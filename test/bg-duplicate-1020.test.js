@@ -558,3 +558,42 @@ for (const other of ['cccccccc', '0000cccc']) {
     assert.deepEqual((result.jobs || []).map(job => job.id), ['bbbbbbbb'], 'an uncertain sibling job must not erase the owner proven for the same continuation');
   });
 }
+
+for (const liveness of ['unknown', 'live', 'dead']) {
+  test('#1295 continuation check identifies the old job when worker liveness is ' + liveness, async t => {
+    const h = fixture(t);
+    h.fork();
+    if (liveness !== 'live') h.descriptors.length = 0;
+    if (liveness === 'unknown') fs.writeFileSync(path.join(h.root, 'daemon', 'roster.json'), line({ proto: 1, updatedAt: new Date().toISOString(), workers: {} }));
+    const jobFile = path.join(h.root, 'jobs', 'bbbbbbbb', 'state.json');
+    fs.writeFileSync(jobFile, line({ ...JSON.parse(fs.readFileSync(jobFile)), name: 'harness-dev' }));
+    const result = await bg.continuationJobCheck(SID);
+    if (liveness === 'unknown') {
+      assert.equal(result.known, false);
+      assert.deepEqual(result.unknownJobs, [{ id: 'bbbbbbbb', name: 'harness-dev', sessionId: NEXT, state: 'working' }], 'unknown workers must carry the job identity for the renderer question');
+    } else {
+      assert.equal(result.known, true);
+      assert.equal(result.job?.id || null, liveness === 'live' ? 'bbbbbbbb' : null);
+      assert.equal(result.unknownJobs, undefined);
+    }
+  });
+}
+
+for (const deeper of ['live', 'unknown']) {
+  test('#1295 r2 traverses S -> unknown C1 -> ' + deeper + ' C2 before reporting uncertainty', async t => {
+    const h = fixture(t);
+    h.fork();
+    h.descriptors.length = 0;
+    fs.writeFileSync(path.join(h.root, 'daemon', 'roster.json'), line({ proto: 1, updatedAt: new Date().toISOString(), workers: {} }));
+    fs.appendFileSync(path.join(h.root, NEXT + '.jsonl'), line({ type: 'continued-in', sessionId: NEXT, continuedInSessionId: PRIOR }));
+    fs.writeFileSync(path.join(h.root, PRIOR + '.jsonl'), line({ type: 'user', sessionId: PRIOR }));
+    h.writeJob('cccccccc', PRIOR, 'working');
+    if (deeper === 'live') h.descriptors.push({ kind: 'bg', sessionId: PRIOR, jobId: 'cccccccc', cwd: h.root });
+    const before = await bg.continuationJobCheck(SID);
+    assert.deepEqual((deeper === 'live' ? before.jobs || [] : before.unknownJobs || []).map(job => job.id),
+      deeper === 'live' ? ['cccccccc'] : ['bbbbbbbb', 'cccccccc'], 'unknown C1 must not hide C2');
+    h.writeJob('bbbbbbbb', NEXT, 'stopped');
+    const after = await bg.continuationJobCheck(SID);
+    assert.equal(deeper === 'live' ? after.job?.id : after.unknownJobs?.[0]?.id, 'cccccccc', 'post-stop traversal must still see C2');
+  });
+}

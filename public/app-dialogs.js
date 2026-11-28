@@ -9,8 +9,8 @@ async function appAlert({ title = 'Switchboard', message, sessions, messageParts
   await showChoiceDialog({ title, message: appDialogMessage(message), confirmLabel: 'OK', cancelLabel: null, sessions, messageParts, titleParts });
 }
 
-async function appChoose({ title = 'Choose', message, options = [], selectedId, confirmLabel = 'Open', sessions, messageParts, titleParts } = {}) {
-  return showChoiceDialog({ title, message: appDialogMessage(message), options, selectedId, confirmLabel, sessions, messageParts, titleParts });
+async function appChoose({ title = 'Choose', message, options = [], selectedId, confirmLabel = 'Open', sessions, messageParts, titleParts, closeWith, onShown } = {}) {
+  return showChoiceDialog({ title, message: appDialogMessage(message), options, selectedId, confirmLabel, sessions, messageParts, titleParts, closeWith, onShown });
 }
 
 function appDialogMessage(message) {

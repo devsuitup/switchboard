@@ -1535,34 +1535,84 @@ a `!` command runs in the foreground. Tests: T31–T31e.
 
 **Continuations already hosted.** Before writing, main asks
 `bgAgents.continuationJobCheck(oldId)` through the `checkContinuations` port.
-A known live job hosting a continuation of this conversation refuses before any
-write, naming the job: a `/bg` there forks a second worker from the older
-transcript (the #1020 duplicate; the CLI does not check). Unknown liveness lets
-`/bg` go ahead with one info log line (`continuation liveness unknown`): a typed
-`/bg` would, and the unknown-liveness refusal was the main reason the button
-failed where typing worked. "Unknown" means genuinely unavailable liveness only:
-every `known: false` answer of `continuationJobCheck` carries **a `jobs` array
-naming the live owners it had already established** before the traversal became
-uncertain (several owners with the `multiple live continuation jobs` reason; one
-owner when a later continuation's transcript is torn, unreadable, or its worker
-liveness unknown), and main refuses on `jobs.length` (or a known single `job`)
-before reading `known`; a found conflict is never permission to write. A job
-proven live and hosted while a continuation's jobs are sampled enters `owners`
-at once, and the sampling of that continuation runs to its end before an
-unknown liveness is reported: a second job record for the same conversation
-whose worker cannot be placed does not hide the owner, whatever order the jobs
-directory lists them in (the directory order is not sorted). Only an
-answer with no owner at all lets `/bg` go. The respawn and strict-stop callers
-in `bg-agents-ipc.js` keep refusing on `known: false` whatever `jobs` holds.
-This keeps the pre-write boundary the retired
-`bg-recovery-1020fix` suite guarded for the live-fork case; proceeding on
-unknown liveness is the decided change. Tests: `bg-handoff` T29/T30,
-`bg-handoff-main` "the shipped handler refuses /bg before any write…",
-"…lets /bg go when continuation liveness is unknown" and "…refuses /bg when an
-uncertain check still names the live owner it had established";
-`bg-duplicate-1020` "continuationJobCheck keeps a proven live owner when a
-later continuation tail is torn" and "…when another job … of the same
-continuation has unknown liveness" (both directory orders).
+A known live continuation refuses before any PTY write: otherwise /bg forks a
+second job from the older transcript (#1020), which the CLI does not prevent.
+Known-dead continuations still permit the ordinary handoff. Historically,
+unknown liveness went ahead with an info log because typed /bg did, and the
+unknown-liveness refusal was the main reason the button failed where typing
+worked. #1295 narrows that policy when an uncertain job can be identified.
+
+Every proven live owner is retained immediately, including when a later
+transcript is torn or unreadable. All jobs for each continuation are sampled
+to the end, in either directory order, before unknown liveness is reported.
+An uncertain job cannot hide a live sibling. Traversal also reads that
+continuation's own transcript and continues through deeper continuations:
+S -> C1 unknown -> C2 live must retain C2. The synchronous liveJobCheck fallback
+still runs at each level, excluding the sampled uncertain job ids as well as
+excludeJobId. This preserves their classification without hiding a live owner
+known only from the roster, including after Keep approves an uncertain sibling.
+The result carries `jobs` for established owners and
+`unknownJobs` for uncertain jobs (id, name, conversation id, state). Main checks
+owners before uncertainty; respawn and strict stop still refuse known:false.
+
+#1295 asks **Stop the old job**, **Keep it and continue**, or **Cancel** while
+holding the tab input lock. Stop rechecks foreground eligibility and the exact
+tab/conversation binding before each stop, including after fresh ownership
+reads. Fresh dead liveness skips the stop and proceeds to the continuation
+recheck. Fresh live liveness, including a done job's idle worker, and unknown
+liveness use the existing checked ordinary stop port. Its checks cover only
+the job's sessionIds, not the resume parent in this foreground tab. Strict stop
+is not used here because its delete guard includes that parent's live PTY. A
+failed stop cancels with its reason, never as a user decline. Success is only
+a CLI acknowledgement. After the stop sequence, continuationJobCheck runs
+again: no /bg unless the graph is known and contains neither owners nor unknown
+jobs. Otherwise the move cancels with the reason. Partial failure lists every
+prior stop acknowledgement without claiming unverified worker death. The stop
+port does not atomically pin the worker incarnation; see Guarded stop ports above.
+
+Keep approves only the displayed job ids, then traverses again. Newly found
+unknown ids require another question; known live owners still refuse. Each job
+can appear in at most two questions per handoff. If its liveness keeps changing
+and it would need a third question, the move cancels with an explicit reason. A failed
+recheck without identifiable jobs cancels after consent. Unknown traversal
+without any identified job at the initial check retains the historical info
+log and proceed policy. User Cancel or an unanswered/cancelled question returns
+declined, so a busy sibling row in an exit batch can still move later. Only
+declined is quiet in the single action. Claude's cancellation, post-choice
+eligibility refusals and failed ownership rechecks retain their failure notices.
+Stop errors and prior stop acknowledgements remain visible, even if a later
+question is cancelled. Exit batches report failures through exitBackgroundFailure
+and describe declined as Cancel. Both action paths use the same main handler.
+
+Only force is accepted from IPC options. The batch signal is a separate
+internal argument, excluded by the IPC wrapper. Questions authenticate the
+request token, sending window and main frame for answers and shown events.
+The renderer acknowledges only when the queued dialog is mounted; its own
+120-second timeout starts then. Main sends bg-continuation-choice-cancel with
+the token on timeout, batch abort, external exit or renderer loss. closeWith
+settles a queued question or closes its mounted dialog; renderer sends no stale
+answer. Abort is immediate even for queued questions. The handoff's separate
+two-minute confirmation deadline starts after all questions and stops finish.
+
+Pre-write boundary guards retained from the retired bg-recovery-1020fix suite:
+`bg-handoff` T29/T30; `bg-handoff-main` tests for live owners, unknown liveness,
+multiple owners and a proven owner before a later uncertain tail;
+`bg-duplicate-1020` tests for torn tails and uncertain sibling jobs in both
+directory orders. New #1295 r2 tests cover deeper live/unknown continuations,
+post-stop rechecks, consent scoped to job ids, eligibility before stopping,
+fresh live/dead rechecks with the real checkStop parent-PTY refusal, the ordinary
+stop of a live done worker (ACK before /bg, failure and exception), the per-job
+re-ask limit, partial stop
+errors, IPC option filtering, late answers,
+timeout after display and batch abort/external exit. The batch Cancel test has
+a second row initially busy. A single renderer Send also reaches the shipped
+main and handoff functions. `send-to-background-renderer` exercises the actual
+queued dialogs, their open/queued cancellation, shown acknowledgements,
+concise copy and quiet Cancel. Round-3 tests also cover visible CLI cancellation,
+post-choice refusals, failed Keep rechecks, and a roster-only live sibling found
+after Keep through the real job service and exit batch. All use plain Node/VM
+and external PTY/CLI ports;
+no running Electron or daemon is covered.
 
 ### Exit handoff batch (#546, H1)
 
@@ -1590,7 +1640,7 @@ the renderer retains the old id and relies on `continued-in`.
 
 `runExitBackgroundBatch` in `main.js` sits immediately after the single-tab
 handoff registration and before `stop-session`. It delegates sends to
-`handleSendToBackground(null, id)`, reads status using
+`handleSendToBackground(null, id, { signal })`, reads status using
 `record.realSessionId || id`, and waits through `cliSessionState` descriptor
 subscriptions. A module-scope `runExitBackground` binding is read lazily by
 the unsaved guard. Each busy waiter clears its timer and descriptor subscription

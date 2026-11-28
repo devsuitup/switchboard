@@ -1995,3 +1995,13 @@ have failed) and the remembered-reply case in
 Schedules reuse `run-schedule-now`, `read-memory`, `save-memory` and
 `schedule-run-exit` unchanged. Slice B adds deletion through the Electron-free
 `src/main/schedules/schedule-delete-file.js` helper; creation remains a later slice.
+
+## Background continuation choices (#1295)
+
+The main-to-renderer `bg-continuation-choice` request has a unique token.
+`bg-continuation-choice-shown` starts the question timer only once mounted;
+`bg-continuation-choice-answer` settles it. Both validate the originating
+window and its main frame. Main sends `bg-continuation-choice-cancel` with the
+token on timeout or abort to remove either the queued or open dialog.
+`send-session-to-background` accepts only `force` from renderer options; batch
+AbortSignal stays a separate internal argument. See bg-agents.md.

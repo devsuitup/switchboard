@@ -2030,7 +2030,7 @@ function markExitBackground(enrollment, sessionId, background) {
 function exitBackgroundFailure(name, result) {
   const reason = result?.code === 'busy-timeout' ? 'still working after 10 minutes. Quit again once it is idle, or stop it.'
     : result?.code === 'needs-answer' ? 'needs an answer in its terminal. Answer it, then quit again, or stop it.'
-      : result?.error || (result?.code === 'cancelled' ? 'Moving was cancelled.' : result?.code === 'pending' ? 'The handoff is not confirmed.' : 'The handoff backend is unavailable or returned no confirmed result.');
+      : result?.error || (['cancelled', 'declined'].includes(result?.code) ? 'Moving was cancelled.' : result?.code === 'pending' ? 'The handoff is not confirmed.' : 'The handoff backend is unavailable or returned no confirmed result.');
   return name + ': ' + reason;
 }
 
@@ -2131,9 +2131,9 @@ async function recoverExitBackground(batch) {
   }));
   const message = batch.saveError
     ? 'The moved sessions run in the background, but Switchboard could not save them for the next start, so it stayed open: ' + batch.saveError
-    : `Switchboard stayed open. ${confirmed.length} of ${batch.entries.size} sessions moved to the background; nothing was stopped.` + (failures.length ? '\n' + failures.map(row => exitBackgroundFailure(row.name, row.result)).join('\n') : '');
+    : `Switchboard stayed open. ${confirmed.length} of ${batch.entries.size} sessions moved to the background.` + (failures.length ? '\n' + failures.map(row => exitBackgroundFailure(row.name, row.result)).join('\n') : '');
   const logText = batch.saveError ? message
-    : `Switchboard stayed open. ${confirmed.length} of ${batch.entries.size} sessions moved to the background; nothing was stopped.` + (failures.length ? '\n' + failures.map(row => exitBackgroundFailure(row.id.slice(0, 8), row.result)).join('\n') : '');
+    : `Switchboard stayed open. ${confirmed.length} of ${batch.entries.size} sessions moved to the background.` + (failures.length ? '\n' + failures.map(row => exitBackgroundFailure(row.id.slice(0, 8), row.result)).join('\n') : '');
   showAppNotice({ id: 'exit-background-failure', kind: 'error', message, logText,
     sessions: [...batch.entries.values()].map(row => ({ sessionId: row.id, name: row.name })) });
 }
@@ -2172,6 +2172,35 @@ function clearExternalExitBackground() {
 window.clearExternalExitBackground = clearExternalExitBackground;
 
 function initExitBackgroundControl() {
+  const questions = new Map();
+  window.api.onBgContinuationChoiceCancel?.(token => {
+    const cancel = questions.get(token);
+    questions.delete(token);
+    cancel?.(null);
+  });
+  window.api.onBgContinuationChoice?.(async (token, sessionId, jobs) => {
+    let choice = 'cancel';
+    const closeWith = new Promise(resolve => questions.set(token, resolve));
+    try {
+      const session = openSessions.get(sessionId)?.session || sessionMap.get(sessionId) || { sessionId };
+      const label = session.name || session.aiTitle || session.summary || sessionId;
+      const messageParts = [
+        [{ session, label }, ' has an older background job that may still be running.'],
+        ...jobs.map(job => ['Old job: ', { session: { sessionId: job.sessionId }, label: job.name || job.id }, ' (' + job.id + ').']),
+        ['Cancel keeps this session in the foreground. Other sessions in the batch continue.'],
+      ];
+      const result = await appChoose({ title: 'Old background job may still be running', messageParts,
+        sessions: [session, ...jobs.map(job => ({ sessionId: job.sessionId, name: job.name }))],
+        options: [
+          { id: 'stop', label: 'Stop the old job', detail: 'Stop it, check that it ended, then move this session to the background.' },
+          { id: 'keep', label: 'Keep it and continue', detail: 'Continue with another job that may share the same name and receive different messages.' },
+        ], selectedId: 'stop', confirmLabel: 'Continue', closeWith,
+        onShown: () => window.api.showBgContinuationChoice(token) });
+      if (result && ['stop', 'keep'].includes(result.choice)) choice = result.choice;
+    } catch {} finally {
+      if (questions.delete(token)) window.api.answerBgContinuationChoice(token, choice);
+    }
+  });
   window.api.onExitBackgroundProgress?.((attempt, event) => {
     const batch = exitBackgroundAttempts.get(attempt);
     const row = batch?.entries.get(event.id);
@@ -2216,6 +2245,7 @@ async function sendSessionToBackground(sessionId) {
       if (openSessions.get(sessionId) !== oldEntry) return;
       result = await window.api.sendSessionToBackground(sessionId, { force: true });
     }
+    if (result?.code === 'declined') return;
     if (!result?.ok) throw new Error(result?.error || 'The handoff backend is unavailable or returned no result');
     destination = { ...source, sessionId: result.sessionId };
     clearAppNotice(sessionActionNoticeId('Send to background', source));

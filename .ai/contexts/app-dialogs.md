@@ -326,3 +326,12 @@ The quit/close/reload guard ACKs immediately, then enqueues an idle question rat
 Every decision caller awaits its answer before performing its side effect. Changes and Touched discard paths remain async. `returnToPanelList()` returns a boolean for an immediate transition or a promise while a discard decision is pending; the diff's Escape listener consumes only a return that already succeeded. Destructive confirmations and the live-elsewhere warning focus Cancel; the continuation chooser focuses Open, and lookup-failure or unknown-target questions focus Open as it was. `liveElsewhereQuestion` supplies the whole Resume anyway question to `appConfirm`, including for scheduled tasks, naming the schedule when known. A background session without a job id is refused with an error notice; `guardResume` defaults `notify` to `showAppNotice` in the renderer and requires an injected adapter elsewhere.
 
 Native `confirm`, `alert`, and `prompt` (bare or on `window`, `globalThis`, or `self`) remain forbidden by ESLint throughout `public/**`. The property rule matches named objects and cannot express nested `document.defaultView`; that spelling is not covered. Main-process Electron dialogs remain outside this renderer rule.
+
+## Background continuation question lifecycle (#1295)
+
+appChoose forwards closeWith and onShown to the shared choice dialog. onShown
+fires after mounting; queued questions do not acknowledge display. closeWith
+uses enqueueModalQuestion settleWith before mounting and closes the dialog
+after mounting. Main cancellation deletes the token before resolving closeWith,
+so a cancelled question cannot send a late answer. Tests live in
+`test/send-to-background-renderer.test.js`.

@@ -373,3 +373,92 @@ test('R18: the exit dialog names the CLI for a Codex tab main refuses as unreada
   assert.doesNotMatch(codex, /cannot read this session/);
   assert.match(await dialog('claude'), /cannot read this session/);
 });
+
+for (const stopError of [false, true]) {
+  test('#1295 r2 user Cancel stays quiet; stop errors stay visible: ' + stopError, async t => {
+    const h = handoff(t, { result: { ok: false, code: stopError ? 'cancelled' : 'declined', error: stopError ? 'Could not stop old job' : 'Cancelled', stopError } });
+    await h.app.sendSessionToBackground('old');
+    assert.equal(!!h.dom.window.document.querySelector('[role="alert"]'), stopError, 'only a stop failure should show an error');
+    assert.deepEqual(h.destroyed, []);
+    assert.deepEqual(h.spawned, []);
+  });
+}
+
+function continuationDialogs(t) {
+  const h = setupSidebarDom();
+  t.after(() => h.destroy());
+  let receive, cancel;
+  const shown = [], answers = [];
+  Object.assign(h.window.api, {
+    onBgContinuationChoice: fn => { receive = fn; },
+    onBgContinuationChoiceCancel: fn => { cancel = fn; },
+    showBgContinuationChoice: token => shown.push(token),
+    answerBgContinuationChoice: (...args) => answers.push(args),
+  });
+  h.window.openSessions = new Map([['tab', { session: { sessionId: 'tab', name: 'Harness' } }]]);
+  h.window.sessionMap = new Map();
+  loadAppFunctions(h.context, { functions: ['initExitBackgroundControl'] }).initExitBackgroundControl();
+  const ask = token => receive(token, 'tab', [{ id: 'adb1224f', name: 'Old harness', sessionId: 'prior' }]);
+  return { ...h, ask, cancel: token => cancel?.(token), shown, answers };
+}
+
+test('#1295 r2 only displayed continuation dialogs acknowledge showing', async t => {
+  const h = continuationDialogs(t);
+  const first = h.ask('one'), second = h.ask('two');
+  assert.deepEqual(h.shown, ['one'], 'queued dialogs must not start their timeout');
+  h.window.document.querySelector('.choice-dialog-cancel').click();
+  await first;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(h.shown, ['one', 'two']);
+  h.window.document.querySelector('.choice-dialog-cancel').click();
+  await second;
+});
+
+for (const which of ['queued', 'open']) {
+  test('#1295 r2 main cancellation removes the ' + which + ' continuation dialog', async t => {
+    const h = continuationDialogs(t);
+    const first = h.ask('one');
+    const second = which === 'queued' ? h.ask('two') : null;
+    h.cancel(which === 'queued' ? 'two' : 'one');
+    await new Promise(resolve => setImmediate(resolve));
+    if (which === 'queued') h.window.document.querySelector('.choice-dialog-cancel').click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.window.document.querySelector('.choice-dialog-overlay'), null, 'cancelled questions must never remain or reopen');
+    await first;
+    if (second) await second;
+    assert.equal(h.answers.some(([token]) => token === (which === 'queued' ? 'two' : 'one')), false, 'main cancellation must not send a stale answer');
+  });
+}
+
+test('#1295 r2 continuation dialog leads with a short plain sentence', async t => {
+  const h = continuationDialogs(t);
+  const pending = h.ask('one');
+  const doc = h.window.document;
+  assert.equal(doc.querySelector('.choice-dialog-body p').textContent, 'Harness has an older background job that may still be running.');
+  for (const detail of doc.querySelectorAll('.choice-dialog-detail')) {
+    assert.ok(detail.textContent.length < 110, 'option descriptions stay short');
+    assert.equal(detail.textContent.split('.').filter(Boolean).length, 1, 'one sentence per option');
+  }
+  doc.querySelector('.choice-dialog-cancel').click();
+  await pending;
+});
+
+for (const error of ['Claude cancelled it: tool still running', 'The prompt holds text you have not sent.', 'Background ownership could not be rechecked.']) {
+  test('#1295 N1 cancellation failure remains visible: ' + error, async t => {
+    const h = handoff(t, { result: { ok: false, code: 'cancelled', error } });
+    await h.app.sendSessionToBackground('old');
+    const alert = h.dom.window.document.querySelector('[role="alert"]');
+    assert.ok(alert, 'non-declined cancellation must raise a failure notice');
+    assert.ok(alert.textContent.includes(error));
+    assert.deepEqual(h.destroyed, []);
+    assert.deepEqual(h.spawned, []);
+    const { exitBackgroundFailure } = loadAppFunctions(h.ctx, { functions: ['exitBackgroundFailure'] });
+    assert.equal(exitBackgroundFailure('Session', { code: 'cancelled', error }), 'Session: ' + error);
+  });
+}
+
+test('#1295 N1 exit failure describes declined like user Cancel', t => {
+  const h = handoff(t);
+  const { exitBackgroundFailure } = loadAppFunctions(h.ctx, { functions: ['exitBackgroundFailure'] });
+  assert.equal(exitBackgroundFailure('Session', { code: 'declined' }), 'Session: Moving was cancelled.');
+});

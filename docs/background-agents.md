@@ -212,6 +212,25 @@ If a live continuation already runs in the background, the move is refused
 with a pointer to the sidebar, leaving this tab untouched. The button does
 not exit and respawn an old job.
 
+If an older background job belongs to the same conversation and Switchboard
+cannot tell whether it is running, a question names the session and
+old job. **Stop the old job** requests its stop, then checks again before moving
+the session; if stopping fails or another job remains unresolved, the session
+stays in the foreground and the reason is shown. Partial failures list the
+stops already acknowledged. If a fresh check proves the old job dead, it needs
+no stop; if it proves a live owner, the move is refused. **Keep it
+and continue** leaves the old job alone and moves the session anyway, which
+may create another job and split message delivery. **Cancel** keeps this
+session in the foreground while the other sessions in a move batch continue.
+This question also applies when moving sessions before an update or exit.
+A newly discovered old job requires another choice before continuing.
+Each question allows two minutes once displayed; waiting in the dialog queue
+does not use that time. Cancelling the batch closes its open or queued questions.
+After the choice and any stops, Claude gets its full two minutes to confirm
+the move. Your Cancel does not show a failure notice; a cancellation from Claude
+or a refusal after your choice still explains why the session could not move.
+Without a renderer able to answer, the affected session is not moved.
+
 An unconfirmed move displays a notice with what to check. If the terminal
 has exited, open the conversation from the sidebar to check where it runs.
 If attaching fails after the move, the session still runs in the background;
