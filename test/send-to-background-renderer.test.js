@@ -376,7 +376,7 @@ test('R18: the exit dialog names the CLI for a Codex tab main refuses as unreada
 
 for (const stopError of [false, true]) {
   test('#1295 r2 user Cancel stays quiet; stop errors stay visible: ' + stopError, async t => {
-    const h = handoff(t, { result: { ok: false, code: 'cancelled', error: stopError ? 'Could not stop old job' : 'Cancelled', stopError } });
+    const h = handoff(t, { result: { ok: false, code: stopError ? 'cancelled' : 'declined', error: stopError ? 'Could not stop old job' : 'Cancelled', stopError } });
     await h.app.sendSessionToBackground('old');
     assert.equal(!!h.dom.window.document.querySelector('[role="alert"]'), stopError, 'only a stop failure should show an error');
     assert.deepEqual(h.destroyed, []);
@@ -441,4 +441,24 @@ test('#1295 r2 continuation dialog leads with a short plain sentence', async t =
   }
   doc.querySelector('.choice-dialog-cancel').click();
   await pending;
+});
+
+for (const error of ['Claude cancelled it: tool still running', 'The prompt holds text you have not sent.', 'Background ownership could not be rechecked.']) {
+  test('#1295 N1 cancellation failure remains visible: ' + error, async t => {
+    const h = handoff(t, { result: { ok: false, code: 'cancelled', error } });
+    await h.app.sendSessionToBackground('old');
+    const alert = h.dom.window.document.querySelector('[role="alert"]');
+    assert.ok(alert, 'non-declined cancellation must raise a failure notice');
+    assert.ok(alert.textContent.includes(error));
+    assert.deepEqual(h.destroyed, []);
+    assert.deepEqual(h.spawned, []);
+    const { exitBackgroundFailure } = loadAppFunctions(h.ctx, { functions: ['exitBackgroundFailure'] });
+    assert.equal(exitBackgroundFailure('Session', { code: 'cancelled', error }), 'Session: ' + error);
+  });
+}
+
+test('#1295 N1 exit failure describes declined like user Cancel', t => {
+  const h = handoff(t);
+  const { exitBackgroundFailure } = loadAppFunctions(h.ctx, { functions: ['exitBackgroundFailure'] });
+  assert.equal(exitBackgroundFailure('Session', { code: 'declined' }), 'Session: Moving was cancelled.');
 });

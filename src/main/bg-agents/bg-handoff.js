@@ -105,7 +105,7 @@ async function sendToBackground(sessionId, deps) {
     const validate = () => backgroundRefusal({ ...session, backgrounding: false }, deps.getStatus(oldId), { force })
       || (!bound() ? 'The tab changed. Check the terminal, then try again.' : null);
     const held = deps.checkContinuations ? await deps.checkContinuations(oldId, session, validate) : null;
-    if (held?.cancelled) return { ok: false, code: 'cancelled', error: held.cancelled, ...(held.stopError ? { stopError: true } : {}) };
+    if (held?.cancelled) return { ok: false, code: held.declined ? 'declined' : 'cancelled', error: held.cancelled, ...(held.stopError ? { stopError: true } : {}) };
     if (held?.refuse) return { ok: false, code: 'refused', error: held.refuse };
     const afterCheck = backgroundRefusal({ ...session, backgrounding: false }, deps.getStatus(oldId), { force });
     if (afterCheck || !bound()) return { ok: false, code: 'refused', error: afterCheck || 'The tab changed. Check the terminal, then try again.' };

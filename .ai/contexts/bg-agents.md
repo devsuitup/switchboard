@@ -1548,32 +1548,38 @@ to the end, in either directory order, before unknown liveness is reported.
 An uncertain job cannot hide a live sibling. Traversal also reads that
 continuation's own transcript and continues through deeper continuations:
 S -> C1 unknown -> C2 live must retain C2. The synchronous liveJobCheck fallback
-is skipped for a continuation containing an uncertain sampled job, preserving
-its classification. The result carries `jobs` for established owners and
+still runs at each level, excluding the sampled uncertain job ids as well as
+excludeJobId. This preserves their classification without hiding a live owner
+known only from the roster, including after Keep approves an uncertain sibling.
+The result carries `jobs` for established owners and
 `unknownJobs` for uncertain jobs (id, name, conversation id, state). Main checks
 owners before uncertainty; respawn and strict stop still refuse known:false.
 
 #1295 asks **Stop the old job**, **Keep it and continue**, or **Cancel** while
 holding the tab input lock. Stop rechecks foreground eligibility and the exact
 tab/conversation binding before each stop, including after fresh ownership
-reads. When conversationCheck can establish live/dead liveness, it prefers
-runStop with strict:true, expected sessionIds and its own two-minute deadline,
-and requires ended:true. Strict stop cannot admit unknown liveness (#1090);
-that case retains the existing checked ordinary stop port. Its success is only
+reads. When conversationCheck establishes fresh live/dead liveness, no stop is
+issued for that job: the continuation recheck admits a dead job and refuses a
+live owner. Strict stop is not used here because its delete guard includes the
+resume parent, which is this foreground tab's live PTY. Unknown liveness retains
+the existing checked ordinary stop port. Its success is only
 a CLI acknowledgement. After the stop sequence, continuationJobCheck runs
 again: no /bg unless the graph is known and contains neither owners nor unknown
 jobs. Otherwise the move cancels with the reason. Partial failure lists every
-prior stop acknowledgement without claiming unverified worker death. Neither
-port atomically pins the worker incarnation; see Guarded stop ports above.
+prior stop acknowledgement without claiming unverified worker death. The stop
+port does not atomically pin the worker incarnation; see Guarded stop ports above.
 
 Keep approves only the displayed job ids, then traverses again. Newly found
 unknown ids require another question; known live owners still refuse. A failed
 recheck without identifiable jobs cancels after consent. Unknown traversal
 without any identified job at the initial check retains the historical info
-log and proceed policy. Cancel keeps the session foreground and returns
-cancelled, so a busy sibling row in an exit batch can still move later. A plain
-Cancel is quiet in the single action; stop failures carry stopError and retain
-the existing failure notice. Both action paths use the same main handler.
+log and proceed policy. User Cancel or an unanswered/cancelled question returns
+declined, so a busy sibling row in an exit batch can still move later. Only
+declined is quiet in the single action. Claude's cancellation, post-choice
+eligibility refusals and failed ownership rechecks retain their failure notices.
+Stop errors and prior stop acknowledgements remain visible, even if a later
+question is cancelled. Exit batches report failures through exitBackgroundFailure
+and describe declined as Cancel. Both action paths use the same main handler.
 
 Only force is accepted from IPC options. The batch signal is a separate
 internal argument, excluded by the IPC wrapper. Questions authenticate the
@@ -1591,12 +1597,16 @@ multiple owners and a proven owner before a later uncertain tail;
 `bg-duplicate-1020` tests for torn tails and uncertain sibling jobs in both
 directory orders. New #1295 r2 tests cover deeper live/unknown continuations,
 post-stop rechecks, consent scoped to job ids, eligibility before stopping,
-strict-stop selection, partial stop errors, IPC option filtering, late answers,
+fresh live/dead rechecks with the real checkStop parent-PTY refusal, partial stop
+errors, IPC option filtering, late answers,
 timeout after display and batch abort/external exit. The batch Cancel test has
 a second row initially busy. A single renderer Send also reaches the shipped
 main and handoff functions. `send-to-background-renderer` exercises the actual
 queued dialogs, their open/queued cancellation, shown acknowledgements,
-concise copy and quiet Cancel. All use plain Node/VM and external PTY/CLI ports;
+concise copy and quiet Cancel. Round-3 tests also cover visible CLI cancellation,
+post-choice refusals, failed Keep rechecks, and a roster-only live sibling found
+after Keep through the real job service and exit batch. All use plain Node/VM
+and external PTY/CLI ports;
 no running Electron or daemon is covered.
 
 ### Exit handoff batch (#546, H1)

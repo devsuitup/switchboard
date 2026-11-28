@@ -2030,7 +2030,7 @@ function markExitBackground(enrollment, sessionId, background) {
 function exitBackgroundFailure(name, result) {
   const reason = result?.code === 'busy-timeout' ? 'still working after 10 minutes. Quit again once it is idle, or stop it.'
     : result?.code === 'needs-answer' ? 'needs an answer in its terminal. Answer it, then quit again, or stop it.'
-      : result?.error || (result?.code === 'cancelled' ? 'Moving was cancelled.' : result?.code === 'pending' ? 'The handoff is not confirmed.' : 'The handoff backend is unavailable or returned no confirmed result.');
+      : result?.error || (['cancelled', 'declined'].includes(result?.code) ? 'Moving was cancelled.' : result?.code === 'pending' ? 'The handoff is not confirmed.' : 'The handoff backend is unavailable or returned no confirmed result.');
   return name + ': ' + reason;
 }
 
@@ -2245,7 +2245,7 @@ async function sendSessionToBackground(sessionId) {
       if (openSessions.get(sessionId) !== oldEntry) return;
       result = await window.api.sendSessionToBackground(sessionId, { force: true });
     }
-    if (result?.code === 'cancelled' && !result.stopError) return;
+    if (result?.code === 'declined') return;
     if (!result?.ok) throw new Error(result?.error || 'The handoff backend is unavailable or returned no result');
     destination = { ...source, sessionId: result.sessionId };
     clearAppNotice(sessionActionNoticeId('Send to background', source));

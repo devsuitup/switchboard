@@ -465,7 +465,7 @@ for (const choice of ['stop', 'keep', 'cancel']) {
     assert.equal(results[0].ok, choice !== 'cancel');
     assert.deepEqual(h.stops, choice === 'stop' ? ['adb1224f'] : []);
     assert.deepEqual(h.writes, choice === 'cancel' ? [] : ['/bg', '\r']);
-    if (choice === 'cancel') assert.equal(results[0].code, 'cancelled');
+    if (choice === 'cancel') assert.equal(results[0].code, 'declined');
     assert.equal(h.session.backgrounding, false);
     assert.equal(h.ipcMain.listenerCount('bg-continuation-choice-answer'), 0);
   });
@@ -500,7 +500,7 @@ test('#1295 cancelling one session leaves it foreground and still sends the next
   h.ctx.cliSessionState.getStatus = id => ({ status: id === 'SECOND' && !secondReady ? 'busy' : 'idle' });
   h.control.choose = () => { setTimeout(() => { secondReady = true; for (const fn of [...h.listeners]) fn(); }, 20); return null; };
   const results = await h.batch(['tab', 'second']);
-  assert.equal(results[0].code, 'cancelled');
+  assert.equal(results[0].code, 'declined');
   assert.equal(results[1].ok, true);
   assert.deepEqual(perSessionWrites, [['SECOND', '/bg'], ['SECOND', '\r']]);
   assert.equal(h.ctx.activeSessions.has('tab'), true);
@@ -509,7 +509,7 @@ test('#1295 cancelling one session leaves it foreground and still sends the next
 test('#1295 without a renderer an unknown continuation is cancelled and logged', async t => {
   const h = continuationChoiceFixture(t, { renderer: false });
   const [result] = await h.batch();
-  assert.equal(result.code, 'cancelled');
+  assert.equal(result.code, 'declined');
   assert.deepEqual(h.writes, []);
   assert.ok(h.logs.some(line => /cancel/i.test(line)));
 });
@@ -541,7 +541,7 @@ test('#1295 r2 Keep approves only the ids shown and asks for a newly discovered 
   h.control.choose = () => h.questions.length === 1 ? { choice: 'keep' } : null;
   const result = await h.handleSendToBackground({}, 'tab');
   assert.equal(h.questions.length, 2, 'a new unknown job requires its own consent');
-  assert.equal(result.code, 'cancelled');
+  assert.equal(result.code, 'declined');
   assert.deepEqual(h.writes, []);
 });
 
@@ -584,13 +584,37 @@ test('#1295 r2 partial Stop reports jobs already stopped', async t => {
   assert.deepEqual(h.writes, []);
 });
 
-test('#1295 r2 Stop prefers strict verification when fresh liveness is known', async t => {
-  const h = continuationChoiceFixture(t, { choice: 'stop', stop: { ok: true, ended: true } });
-  h.ctx.bgAgents.conversationCheck = async () => ({ known: true, sessionIds: ['prior'], workerLiveness: 'live' });
-  assert.equal((await h.handleSendToBackground({}, 'tab')).ok, true);
-  assert.equal(h.stopOptions[0]?.strict, true, 'known ownership must use the strict stop port');
-  assert.deepEqual(Array.from(h.stopOptions[0].sessionIds), ['prior']);
-});
+for (const liveness of ['dead', 'live']) {
+  test('#1295 N2 fresh ' + liveness + ' rechecks without strict Stop of the foreground parent', async t => {
+    const h = continuationChoiceFixture(t, { choice: 'stop' });
+    let checks = 0;
+    const initial = h.ctx.bgAgents.continuationJobCheck;
+    h.ctx.bgAgents.continuationJobCheck = async (id, options) => {
+      if (options?.excludeJobId) return { known: true, job: null };
+      if (++checks === 1) return initial(id);
+      return { known: true, job: liveness === 'live' ? { id: 'adb1224f' } : null };
+    };
+    h.ctx.bgAgents.conversationCheck = async () => ({ known: true, sessionIds: ['prior'],
+      continuationSessionIds: ['prior', 'OLD'], workerLiveness: liveness, hosted: liveness === 'live' });
+    h.ctx.bgAgents.liveJobCheck = () => ({ known: true, job: null });
+    h.ctx.bgAgents.runVerb = async (...args) => { h.stops.push(args); return { ok: true }; };
+    const ports = require('../src/main/bg-agents/bg-agents-ipc').init({ ipcMain: h.ipcMain,
+      bgAgents: h.ctx.bgAgents, activeSessions: h.ctx.activeSessions, cliSessionState: h.ctx.cliSessionState,
+      sessionHasPty: h.ctx.sessionHasPty, ptyPids: h.ctx.ptyPids, getMainWindow: () => null, log: h.ctx.log });
+    t.after(ports);
+    h.ctx.unsubscribeBgAgents = ports;
+    const strict = await ports.checkStop('adb1224f', { strict: true, jobId: 'adb1224f', sessionIds: ['prior'], deadline: Date.now() + 1000 });
+    assert.equal(strict.ok, false);
+    assert.match(strict.error, /session is still running in this window/);
+    const result = await h.handleSendToBackground({}, 'tab');
+    assert.equal(liveness === 'dead' ? result.ok : result.code, liveness === 'dead' ? true : 'refused',
+      'fresh liveness must reach the ownership recheck instead of the parent PTY stop guard');
+    assert.ok(checks >= 2);
+    assert.deepEqual(h.stops, [], 'known live or dead workers must not receive a stop verb in this flow');
+    assert.deepEqual(h.writes, liveness === 'dead' ? ['/bg', '\r'] : []);
+    if (liveness === 'live') assert.match(result.error, /already runs in background job adb1224f/);
+  });
+}
 
 for (const choice of ['stop', 'keep']) {
   test('#1295 r2 ' + choice + ' gets a fresh handoff deadline after a late answer', async t => {
@@ -664,4 +688,80 @@ test('#1295 r2 question timeout starts on display, cancels by token and removes 
   assert.deepEqual(h.writes, []);
   assert.deepEqual(failures, [], 'single action Cancel must not become a failure notice');
   assert.equal(h.rendererContext.openSessions.get('tab').backgrounding, false);
+});
+
+for (const failure of ['CLI cancellation', 'Keep refusal', 'Stop refusal', 'Stop revalidation', 'Keep recheck']) {
+  test('#1295 N1 single Send reports ' + failure + ' through the renderer', async t => {
+    const h = continuationChoiceFixture(t, { choice: failure.startsWith('Stop') ? 'stop' : 'keep' });
+    const failures = [];
+    let result;
+    Object.assign(h.rendererContext, { backgroundActionReason: () => null, activeSubagentsByParent: new Map(),
+      updateTerminalHeader() {}, showSessionActionFailure: (...args) => failures.push(args) });
+    h.rendererContext.window.api.sendSessionToBackground = async (id, options) => (result = await h.handleSendToBackground({}, id, options));
+    if (failure === 'CLI cancellation') {
+      h.ctx.bgAgents.continuationJobCheck = async () => ({ known: true, job: null });
+      h.ctx.writePty = (_entry, text) => {
+        h.writes.push(text);
+        if (text === '\r') for (const tap of h.taps) tap.fn('Backgrounding cancelled — tool still running\r\n');
+        return true;
+      };
+    } else if (failure === 'Keep recheck') {
+      const initial = h.ctx.bgAgents.continuationJobCheck;
+      let checks = 0;
+      h.ctx.bgAgents.continuationJobCheck = id => ++checks === 1 ? initial(id) : { known: false, reason: 'read unavailable' };
+    } else if (failure === 'Stop revalidation') {
+      h.ctx.bgAgents.conversationCheck = async () => {
+        h.ctx.cliSessionState.getStatus = () => ({ status: 'busy' });
+        return { known: true, workerLiveness: 'unknown' };
+      };
+    } else {
+      h.control.choose = () => {
+        h.ctx.cliSessionState.getStatus = () => ({ status: 'busy' });
+        return { choice: failure.startsWith('Stop') ? 'stop' : 'keep' };
+      };
+    }
+    const app = loadAppFunctions(h.rendererContext, { functions: ['sendSessionToBackground', 'exitBackgroundFailure'] });
+    await app.sendSessionToBackground('tab');
+    assert.equal(failures.length, 1, 'non-user cancellation must reach the single Send failure notice');
+    assert.equal(result.ok, false);
+    assert.notEqual(result.code, 'declined');
+    assert.equal(failures[0][2].message, result.error);
+    assert.equal(app.exitBackgroundFailure('Session', result), 'Session: ' + result.error);
+    assert.deepEqual(h.stops, []);
+    assert.deepEqual(h.writes, failure === 'CLI cancellation' ? ['/bg', '\r'] : []);
+  });
+}
+
+test('#1295 N3 Keep recheck refuses a roster-only live owner beside the approved unknown job', async t => {
+  const fs = require('node:fs');
+  const bg = require('../src/main/bg-agents/bg-agents');
+  const h = continuationChoiceFixture(t, { choice: 'keep' });
+  const sid = '22222222-2222-4222-8222-222222222222';
+  const jobsDir = path.join(h.root, 'jobs');
+  fs.mkdirSync(path.join(jobsDir, 'adb1224f'), { recursive: true });
+  fs.writeFileSync(path.join(jobsDir, 'adb1224f', 'state.json'), JSON.stringify({ state: 'done', sessionId: sid, name: 'old job' }));
+  fs.appendFileSync(h.transcript, JSON.stringify({ type: 'continued-in', sessionId: 'OLD', continuedInSessionId: sid }) + '\n');
+  fs.writeFileSync(path.join(h.root, sid + '.jsonl'), '{}\n');
+  const listed = [];
+  bg.init({ jobsDir, homeDir: h.root, cliSessionState: { ...h.ctx.cliSessionState,
+    refreshProcessTable: async () => {}, readWorkerProcessEvidence: () => ({ processTableFresh: false }) },
+    resolveProjectRoots: async cwd => ({ projectRoot: cwd, worktreeRoot: null }),
+    resolveTranscriptPath: id => id === 'old' ? h.transcript : path.join(h.root, id + '.jsonl'),
+    runClaude: async () => ({ code: 0, stdout: JSON.stringify(listed), stderr: '' }) });
+  t.after(() => bg.stop());
+  bg.start();
+  await bg.reconcile();
+  h.ctx.bgAgents = bg;
+  h.control.choose = async () => {
+    listed.push({ kind: 'background', id: 'cccccccc', state: 'working', sessionId: sid });
+    await bg.reconcile();
+    assert.equal(fs.existsSync(path.join(jobsDir, 'cccccccc')), false);
+    assert.equal(bg.liveJobCheck(sid, { excludeJobId: 'adb1224f' }).job?.id, 'cccccccc', 'roster proves the sibling owner');
+    return { choice: 'keep' };
+  };
+  const [result] = await h.batch();
+  assert.equal(result.code, 'refused', 'Keep must not hide a roster-only live sibling of the approved job');
+  assert.match(result.error, /cccccccc/);
+  assert.equal(h.questions.length, 1);
+  assert.deepEqual(h.writes, []);
 });
