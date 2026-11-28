@@ -1624,6 +1624,20 @@ for (const choice of ['cancel', 'save', 'discard']) test(`#1023 idle quit still 
   if (choice === 'save') assert.equal(ctx.disk.get(A), 'x0\nmine');
 });
 
+test('#1023 a failing skip check shows the exit dialog instead of cancelling the quit', async t => {
+  const ctx = setup();
+  t.after(() => ctx.destroy());
+  const detail = idleExit(ctx);
+  ctx.window.api.getSetting = async () => { throw new Error('settings unavailable'); };
+  const checking = ctx.calls.check(1028, 'quit', detail);
+  await flush();
+  const question = ctx.window.document.querySelector('.choice-dialog');
+  assert.ok(question, 'a failing skip check must fall back to the exit dialog');
+  question.querySelector('.choice-dialog-cancel').click();
+  await checking;
+  assert.deepEqual(ctx.calls.answers, [{ id: 1028, proceed: false }]);
+});
+
 for (const [startup, current] of [['off', 'off'], ['auto', 'off'], ['off', 'auto']]) {
   test('#1023 restore mode ' + startup + ' at startup then ' + current + ' at quit uses the current setting', async t => {
     const ctx = setup();
