@@ -2251,13 +2251,34 @@ transcript's Archive button disabled until the renderer reloads.
 
 The lock belongs to the action that took it last, and an action releases only
 the ids it still holds. Each action takes only ids nobody holds and releases
-each one once. The project archive releases a row as soon as that row's stop
-settles, so the row's own Archive button works again while the folder awaits
-the next stop; it then forgets that id, and its final cleanup releases only
-the rows it has not reached. Releasing every captured id again would free a
-lock that a retried row archive took in between, and that row archive would
-run with its button enabled. `test/dom-archive-busy-rekey.test.js` pins the
-row, project and older rows paths.
+each one once. A project archive releases a refused stop immediately and
+forgets that id, so a row retry may proceed while the next stop is pending.
+Successful stops retain their locks across the remaining stops and until each
+row's archive persistence settles, including a refused or rejected write
+(#1332). If any stop refuses, no rows are persisted and final cleanup releases
+the remaining held ids. Final cleanup must not release ids already forgotten:
+another row archive may now hold them (#1301). The group lock also spans row
+persistence. These remain captured-id locks; re-keying does not transfer them.
+
+Archive identity is separate from lock ownership. For a proven continuation
+while Stop is pending, the same conversation moves from OLD to NEW;
+`rekeySessionTab` changes the shared session object in place. Row, slug-group
+and folder archive correctly persist its current id NEW after stopping OLD,
+rather than pinning the previous transcript. Main's `archive-session` handler
+resolves `getConversationPartIds(sessionId)` for both archive and unarchive.
+Row/group Undo and folder Undo pass their archived session objects back through
+`persistSessionArchive(..., 0)`; working-set restoration also follows the
+current conversation head (cli-session-state.md, "Conversation continuations").
+The re-key identity policy is unchanged.
+
+Older-row archive never stops an already open or running conversation: it
+rechecks eligibility before and after confirmation and before each row.
+A row opened and continued while confirmation is pending is kept, with neither
+OLD nor NEW sent to Stop or Archive. `test/dom-archive-busy-rekey.test.js` loads
+the shipped renderer re-key, planner, stop and archive code in jsdom, checks
+these four paths through the IPC boundary and exercises folder locks through
+successful, refused and rejected persistence plus the #1301 retry. It does not
+prove live CLI ownership, real process termination or SQLite persistence.
 
 Two source-keyed stores stay under the old id without a visible effect.
 `sessionExits` (`process-exit.js`) records the PTY that ended under an id:

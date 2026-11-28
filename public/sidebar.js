@@ -2141,10 +2141,11 @@ async function archiveProjectFolder(project, button) {
       const unreachable = new Map();
       try {
         for (const { session: s, plan: sessionPlan } of confirmed.prepared.plans.filter(({ session }) => own.includes(session))) {
-          let stopResult;
-          try { stopResult = await stopForArchive(s, unreachable, sessionPlan); } finally { setArchiveBusy(ownIds.get(s), false); ownIds.delete(s); }
+          const stopResult = await stopForArchive(s, unreachable, sessionPlan);
           didStop ||= !!stopResult.didStop;
           if (!stopResult.ok) {
+            setArchiveBusy(ownIds.get(s), false);
+            ownIds.delete(s);
             refused = true;
             const item = document.getElementById('si-' + s.sessionId);
             surfaceStopFailure(item && item.querySelector('.session-archive-btn'), stopResult.error, s);
@@ -2152,18 +2153,23 @@ async function archiveProjectFolder(project, button) {
             notStopped.push(...(stopResult.notStopped || []).map(entry => ({ ...entry, session: s })));
           }
         }
+        if (refused) {
+          pollActiveSessions();
+          Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
+          return;
+        }
+        for (const s of own) {
+          try {
+            if (!await persistSessionArchive(s, 1, didStop)) refused = true;
+            else archived.push(s);
+          } finally {
+            setArchiveBusy(ownIds.get(s), false);
+            ownIds.delete(s);
+          }
+        }
       } finally {
         for (const id of ownIds.values()) setArchiveBusy(id, false);
         setGroupArchiveBusy(groupKey, false);
-      }
-      if (refused) {
-        pollActiveSessions();
-        Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
-        return;
-      }
-      for (const s of own) {
-        if (!await persistSessionArchive(s, 1, didStop)) refused = true;
-        else archived.push(s);
       }
       announceNotStopped(notStopped.filter(entry => entry.session.archived));
       if (refused) {
