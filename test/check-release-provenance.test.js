@@ -14,6 +14,12 @@ const SCRIPT = path.join(__dirname, '..', 'scripts', 'check-release-provenance.j
 const source = fs.readFileSync(SCRIPT, 'utf8');
 const SHA = 'a'.repeat(40);
 const ORIGIN = 'b'.repeat(40);
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+const mergeHelp = (() => {
+  try { return execFileSync('git', ['merge-tree', '-h'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'pipe'] }); }
+  catch (err) { return String(err.stdout || '') + String(err.stderr || ''); }
+})();
+const mergeOptions = { skip: !mergeHelp.includes('--write-tree') && 'Git >= 2.38 required: merge-tree --write-tree unsupported' };
 
 function tagCheck(branches) {
   return checkTagProvenance({
@@ -39,7 +45,7 @@ test('tag accepts membership of any remote release branch', () => {
   assert.equal(result.ok, true, result.message);
 });
 
-function prCheck(overrides = {}, onMain = []) {
+function prCheck(overrides = {}, onMain = [], readers = {}) {
   const commit = { sha: SHA, parents: [ORIGIN], files: ['src/fix.js'], message: 'fix: release only', ...overrides };
   return checkReleaseProvenance({
     base: 'release/1.2', head: SHA,
@@ -47,6 +53,10 @@ function prCheck(overrides = {}, onMain = []) {
     readCommit: () => commit,
     isOnMain: sha => onMain.includes(sha),
     readFileAt: () => JSON.stringify({ version: '1.2.0' }),
+    mergeTree: () => ({ tree: 'automatic-tree', conflicts: [] }),
+    diffFiles: () => [],
+    patchId: () => 'same-patch',
+    ...readers,
   });
 }
 
@@ -150,7 +160,7 @@ function repoFixture(t) {
     GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(dir, 'no-git-config'),
     GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
     GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' };
-  const git = (...args) => execFileSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], { cwd: dir, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const git = (...args) => execFileSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], { cwd: dir, env, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   const commit = (file, text, message) => {
     fs.writeFileSync(path.join(dir, file), text);
     git('add', '-A');
@@ -182,7 +192,7 @@ test('real Git: annotated ancestor tag accepted; off-release tag rejected', t =>
   assert.equal(result.ok, false, result.message);
 });
 
-test('real Git: -x backport passes; unported commits hidden by a merge are listed', t => {
+test('real Git: -x backport passes; unported commits hidden by a merge are listed', mergeOptions, t => {
   const repo = repoFixture(t);
   const original = repo.commit('fix.txt', 'fixed', 'fix on main');
   repo.git('update-ref', 'refs/remotes/origin/main', original);
@@ -268,13 +278,13 @@ function mergedReleaseFixture(t, withCode) {
   return { ...repo, bad };
 }
 
-test('real Git: #1312 release-only bump and merge base merged into a bump head passes', t => {
+test('real Git: #1312 release-only bump and merge base merged into a bump head passes', mergeOptions, t => {
   const repo = mergedReleaseFixture(t, false);
   const result = checkReleaseProvenance({ base: 'release/1.2', head: 'HEAD', ...repo.readers });
   assert.equal(result.ok, true, result.message);
 });
 
-test('real Git: #1312 topology rejects non-bump code brought by a head merge', t => {
+test('real Git: #1312 topology rejects non-bump code brought by a head merge', mergeOptions, t => {
   const repo = mergedReleaseFixture(t, true);
   const result = checkReleaseProvenance({ base: 'release/1.2', head: 'HEAD', ...repo.readers });
   assert.equal(result.ok, false, 'merged non-bump code must still be checked');
@@ -317,4 +327,228 @@ test('real Git: a file larger than one MiB is read whole', t => {
   let content;
   assert.doesNotThrow(() => { content = repo.readers.readFileAt(sha, 'big.txt'); }, 'git output above the 1 MiB default buffer is read');
   assert.equal(content.length, 2 * 1024 * 1024);
+});
+
+function mergeCheck({ conflicts = [], files = [], parents = [ORIGIN, 'c'.repeat(40)], readFileAt } = {}) {
+  return prCheck({ parents, message: 'Merge release/1.2 into bump/next' }, [], {
+    mergeTree: (first, second) => {
+      assert.deepEqual([first, second], parents);
+      return { tree: 'automatic-tree', conflicts };
+    },
+    diffFiles: (before, after) => {
+      assert.equal(before, 'automatic-tree');
+      assert.equal(after, SHA);
+      return files;
+    },
+    ...(readFileAt ? { readFileAt } : {}),
+  });
+}
+
+test('PR rejects non-bump paths hand-resolved during a merge', () => {
+  const result = mergeCheck({ conflicts: ['src/conflict.js'], files: ['src/conflict.js'] });
+  assert.equal(result.ok, false, 'hand-resolved code must fail provenance');
+  assert.match(result.message, /hand-resolved.*src\/conflict\.js/);
+});
+
+test('PR rejects code added to an otherwise automatic merge', () => {
+  const result = mergeCheck({ files: ['src/sneaked.js'] });
+  assert.equal(result.ok, false, 'merge-only code must fail provenance');
+  assert.match(result.message, /src\/sneaked\.js/);
+});
+
+test('PR rejects octopus merges explicitly', () => {
+  const result = mergeCheck({ parents: [ORIGIN, SHA, 'c'.repeat(40)] });
+  assert.equal(result.ok, false, 'octopus must fail closed');
+  assert.match(result.message, /octopus.*3 parents/i);
+});
+
+test('PR accepts #1312 merge resolved only in bump files and version fields', () => {
+  const files = ['CHANGELOG.md', 'package.json', 'package-lock.json'];
+  const result = mergeCheck({ conflicts: files, files, readFileAt: (ref, file) => {
+    assert.notEqual(ref, 'automatic-tree', 'conflicted JSON contains markers, not valid JSON');
+    return JSON.stringify({ name: 'app', version: ref, ...(file === 'package-lock.json' ? { packages: { '': { version: ref }, dep: { version: '1' } } } : {}) });
+  } });
+  assert.equal(result.ok, true, result.message);
+});
+
+test('PR accepts an automatic merge and a clean version-only merge edit', () => {
+  assert.equal(mergeCheck().ok, true);
+  assert.equal(mergeCheck({ files: ['package.json'], readFileAt: ref => JSON.stringify({ name: 'app', version: ref }) }).ok, true);
+});
+
+for (const conflicted of [false, true]) {
+  for (const file of ['package.json', 'package-lock.json']) {
+    test('PR rejects non-version merge edits in ' + file + ' (conflict=' + conflicted + ')', () => {
+      const result = mergeCheck({ files: [file], conflicts: conflicted ? [file] : [], readFileAt: ref =>
+        JSON.stringify({ version: ref, dependencies: { dep: ref === SHA ? '2' : '1' } }) });
+      assert.equal(result.ok, false, 'package changes beyond version fields must fail');
+      assert.ok(result.message.includes(file));
+    });
+  }
+}
+
+test('PR rejects a conflicted package resolution that drops a parent dependency', () => {
+  const result = mergeCheck({ files: ['package.json'], conflicts: ['package.json'], readFileAt: ref =>
+    JSON.stringify({ version: ref, dependencies: { dep: ref === ORIGIN ? '2' : '1' } }) });
+  assert.equal(result.ok, false, 'both parents must agree outside version fields');
+});
+
+function cherryCheck(files, sourceFiles) {
+  return prCheck({}, [ORIGIN], {
+    readCommit: sha => ({ parents: [ORIGIN], files: sha === SHA ? files : sourceFiles,
+      message: 'fix: backport\n\n(cherry picked from commit ' + ORIGIN + ')' }),
+    patchId: sha => sha,
+  });
+}
+
+test('PR rejects a mismatched -x trailer that introduces a file absent from its source', () => {
+  const result = cherryCheck(['src/new.js'], ['src/original.js']);
+  assert.equal(result.ok, false, 'unrelated trailer must fail provenance');
+  assert.match(result.message, /trailer does not match its source/);
+});
+
+test('PR accepts an exact -x cherry-pick by stable patch ID', () => {
+  const patches = [];
+  const result = prCheck({ message: '(cherry picked from commit ' + ORIGIN + ')' }, [ORIGIN], {
+    readCommit: sha => {
+      assert.equal(sha, SHA, 'equal patch IDs do not need the source file set');
+      return { parents: [ORIGIN], files: ['src/fix.js'], message: '(cherry picked from commit ' + ORIGIN + ')' };
+    },
+    patchId: sha => { patches.push(sha); return 'same-patch'; },
+  });
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(patches, [SHA, ORIGIN]);
+});
+
+test('PR accepts a conflict-resolved -x cherry-pick touching a subset of source files', () => {
+  assert.equal(cherryCheck(['src/fix.js'], ['src/fix.js', 'CHANGELOG.md']).ok, true);
+});
+
+test('PR does not equate absent patch IDs', () => {
+  const result = prCheck({}, [ORIGIN], {
+    readCommit: sha => ({ parents: [ORIGIN], files: [sha + '.js'], message: '(cherry picked from commit ' + ORIGIN + ')' }),
+    patchId: () => null,
+  });
+  assert.equal(result.ok, false, 'missing patch IDs must use the file-set fallback');
+});
+
+function fakeReaders(git) {
+  const mod = { exports: {} };
+  const req = name => name === 'node:child_process' ? { execFileSync: git } : require(name);
+  vm.runInNewContext(source, { require: req, module: mod }, { filename: SCRIPT });
+  return mod.exports.createGitReaders();
+}
+
+for (const conflicted of [false, true]) {
+  test('Git reader parses NUL-delimited merge-tree output (conflict=' + conflicted + ')', () => {
+    const readers = fakeReaders((_exe, args, options) => {
+      assert.equal(options.maxBuffer, GIT_MAX_BUFFER);
+      assert.deepEqual(Array.from(args), ['merge-tree', '--write-tree', '--name-only', '-z', SHA, ORIGIN]);
+      const stdout = SHA + '\0' + (conflicted ? 'odd\nname.js\0package.json\0\0messages\0' : '');
+      if (conflicted) throw Object.assign(new Error('conflict'), { status: 1, stdout });
+      return stdout;
+    });
+    assert.equal(typeof readers.mergeTree, 'function', 'mergeTree reader must be exported');
+    const result = readers.mergeTree(SHA, ORIGIN);
+    assert.equal(result.tree, SHA);
+    assert.deepEqual(Array.from(result.conflicts), conflicted ? ['odd\nname.js', 'package.json'] : []);
+  });
+}
+
+test('Git merge reader propagates unsupported Git and rejects malformed output', () => {
+  for (const action of [() => { throw Object.assign(new Error('unsupported'), { status: 129 }); }, () => 'invalid\0']) {
+    const readers = fakeReaders(action);
+    assert.equal(typeof readers.mergeTree, 'function', 'mergeTree reader must be exported');
+    assert.throws(() => readers.mergeTree(SHA, ORIGIN));
+  }
+});
+
+test('Git readers compare tree files without renames and pipe patches with the large buffer', () => {
+  const calls = [];
+  const readers = fakeReaders((_exe, args, options) => {
+    assert.equal(options.maxBuffer, GIT_MAX_BUFFER);
+    calls.push(Array.from(args));
+    if (args[0] === 'diff-tree') {
+      assert.ok(args.includes('--no-renames'));
+      assert.ok(args.includes('-z'));
+      return 'old.js\0new.js\0';
+    }
+    if (args[0] === 'show') {
+      assert.ok(args.includes('--binary'));
+      assert.ok(args.includes('--no-renames'));
+      return 'patch bytes';
+    }
+    assert.deepEqual(Array.from(args), ['patch-id', '--stable']);
+    assert.equal(options.input, 'patch bytes');
+    return ORIGIN + ' ' + SHA + '\n';
+  });
+  assert.equal(typeof readers.diffFiles, 'function', 'diffFiles reader must be exported');
+  assert.equal(typeof readers.patchId, 'function', 'patchId reader must be exported');
+  assert.deepEqual(Array.from(readers.diffFiles(SHA, ORIGIN)), ['old.js', 'new.js']);
+  assert.equal(readers.patchId(SHA), ORIGIN);
+  assert.equal(calls.length, 3);
+});
+
+function conflictFixture(t, files) {
+  const repo = repoFixture(t);
+  for (const file of files) {
+    if (file === 'CHANGELOG.md' || file === 'code.js') repo.commit(file, 'base\n', 'base content');
+  }
+  const base = repo.git('rev-parse', 'HEAD');
+  repo.git('checkout', '-qb', 'release-side');
+  for (const file of files) {
+    if (file.endsWith('.json')) bumpPackage(repo, file, value => { value.version = '1.2.1'; if (value.packages) value.packages[''].version = '1.2.1'; });
+    else repo.commit(file, 'release side\n', 'release side');
+  }
+  const release = repo.git('rev-parse', 'HEAD');
+  repo.git('update-ref', 'refs/remotes/origin/release/1.2', release);
+  repo.git('checkout', '-qb', 'bump-side', base);
+  for (const file of files) {
+    if (file.endsWith('.json')) bumpPackage(repo, file, value => { value.version = '1.2.2'; if (value.packages) value.packages[''].version = '1.2.2'; });
+    else repo.commit(file, 'bump side\n', 'main content');
+  }
+  const main = repo.git('rev-parse', 'HEAD');
+  repo.git('update-ref', 'refs/remotes/origin/main', main);
+  assert.throws(() => repo.git('merge', '--no-ff', 'release-side', '-m', 'Merge release into bump'));
+  for (const file of files) repo.git('checkout', '--ours', '--', file);
+  repo.git('add', '-A');
+  repo.git('commit', '-qm', 'Merge release into bump');
+  return { ...repo, main, release };
+}
+
+test('real Git: merge resolution in code fails and identifies the path', mergeOptions, t => {
+  const repo = conflictFixture(t, ['code.js']);
+  const automatic = repo.readers.mergeTree(repo.main, repo.release);
+  assert.deepEqual(automatic.conflicts, ['code.js']);
+  const result = checkReleaseProvenance({ base: 'release/1.2', head: 'HEAD', ...repo.readers });
+  assert.equal(result.ok, false, 'hand-resolved code must fail provenance');
+  assert.match(result.message, /hand-resolved.*code\.js/);
+});
+
+test('real Git: #1312 conflicts resolved in all three bump files pass', mergeOptions, t => {
+  const repo = conflictFixture(t, ['CHANGELOG.md', 'package.json', 'package-lock.json']);
+  const result = checkReleaseProvenance({ base: 'release/1.2', head: 'HEAD', ...repo.readers });
+  assert.equal(result.ok, true, result.message);
+});
+
+test('real Git: exact -x patch, resolved subset and unrelated file are distinguished', mergeOptions, t => {
+  const repo = repoFixture(t);
+  fs.writeFileSync(path.join(repo.dir, 'second.txt'), 'original\n');
+  const original = repo.commit('fix.txt', 'original\n', 'fix on main');
+  repo.git('update-ref', 'refs/remotes/origin/main', original);
+  repo.git('checkout', '-qb', 'backport', repo.base);
+  repo.commit('CHANGELOG.md', 'bump\n', 'bump');
+  repo.git('cherry-pick', '-x', original);
+  const exact = repo.git('rev-parse', 'HEAD');
+  assert.equal(repo.readers.patchId(exact), repo.readers.patchId(original));
+  const check = () => checkReleaseProvenance({ base: 'release/1.2', head: 'HEAD', ...repo.readers });
+  assert.equal(check().ok, true);
+  repo.git('checkout', '-qb', 'resolved', repo.base);
+  const resolved = repo.commit('fix.txt', 'adapted to release\n', '(cherry picked from commit ' + original + ')');
+  assert.notEqual(repo.readers.patchId(resolved), repo.readers.patchId(original));
+  assert.equal(check().ok, true, 'source file subset is allowed');
+  repo.commit('unrelated.txt', 'invented\n', '(cherry picked from commit ' + original + ')');
+  const result = check();
+  assert.equal(result.ok, false, 'unrelated trailer must fail provenance');
+  assert.match(result.message, /trailer does not match its source/);
 });

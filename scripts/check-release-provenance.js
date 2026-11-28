@@ -43,22 +43,47 @@ function isBump(sha, commit, readFileAt) {
   });
 }
 
-function checkReleaseProvenance({ base, head, listCommits, readCommit, readFileAt, isOnMain }) {
+function checkMerge(sha, commit, { mergeTree, diffFiles, readFileAt }) {
+  if (commit.parents.length > 2) return 'octopus merge (' + commit.parents.length + ' parents) is unsupported';
+  const automatic = mergeTree(...commit.parents);
+  const handResolved = automatic.conflicts.filter(file => !BUMP_FILES.has(file));
+  if (handResolved.length) return 'hand-resolved paths outside bump files: ' + handResolved.join(', ');
+  const files = diffFiles(automatic.tree, sha);
+  const invalid = [...new Set([...files, ...automatic.conflicts])].filter(file => {
+    const parents = automatic.conflicts.includes(file) ? commit.parents : [automatic.tree];
+    return !parents.every(parent => isBump(sha, { parents: [parent], files: [file] }, readFileAt));
+  });
+  return invalid.length ? 'merge resolution changes more than bump version fields: ' + invalid.join(', ') : null;
+}
+
+function checkReleaseProvenance({ base, head, listCommits, readCommit, readFileAt, isOnMain, mergeTree, diffFiles, patchId }) {
   const offenders = [];
   const commits = listCommits(base, head);
   for (const sha of commits) {
     if (isOnMain(sha)) continue;
     const commit = readCommit(sha);
-    if (commit.parents.length > 1) continue;
+    if (commit.parents.length > 1) {
+      const reason = checkMerge(sha, commit, { mergeTree, diffFiles, readFileAt });
+      if (reason) offenders.push('  ' + sha + ' ' + commit.message.split(/\r?\n/)[0] + ': ' + reason);
+      continue;
+    }
     if (isBump(sha, commit, readFileAt)) continue;
     const sources = [...commit.message.matchAll(/^\(cherry picked from commit ([a-fA-F0-9]{40}|[a-fA-F0-9]{64})\)\r?$/gm)];
-    if (sources.some(match => isOnMain(match[1]))) continue;
-    offenders.push('  ' + sha + ' ' + commit.message.split(/\r?\n/)[0]);
+    if (sources.some(match => {
+      const source = match[1];
+      if (!isOnMain(source)) return false;
+      const patch = patchId(sha);
+      if (patch && patch === patchId(source)) return true;
+      const sourceFiles = new Set(readCommit(source).files);
+      return commit.files.every(file => sourceFiles.has(file));
+    })) continue;
+    const reason = sources.length ? ': cherry-pick trailer does not match its source on origin/main' : '';
+    offenders.push('  ' + sha + ' ' + commit.message.split(/\r?\n/)[0] + reason);
   }
   if (offenders.length) {
     return { ok: false, message: [
       'Release provenance: fixes must land on main first, then use git cherry-pick -x into release/*.',
-      'Each commit must be on origin/main, a merge, a bump changing only CHANGELOG.md and package/lock version fields, or carry a cherry-pick source reachable from origin/main.',
+      'Each commit must be on origin/main, a checked two-parent merge, a bump changing only CHANGELOG.md and package/lock version fields, or a matching cherry-pick from origin/main.',
       ...offenders,
       'See ' + DOCS,
     ].join('\n') };
@@ -67,7 +92,7 @@ function checkReleaseProvenance({ base, head, listCommits, readCommit, readFileA
 }
 
 function createGitReaders({ cwd, env } = {}) {
-  const git = args => execFileSync('git', args, { cwd, env, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'pipe'] });
+  const git = (args, input) => execFileSync('git', args, { cwd, env, input, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['pipe', 'pipe', 'pipe'] });
   const lines = text => text.split(/\r?\n/).filter(Boolean);
   const resolve = ref => git(['rev-parse', '--verify', '--end-of-options', ref + '^{commit}']).trim();
   return {
@@ -78,6 +103,25 @@ function createGitReaders({ cwd, env } = {}) {
       const baseSha = resolve('refs/remotes/origin/' + base);
       const headSha = resolve(head);
       return lines(git(['rev-list', baseSha + '..' + headSha]));
+    },
+    mergeTree: (first, second) => {
+      let output;
+      try {
+        output = git(['merge-tree', '--write-tree', '--name-only', '-z', first, second]);
+      } catch (err) {
+        if (err.status !== 1) throw err;
+        output = err.stdout;
+      }
+      const [tree, ...fields] = String(output).split('\0');
+      if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(tree)) throw new Error('Invalid merge-tree output');
+      const end = fields.indexOf('');
+      if (end < 0) throw new Error('Invalid merge-tree conflict paths');
+      return { tree, conflicts: fields.slice(0, end) };
+    },
+    diffFiles: (before, after) => git(['diff-tree', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', before, after]).split('\0').filter(Boolean),
+    patchId: sha => {
+      const patch = git(['show', '--pretty=format:', '--binary', '--no-renames', sha, '--']);
+      return git(['patch-id', '--stable'], patch).trim().split(/\s+/)[0] || null;
     },
     readCommit: sha => ({
       parents: git(['rev-list', '--parents', '-n', '1', sha]).trim().split(/\s+/).slice(1),
