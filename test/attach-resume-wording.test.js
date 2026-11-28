@@ -35,7 +35,7 @@ for (const rejects of [false, true]) {
     const { attachBackgroundContinuation } = loadAppFunctions(h.context, { functions: ['attachBackgroundContinuation'] });
     await attachBackgroundContinuation(entry, { jobId: '1234abcd' });
     noticeText(h.document,
-      'Could not attach; retry from the sidebar.\nThe conversation now runs in the background. Open it from the sidebar to retry attaching.',
+      'Could not attach to the background session.\nOpen it from the sidebar to retry attaching.\n"Work" now runs in the background.',
       '"Work" (abcdef12-1234-5678-9012-123456789abc) at /work/project\njob 1234abcd unavailable');
     assert.equal(entry.closed, true);
     assert.equal(logs.at(-1).text,
@@ -52,7 +52,7 @@ for (const closed of [false, true]) {
     h.ctx.api.openTerminal = async () => ({ ok: false, error: 'job 1234abcd unavailable' });
     assert.equal(await h.app.openSession(session, { type: 'attach', jobId: '1234abcd' }), false);
     noticeText(h.dom.window.document,
-      'Could not attach; check the session in the Agents view.\nOpen it from the sidebar to retry attaching.',
+      'Could not attach to the background session.\nCheck it in the Agents view, then open it from the sidebar to retry attaching.\nSession: "Work".',
       '"Work" (old) at ' + h.root + '\njob 1234abcd unavailable');
     assert.equal(h.ctx.openSessions.has('old'), false);
   });
@@ -66,7 +66,44 @@ test('1023 failed respawn does not claim that the job restarted', async t => {
   h.ctx.api.bgAgentVerb = async () => ({ ok: false, error: 'job 1234abcd refused' });
   assert.equal(await h.app.openSession(session), false);
   noticeText(h.dom.window.document,
-    'Could not attach; check the session in the Agents view.',
+    'Respawn failed.\nCheck it in the Agents view.\nSession: "Work".',
     '"Work" (old) at ' + h.root + '\njob 1234abcd refused');
   assert.deepEqual(h.spawned, []);
+});
+
+for (const failure of ['missing job', 'throw']) {
+  test('1023 respawn refusal describes the actual outcome: ' + failure, async t => {
+    const h = setup(t, { old: [], other: [] }, { choice: 'background' });
+    const session = h.rows.get('old');
+    Object.assign(session, { name: 'Work', headSessionId: 'old', mergedMemberIds: ['other'],
+      identitySessionId: 'old', identityJobId: '1234abcd', refusedJobState: 'blocked' });
+    h.ctx.api.bgAgentVerb = async () => {
+      if (failure === 'throw') throw new Error('respawn unavailable');
+      return { ok: true };
+    };
+    t.mock.method(h.ctx, 'setTimeout', callback => { queueMicrotask(callback); return 0; });
+    assert.equal(await h.app.openSession(session), false);
+    noticeText(h.dom.window.document,
+      (failure === 'throw' ? 'Respawn failed.' : 'The respawned job did not appear.')
+        + '\nCheck it in the Agents view.\nSession: "Work".',
+      '"Work" (old) at ' + h.root + '\n' + (failure === 'throw' ? 'respawn unavailable'
+        : 'Job 1234abcd was respawned but has no live background descriptor'));
+    assert.deepEqual(h.spawned, []);
+  });
+}
+
+test('1023 continuation failure shows the short id when no name exists', async t => {
+  const h = setupSidebarDom();
+  t.after(() => h.destroy());
+  const session = { sessionId: 'abcdef12-1234-5678-9012-123456789abc', projectPath: '/work/project' };
+  const entry = { session, initialSize: {} };
+  Object.assign(h.window, { skippedWorkingSetEntries: new Map(), beginPtyOpen() {}, settlePtyOpen() {},
+    schedulePersistWorkingSet() {}, pollActiveSessions() {} });
+  h.window.openSessions.set(session.sessionId, entry);
+  h.window.api.openTerminal = async () => ({ ok: false, error: 'attach unavailable' });
+  await loadAppFunctions(h.context, { functions: ['attachBackgroundContinuation'] })
+    .attachBackgroundContinuation(entry, { jobId: '1234abcd' });
+  noticeText(h.document,
+    'Could not attach to the background session.\nOpen it from the sidebar to retry attaching.\n"abcdef12" now runs in the background.',
+    '"abcdef12-1234-5678-9012-123456789abc" at /work/project\nattach unavailable');
 });

@@ -227,7 +227,8 @@ test('an interactive background click without a job id keeps its error notice', 
   assert.equal(notices.length, 1);
   assert.equal(notices[0].dataset.noticeId, `resume-background:${SID}`);
   assert.equal(notices[0].getAttribute('role'), 'alert');
-  assert.match(notices[0].textContent, /Cannot open "Scheduled task".*Agents view/);
+  assert.equal(notices[0].querySelector('.app-notice-message').textContent,
+    'Cannot attach to this session.\nFind it in the Agents view.\n"Scheduled task" runs as a background session whose job Switchboard cannot identify.');
 });
 
 test('cancelling a scheduled-session click opens no terminal and does not attach', async t => {

@@ -1916,20 +1916,20 @@ async function detachSession(sessionOrId, btn, retryTargets) {
           }
           if (reattach.entry && openSessions.get(id) === reattach.entry && !reattach.entry.closed) {
             showAppNotice({ id: noticeId, kind: 'error', sessions: [reattach.session],
-              message: `Still detaching; open the session from the sidebar to retry.\n${sessionActionDescription(reattach.session)}`, logText: `The session is still detaching from ${sessionActionDescription(reattach.session, { log: true })}. Open it from the sidebar to retry.` });
+              message: `Reattaching is still waiting for the detach to finish.\nOpen the session from the sidebar to retry.\n${sessionActionDescription(reattach.session)}`, logText: `The session is still detaching from ${sessionActionDescription(reattach.session, { log: true })}. Open it from the sidebar to retry.` });
             return;
           }
           let check;
           try { if (!target.remote) check = await window.api.bgAgentLiveJob?.(id); } catch {}
           if (check?.known === true && !check.job) {
             showAppNotice({ id: noticeId, kind: 'error', sessions: [reattach.session],
-              message: `The background job has ended; there is nothing to reattach.\n${sessionActionDescription(reattach.session)}`, logText: `The background job has ended for ${sessionActionDescription(reattach.session, { log: true })}; there is nothing to reattach.` });
+              message: `The background job has ended.\nThere is nothing to reattach.\n${sessionActionDescription(reattach.session)}`, logText: `The background job has ended for ${sessionActionDescription(reattach.session, { log: true })}; there is nothing to reattach.` });
             return;
           }
           try {
             const row = sessionMap.get(reattach.session.sessionId) || reattach.session;
             if (target.remote && !row.remoteAttachable) {
-              showAppNotice({ id: noticeId, kind: 'info', message: `Cannot reattach; open the session from the sidebar to view its transcript.\nHost: ${remoteHostLabel(target.alias)}.`, logText: `The session is no longer attachable on ${remoteHostLabel(target.alias)}. Open it from the sidebar to view its transcript.` });
+              showAppNotice({ id: noticeId, kind: 'info', message: `Cannot reattach to the session.\nOpen it from the sidebar to view its transcript.\nHost: ${remoteHostLabel(target.alias)}.`, logText: `The session is no longer attachable on ${remoteHostLabel(target.alias)}. Open it from the sidebar to view its transcript.` });
               return;
             }
             const opened = target.remote
@@ -1943,7 +1943,7 @@ async function detachSession(sessionOrId, btn, retryTargets) {
             return opened;
           } catch (error) {
             showAppNotice({ id: noticeId, kind: 'error', sessions: [reattach.session],
-              message: `Could not reattach; open the session from the sidebar to retry.\n${sessionActionDescription(reattach.session)}: ${error?.message || error || 'unknown error'}.`, logText: `Could not reattach to ${sessionActionDescription(reattach.session, { log: true })}: ${error?.message || error || 'unknown error'}.` });
+              message: `Could not reattach to the session.\nOpen the session from the sidebar to retry.\n${sessionActionDescription(reattach.session)}: ${error?.message || error || 'unknown error'}.`, logText: `Could not reattach to ${sessionActionDescription(reattach.session, { log: true })}: ${error?.message || error || 'unknown error'}.` });
           }
         } });
     }
@@ -2030,7 +2030,7 @@ async function attachBackgroundContinuation(entry, background) {
       syncPtySizeAfterOpen(entry, result);
     } else showSessionActionFailure('Attach background', entry.session, entry.openError,
       'The conversation now runs in the background. Open it from the sidebar to retry attaching.', undefined,
-      { message: 'Could not attach; retry from the sidebar.\nThe conversation now runs in the background. Open it from the sidebar to retry attaching.',
+      { message: `Could not attach to the background session.\nOpen it from the sidebar to retry attaching.\n"${sessionActionLabel(entry.session)}" now runs in the background.`,
         details: `${sessionActionDescription(entry.session)}\n${entry.openError}` });
   } catch (err) {
     if (openSessions.get(sessionId) !== entry) return;
@@ -2039,7 +2039,7 @@ async function attachBackgroundContinuation(entry, background) {
     entry.openError = err.message;
     showSessionActionFailure('Attach background', entry.session, err,
       'The conversation now runs in the background. Open it from the sidebar to retry attaching.', undefined,
-      { message: 'Could not attach; retry from the sidebar.\nThe conversation now runs in the background. Open it from the sidebar to retry attaching.',
+      { message: `Could not attach to the background session.\nOpen it from the sidebar to retry attaching.\n"${sessionActionLabel(entry.session)}" now runs in the background.`,
         details: `${sessionActionDescription(entry.session)}\n${err?.message || err || 'The backend is unavailable or returned no result'}` });
   } finally {
     schedulePersistWorkingSet();
@@ -2294,7 +2294,9 @@ async function sendSessionToBackground(sessionId) {
     if (openSessions.get(result.sessionId) === oldEntry && oldEntry.backgroundAttach) {
       await oldEntry.backgroundAttach;
       if (oldEntry.closed) showSessionActionFailure('Attach background', destination, oldEntry.openError,
-        'The conversation now runs in the background. Open it from the sidebar to retry attaching.');
+        'The conversation now runs in the background. Open it from the sidebar to retry attaching.', undefined,
+        { message: `Could not attach to the background session.\nOpen it from the sidebar to retry attaching.\n"${sessionActionLabel(destination)}" now runs in the background.`,
+          details: `${sessionActionDescription(destination)}\n${oldEntry.openError || 'The backend is unavailable or returned no result'}` });
       else {
         clearAppNotice(sessionActionNoticeId('Attach background', destination));
         showRestoreNotice('background-info:' + result.sessionId, `${name} now runs in the background. Closing this tab detaches it; the session keeps running.`, { ...destination, name }, { logText: `${result.sessionId.slice(0, 8)} now runs in the background. Closing this tab detaches it; the session keeps running.` });
@@ -2338,7 +2340,9 @@ async function sendSessionToBackground(sessionId) {
       clearAppNotice(sessionActionNoticeId('Attach background', destination));
       showRestoreNotice('background-info:' + result.sessionId, `${name} now runs in the background. Closing this tab detaches it; the session keeps running.`, { ...destination, name }, { logText: `${result.sessionId.slice(0, 8)} now runs in the background. Closing this tab detaches it; the session keeps running.` });
     } else showSessionActionFailure('Attach background', destination, attachError || entry?.openError || 'the attach tab did not open',
-      'The conversation now runs in the background. Open it from the sidebar to retry attaching.');
+      'The conversation now runs in the background. Open it from the sidebar to retry attaching.', undefined,
+      { message: `Could not attach to the background session.\nOpen it from the sidebar to retry attaching.\n"${sessionActionLabel(destination)}" now runs in the background.`,
+        details: `${sessionActionDescription(destination)}\n${attachError || entry?.openError || 'the attach tab did not open'}` });
   } catch (err) {
     showSessionActionFailure(destination ? 'Attach background' : 'Send to background', destination || source, err,
       'Open the conversation from the sidebar to check where it is running, then retry the action.', undefined,
@@ -3139,7 +3143,7 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
         }
         if (!current) {
           showSessionActionFailure('Attach background', session, error || `Job ${jobId} was respawned but has no live background descriptor`, 'Check the background session in the Agents view.', undefined,
-            { message: 'Could not attach; check the session in the Agents view.',
+            { message: `${error ? 'Respawn failed.' : 'The respawned job did not appear.'}\nCheck it in the Agents view.\nSession: "${sessionActionLabel(session)}".`,
               details: `${sessionActionDescription(session)}\n${error || `Job ${jobId} was respawned but has no live background descriptor`}` });
           return false;
         }
@@ -3296,7 +3300,7 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
       showSessionActionFailure(automatic ? 'Restore' : 'Attach background', session, backgroundRestoreJobId ? `Job ${backgroundRestoreJobId}: ${result.error}` : result.error,
         entry.attach ? 'Check the background session in the Agents view, then open it from the sidebar to retry attaching.'
           : 'Check the transcript and connection, then open the session from the sidebar to retry restoring.', undefined,
-        automatic ? {} : { message: 'Could not attach; check the session in the Agents view.\nOpen it from the sidebar to retry attaching.',
+        automatic ? {} : { message: `Could not attach to the background session.\nCheck it in the Agents view, then open it from the sidebar to retry attaching.\nSession: "${sessionActionLabel(session)}".`,
           details: `${sessionActionDescription(session)}\n${backgroundRestoreJobId ? `Job ${backgroundRestoreJobId}: ${result.error}` : result.error}` });
       const held = skippedWorkingSetEntries.get(sessionId);
       const index = restoreSavedIndex.get(sessionId) ?? [...openSessions.keys()].indexOf(sessionId);

@@ -42,7 +42,7 @@ test('L6 background without job id refuses by error notice without asking', asyn
   }), false);
   assert.equal(notices.length, 1);
   assert.equal(notices[0].kind, 'error');
-  assert.equal(notices[0].message, 'Cannot attach to this session; find it in the Agents view.\nCannot open "Plan" here: it runs as a background session whose job Switchboard cannot identify, so it cannot be attached. Find it in the Agents view.');
+  assert.equal(notices[0].message, 'Cannot attach to this session.\nFind it in the Agents view.\n"Plan" runs as a background session whose job Switchboard cannot identify.');
 });
 
 test('automatic background refusal without a job id reports the blocked session silently', async () => {
@@ -63,6 +63,6 @@ test('1023 refused background notice preserves diagnostic log text', async () =>
   await guardResume({ sessionId: 'abcdef12-1234-5678-9012-123456789abc' }, {
     name: '/named/session', live: { kind: 'bg' }, notify: notice => notices.push(notice),
   });
-  assert.equal(notices[0].message.split('\n')[0], 'Cannot attach to this session; find it in the Agents view.');
+  assert.equal(notices[0].message.split('\n')[0], 'Cannot attach to this session.');
   assert.equal(notices[0].logText, 'Cannot open "abcdef12" here: it runs as a background session whose job Switchboard cannot identify, so it cannot be attached. Find it in the Agents view.');
 });
