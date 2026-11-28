@@ -1,6 +1,7 @@
 'use strict';
 
 const { stopPtyWithEvidence } = require('../terminals/pty-ops');
+const { armDeadlineTimer } = require('./project-delete-timer');
 
 function createProjectDeleteStop(ports) {
   const { now = Date.now, schedule = setTimeout, cancel = clearTimeout } = ports;
@@ -14,17 +15,17 @@ function createProjectDeleteStop(ports) {
     && typeof value.procStart === 'string' && !!value.procStart;
   const bounded = async (read, deadline) => {
     if (now() >= deadline) throw fail('STOP_TIMEOUT');
-    let timer;
+    let cancelTimer;
     try {
       const result = await Promise.race([Promise.resolve().then(() => {
         if (now() >= deadline) throw fail('STOP_TIMEOUT');
         return read();
       }), new Promise((_, reject) => {
-        timer = schedule(() => reject(fail('STOP_TIMEOUT')), deadline - now());
+        cancelTimer = armDeadlineTimer({ deadline, now, schedule, cancel }, () => reject(fail('STOP_TIMEOUT')));
       })]);
       if (now() >= deadline) throw fail('STOP_TIMEOUT');
       return result;
-    } finally { cancel(timer); }
+    } finally { cancelTimer?.(); }
   };
   const pinAttachment = attachment => ({ sessionKey: attachment.sessionKey, session: attachment.session,
     pty: attachment.session?.pty, pid: attachment.session?.pty?.pid,
