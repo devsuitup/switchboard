@@ -2218,11 +2218,12 @@ function initExitBackgroundControl() {
       const session = openSessions.get(sessionId)?.session || sessionMap.get(sessionId) || { sessionId };
       const label = session.name || session.aiTitle || session.summary || sessionId;
       const messageParts = [
-        [{ session, label }, ' has an older background job that may still be running.'],
+        ['An older background job may still be running.'],
+        ['Session: ', { session, label }],
         ...jobs.map(job => ['Old job: ', { session: { sessionId: job.sessionId }, label: job.name || job.id }, ' (' + job.id + ').']),
         ['Cancel keeps this session in the foreground. Other sessions in the batch continue.'],
       ];
-      const result = await appChoose({ title: 'Old background job may still be running', messageParts,
+      const result = await appChoose({ title: 'Choose what to do with the old background job.', messageParts,
         sessions: [session, ...jobs.map(job => ({ sessionId: job.sessionId, name: job.name }))],
         options: [
           { id: 'stop', label: 'Stop the old job', detail: 'Stop it, check that it ended, then move this session to the background.' },
@@ -2259,7 +2260,10 @@ async function sendSessionToBackground(sessionId) {
     const pending = !!openSessions.get(sessionId)?.backgrounding;
     showSessionActionFailure('Send to background', source, reason,
       pending ? 'Wait for the handoff to finish and check this terminal.' : 'Continue working in its own terminal, or open the session from the sidebar to check its state.',
-      undefined, pending ? { headline: 'Moving to the background', kind: 'info' } : {});
+      undefined, { headline: pending ? 'Moving to the background' : undefined, kind: pending ? 'info' : 'error',
+        message: pending ? 'Moving to the background.\nWait for it to finish and check this terminal.'
+          : `Could not send this session to the background.\n${reason}.`,
+        details: `${sessionActionDescription(source)}\n${pending ? 'Wait for the handoff to finish and check this terminal.' : 'Continue working in its own terminal, or open the session from the sidebar to check its state.'}` });
     return;
   }
   const oldEntry = openSessions.get(sessionId);
@@ -2274,7 +2278,7 @@ async function sendSessionToBackground(sessionId) {
     let result = await window.api.sendSessionToBackground(sessionId);
     if (result?.code === 'busy') {
       // see .ai/contexts/bg-agents.md ("Send to background")
-      if (!await appConfirm({ title: 'Send to background now?', message: 'Claude is working in this session. Sending /bg now interrupts the running tool: Claude sees it as killed and finishes the turn in the background. Wait for the turn to end, or send it now.', confirmLabel: 'Send now' })) return;
+      if (!await appConfirm({ title: 'Sending now will interrupt the current task.', message: 'Claude will finish this turn in the background. Cancel to wait for the task to finish.', confirmLabel: 'Send now' })) return;
       if (openSessions.get(sessionId) !== oldEntry) return;
       result = await window.api.sendSessionToBackground(sessionId, { force: true });
     }
@@ -2333,7 +2337,8 @@ async function sendSessionToBackground(sessionId) {
       'The conversation now runs in the background. Open it from the sidebar to retry attaching.');
   } catch (err) {
     showSessionActionFailure(destination ? 'Attach background' : 'Send to background', destination || source, err,
-      'Open the conversation from the sidebar to check where it is running, then retry the action.');
+      'Open the conversation from the sidebar to check where it is running, then retry the action.', undefined,
+      destination ? {} : { message: `Could not send this session to the background.\n${err?.message || err || 'The backend is unavailable or returned no result'}`, details: `${sessionActionDescription(source)}\nOpen the conversation from the sidebar to check where it is running, then retry the action.` });
   } finally {
     oldEntry.backgrounding = false;
     updateTerminalHeader();

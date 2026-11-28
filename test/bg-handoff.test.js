@@ -49,14 +49,16 @@ test('a confirmed background handoff releases its Windows job before the delayed
 
 test('T1: unsent composer text refuses before any write', async () => {
   const h = setup({ session: { composerState: { pending: 2 } } });
-  assert.match((await sendToBackground('old', h.deps)).error, /have not sent/i);
+  assert.equal((await sendToBackground('old', h.deps)).error, 'Send or clear the unsent text, then try again.');
   assert.deepEqual(h.writes, []);
 });
 
 test('T2: waiting and unknown status refuse before any write', async () => {
   for (const status of ['waiting', null]) {
     const h = setup({ status });
-    assert.equal((await sendToBackground('old', h.deps)).code, 'refused');
+    const result = await sendToBackground('old', h.deps);
+    assert.equal(result.code, 'refused');
+    assert.equal(result.error, status === 'waiting' ? 'Answer Claude in the terminal, then try again.' : 'Switchboard cannot read this session’s state. Wait for its state to appear, then try again.');
     assert.deepEqual(h.writes, []);
   }
 });
@@ -229,7 +231,7 @@ test('T16: a withheld Enter leaves /bg in the composer model, so a retry refuses
   h.deps.getStatus = () => 'idle';
   const retry = await sendToBackground('old', h.deps);
   assert.equal(retry.code, 'refused');
-  assert.match(retry.error, /have not sent/);
+  assert.match(retry.error, /Send or clear the unsent text, then try again\./);
   assert.deepEqual(h.writes, ['/bg']);
 });
 
@@ -355,7 +357,7 @@ test('T31d: shell sends after a submitted ! command but refuses ! text left in t
     noteUserInput(h.session.composerState, text, 1);
     const result = await sendToBackground('old', h.deps);
     assert.equal(result.code, 'refused');
-    assert.match(result.error, /have not sent/);
+    assert.match(result.error, /Send or clear the unsent text, then try again\./);
     assert.deepEqual(h.writes, []);
   }
 });

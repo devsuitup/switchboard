@@ -105,11 +105,16 @@ test('R1: success replaces the old tab with attach, follows the active tab and p
 });
 
 test('R2: refusal keeps the old tab and shows the error', async t => {
-  const h = handoff(t, { result: { ok: false, error: 'The prompt holds text you have not sent.' } });
+  const h = handoff(t, { result: { ok: false, error: 'Send or clear the unsent text, then try again.' } });
   await h.app.sendSessionToBackground('old');
   assert.deepEqual(h.destroyed, []);
   assert.deepEqual(h.spawned, []);
-  assert.match(h.dom.window.document.querySelector('[role="alert"]').textContent, /Send to background.*have not sent/i);
+  const notice = h.dom.window.document.querySelector('[role="alert"]');
+  assert.equal(notice.querySelector('.app-notice-title').textContent, 'Could not send this session to the background.');
+  assert.equal(notice.querySelector('.app-notice-body').textContent, 'Send or clear the unsent text, then try again.');
+  assert.equal(notice.querySelector('details').open, false);
+  assert.ok(notice.querySelector('details').textContent.includes('old'));
+  assert.ok(notice.querySelector('details').textContent.includes(h.root));
 });
 
 test('R3: running subagents confirm before IPC; cancel sends nothing', async t => {
@@ -434,7 +439,10 @@ test('#1295 r2 continuation dialog leads with a short plain sentence', async t =
   const h = continuationDialogs(t);
   const pending = h.ask('one');
   const doc = h.window.document;
-  assert.equal(doc.querySelector('.choice-dialog-body p').textContent, 'Harness has an older background job that may still be running.');
+  assert.equal(doc.querySelector('.choice-dialog-body p').textContent, 'An older background job may still be running.');
+  assert.match(doc.querySelectorAll('.choice-dialog-body p')[1].textContent, /Harness/);
+  assert.match(doc.querySelectorAll('.choice-dialog-body p')[2].textContent, /Old harness.*adb1224f/);
+  assert.equal(doc.querySelector('#choice-dialog-title').textContent, 'Choose what to do with the old background job.');
   for (const detail of doc.querySelectorAll('.choice-dialog-detail')) {
     assert.ok(detail.textContent.length < 110, 'option descriptions stay short');
     assert.equal(detail.textContent.split('.').filter(Boolean).length, 1, 'one sentence per option');
@@ -443,7 +451,7 @@ test('#1295 r2 continuation dialog leads with a short plain sentence', async t =
   await pending;
 });
 
-for (const error of ['Claude cancelled it: tool still running', 'The prompt holds text you have not sent.', 'Background ownership could not be rechecked.']) {
+for (const error of ['Claude cancelled it: tool still running', 'Send or clear the unsent text, then try again.', 'Background ownership could not be rechecked.']) {
   test('#1295 N1 cancellation failure remains visible: ' + error, async t => {
     const h = handoff(t, { result: { ok: false, code: 'cancelled', error } });
     await h.app.sendSessionToBackground('old');
@@ -461,4 +469,34 @@ test('#1295 N1 exit failure describes declined like user Cancel', t => {
   const h = handoff(t);
   const { exitBackgroundFailure } = loadAppFunctions(h.ctx, { functions: ['exitBackgroundFailure'] });
   assert.equal(exitBackgroundFailure('Session', { code: 'declined' }), 'Session: Moving was cancelled.');
+});
+
+for (const answer of [false, true]) {
+  test('busy handoff explains interruption and preserves the force choice: ' + answer, async t => {
+    const h = handoff(t, { answer });
+    const calls = [];
+    h.dom.window.api.sendSessionToBackground = async (id, options) => {
+      calls.push([id, options]);
+      return options?.force ? { ok: false, code: 'declined' } : { ok: false, code: 'busy' };
+    };
+    await h.app.sendSessionToBackground('old');
+    assert.equal(h.confirmations.length, 1);
+    assert.equal(h.confirmations[0].title, 'Sending now will interrupt the current task.');
+    assert.equal(h.confirmations[0].message, 'Claude will finish this turn in the background. Cancel to wait for the task to finish.');
+    assert.equal(h.confirmations[0].confirmLabel, 'Send now');
+    assert.deepEqual(JSON.parse(JSON.stringify(calls)), answer ? [['old', null], ['old', { force: true }]] : [['old', null]]);
+    assert.deepEqual(h.destroyed, []);
+    assert.deepEqual(h.spawned, []);
+  });
+}
+
+test('awaited-answer refusal reaches the notice body without identifiers in the title', async t => {
+  const error = backgroundRefusal({ kind: 'local-pty', composerState: { pending: 0 } }, 'waiting');
+  const h = handoff(t, { result: { ok: false, code: 'refused', error } });
+  await h.app.sendSessionToBackground('old');
+  const notice = h.dom.window.document.querySelector('[role="alert"]');
+  assert.equal(notice.querySelector('.app-notice-title').textContent, 'Could not send this session to the background.');
+  assert.equal(notice.querySelector('.app-notice-body').textContent, 'Answer Claude in the terminal, then try again.');
+  assert.deepEqual(h.destroyed, []);
+  assert.deepEqual(h.spawned, []);
 });

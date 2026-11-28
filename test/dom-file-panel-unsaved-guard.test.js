@@ -1569,7 +1569,7 @@ for (const loss of ['plain terminal', 'panel shell', 'busy turn', 'subagent', 'b
     assert.equal(ctx.window.activeSubagentsByParent.has('two'), false, 'background shell work is absent from the agent view');
     assert.equal(ctx.window.taskRegistry.background('two'), true);
   }
-  if (loss === 'refused session') Object.assign(detail.snapshot.rows[1], { background: 'refused', canBackground: false, reason: 'The prompt holds text you have not sent.' });
+  if (loss === 'refused session') Object.assign(detail.snapshot.rows[1], { background: 'refused', canBackground: false, reason: 'Send or clear the unsent text, then try again.' });
   if (loss === 'unknown inventory') detail.snapshot.unknown = true;
   if (loss === 'Codex session') ctx.window.openSessions.get('two').session.runtime = 'codex';
   if (loss === 'renderer refusal') ctx.window.backgroundActionReason = id => id === 'two' ? 'Moving to the background…' : null;
