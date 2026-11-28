@@ -306,6 +306,53 @@ exists. A live background continuation uses the existing attach path and its fin
 is saved with `bg: true`, so every later restore reattaches it while the job is
 live. A saved entry without that mark still skips a session live elsewhere.
 
+## A restored session whose CLI never connects
+
+A restored Claude session normally connects to Switchboard's IDE bridge a few
+seconds after its terminal starts (`[mcp] session=… CLI connected` in the
+log). One that has not connected **60 seconds** after its terminal started is
+shown as having no CLI: its sidebar icon and the terminal header icon become the
+Not running dash (green while its terminal is still open here), and their
+tooltip reads *No CLI connected · Open here · restarts once, when the network
+is back or within 5 minutes*.
+
+Switchboard then restarts that session once by itself: it stops its terminal
+and resumes it again through the same path as a restore. The restart happens
+when the window reports the network back (the `online` event), at once if the
+network was reported down at any time since the terminal started and is up
+again, and otherwise **5 minutes** after the session was shown as having no
+CLI. The restarted session is watched again; if its CLI still does not connect,
+it is shown as having no CLI once more, its tooltip now reads *stop it, then
+click it to start it again*, and nothing restarts it a second time during the
+same run of the app, a reload of the window included.
+
+The restart is skipped, and Switchboard does not try it again by itself, when
+the conversation's turn is running or its state is unknown, when the prompt
+holds text you have not sent, when anything was sent to that terminal (your
+typing or paste, a trigger, a move to the background) in the last 10 seconds
+or while the restart was being decided, when a trigger or a move to the
+background is writing to it, when Claude reports itself working or waiting
+for an answer, when another process runs the same conversation, or when any of
+these cannot be checked. Switchboard checks the prompt, Claude's state and the
+connection and stops the terminal in one step, so text typed or a prompt sent
+just before is never lost. A CLI that connects late, even while the restart is
+being decided, clears the state and cancels the restart. A terminal that exits
+on its own clears it too. If the conversation moved to a new id while the
+terminal was stopping (a `/clear` or a fork), nothing is reopened; open it
+from the sidebar. The reopen runs the usual check for a session live in
+another process, so a conversation you resumed elsewhere meanwhile is not
+reopened here.
+
+Only sessions reopened by a restore are watched, and only those with an IDE
+bridge: Codex sessions, background attaches, remote sessions, sessions started
+with IDE emulation turned off and sessions you open yourself are not.
+
+The `online` event follows the operating system's network state. On Linux a
+local connection without internet access (NetworkManager's
+`CONNECTED_LOCAL`) already counts as online, so the 5-minute timeout, not the
+event, is what restarts the session in that case. If the network is still down
+then, the restart does not help and the session stays shown as having no CLI.
+
 ## Restore on click
 
 No Claude or Codex process is started at launch. Each saved session that is in the

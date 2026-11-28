@@ -140,6 +140,19 @@ function killPty(session, sessionId, { platform = process.platform, ...closeOpti
   return kill();
 }
 
+const trackedPtys = new WeakSet();
+
+function trackPtyWrites(session, pty, now = Date.now) {
+  if (!session || !pty || typeof pty.write !== 'function' || trackedPtys.has(pty)) return;
+  trackedPtys.add(pty);
+  const write = pty.write;
+  pty.write = data => {
+    session.inputSeq = (session.inputSeq || 0) + 1;
+    session.lastPtyInputAt = now();
+    return write.call(pty, data);
+  };
+}
+
 function writePty(session, data, sessionId) {
   if (isKilled(session)) return false;
   return withPty(session, 'write', (pty) => pty.write(data), sessionId);
@@ -219,4 +232,4 @@ function ptyExitSignalName(signal, signals = os.constants.signals) {
   return Object.keys(signals).find((name) => signals[name] === signal) || `signal ${signal}`;
 }
 
-module.exports = { setPtyOpLogger, guardPtyInputErrors, trackWindowsPty, releaseWindowsPty, withPty, isKilled, resizePty, killPty, stopPtyWithEvidence, writePty, detachPty, ptyExitSignalName };
+module.exports = { setPtyOpLogger, guardPtyInputErrors, trackWindowsPty, releaseWindowsPty, withPty, isKilled, resizePty, killPty, stopPtyWithEvidence, writePty, trackPtyWrites, detachPty, ptyExitSignalName };

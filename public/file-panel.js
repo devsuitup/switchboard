@@ -685,6 +685,7 @@ function setSessionMcpState(sessionId, mcpState, detail) {
   const state = getSessionState(sessionId);
   state.mcpState = mcpState || 'off';
   state.mcpDetail = detail || '';
+  if (typeof cliLiveness !== 'undefined') cliLiveness.mcpState(sessionId, state.mcpState);
   if (state.mcpState === 'off') {
     clearParkedDiffs(sessionId, state);
     const tab = state.currentTab;

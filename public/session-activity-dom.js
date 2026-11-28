@@ -270,7 +270,7 @@ function applyStateClasses(sessionId, snapshot) {
   };
   snapshot = taskActivitySnapshot(sessionId, snapshot, row);
   snapshot = mergedRowSnapshot(ids, sessionId, snapshot, row);
-  const icon = renderSessionIcon(snapshot);
+  const icon = noCliIcon(renderSessionIcon(snapshot), row);
   if (ids.includes(activeSessionId)) paintTerminalHeaderStatus(activeSessionId, snapshot, row, icon);
   // Row classes read snapshot fields directly, not icon.classes — see .ai/contexts/session-state.md ("The local-pty adapter")
   const attention = !!(snapshot && snapshot.attention);
@@ -322,8 +322,18 @@ function paintTerminalHeaderStatus(sessionId, snapshot, row, icon) {
   terminalHeaderStatus.classList.add('session-icon');
   terminalHeaderStatus.classList.toggle('running', activePtyIds.has(sessionId));
   setHasBusyAgents(terminalHeaderStatus, snapshot?.agentsBusy);
-  writeIconSlot(terminalHeaderStatus, icon || renderSessionIcon(snapshot), null, null, null,
+  writeIconSlot(terminalHeaderStatus, icon || noCliIcon(renderSessionIcon(snapshot), row), null, null, null,
     rowLifecycleLabel(sessionId, snapshot, row));
+}
+
+function rowNoCliId(row) {
+  if (typeof cliLiveness === 'undefined' || !row || row.remoteAlias) return null;
+  return rowSessionIds(row).find(id => activePtyIds.has(id) && cliLiveness.isNoCli(id)) || null;
+}
+
+function noCliIcon(icon, row) {
+  if (!rowNoCliId(row)) return icon;
+  return { ...icon, title: 'No CLI connected', glyph: '', slotClasses: ['session-icon--stale'] };
 }
 
 function rowLifecycleLabel(sessionId, snapshot, row) {
@@ -332,7 +342,9 @@ function rowLifecycleLabel(sessionId, snapshot, row) {
   const ids = rowSessionIds(row);
   const here = ids.find(id => activePtyIds.has(id));
   const head = rowHeadId(row);
+  const noCliId = rowNoCliId(row);
   return lifecycleLabel({
+    noCli: !!noCliId, restartPending: !!noCliId && cliLiveness.status(noCliId).restartPending,
     ptyHere: !!here, attach: openSessions.get(here)?.attach,
     job: typeof backgroundActivityEntry === 'function' ? backgroundActivityEntry(head, row) : null,
     remoteAlias: row.remoteAlias, liveness: snapshot?.liveness,
@@ -417,7 +429,7 @@ function rowHasLiveBackgroundJob(row) {
 }
 
 function scheduledRunIcon(snapshot, row) {
-  const icon = renderSessionIcon(snapshot);
+  const icon = noCliIcon(renderSessionIcon(snapshot), row);
   if (!rowHasRunningSchedule(row)) return icon;
   return { ...icon, title: 'Scheduled run in progress', glyph: '\u23f1', slotClasses: ['session-icon--scheduled'] };
 }

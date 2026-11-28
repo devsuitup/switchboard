@@ -21,6 +21,12 @@ When several states hold at once, the first one in this table wins:
 | Idle | Grey dot | — | No higher activity state | Activity changes |
 | Not running | Solid grey dash | — | A finished background job has no live process | Liveness changes |
 
+A restored session whose CLI has not connected a minute after its terminal
+started shows the same dash, green while its terminal is open here, whatever
+its activity, and its tooltip says `No CLI connected` and what happens next
+(see [Session Restore](session-restore.md#a-restored-session-whose-cli-never-connects)).
+A running schedule's ⏱ still wins over it.
+
 Remote sessions do not detect background commands.
 
 The two violet states are explained on [Subagents](subagents.md#live-status).
