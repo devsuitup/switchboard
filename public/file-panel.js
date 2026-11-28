@@ -934,6 +934,17 @@ async function confirmSessionExit(detail, changed) {
     return session?.name || session?.aiTitle || session?.summary || '';
   };
   const moving = exitBackgroundRows(snapshot);
+  if (['quit', 'close'].includes(action) && !snapshot.unknown && moving.length === snapshot.rows.length
+    && moving.every(row => row.background === 'ready' && !row.reason
+      && (openSessions.get(row.id)?.session?.runtime || 'claude') === 'claude'
+      && (typeof activeSubagentsByParent === 'undefined' || !activeSubagentsByParent.get(row.id)?.size))) {
+    try {
+      window.api.logUiNotice?.({ event: 'action', kind: 'info', id: 'session-exit-skip', source: 'session-exit',
+        text: 'Exit dialog skipped: only idle, resumable Claude sessions; no work would be lost.' })?.catch?.(() => {});
+    } catch {}
+
+    return 'stop';
+  }
   const stopping = snapshot.rows.filter(row => !moving.includes(row));
   const words = rows => {
     const parts = ['session', 'plain', 'panel'].map(type => {

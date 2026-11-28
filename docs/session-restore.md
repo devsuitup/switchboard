@@ -181,16 +181,22 @@ ask about unsaved edits; main sends `exit-flush` instead, and the renderer
 writes the set without waiting for an answer. That write is best effort:
 Windows may end the app before it lands. Main also starts a coalesced, bounded,
 non-destructive drain without closing the database or stopping PTYs/services.
-A query expires after 60 s; user Quit, X and Restart always ask independently
-of this external approval, including within that window.
+A query expires after 60 s; user Quit, X and Restart always run their own exit
+checks independently of this external approval, including within that window.
 
 User Quit (Exit on Windows), Restart to update and window close ask about
-unsaved edits first, then name the local work that will stop in a separate
-Stop/Cancel question. Only both approvals permit the final renderer write.
-A late reload-to-exit upgrade also asks before writing. On macOS, Dock Quit
+unsaved edits first. Quit/Exit and window close then proceed without another
+question when only idle, resumable Claude sessions are open and no subagent is
+running. Switchboard saves the same restore list as ordinary Quit, and records
+why it skipped the question in the log. Plain terminals, panel shells, busy
+turns, running subagents and work whose state is uncertain keep the Stop/Cancel
+question. Restart to update keeps its Stop/Move/Cancel question, including the
+option to move sessions to the background. The final renderer write follows
+the required approvals.
+A late reload-to-exit upgrade also runs these checks before writing. On macOS, Dock Quit
 and logout arrive as untagged external before-quit events: with no unsaved
 edits they can stop local sessions without the Stop question. JB accepted
-this residual on 2026-10-21; app-menu Cmd+Q asks. Force termination bypasses
+this residual on 2026-10-21; app-menu Cmd+Q uses the normal exit checks. Force termination bypasses
 questions and flushing. Scheduled children are outside this inventory, with
 no guarantee of survival across every OS exit.
 

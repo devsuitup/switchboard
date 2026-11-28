@@ -254,8 +254,16 @@ move and resize the window: `Super`+drag on GNOME, `Alt`+`F7`/`Alt`+`F8`, or
 
 User menu Quit (Exit on Windows), Restart to update and window close enter
 one attempt in `src/main/app/session-exit.js` through `src/main/app/unsaved-guard.js`. Unsaved edits
-first ask Save/Discard/Cancel. Only after that choice does local work ask
-Stop/Move/Cancel when sessions can move, otherwise Stop/Cancel. Cancel stays
+first ask Save/Discard/Cancel. For user Quit/Exit and window close, the session
+question is skipped when every inventoried row is a ready, resumable Claude
+session, with no refusal or running subagent. The existing snapshot and renderer
+eligibility/subagent state supply this decision; there is no extra probe.
+Unknown inventory, plain terminals, panel shells, busy turns, other runtimes
+and any existing refusal keep the question. A skipped question returns the same
+`stop` choice as ordinary Quit, preserving the flush and restore list, and logs
+the reason through `logUiNotice` as a `session-exit` action.
+Restart to update retains its question, including Move to background and update.
+Otherwise local work asks Stop/Move/Cancel when sessions can move, or Stop/Cancel. Cancel stays
 focused; Enter on Cancel, Escape, the backdrop and × cancel.
 The named question replaces the generic close question and uses the existing
 queued `showChoiceDialog` with danger styling and text-only names.

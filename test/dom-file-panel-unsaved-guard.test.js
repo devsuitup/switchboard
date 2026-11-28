@@ -45,6 +45,11 @@ function fakeEditor(initial) {
 function setup() {
   const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
+  const nodeModules = path.dirname(path.dirname(require.resolve('marked/package.json')));
+  for (const file of ['marked/lib/marked.umd.js', 'dompurify/dist/purify.min.js']) {
+    const filename = path.join(nodeModules, file);
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), dom.getInternalVMContext(), { filename });
+  }
   const disk = new Map();
   const calls = { openFile: null, check: null, reason: null, acks: [], answers: [], saves: [], confirms: [], reasonDone: [], reasonDoneTokens: [] };
   let editor = null;
@@ -171,7 +176,7 @@ const B = '/repo/b.md';
 const C = '/repo/c.md';
 
 function exitDetail(action = 'quit', rows = null) {
-  rows ||= [{ id: 'session-id', type: 'session', generation: 'g1', cwd: '/repo/project', canBackground: true, background: 'ready', reason: null }];
+  rows ||= [{ id: 'session-id', type: 'session', generation: 'g1', cwd: '/repo/project', canBackground: false, background: 'busy', reason: 'Claude is working.' }];
   const counts = { sessions: 0, plain: 0, panels: 0, attached: 1 };
   for (const row of rows) counts[row.type === 'panel' ? 'panels' : row.type === 'plain' ? 'plain' : 'sessions']++;
   return { attempt: 1, version: 1, action, external: false, snapshot: { rows, counts, remote: { vps: 2 } } };
@@ -227,7 +232,7 @@ function exitRuntime(ctx) {
     w.openSessions.set(id, entry);
     w.sessionMap.set(id, entry.session);
   }
-  return exitDetail('quit', ['one', 'two'].map(id => ({ id, type: 'session', background: 'ready', cwd: '/repo', generation: id })));
+  return exitDetail('quit', ['one', 'two'].map(id => ({ id, type: 'session', background: 'busy', reason: 'Claude is working.', cwd: '/repo', generation: id })));
 }
 
 async function clickMove(ctx) {
@@ -321,7 +326,7 @@ test('H2b a new attempt after cancelled logoff restores typed background rekey a
     await flush();
     callbacks.forEach(cb => cb('two', 'Choose Background or Stay'));
     assert.equal(ctx.window.document.querySelector('[data-notice-id="background-progress:two"]'), null);
-    const next = exitDetail('quit', [{ id: 'two', type: 'session', background: 'ready' }]); next.attempt = 2;
+    const next = exitDetail('quit', [{ id: 'two', type: 'session', background: 'busy', reason: 'Claude is working.' }]); next.attempt = 2;
     ctx.calls.check(323, 'quit', next); await flush();
     ctx.window.document.querySelector('.choice-dialog-cancel').click(); await flush();
     callbacks.forEach(cb => cb('two', 'Choose Background or Stay'));
@@ -1520,4 +1525,93 @@ test('the close question opens on top of another question and Escape returns to 
     await flush();
     assert.equal(answered, false, 'Escape now reaches the other question');
   } finally { ctx.destroy(); }
+});
+
+function idleExit(ctx, action = 'quit') {
+  const detail = exitRuntime(ctx);
+  detail.action = action;
+  for (const row of detail.snapshot.rows) Object.assign(row, { canBackground: true, background: 'ready', reason: null });
+  return detail;
+}
+
+for (const action of ['quit', 'close']) test(`#1023 idle resumable sessions skip the ${action} dialog and save the original restore list`, async t => {
+  const ctx = setup();
+  t.after(() => ctx.destroy());
+  const detail = idleExit(ctx, action);
+  const logs = [];
+  ctx.window.api.logUiNotice = event => logs.push(event);
+  const checking = ctx.calls.check(1023, action, detail);
+  await flush();
+  assert.equal(ctx.window.document.querySelector('.choice-dialog'), null, 'idle resumable sessions must not show an exit dialog');
+  await checking;
+  assert.deepEqual(ctx.calls.answers, [{ id: 1023, proceed: true }], 'quit proceeds without a user choice');
+  assert.deepEqual(ctx.calls.writes.at(-1).map(row => [row.sessionId, !!row.bg]), [['one', false], ['two', false]], 'plain quit preserves the original restore list');
+  assert.deepEqual(ctx.calls.batches, [], 'skip must not move sessions to the background');
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].event, 'action');
+  assert.equal(logs[0].source, 'session-exit');
+  assert.match(logs[0].text, /exit.*dialog.*skipped.*idle.*resumable/i, 'the log explains why the dialog was skipped');
+});
+
+for (const loss of ['plain terminal', 'panel shell', 'busy turn', 'subagent', 'refused session', 'unknown inventory', 'Codex session', 'renderer refusal']) test(`#1023 ${loss} keeps the exit dialog`, async t => {
+  const ctx = setup();
+  t.after(() => ctx.destroy());
+  const detail = idleExit(ctx);
+  if (loss === 'plain terminal') detail.snapshot.rows.push({ id: 'plain', type: 'plain' });
+  if (loss === 'panel shell') detail.snapshot.rows.push({ id: 'panel', type: 'panel', owner: 'one' });
+  if (loss === 'busy turn') Object.assign(detail.snapshot.rows[1], { background: 'busy', canBackground: false, reason: 'Claude is working.' });
+  if (loss === 'subagent') ctx.window.activeSubagentsByParent = new Map([['two', new Set(['child'])]]);
+  if (loss === 'refused session') Object.assign(detail.snapshot.rows[1], { background: 'refused', canBackground: false, reason: 'The prompt holds text you have not sent.' });
+  if (loss === 'unknown inventory') detail.snapshot.unknown = true;
+  if (loss === 'Codex session') ctx.window.openSessions.get('two').session.runtime = 'codex';
+  if (loss === 'renderer refusal') ctx.window.backgroundActionReason = id => id === 'two' ? 'Moving to the background…' : null;
+  const checking = ctx.calls.check(1024, 'quit', detail);
+  await flush();
+  const question = ctx.window.document.querySelector('.choice-dialog');
+  assert.ok(question, `${loss} must keep the exit dialog`);
+  assert.equal(ctx.window.document.activeElement, question.querySelector('.choice-dialog-cancel'));
+  assert.deepEqual(ctx.calls.answers, []);
+  assert.deepEqual(ctx.calls.writes, []);
+  question.querySelector('.choice-dialog-cancel').click();
+  await checking;
+  assert.deepEqual(ctx.calls.answers, [{ id: 1024, proceed: false }]);
+});
+
+test('#1023 idle update retains Move to background and update', async t => {
+  const ctx = setup();
+  t.after(() => ctx.destroy());
+  const detail = idleExit(ctx, 'update');
+  const checking = ctx.calls.check(1025, 'quit', detail);
+  await flush();
+  const move = ctx.window.document.querySelector('.choice-dialog-secondary');
+  assert.ok(move, 'idle update must still offer Move to background and update');
+  assert.equal(move.textContent, 'Move 2 sessions to background and update');
+  move.click();
+  await flush();
+  assert.deepEqual(Array.from(ctx.calls.batches[0][2]), ['one', 'two']);
+  ctx.calls.finishBatch([moved('one'), moved('two')]);
+  await checking;
+  assert.deepEqual(ctx.calls.answers, [{ id: 1025, proceed: true }]);
+  assert.deepEqual(ctx.calls.writes.at(-1).map(row => [row.sessionId, row.bg]), [['one-bg', true], ['two-bg', true]]);
+});
+
+for (const choice of ['cancel', 'save', 'discard']) test(`#1023 idle quit still asks about unsaved edits: ${choice}`, async t => {
+  const ctx = setup();
+  t.after(() => ctx.destroy());
+  const detail = idleExit(ctx);
+  await dirtyTab(ctx, 'one', A);
+  const checking = ctx.calls.check(1026, 'quit', detail);
+  await flush();
+  assert.ok(dialog(ctx), 'unsaved edits must still be asked before an idle quit');
+  assert.equal(ctx.window.document.querySelector('.choice-dialog'), null);
+  assert.deepEqual(ctx.calls.answers, []);
+  assert.deepEqual(ctx.calls.writes, []);
+  button(ctx, 'unsaved-' + choice).click();
+  await flush();
+  assert.equal(ctx.window.document.querySelector('.choice-dialog'), null, 'answering unsaved edits must not add an idle exit dialog');
+  await checking;
+  assert.deepEqual(ctx.calls.answers, [{ id: 1026, proceed: choice !== 'cancel' }]);
+  assert.equal(ctx.calls.saves.length, choice === 'save' ? 1 : 0);
+  assert.equal(ctx.calls.writes.length, choice === 'cancel' ? 0 : 1);
+  if (choice === 'save') assert.equal(ctx.disk.get(A), 'x0\nmine');
 });
