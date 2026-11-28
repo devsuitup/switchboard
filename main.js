@@ -100,7 +100,7 @@ const { validatePreLaunchCmd } = require('./src/main/terminals/pre-launch-cmd-gu
 const { normalizePtySize } = require('./src/main/terminals/pty-size');
 const { makeDeleteSessionGuard } = require('./delete-session-guard');
 const { resolveWindowsClaude } = require('./claude-binary');
-const { setPtyOpLogger, guardPtyInputErrors, trackWindowsPty, killPty, detachPty, writePty, ptyExitSignalName } = require('./src/main/terminals/pty-ops');
+const { setPtyOpLogger, guardPtyInputErrors, trackWindowsPty, killPty, detachPty, writePty, trackPtyWrites, ptyExitSignalName } = require('./src/main/terminals/pty-ops');
 const { configureWindowsJobHelper } = require('./src/main/terminals/windows-job-helper');
 const { stopProcessTree } = require('./src/main/terminals/stop-process-tree');
 const { JOB_ID_RE, isHostedJob } = require('./src/main/bg-agents/bg-agents-roster');
@@ -1479,6 +1479,7 @@ let projectsRetryTimer = null;
 let projectsRetryRunning = false;
 let projectsRetryFailures = 0;
 let projectsReconcileStreak = null;
+const projectsRepairCleanupDeferred = new Set();
 
 // see .ai/contexts/session-cache.md ("A reconcile that loses to writes")
 function projectsReconcileInterval() {
@@ -1546,8 +1547,16 @@ async function getProjectsSnapshot(showArchived, retry = false, { logConflict = 
       });
       // see .ai/contexts/session-cache.md ("Bridge history divergence")
       if (declared.length !== repairFolders.length) {
-        try { await writer.pruneUndeclaredRepairFolders(repairFolders.filter(folder => !declared.includes(folder))); }
-        catch (error) { log.warn(`[projects] repair cleanup for undeclared hosts deferred: ${error.code || error.message}`); }
+        try {
+          await writer.pruneUndeclaredRepairFolders(repairFolders.filter(folder => !declared.includes(folder)));
+          projectsRepairCleanupDeferred.clear();
+        } catch (error) {
+          const key = error.code || 'UNCODED';
+          if (!projectsRepairCleanupDeferred.has(key)) {
+            projectsRepairCleanupDeferred.add(key);
+            log.warn(`[projects] repair cleanup for undeclared hosts deferred: ${error.code || error.message}`);
+          }
+        }
       }
     }
     const needsPopulate = !isInitialScanComplete() || (!repairPending && (!isCachePopulated() || !isSearchIndexPopulated()));
@@ -2920,6 +2929,7 @@ let ptyGenerationCounter = 0;
 function wireSessionPty(session, sessionId, ptyProcess) {
   activeSessions.statusExits?.delete(sessionId.toLowerCase());
   if (session.realSessionId) activeSessions.statusExits?.delete(session.realSessionId.toLowerCase());
+  if (typeof trackPtyWrites === 'function') trackPtyWrites(session, ptyProcess);
   session.pty = ptyProcess;
   let resolveExitDrain;
   session.exitDrain = new Promise(resolve => { resolveExitDrain = resolve; });
@@ -3826,6 +3836,17 @@ ipcMain.on('terminal-input', (_event, sessionId, data) => {
   }
   handleTerminalInput(activeSessions, sessionId, data, Date.now());
 });
+
+// see docs/session-restore.md ("A restored session whose CLI never connects")
+const noCliRestart = require('./src/main/terminals/no-cli-restart').createNoCliRestart({
+  sessions: activeSessions,
+  getStatus: id => cliSessionState.getStatus(id)?.status,
+  getMcpState,
+  liveElsewhereChecked: id => cliSessionState.liveElsewhereChecked(id, () => false, ptyPids),
+  stop: (session, id) => require('./src/main/terminals/stop-session').stopLocalSession(session, id, killPty),
+});
+ipcMain.handle('restart-no-cli-session', (_event, sessionId) => noCliRestart.restart(sessionId));
+ipcMain.handle('no-cli-restart-spent', (_event, sessionId) => ({ ok: true, spent: noCliRestart.spent(sessionId) }));
 
 // --- IPC: terminal-resize (fire-and-forget) ---
 const handleTerminalResize = createTerminalResizeHandler(activeSessions, undefined, (sessionId, phase, cols, rows, ok) => {

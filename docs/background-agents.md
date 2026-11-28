@@ -10,23 +10,12 @@ Switchboard, and acts on them without a terminal.
 ## Restoring saved background tabs
 
 After a restart or reboot, startup restore reopens only background jobs whose
-attach tabs were saved, including tabs opened from the Agents view. A live worker is attached. A dead working, done, running or failed job is
-respawned as the same job and conversation, retaining its name, then attached,
-unless a live continuation already holds the conversation.
-Automatic mode does this without a click, Ask waits for Restore, Restore on
-click waits for the saved row, and Don't restore starts nothing.
-
-A persistent Restore notice names the job and reason when its worker cannot
-be classified or a respawn is refused. Conflicting legacy records list their
-ids. Dead blocked and stopped jobs offer **Respawn** and are never restarted automatically.
-Respawn checks worker liveness and continuations again; a deleted, unowned continuation does not prevent recovery.
-**Respawned, not attached** means the job started but its live background
-descriptor did not appear within 15 seconds; **Attach** retries attachment
-without another respawn. An attach failure retains the CLI's message and
-leaves the worker running. The saved tab remains available for a later retry;
-check the job in Agents. If the job record no longer exists, the saved background
-entry is released and a notice explains that the conversation can be opened
-normally from the sidebar. See [Session Restore](session-restore.md).
+attach tabs were saved, including tabs opened from the Agents view: a live
+worker is attached, a dead working, done, running or failed job is respawned as
+the same job and then attached, and a dead blocked or stopped job is never
+restarted automatically (its notice offers **Respawn**). The restore modes,
+notices, retries and recovery actions are described in
+[Session Restore — Background sessions](session-restore.md#background-sessions).
 
 ## Opening it
 
@@ -289,9 +278,8 @@ stays disabled; start a session in that project instead.
 A session that a background job is still running cannot be archived or
 deleted from the sidebar: use **Stop session** on its sidebar row first when
 that row can stop the job. Otherwise, find and stop it in the Agents view.
-Archiving a folder that holds one is refused when **Archive the sessions** is checked.
-Unchecked, the folder is only hidden: no session is archived or detached, and
-the job keeps running and stays in the Agents view. A session live in another
+**Archive folder** on a folder that holds one is refused before its dialog
+opens, whatever you would choose in it: stop the job first. A session live in another
 process cannot be deleted either. When Switchboard cannot tell, for example because `~/.claude/jobs`
 cannot be read, it refuses and says why.
 

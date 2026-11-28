@@ -105,8 +105,9 @@ The file's toolbar has four icon buttons, each named by its tooltip: **Close**
   tooltip names the next: **Inline** (the default: one column, changes
   marked), **Plain** (the file alone) and **Side-by-side** (the version git
   compares against on the left, read-only; the working copy on the right).
-- The left-hand side is what `git diff` compares against: the staged version for
-  a row opened as staged, the last commit otherwise.
+- The left-hand side is the last commit (`HEAD`) for a row opened as staged,
+  and the staged version (the index) otherwise. The right-hand side is always
+  the file on disk, so a staged row with later unstaged edits shows both.
 - The file stays read-only, and the panel says why, for: a remote session, a
   binary file, a file that is not UTF-8, a file mixing line endings, a symbolic
   link, a hard link, and a file over 2 MB.

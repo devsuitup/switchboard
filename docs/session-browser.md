@@ -52,6 +52,7 @@ Buttons on a project header:
 |---|---|
 | Create scheduled task | Opens a Claude session that writes a schedule file — see [Automation](automation.md#creating-a-schedule) |
 | Project settings | Per-project overrides — see [Settings reference](settings.md#project-settings) |
+| Stop all (Stop all sessions in this folder and its worktrees) | Stops every running conversation of the folder and its nested worktrees after one confirmation — see [Stop all](#stop-all). A worktree header has its own **Stop all** for that worktree |
 | Archive folder | Opens a dialog that archives the folder's sessions and disables its schedules, each optional, and hides the folder — see [Archive a folder](#archive-a-folder) |
 | Delete | Previews removal from Switchboard with separate session metadata, project settings and individual linked worktree folder choices. Worktree removal starts unchecked; the main checkout stays — see [Worktree cleanup](worktrees.md#cleaning-up). |
 | New session (`+`) | The launch menu — see [Launching sessions](launching-sessions.md) |
@@ -125,6 +126,7 @@ Hovering a row shows its buttons:
 |---|---|
 | Stop session | Ends the session's process, after a confirmation |
 | Detach (the session keeps running) | Detaches an open background tab without asking; offers Undo for about 10 seconds |
+| Mark as unread / Mark as read | Sets or clears the Response ready reminder on the conversation, without a confirmation. It is kept in memory only: a reload or restart clears it, and so does opening the session — see [Mark as unread](product/GLOSSARY.md#mark-as-unread--mark-as-read) |
 | Archive / Unarchive | Hides the session from the normal list (stopping it first if it runs), or brings it back |
 | Fork session | Starts a new session branched from this one — see [Launching sessions](launching-sessions.md#fork) |
 | View messages | Opens the transcript in the read-only viewer |
@@ -181,6 +183,19 @@ modified within **Session Max Age** (default 3 days); the others sit behind a
 `+ N older` link. Running and pinned sessions, and sessions waiting to be
 restored, are always shown. Both limits are
 in [Global Settings → Sessions → Sidebar list](settings.md#sidebar-list).
+
+**Archive all older sessions**, the archive button beside `+ N older`, archives
+the older rows in one go, after one confirmation that lists the rows to
+archive, the rows kept and the rows refused, with reasons. It never stops a
+process: the session on screen, rows with a tab open here, running here or
+waiting to restore, pinned rows, sessions live elsewhere, remote sessions alive
+on their host, and any row that would need a process stopped are kept. The
+button is disabled when every older row is already kept for one of the
+reasons Switchboard can see at once (on screen, tab open, running here,
+waiting to restore, pinned, remote and alive). If it is enabled but the checks
+made on click (live elsewhere, a process to stop) leave no eligible row, it
+asks nothing and a notice says **Nothing eligible to archive.** Undo restores
+the archived rows.
 
 ### Sessions started by a program
 
@@ -371,6 +386,20 @@ offers **Undo** for about 10 seconds to attach it again in the same working
 folder. If Stop finds that the daemon no longer reports the attached job as
 hosted, its confirmation explains that only the tab detaches; the exit reads
 **Detached**.
+
+### Stop all
+
+**Stop all** on a project header stops the conversations of that folder and of
+its nested worktrees; on a worktree header, those of that worktree. One
+confirmation lists each conversation to stop, where its processes run, and
+marks those **(mid-turn)**; parts that cannot be stopped are listed with the
+reason. The conversations are kept and can be resumed.
+
+Conversations running a background job are kept by default. When there are
+any, the dialog offers **Stop the others only** (the default) or **Stop all
+including background jobs**. With nothing running, a notice says so. If some
+stops fail, the notice names them and **Retry** retries only the failed ones;
+an unreachable remote host is tried once per Stop all, not once per session.
 
 ## Delete
 

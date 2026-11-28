@@ -176,8 +176,17 @@ concept. Each entry gives:
 - **Today**: `+ N older` counts listed conversation rows, excluding subagents.
   **Archive all older sessions** confirms eligible names and lists kept and
   refused rows with reasons. Active sessions, all open tabs including closed
-  ones, sessions live elsewhere and remote sessions alive on their host stay
-  unarchived; an empty eligible set disables the archive action (#819).
+  ones, sessions running here or waiting to restore, pinned sessions, sessions
+  live elsewhere, remote sessions alive on their host, and rows that would
+  still need a process stopped stay unarchived; it never stops a process. The
+  button is disabled while an archive of that list runs, and whenever every
+  older row already has a local keep reason (on screen, tab open here, running
+  here, waiting to restore, pinned, or remote and alive on its host;
+  `olderArchiveKeepReason`). When it is enabled but the click's preflight,
+  which also asks whether a session is live elsewhere and whether archiving
+  would stop a process, finds no eligible row, nothing is asked and a
+  **Nothing eligible to archive.** notice lists the kept and refused rows
+  (#819; `docs/product/UI-PATTERNS.md` §2.3).
 
 ### Find in messages
 
@@ -544,15 +553,19 @@ concept. Each entry gives:
 ### Schedule (scheduled task)
 
 - **Definition**: a `schedule-<name>.md` file in a project's
-  `.claude/commands/` whose cron fires headless `claude -p` runs while the app
-  is running.
+  `.claude/commands/` whose cron fires runs while the app is running: headless
+  `claude -p` runs by default, or joinable background sessions with
+  `run-as-background: true` (local projects only). The execution contract is
+  maintained in [Automation](../automation.md#schedules).
 - **Don't say**: "cron job", "routine", "automation" alone.
   - **Code**: `src/main/schedules/schedule-runner.js`, `src/main/schedules/schedule-ipc.js`, `src/main/schedules/run-schedule-now-target.js`;
   `docs/automation.md:14-180`.
 - **Today**: "Create scheduled task" (`public/sidebar.js:903`), "schedule" in
   docs and the archive dialog ("Disable the N enabled schedules",
   `public/sidebar.js:1184`), **Run now**, enable/disable and Open in the Schedules tab when `schedulesTab` is on (the default). A run is a session
-  row in a slug group; it cannot be stopped or attached (m7).
+  row in a slug group. A headless run cannot be stopped or attached (m7); a
+  background run can be joined from Sessions or Agents — see
+  [Join a scheduled run](../automation.md#join-a-scheduled-run).
 
 ### Trigger
 

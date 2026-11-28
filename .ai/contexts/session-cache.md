@@ -1426,6 +1426,10 @@ key of a host that is declared again by the time the command runs, is never
 removed. Main also wraps the call: a failure is logged at warn
 (`[projects] repair cleanup for undeclared hosts deferred`) and never fails the
 project listing. The keys stay in the setting, so the next snapshot retries.
+Each distinct failure code is logged once (`projectsRepairCleanupDeferred` in
+`main.js`); failures without a code count as one, because their messages embed
+request ids and would otherwise each look new. A successful cleanup clears that
+set, so a later failure is logged again (#1311).
 Before this change, origin/main awaited `completeRepairFolders` there, and a
 refusal failed the whole `get-projects` reply.
 
@@ -3244,8 +3248,11 @@ spelling (lowercase on Windows), and an exact-string removal left a re-added
 Windows project hidden (#1188). Only equality counts: a hidden worktree group
 that hides the added path as a descendant stays, so adding one child does not
 reveal its siblings or the group. Worktree cleanup
-keeps its existing path-wide cache deletion and removes the stored path mark
-and its scope. Global Settings already rereads and spreads the latest global
+keeps its existing path-wide cache deletion and, with the same helper, removes
+every local hide entry whose `visibilityPath` equals the removed path's,
+whatever its scope, with its kind, scope and archive time under the stored key
+(#1304); a hide entry spelled differently from the path no longer outlives the
+worktree. Global Settings already rereads and spreads the latest global
 record on Save, preserving scopes alongside archive state without a new form
 field.
 

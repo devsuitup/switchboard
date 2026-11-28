@@ -406,6 +406,134 @@ manual open has cancelled automatic retry. A thrown retry reports only members
 still held and absent from open tabs. When no continuation remains held, the
 pending notice clears, including after the final project reload.
 
+## Restored sessions without a CLI (#776)
+
+User-facing behaviour: `docs/session-restore.md`, "A restored session whose
+CLI never connects".
+
+**What was measured (2026-11-28, by reading code, no live run).** Switchboard
+learns that a CLI is there from one event only: the IDE bridge's WebSocket
+`connection` (`src/main/integrations/mcp/mcp-bridge.js`, the `CLI connected`
+log line), forwarded to the renderer as `mcp-status` and folded into
+`setSessionMcpState` (`public/file-panel.js`). `open-terminal` starts that
+bridge only when `launchHarness.capabilities.ideBridge` holds and IDE
+emulation is on (`main.js`, `--ide` plus `CLAUDE_CODE_SSE_PORT`), and returns
+`mcpState: 'listening'`. A PTY that dies sends `process-exited`
+(`applyProcessExit`, exit banner, `mcpState 'off'`); a CLI that hangs, or
+runs without ever reaching the bridge, sends nothing at all, so its row looks
+like any idle open terminal. The installed CLI (2.1.302, Windows, read from
+the strings of its bundled `claude.exe`) connects to the IDE from a one-shot
+effect of its interactive UI: it scans `~/.claude/ide/*.lock` for up to
+30 s (`Ubr`), awaits the policy-limits cold-start waiter (bounded, 5 s
+budget), then calls `connectToServer` once and never retries. The connection
+itself is to `127.0.0.1` and does not need the network. **Inferred, not
+measured:** in the 2026-10-22 incident the CLIs either exited before their UI
+(but an exit would have shown its banner and `Exited`), hung before their UI
+mounted, or had their single connect attempt fail; which one, and in which CLI
+version, is not established. No live network-down run was made.
+
+**The tracker.** `public/cli-liveness.js` (`createCliLiveness`, dual-mode,
+pure, injected timers and `isOnline`) holds one state per session id:
+`expected` → `waiting` → `no-cli` → `restarting`. `runRestore` calls
+`armCliLiveness(id)` just before its `openSession` of an interactive resume
+and `settle(id)` after it, so only restored opens are watched.
+`armCliLiveness` first asks main `no-cli-restart-spent`; anything but
+`{ok: true, spent: false}` arms with `restartSpent`, so a window reload cannot
+reset the budget and an unanswered question never grants a restart. The open
+result's
+`listening` (through `setSessionMcpState`) arms `CLI_LIVENESS_NO_CLI_MS`
+(60 s: the CLI's 30-second lock scan plus its 5-second policy wait, with margin,
+against 3 to 6 s seen in the field). Any other MCP state (`connected`, `off`,
+`failed`) or `exited(id)` from `applyProcessExit` drops the state; while
+`restarting` only `connected` does, which cancels the restart (main refuses a
+connected session in the same tick it would stop it). Codex rows, attaches and sessions with emulation off never
+get `listening`, so they are never armed.
+
+**The restart.** On `no-cli`, one restart per session id per app run
+(`restarted` set, consumed before the attempt whatever its outcome):
+immediately if the network was reported down since the PTY started and is up
+now, on the next `online` event, or after `CLI_LIVENESS_RESTART_TIMEOUT_MS`
+(5 min). The renderer `online`/`offline` events and `navigator.onLine` were
+chosen over polling `net.isOnline()` in main: the tracker, the restore path
+and the restart all live in the renderer, the events need no timer, and both
+read the same Chromium network-change notifier. Its known limit: a link up
+without internet (NetworkManager `CONNECTED_LOCAL`, which preceded launch in
+the incident) is already online, so the timeout carries that case.
+`restartSessionWithoutCli` (`public/app.js`) refuses when the entry is gone,
+closed, an attach or remote, or when the projected state
+(`storedActivitySnapshot`, the head-turn projection of
+`session-status-projection.js`) is not `headTurn: 'closed'` with `busy: false`
+and no attention: an unknown turn refuses, and the local-pty adapter's own
+`busy` is never read alone (PR #1319 review, finding 1). It never stops the PTY
+itself: `restart-no-cli-session` (`src/main/terminals/no-cli-restart.js`)
+refuses on `spent`, unsent prompt text (`composerState`), a descriptor status
+`busy` or `waiting`, a `connected` bridge, or another live process for the
+conversation, then awaits `cliSessionState.liveElsewhereChecked(id, () => false,
+ptyPids)`, which scans the session descriptors excluding this PTY's own
+process tree (the renderer's `session-live-elsewhere` returns null whenever a
+PTY is here, so it cannot answer this; unknown refuses). After the scan it
+checks the session object is still the same and runs every check again, then
+records the id in its `restarted` set and calls `stopLocalSession`, in the same
+tick (finding 2). Input invalidates the attempt even when the composer is
+empty again (PR #1319 reviews r2 and r3): `trackPtyWrites`
+(`src/main/terminals/pty-ops.js`), installed by `wireSessionPty` on every
+session PTY, local and remote attach, wraps the PTY object's own `write`, so
+every byte that reaches it bumps `session.inputSeq` and sets
+`session.lastPtyInputAt`: keystrokes, paste and drop (`terminal-input` →
+`handleTerminalInput` → `writePty`), the /bg handoff (`writePty`), trigger
+delivery (`createLocalSessionHandle(session.pty)` and `entry.handle`, which
+call the same object), detach's `\x1a` and a plain terminal's typed fallback.
+The attempt holds the tab input lock (`tryAcquireTabInput(session)`, the one
+trigger delivery and /bg take) from before the scan until after the stop, and
+refuses `input-locked` when someone else holds it; it captures `inputSeq`
+before the scan and refuses `input-during-attempt` if it moved, since a typed
+and submitted prompt leaves `pending` at 0 and its `busy` may not have reached
+the descriptor cache yet. Before and again after the scan,
+`NO_CLI_RESTART_QUIET_MS` (10 s) refuses `recent-input` when the newer of the
+composer's `lastInputAt` and `lastPtyInputAt` is that recent: a submitted prompt reaches
+the descriptor as `busy` and the transcript as an open turn within a few
+seconds, and 10 s covers that with margin while costing nothing to a CLI that
+never connected, whose user is not typing into it. A missing descriptor does not refuse: a CLI hung before its
+UI may never write one. A process that appears between the scan and the stop
+is not seen there; the reopen's own guard still catches it. The renderer waits
+for `applyProcessExit` to resolve the entry's `closedWaiters` (bounded by
+`CLI_RESTART_EXIT_WAIT_MS`, 10 s, a ref'd timer), then aborts unless the entry
+is still the one under `id` with the same id, head and merged members
+(`noCliRestartIdentity`, finding 4). It re-arms with `restartSpent` and reopens
+`sessionMap.get(id)` through `openSession` with `automatic` and `fromRestore`
+only: no `live` (the reopen runs `guardResume`'s own live-elsewhere check,
+finding 3) and no forced continuation fields. No new spawn path exists.
+`guardResume` treats a failed live query as not live; that is its existing
+behaviour, not changed here.
+
+**The display.** Not a rung of `renderSessionIcon`: `noCliIcon`
+(`public/session-activity-dom.js`) replaces the winning rung with the `stale`
+slot class (Not running's dash; `.running` keeps it green while the PTY is
+here) and the title `No CLI connected`, for a non-remote row with a PTY here
+whose id the tracker reports. It runs in `applyStateClasses`, the header
+painter and under `scheduledRunIcon`, so a running schedule's ⏱ still wins.
+`rowLifecycleLabel` passes `noCli` and `restartPending` to `lifecycleLabel`,
+which reads `Open here · no CLI connected · restarts once, when the network is
+back or within 5 minutes`, then `… · stop it, then click it to start it
+again` once the restart is spent. The tracker's `onChange` repaints through
+`applyStateClasses`; the lifecycle words are part of `sidebarRenderInputs`,
+so an unchanged-refresh skip (#543) cannot keep a stale row. No CSS changed.
+
+**Limits.** A session re-keyed before it connects is not followed to its new
+id. Fresh restored entries (`launchNewSession`) and background restores are
+not watched. A quit between the restart's stop and its reopen can drop the
+session from the saved set, as any stop would.
+
+Evidence: `test/cli-liveness-776.test.js` (tracker, fake timers),
+`test/restore-no-cli-776.test.js` (shipped `runRestore`, `openSession`,
+`guardResume`, `applyProcessExit` and `restartSessionWithoutCli` in jsdom),
+`test/restart-no-cli-776.test.js` (the restart against the real head-turn
+projection: open or unknown turn, connection during the call, re-key and
+merged-member change during shutdown, reopen flags, main's budget),
+`test/no-cli-restart-main-776.test.js` (main's check-and-stop, including input,
+turn, connection and PTY replacement during the process scan),
+`test/dom-no-cli-776.test.js` (sidebar slot and lifecycle words).
+
 ## Conversation head turn and the single spinner (#625)
 
 `system/informational` transcript records (including the CLI's auto-mode
@@ -2114,13 +2242,43 @@ inside an object or a closure. The chain check is syntactic: it proves each
 function names the next one, not that the call runs, so a call made
 unreachable behind a condition still passes it.
 
-`archivingSessionIds` is an archive lock, not moved. The row, group and
-project archive actions capture the session ids they lock before awaiting
-and release those ids, never the `session.sessionId` read again afterwards:
-`rekeySessionTab` renames that object in place, so a re-key while a
-confirmation or a stop is pending would otherwise leave the original
+`archivingSessionIds` is an archive lock, not moved. The row, group, older
+rows and project archive actions capture the session ids they lock before
+awaiting and release those ids, never the `session.sessionId` read again
+afterwards: `rekeySessionTab` renames that object in place, so a re-key while
+a confirmation or a stop is pending would otherwise leave the original
 transcript's Archive button disabled until the renderer reloads.
-`test/dom-archive-busy-rekey.test.js` pins the row and project paths.
+
+The lock belongs to the action that took it last, and an action releases only
+the ids it still holds. Each action takes only ids nobody holds and releases
+each one once. A project archive releases a refused stop immediately and
+forgets that id, so a row retry may proceed while the next stop is pending.
+Successful stops retain their locks across the remaining stops and until each
+row's archive persistence settles, including a refused or rejected write
+(#1332). If any stop refuses, no rows are persisted and final cleanup releases
+the remaining held ids. Final cleanup must not release ids already forgotten:
+another row archive may now hold them (#1301). The group lock also spans row
+persistence. These remain captured-id locks; re-keying does not transfer them.
+
+Archive identity is separate from lock ownership. For a proven continuation
+while Stop is pending, the same conversation moves from OLD to NEW;
+`rekeySessionTab` changes the shared session object in place. Row, slug-group
+and folder archive correctly persist its current id NEW after stopping OLD,
+rather than pinning the previous transcript. Main's `archive-session` handler
+resolves `getConversationPartIds(sessionId)` for both archive and unarchive.
+Row/group Undo and folder Undo pass their archived session objects back through
+`persistSessionArchive(..., 0)`; working-set restoration also follows the
+current conversation head (cli-session-state.md, "Conversation continuations").
+The re-key identity policy is unchanged.
+
+Older-row archive never stops an already open or running conversation: it
+rechecks eligibility before and after confirmation and before each row.
+A row opened and continued while confirmation is pending is kept, with neither
+OLD nor NEW sent to Stop or Archive. `test/dom-archive-busy-rekey.test.js` loads
+the shipped renderer re-key, planner, stop and archive code in jsdom, checks
+these four paths through the IPC boundary and exercises folder locks through
+successful, refused and rejected persistence plus the #1301 retry. It does not
+prove live CLI ownership, real process termination or SQLite persistence.
 
 Two source-keyed stores stay under the old id without a visible effect.
 `sessionExits` (`process-exit.js`) records the PTY that ended under an id:

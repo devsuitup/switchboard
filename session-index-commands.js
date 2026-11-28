@@ -115,6 +115,25 @@ function createSessionRequestCommands(db) {
   };
 }
 
+function localHiddenEntriesEqualTo(global, projectPath, admits = () => true) {
+  const target = visibilityPath(projectPath);
+  return (global.hiddenProjects || []).filter(entry => typeof entry === 'string' && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}::/.test(entry)
+    && visibilityPath(entry) === target && admits(entry));
+}
+
+function fieldsWithoutHiddenEntries(global, matched) {
+  const kinds = { ...global.hiddenProjectKinds };
+  const fields = { hiddenProjects: global.hiddenProjects.filter(p => !matched.includes(p)), hiddenProjectKinds: kinds };
+  if (global.hiddenProjectScopes) fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
+  if (global.hiddenProjectArchivedAt) fields.hiddenProjectArchivedAt = { ...global.hiddenProjectArchivedAt };
+  for (const entry of matched) {
+    delete kinds[entry];
+    if (fields.hiddenProjectScopes) delete fields.hiddenProjectScopes[entry];
+    if (fields.hiddenProjectArchivedAt) delete fields.hiddenProjectArchivedAt[entry];
+  }
+  return fields;
+}
+
 // see .ai/contexts/session-index-writer.md
 function createWriterCommands(db) {
   const settings = { getSetting: db.getSetting, setSetting: db.setSetting, scheduleName: () => null };
@@ -197,19 +216,10 @@ function createWriterCommands(db) {
         removed++;
       }
       const global = db.getSetting('global') || {};
-      if (global.hiddenProjects?.includes(projectPath)) {
-        const kinds = { ...global.hiddenProjectKinds };
-        delete kinds[projectPath];
-        const fields = { hiddenProjects: global.hiddenProjects.filter(p => p !== projectPath) };
-        if (global.hiddenProjectKinds) fields.hiddenProjectKinds = kinds;
-        if (global.hiddenProjectScopes) {
-          fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
-          delete fields.hiddenProjectScopes[projectPath];
-        }
-        if (global.hiddenProjectArchivedAt) {
-          fields.hiddenProjectArchivedAt = { ...global.hiddenProjectArchivedAt };
-          delete fields.hiddenProjectArchivedAt[projectPath];
-        }
+      const matched = localHiddenEntriesEqualTo(global, projectPath);
+      if (matched.length) {
+        const fields = fieldsWithoutHiddenEntries(global, matched);
+        if (!global.hiddenProjectKinds) delete fields.hiddenProjectKinds;
         patch(fields);
       }
       archive.clearArchivedEntry(db.getSetting, db.setSetting, null, projectPath);
@@ -271,21 +281,8 @@ function createWriterCommands(db) {
     revealAddedProject(projectPath, proof) {
       reopen([{ alias: null, projectPath }], proof);
       const global = db.getSetting('global') || {};
-      const target = visibilityPath(projectPath);
-      const matched = (global.hiddenProjects || []).filter(entry => typeof entry === 'string' && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}::/.test(entry)
-        && visibilityPath(entry) === target && isProjectHidden([entry], null, projectPath, global.hiddenProjectScopes));
-      if (matched.length) {
-        const kinds = { ...global.hiddenProjectKinds };
-        const fields = { hiddenProjects: global.hiddenProjects.filter(p => !matched.includes(p)), hiddenProjectKinds: kinds };
-        if (global.hiddenProjectScopes) fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
-        if (global.hiddenProjectArchivedAt) fields.hiddenProjectArchivedAt = { ...global.hiddenProjectArchivedAt };
-        for (const entry of matched) {
-          delete kinds[entry];
-          if (fields.hiddenProjectScopes) delete fields.hiddenProjectScopes[entry];
-          if (fields.hiddenProjectArchivedAt) delete fields.hiddenProjectArchivedAt[entry];
-        }
-        patch(fields);
-      }
+      const matched = localHiddenEntriesEqualTo(global, projectPath, entry => isProjectHidden([entry], null, projectPath, global.hiddenProjectScopes));
+      if (matched.length) patch(fieldsWithoutHiddenEntries(global, matched));
       archive.clearArchivedEntry(db.getSetting, db.setSetting, null, projectPath);
     },
     retireArchivedEntries(entries, snapshot, proof) {

@@ -113,6 +113,15 @@ jobs:
         with:
           node-version: 22
 
+      - name: Fetch main and release branches
+        run: git fetch --no-tags --prune origin '+refs/heads/main:refs/remotes/origin/main' '+refs/heads/release/*:refs/remotes/origin/release/*'
+
+      - name: Extract the checker from main
+        run: git show origin/main:scripts/check-release-provenance.js > "$RUNNER_TEMP/check-release-provenance.js"
+
+      - name: Check the tag belongs to a release branch
+        run: node "$RUNNER_TEMP/check-release-provenance.js" tag "$GITHUB_REF_NAME"
+
       - name: Check the tag against its version and its last beta
         run: node scripts/check-release-tag.js "$GITHUB_REF_NAME"
 

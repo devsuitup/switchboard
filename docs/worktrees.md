@@ -164,8 +164,9 @@ git worktree prune                                 # after deleting a worktree d
 ```
 
 Either way, the sessions' transcripts are the CLI's and are not deleted. Once
-its worktree is gone, a session is resumed from the repository root, where the
-CLI does not find it; [delete](session-browser.md#delete) or archive it.
+its worktree is gone, Switchboard refuses to resume or fork the session and
+names the missing worktree (see [How Switchboard shows it](#how-switchboard-shows-it));
+[delete](session-browser.md#delete) or archive it.
 
 Add `.claude/worktrees/` to the repository's `.gitignore`, or the worktrees
 show up as untracked files in the main working tree.

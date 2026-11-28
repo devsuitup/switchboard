@@ -21,6 +21,12 @@ When several states hold at once, the first one in this table wins:
 | Idle | Grey dot | — | No higher activity state | Activity changes |
 | Not running | Solid grey dash | — | A finished background job has no live process | Liveness changes |
 
+A restored session whose CLI has not connected a minute after its terminal
+started shows the same dash, green while its terminal is open here, whatever
+its activity, and its tooltip says `No CLI connected` and what happens next
+(see [Session Restore](session-restore.md#a-restored-session-whose-cli-never-connects)).
+A running schedule's ⏱ still wins over it.
+
 Remote sessions do not detect background commands.
 
 The two violet states are explained on [Subagents](subagents.md#live-status).
@@ -41,11 +47,19 @@ This reverses #728's rendering. A background idle descriptor never closes a
 head turn held open by transcript evidence.
 
 Sessions Switchboard does not run itself have no terminal to read signals
-from. Their row shows the working spinner while their transcript is being
-written, until 20 seconds of silence, and never "response ready":
+from:
 
 - a local session run by `claude` in another terminal;
-- a session on a [remote host](remote-hosts.md#status).
+- a session on a [remote host](remote-hosts.md#status) with no tab open here.
+
+Their row follows the turn of the conversation's newest part, read from its
+transcript, while the CLI's descriptor shows the process alive. It shows the
+working spinner while that turn is open; a newer idle descriptor stops it, and
+silence alone does not. When Switchboard sees the turn go from open to closed
+in a session you are not viewing, the row shows Response ready, as for a
+session run here. A live session whose transcript gives no turn state shows
+the waiting ring with the tooltip **Turn state unavailable**, unless its
+descriptor already reports the prompt.
 
 The animations advance in discrete steps rather than smoothly, to keep the
 app's idle CPU use low
@@ -58,16 +72,20 @@ These signals are separate from the Claude signals below.
 
 ## Where the states come from
 
-- **Working** follows the spinner glyph Claude Code puts at the start of the
-  terminal title (OSC 0), and its progress reports (OSC 9;4). Switchboard does
-  not poll the transcript for this.
+- **Working** follows the turn of the conversation's newest part, read from
+  its transcript when the transcript changes: an open turn shows Working while
+  the process is alive (a terminal here or a live CLI descriptor). The spinner
+  glyph Claude Code puts at the start of the terminal title (OSC 0) and its
+  progress reports (OSC 9;4) are only hints: they cannot start Working on their
+  own. An idle signal from the terminal or from the CLI's descriptor that is
+  newer than the transcript's latest turn evidence ends it.
 - **Needs your attention** follows Claude Code's desktop notifications (OSC 9)
   whose text mentions attention, approval, permission, "needs your" or "wants
   to enter". The notification's text also replaces the terminal title in the
   header while the session is on screen.
-- **Response ready** is set when the working state ends while you are looking
-  at another session. The "waiting for your input" notification ends the
-  working state too.
+- **Response ready** is set when Switchboard sees the turn go from open to
+  closed while you are looking at another session. The "waiting for your
+  input" notification ends the working state too.
 - Plain output does not count as work: it only updates the session's last
   activity time.
 
@@ -85,6 +103,17 @@ shared activity label without the sidebar's CLI status detail.
 
 [Debug mode](activity-trace.md) records every one of these signals, and what
 the sidebar did with it, when an indicator looks wrong.
+
+## Unexpected errors
+
+An uncaught exception or unhandled promise rejection in Switchboard's main
+process does not stop the app. It is written to the application log and shown
+in one error notice that groups the five most recent distinct errors, each
+followed by its count when it repeated (*(3 occurrences)*). Screen readers
+announce a new error once, not each count update. **Open log** opens the
+application log and leaves the notice in place. Errors you have not dismissed
+are shown again after a window reload; dismissing the notice removes them, and
+only a new occurrence brings one back.
 
 ## Notice history
 

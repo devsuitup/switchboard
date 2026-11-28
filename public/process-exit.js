@@ -23,10 +23,13 @@ function processExitLabel(exit) {
   return 'Exited';
 }
 
-function lifecycleLabel({ ptyHere, attach, job, remoteAlias, liveness, exit, dormant }) {
+function lifecycleLabel({ ptyHere, attach, job, remoteAlias, liveness, exit, dormant, noCli, restartPending }) {
   if (ptyHere) {
     if (remoteAlias) return `Attached here · runs on ${remoteAlias}`;
-    return attach ? 'Attached here · keeps running in the background' : 'Open here';
+    if (attach) return 'Attached here · keeps running in the background';
+    if (!noCli) return 'Open here';
+    return `Open here · no CLI connected · ${restartPending ? 'restarts once, when the network is back or within 5 minutes'
+      : 'stop it, then click it to start it again'}`;
   }
   const liveJob = job?.kind === 'background' && job.hosted === true;
   if (!liveJob && ['done', 'stopped', 'failed'].includes(job?.state)) return `Job ${job.state}`;

@@ -51,8 +51,9 @@ Node 22, full-history checkout without credentials, 10 minutes) running
 it, so a refused tag costs a build but adds no latency to an accepted one;
 `publish` needs `[build, release-tag]`. The beta comparison (diff, package
 and lock comparison, fold check) applies only when a `vX.Y.Z-beta.N` tag of
-the final's own version exists; without one the final passes on tag shape and
-`package.json` version and the log says no beta was compared. This keeps the
+the final's own version exists; without one the final passes on release-branch
+provenance, tag shape and `package.json` version and the log says no beta was
+compared. This keeps the
 plain `v0.0.N` path releasable: an unconditional "final needs a beta" rule
 blocked the next plain release (review F1 of #1231). `readFileAt` verifies the
 ref as a commit first, so an unknown tag exits 2 rather than reporting a null
@@ -91,14 +92,38 @@ runner, and that electron-builder packages a `-beta.N` version on every target
 ## Release branches (#1199)
 
 The maintainer decided on 2026-11-25 that `main` never freezes: releases are
-cut from `release/X.Y` ([releasing.md](../../docs/releasing.md#release-branches)).
+tagged on `release/X.Y` ([releasing.md](../../docs/releasing.md#release-branches),
+branch model in [branching.md](../../docs/branching.md)). A beta's bump branch
+starts at `origin/main` and its PR to `release/X.Y` is merged with a merge
+commit; the final's starts at `origin/release/X.Y`, because the tag check
+refuses a final that differs from its last beta by more than version and
+changelog. Each release returns to `main` through a port-back PR from a branch
+at the tag, also merged with a merge commit, so each branch stays an ancestor
+of the other and the next cut merges cleanly. A line diverged from `main`
+takes only `git cherry-pick -x` backports of commits already on `main`, and
+its betas are cut from the release branch (maintenance betas). No workflow
+enforces the merge method: `release-protection` (28112036) allows only
+`merge` and its `creation` rule leaves branch creation to admins;
+`main-protection` allows all three, so a port-back's merge commit is
+procedure. A squashed port-back (#1293) made the next cut (#1312) conflict on
+the version and `CHANGELOG.md`. Ruleset 28267436 (`release-tags`,
+`refs/tags/v*`) restricts tag creation, update and deletion to admins.
+`scripts/check-release-provenance.js`, run from `main`'s copy, enforces two
+rules: in tag mode, run by `build.yml`'s `release-tag` job on a tag push, a
+tag's commit is on a `release/*` branch; in PR mode, run by the
+`release-provenance` job of `release-provenance.yml` on PRs into `release/*`,
+every incoming commit is already on `main` unless it is a checked two-parent
+merge, the bump, or a cherry-pick whose `-x` source on main matches by stable
+patch ID or whose changed files contain the backport's changed file set.
+`release-provenance` is not yet a required check, and `release/0.1` gets the workflow only at its next cut from `main` (#1318).
+
 The workflow side is the trigger list `[main, 'release/*']` in `test.yml`
 (PR and push), `build.yml` (PR) and `pr-title.yml` (PR); tag pushes are not
 filtered by branch. `*` does not cross `/`, so `release/*` matches
 `release/0.1` and not `release/0.1/x`; the ruleset `release-protection` uses
 the same pattern, and a working branch named `release/vX` falls under both.
 
-No job names `main`: `changelog` and `docs` receive the PR's base and head
+The changelog and documentation jobs receive the PR's base and head
 SHAs and diff through the merge base, patch coverage compares with
 `origin/${{ github.base_ref }}` after fetching it (a base with a slash is an
 ordinary ref name), and `check-release-tag.js` compares trees and tags,
@@ -106,18 +131,104 @@ whatever the branch. `docs` is not a required check on either base.
 
 Bootstrap: `pull_request` workflows are read from the PR's merge commit, so a
 PR to a release branch runs CI only if the base or the PR carries the
-triggers. `release/0.1` was cut at `v0.1.0-beta.2` without them; they reach it
-with a backport that ships in its next beta, because the tag check refuses a
-final differing from its last beta by a workflow file.
+triggers. `release/0.1` was created at `v0.1.0-beta.2` without them; the
+`0.1.0-beta.3` cut from `main` (#1292) carried them in. A branch without them
+gets them in a beta, never in a final, because the tag check refuses a final
+differing from its last beta by a workflow file.
 
 Known limit: the notes' compare link uses `git describe` on the tag's own
-history. Finals tagged on one release branch are not ancestors of the next
-line, so a new line's `X.Y.0` compares with an older final; the link is
-corrected by hand in the draft.
+history. When an older line's releases were ported back with a merge commit,
+its finals are in `main`'s history and the next line sees them; when a
+port-back was squashed or skipped, they are not, a new line's `X.Y.0` compares
+with an older final, and the link is corrected by hand in the draft.
 
 The triggers are pinned by `test/build-workflow.test.js` and
 `test/lint-pr-title.test.js`. Not covered: GitHub starting the runs, which the
 first PR to a release branch shows.
+
+## Release provenance (2026-11-27)
+
+`scripts/check-release-provenance.js` exports `checkTagProvenance`,
+`checkReleaseProvenance` and `createGitReaders`. The checks take injected
+readers; the CLI exits 0/1/2 for success/rule failure/input or Git failure.
+No SQLite, Electron or npm dependencies are involved; the PR job uses Node 20.
+
+Both provenance jobs fetch `origin/main` and extract its checker with
+`git show origin/main:scripts/check-release-provenance.js` into
+`$RUNNER_TEMP/check-release-provenance.js`. They execute that copy with the
+checkout as cwd, so changing the PR/tag copy of the script cannot bypass
+the check. The script requires only Node built-ins; no repository modules
+or npm resolution from the temporary directory are needed. Main must
+contain the checker before rollout; extraction errors fail the job.
+
+Not covered: the workflow files. `pull_request` takes the workflow from the
+PR's merge ref, so a PR into `release/*` can edit `release-provenance.yml` or
+`build.yml` to remove or replace the invocation; a tag push runs the tagged
+commit's `build.yml`. #1318 tracks moving the PR check to
+`pull_request_target` once `release/*` carries the workflow.
+
+The tag-push-only `release-tag` job also explicitly fetches the release refspec,
+then requires the peeled tag commit to be contained by an
+`origin/release/*` branch, before the existing version/beta check.
+`publish` still needs both `build` and `release-tag`.
+
+`.github/workflows/release-provenance.yml` runs only on PRs to `release/*`,
+with read-only contents permission and a full-history checkout. It fetches
+main and all release branches and passes the actual PR head SHA via an
+environment variable, not the synthetic merge SHA. The range is
+`origin/<base>..<head>`, not first-parent history or a tree diff.
+Each commit must be on main, a verified two-parent merge, a nonempty bump
+touching only the three root release files, or an `-x` backport with its full
+source SHA on main and a matching patch or file set. A bump can change
+`CHANGELOG.md` freely, but parsed `package.json`
+must equal its parent after deleting only `version`; for the lock, only
+root `version` and `packages[""].version` are deleted. Missing or invalid
+package JSON is not a bump. Scripts and dependencies require main provenance.
+NUL-delimited paths and disabled rename detection retain deletions
+when code is renamed into an allowed file. Missing refs fail closed.
+The injected `mergeTree(p1, p2)` returns the automatic tree and conflicted
+paths from `git merge-tree --write-tree --name-only -z` (Git >= 2.38).
+`diffFiles(tree, sha)` compares that tree with the recorded merge. Non-bump
+conflicts fail with their paths; other differences use `isBump` against
+the automatic tree. For conflicted package JSON, that tree contains markers,
+so the resolved JSON must instead match both parents after stripping only
+version fields. This deliberately fails closed when their non-version
+content differs. Octopus merges fail closed. Changelog content stays free.
+
+The injected `patchId(sha)` pipes the binary, no-renames patch into
+`git patch-id --stable`. A nonempty matching ID accepts the backport. If IDs
+differ or are absent, every backport path must belong to the source file
+set. This fallback does not establish semantic equivalence or an actual
+conflict: unrelated changes inside those same paths can still pass. All Git
+calls retain `maxBuffer: GIT_MAX_BUFFER`, including patch input/output.
+
+The workflow already has `fetch-depth: 0` and fetches main and release refs,
+so parents and reachable source commits are available; no fetch change is
+needed. #1318 items 1, 4 and 5 remain open (workflow trust, required-check
+settings, and carrying the workflow onto the existing release line).
+
+`test/check-release-provenance.test.js` requires production code directly,
+uses real temporary Git histories, parses both workflows and executes the
+CLI in a VM with a filename and no source wrapping. It covers annotated
+ancestor tags, off-release tags, valid backports, missing source/main refs,
+merge-parent offenders, disguised renames, CLI errors and workflow wiring.
+A real Git fixture reproduces #1312: release-only bump and merge commits on
+the base, a head merging that base tip, and subsequent version bumps. It
+accepts that history and rejects unported code brought by another head merge.
+Package script/dependency and lock dependency changes are rejected.
+Injected-reader regressions cover hand-resolved code, merge-only edits,
+version-only conflicts, octopus merges and mismatched trailers. Real Git
+fixtures also cover conflicted merges and patch/file-set checks; they skip
+with an explicit reason when `merge-tree --write-tree` is unsupported
+(local Git 2.24), and execute on the CI runners with modern Git. VM tests
+exercise NUL parsing, Git failures and the large-buffer reader contract.
+The procedure and maintainer settings are documented in
+[The tag check](../../docs/releasing.md#the-tag-check) and
+[branching.md](../../docs/branching.md#protection). Release branches use
+merge commits to preserve the checked ancestry and `-x` lines; `v*` tags are
+admin-only. Requiring the new check is a separate GitHub setting, and
+`release/0.1` gets the workflow only at its next cut from `main` (#1318).
+GitHub-side execution and settings remain unverified locally.
 
 ## Packaging and test workflows
 

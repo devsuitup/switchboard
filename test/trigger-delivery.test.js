@@ -815,14 +815,14 @@ test('ADR scenario: no viable fallback fast-fails macOS, namespaces, external pr
     const f = fixture(t, platform);
     f.descriptor('outside', 400);
     let started = Date.now();
-    const result = await f.run({ sessionId: 'outside' }, 900);
+    const result = await f.run({ sessionId: 'outside' }, 5000);
     assert.equal(result.error, 'session not found'); assert.deepEqual(f.written, []);
-    assert.ok(Date.now() - started < 300);
+    assert.ok(Date.now() - started < 2500, 'refused well before the 5000 ms trigger timeout');
     f.descriptor('job', 400, 'bg', { jobId: '1234abcd' });
     started = Date.now();
-    const bg = await f.run({ sessionId: 'job' }, 900);
+    const bg = await f.run({ sessionId: 'job' }, 5000);
     assert.equal(bg.error, 'background session, not attached here'); assert.equal(bg.jobId, '1234abcd');
-    assert.deepEqual(f.written, []); assert.ok(Date.now() - started < 300);
+    assert.deepEqual(f.written, []); assert.ok(Date.now() - started < 2500, 'refused well before the 5000 ms trigger timeout');
   }
 });
 

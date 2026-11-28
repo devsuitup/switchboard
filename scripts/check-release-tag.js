@@ -5,6 +5,8 @@
 const { execFileSync } = require('child_process');
 const { parseChangelog, compareVersions } = require('../src/main/app/changelog');
 
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+
 const TAG_RE = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-beta\.([1-9]\d*))?$/;
 const ALLOWED_FINAL_FILES = ['CHANGELOG.md', 'package.json', 'package-lock.json'];
 
@@ -79,7 +81,7 @@ function checkReleaseTag({ tag, tags, readFile, changedFiles }) {
 }
 
 function git(args) {
-  return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  return execFileSync('git', args, { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
 function readFileAt(ref, file) {

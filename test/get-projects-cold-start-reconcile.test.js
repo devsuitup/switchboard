@@ -249,3 +249,65 @@ test('a refused repair cleanup for an undeclared host never fails get-projects a
   await handler(null, false);
   assert.equal(attempts, 2, 'the cleanup is retried on a later snapshot');
 });
+
+test('a repair cleanup that keeps failing warns once per distinct code until a success resets it (#1311)', async () => {
+  const settings = new Map([
+    ['global', { remoteHosts: [] }],
+    ['bridge_uuid_reindex_folders', ['gone::-srv-shared']],
+  ]);
+  const outcomes = ['DELETION_OWNERSHIP', 'DELETION_OWNERSHIP', 'PROJECT_EPOCH_STALE', 'DELETION_OWNERSHIP', null, 'DELETION_OWNERSHIP'];
+  const warnings = [];
+  const handler = loadGetProjectsHandler({
+    annotateRemoteAttachable: projects => projects, mergePlaceholderSessions: projects => projects, normalizeHosts, parseFolderKey,
+    getSetting: key => settings.get(key), setSetting: (key, value) => settings.set(key, value),
+    backfillEntrypoints() {}, backfillCustomTitles() {}, TRACE: { on: false }, projectsReconciledAt: 0,
+    isCachePopulated: () => true, isSearchIndexPopulated: () => true, isInitialScanComplete: () => true,
+    populateCacheViaWorker() {}, log: { warn: message => warnings.push(message), info() {}, error() {} },
+    projectsClient: { request: () => Promise.resolve({ defaultProjects: [], allProjects: [], rows: 0 }) },
+    writer: { applyAndPersistArchived: projects => projects,
+      pruneUndeclaredRepairFolders: async () => {
+        const code = outcomes.shift();
+        if (code) throw Object.assign(new Error('refused'), { code });
+        return [];
+      } },
+  });
+  const deferred = () => warnings.filter(message => message.includes('repair cleanup for undeclared hosts deferred'));
+
+  await handler(null, false);
+  await handler(null, false);
+  assert.deepEqual(deferred(), ['[projects] repair cleanup for undeclared hosts deferred: DELETION_OWNERSHIP'],
+    'a repeated refusal with the same code is logged once');
+  await handler(null, false);
+  await handler(null, false);
+  assert.deepEqual(deferred().slice(1), ['[projects] repair cleanup for undeclared hosts deferred: PROJECT_EPOCH_STALE'],
+    'a new code is logged once, and a code already logged stays quiet');
+  await handler(null, false);
+  await handler(null, false);
+  assert.equal(deferred().length, 3, 'after a successful cleanup the same code is logged again');
+  assert.equal(outcomes.length, 0);
+});
+
+test('code-less cleanup failures with varying messages share one warning (#1311)', async () => {
+  const settings = new Map([
+    ['global', { remoteHosts: [] }],
+    ['bridge_uuid_reindex_folders', ['gone::-srv-shared']],
+  ]);
+  let request = 0;
+  const warnings = [];
+  const handler = loadGetProjectsHandler({
+    annotateRemoteAttachable: projects => projects, mergePlaceholderSessions: projects => projects, normalizeHosts, parseFolderKey,
+    getSetting: key => settings.get(key), setSetting: (key, value) => settings.set(key, value),
+    backfillEntrypoints() {}, backfillCustomTitles() {}, TRACE: { on: false }, projectsReconciledAt: 0,
+    isCachePopulated: () => true, isSearchIndexPopulated: () => true, isInitialScanComplete: () => true,
+    populateCacheViaWorker() {}, log: { warn: message => warnings.push(message), info() {}, error() {} },
+    projectsClient: { request: () => Promise.resolve({ defaultProjects: [], allProjects: [], rows: 0 }) },
+    writer: { applyAndPersistArchived: projects => projects,
+      pruneUndeclaredRepairFolders: async () => { throw new Error(`writer exited during request ${++request}`); } },
+  });
+
+  for (let i = 0; i < 5; i++) await handler(null, false);
+  assert.deepEqual(warnings.filter(message => message.includes('repair cleanup for undeclared hosts deferred')),
+    ['[projects] repair cleanup for undeclared hosts deferred: writer exited during request 1'],
+    'failures without a code are one category, whatever their message says');
+  assert.equal(request, 5);
+});
