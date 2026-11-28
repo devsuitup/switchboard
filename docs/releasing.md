@@ -76,9 +76,9 @@ from it.
   branch cut from the release branch, and opened as a PR whose base is the
   release branch, merged with a merge commit. Never write a fix on the
   release branch first: every commit a PR brings into `release/*` must
-  already be on `main`, unless it is a merge commit, the version and
-  changelog bump, or a cherry-pick whose `-x` trailer names a commit on
-  `main`; this is enforced by the PR mode of `scripts/check-release-provenance.js`, run by the `release-provenance` job of `.github/workflows/release-provenance.yml` on every PR into `release/*` (not yet a required check, and
+  already be on `main`, unless it is a verified two-parent merge, the version and
+  changelog bump, or a cherry-pick whose `-x` trailer and patch or changed
+  file set match a commit on `main` (see [Release provenance](#release-provenance)); this is enforced by the PR mode of `scripts/check-release-provenance.js`, run by the `release-provenance` job of `.github/workflows/release-provenance.yml` on every PR into `release/*` (not yet a required check, and
   not yet on `release/0.1`, #1318). The line's next beta is then a
   maintenance beta:
 
@@ -440,11 +440,11 @@ two files in a PR into `release/*`.
 - On PRs into `release/*`, the `release-provenance` job fetches `origin/main`
   and the release branches and checks every commit in
   `origin/<base>..<PR head SHA>`, including commits brought by a merge.
-  A commit passes if it is reachable from `origin/main`, is a merge commit,
+  A commit passes if it is reachable from `origin/main`, is a checked two-parent merge,
   is a bump limited to the root `CHANGELOG.md`, `package.json` and/or
   `package-lock.json`, or has a standalone
   `(cherry picked from commit <sha>)` line from `git cherry-pick -x` whose
-  full source SHA is reachable from `origin/main`.
+  full source SHA is reachable from `origin/main` and passes the content check below.
   A bump may change `CHANGELOG.md` freely. Package JSON is compared with
   its parent after deleting only `version`; the lock comparison deletes
   only root `version` and `packages[""].version`. All remaining parsed JSON
@@ -454,11 +454,36 @@ two files in a PR into `release/*`.
   Failures list every offending commit: land the fix on main first and
   backport it with `-x`.
 
-The PR check compares bumps to their parent; the final-tag check compares
-package files to the last beta. Provenance validates ancestry and the recorded source, not patch
-equivalence. Merge commits are exempt, but their incoming parent histories
-are checked. Exit 1 means a rule violation; exit 2 means invalid usage or
-unreadable Git inputs. Both block the job.
+For a two-parent merge outside main, the PR check reconstructs the automatic
+merge with `git merge-tree --write-tree <p1> <p2>` (Git 2.38 or newer).
+It compares that tree with the recorded merge tree. Differences are allowed
+only in the three bump files, with the same version-only JSON rule. Any
+automatic conflict outside those files fails and names the hand-resolved
+paths, even if the resolution chose one parent's contents. Conflicted
+package files must match both parents after removing the allowed version
+fields; this fails closed if the parents also differ in scripts or
+dependencies. Changelog conflicts may be resolved freely. Octopus merges
+(more than two parents) fail explicitly. Incoming parent histories are still
+checked, so a clean merge cannot hide an unported commit.
+
+For a `-x` trailer naming a source on main, the check compares both commits'
+`git patch-id --stable` values. An equal, non-empty patch ID passes. When
+patches differ, a conflict-resolved cherry-pick is allowed only if every
+changed path also occurs in the source's changed file set. Otherwise the
+failure says that the trailer does not match its source. Renames count both
+paths. This fallback permits adapted content within those paths; it does
+not prove semantic equivalence or that a conflict actually occurred.
+
+The PR check compares ordinary bumps to their parent; the final-tag check
+compares package files to the last beta. Exit 1 means a rule violation;
+exit 2 means invalid usage or unreadable Git inputs, including unsupported
+Git. Both block the job. Full checkout history and the explicit fetch of
+main and release refs supply the merge parents and reachable cherry-pick
+sources; no shallow fetch is used.
+
+Only items 2 and 3 of #1318 are addressed here. Items 1, 4 and 5 remain open:
+workflow trust, requiring the provenance check, and getting the workflow onto
+the existing release line are not solved by these content checks.
 
 Release PRs use merge commits, preserving the checked commits and their
 `-x` lines. The maintainer configured `release/*` as merge-commit only and

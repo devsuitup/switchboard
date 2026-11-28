@@ -69,9 +69,24 @@ Two more rules are enforced by `scripts/check-release-provenance.js`:
 1. a tag is released only when its commit is on a `release/*` branch:
    the tag mode of `scripts/check-release-provenance.js`, run by `build.yml`'s `release-tag` job on the tag push;
 2. every commit a PR brings into `release/*` is already on `main`, unless it
-   is a merge commit, the version and `CHANGELOG.md` bump, or a cherry-pick
+   is a verified two-parent merge, the version and `CHANGELOG.md` bump, or a cherry-pick
    whose `(cherry picked from commit <sha>)` trailer (`git cherry-pick -x`)
-   names a commit on `main`: the PR mode of `scripts/check-release-provenance.js`, run by the `release-provenance` job of `.github/workflows/release-provenance.yml` on every PR into `release/*`.
+   names a commit on `main` and passes the patch/file-set check: the PR mode of `scripts/check-release-provenance.js`, run by the `release-provenance` job of `.github/workflows/release-provenance.yml` on every PR into `release/*`.
+
+Two-parent merges outside main are compared with an automatic
+`git merge-tree --write-tree` of their parents (Git >= 2.38). Only the three
+bump files may differ, and package/lock JSON may differ only in version
+fields. Automatic conflicts outside those files fail with the hand-resolved
+paths. Conflicted package files must match both parents outside version
+fields; octopus merges fail closed. Parent histories are still checked.
+
+A `-x` commit must have the source's stable patch ID, or, for an adapted
+cherry-pick, change only a subset of the source's files. The latter checks
+paths, not semantic equivalence; a forged trailer can still pass if it only
+changes those same paths. Details and diagnostics are in
+[Release provenance](releasing.md#release-provenance). This addresses #1318
+items 2 and 3; items 1, 4 and 5 (workflow trust, required-check settings and
+workflow availability on the existing release line) remain open.
 
 `release-provenance` is not yet a required check, and `release/0.1` gets the workflow only at its next cut from `main` (#1318). Both jobs run the checker from `main`'s copy, so editing the checked-out script does not bypass it. The workflow files themselves are not protected that way: `pull_request` reads the workflow from the PR's merge ref, so a PR into `release/*` can edit `release-provenance.yml` or `build.yml` to remove or replace the invocation. Moving the PR check to `pull_request_target` once `release/*` carries the workflow is tracked in #1318.
 
@@ -133,10 +148,11 @@ The examples cut `0.1.0-beta.4` from `main` onto `release/0.1`.
    git merge origin/release/0.1
    ```
 
-   Resolve every conflict on the bump side: the new version, and a
+   Resolve bump-file conflicts on the bump side: the new version, and a
    `CHANGELOG.md` whose older sections equal the release branch's. When
    `origin/release/0.1` already is an ancestor, the merge says
-   `Already up to date.`
+   `Already up to date.` Code conflicts cannot be resolved in this merge:
+   the provenance check rejects them; land the fix on main and backport it.
 
 4. **Open the PR to the release branch and merge it with a merge commit.**
 
@@ -273,8 +289,12 @@ every fix `main` has. A backport is for a line that has diverged from `main`
 The rule: a backport is a `git cherry-pick -x` of a commit already merged on
 `main`, never a fix written on the release branch first. The fix PR goes to
 `main`, is squashed there, and only that squash commit is cherry-picked; the
-`-x` trailer names it, so every backport is also on `main` and nothing ships
-from a release branch that `main` lacks. This is enforced by the PR mode of `scripts/check-release-provenance.js`, run by the `release-provenance` job of `.github/workflows/release-provenance.yml` on every PR into `release/*`
+`-x` trailer names it. The checker compares stable patch IDs and, if they
+differ, requires the backport to touch only files changed by that source.
+The patch and path checks run in the PR mode of
+`scripts/check-release-provenance.js`, through the `release-provenance` job
+of `.github/workflows/release-provenance.yml` on every PR into `release/*`.
+Review adapted content: the file-set fallback does not prove semantic equivalence
 ([Protection](#protection): not yet a required check, and not yet on
 `release/0.1`, #1318).
 

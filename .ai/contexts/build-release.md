@@ -112,8 +112,9 @@ the version and `CHANGELOG.md`. Ruleset 28267436 (`release-tags`,
 rules: in tag mode, run by `build.yml`'s `release-tag` job on a tag push, a
 tag's commit is on a `release/*` branch; in PR mode, run by the
 `release-provenance` job of `release-provenance.yml` on PRs into `release/*`,
-every incoming commit is already on `main` unless it is a merge commit, the
-bump, or a cherry-pick whose `-x` trailer names a commit on `main`.
+every incoming commit is already on `main` unless it is a checked two-parent
+merge, the bump, or a cherry-pick whose `-x` source on main matches by stable
+patch ID or whose changed files contain the backport's changed file set.
 `release-provenance` is not yet a required check, and `release/0.1` gets the workflow only at its next cut from `main` (#1318).
 
 The workflow side is the trigger list `[main, 'release/*']` in `test.yml`
@@ -176,16 +177,35 @@ with read-only contents permission and a full-history checkout. It fetches
 main and all release branches and passes the actual PR head SHA via an
 environment variable, not the synthetic merge SHA. The range is
 `origin/<base>..<head>`, not first-parent history or a tree diff.
-Each commit must be on main, a merge, a nonempty bump touching only the
-three root release files, or an `-x` backport with its full source SHA on
-main. A bump can change `CHANGELOG.md` freely, but parsed `package.json`
+Each commit must be on main, a verified two-parent merge, a nonempty bump
+touching only the three root release files, or an `-x` backport with its full
+source SHA on main and a matching patch or file set. A bump can change
+`CHANGELOG.md` freely, but parsed `package.json`
 must equal its parent after deleting only `version`; for the lock, only
 root `version` and `packages[""].version` are deleted. Missing or invalid
 package JSON is not a bump. Scripts and dependencies require main provenance.
 NUL-delimited paths and disabled rename detection retain deletions
 when code is renamed into an allowed file. Missing refs fail closed.
-The check validates recorded provenance, not patch equivalence; merge
-resolutions and changelog contents are exempt by policy.
+The injected `mergeTree(p1, p2)` returns the automatic tree and conflicted
+paths from `git merge-tree --write-tree --name-only -z` (Git >= 2.38).
+`diffFiles(tree, sha)` compares that tree with the recorded merge. Non-bump
+conflicts fail with their paths; other differences use `isBump` against
+the automatic tree. For conflicted package JSON, that tree contains markers,
+so the resolved JSON must instead match both parents after stripping only
+version fields. This deliberately fails closed when their non-version
+content differs. Octopus merges fail closed. Changelog content stays free.
+
+The injected `patchId(sha)` pipes the binary, no-renames patch into
+`git patch-id --stable`. A nonempty matching ID accepts the backport. If IDs
+differ or are absent, every backport path must belong to the source file
+set. This fallback does not establish semantic equivalence or an actual
+conflict: unrelated changes inside those same paths can still pass. All Git
+calls retain `maxBuffer: GIT_MAX_BUFFER`, including patch input/output.
+
+The workflow already has `fetch-depth: 0` and fetches main and release refs,
+so parents and reachable source commits are available; no fetch change is
+needed. #1318 items 1, 4 and 5 remain open (workflow trust, required-check
+settings, and carrying the workflow onto the existing release line).
 
 `test/check-release-provenance.test.js` requires production code directly,
 uses real temporary Git histories, parses both workflows and executes the
@@ -196,6 +216,12 @@ A real Git fixture reproduces #1312: release-only bump and merge commits on
 the base, a head merging that base tip, and subsequent version bumps. It
 accepts that history and rejects unported code brought by another head merge.
 Package script/dependency and lock dependency changes are rejected.
+Injected-reader regressions cover hand-resolved code, merge-only edits,
+version-only conflicts, octopus merges and mismatched trailers. Real Git
+fixtures also cover conflicted merges and patch/file-set checks; they skip
+with an explicit reason when `merge-tree --write-tree` is unsupported
+(local Git 2.24), and execute on the CI runners with modern Git. VM tests
+exercise NUL parsing, Git failures and the large-buffer reader contract.
 The procedure and maintainer settings are documented in
 [The tag check](../../docs/releasing.md#the-tag-check) and
 [branching.md](../../docs/branching.md#protection). Release branches use
