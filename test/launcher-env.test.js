@@ -51,11 +51,12 @@ for (const [name, buildEnv] of launchers) {
     const outside = path.join(home, 'inherited-state');
     const inherited = Object.freeze({
       ZDOTDIR: outside, BASH_ENV: path.join(outside, 'bashenv'), ENV: path.join(outside, 'shenv'),
+      PROMPT_COMMAND: '. ' + path.join(outside, '.bashrc'), INPUTRC: path.join(outside, '.inputrc'),
       zdotdir: outside, XDG_STATE_HOME: outside, XDG_DATA_HOME: outside, XDG_CACHE_HOME: outside,
       XDG_CONFIG_HOME: outside, KEEP_ME: 'retained',
     });
     const env = buildEnv(home, inherited);
-    for (const key of ['ZDOTDIR', 'BASH_ENV', 'ENV']) {
+    for (const key of ['ZDOTDIR', 'BASH_ENV', 'ENV', 'PROMPT_COMMAND', 'INPUTRC']) {
       assert.deepEqual(Object.keys(env).filter(k => k.toUpperCase() === key), [], key + ' must be dropped');
     }
     assert.equal(env.XDG_STATE_HOME, path.join(home, '.local', 'state'));

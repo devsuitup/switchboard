@@ -174,8 +174,9 @@ This mode creates a fresh temporary directory for every run and sets both
 `HOME` and `USERPROFILE` to it. Configuration, Windows AppData, database and
 triggers directories also live beneath it, as do the `XDG_CONFIG_HOME`,
 `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME` roots. Inherited
-`ZDOTDIR`, `BASH_ENV` and `ENV` are removed so plain terminals do not read
-your real shell startup files. It reuses `e2e/fixtures.js` to
+`ZDOTDIR`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND` and `INPUTRC` are removed so
+plain terminals do not read your own shell startup files (system-wide ones
+such as `/etc/profile` still run). It reuses `e2e/fixtures.js` to
 create two projects: a committed fixture git repository and a plain directory,
 each with a synthetic transcript. It does not copy your database or history.
 

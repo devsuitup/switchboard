@@ -17,8 +17,10 @@ point inside the disposable home. Claude paths derive from that home, and
 socket location, not a harness history root, and stays available to desktop
 runtime services.
 
-Both isolated modes also drop inherited `ZDOTDIR`, `BASH_ENV` and `ENV`, which
-would make a plain terminal's zsh or bash read the user's real shell config
+Both isolated modes also drop inherited `ZDOTDIR`, `BASH_ENV`, `ENV`,
+`PROMPT_COMMAND` (an exported `. ~/.bashrc` reloads it before each prompt) and
+`INPUTRC` (an absolute path to the user's Readline file), which would make a
+plain terminal's zsh or bash read the user's real shell config
 (the generated rcfile / `ZDOTDIR` logic in `plain-terminal-shell.js` falls back
 to the disposable `HOME` when `ZDOTDIR` is absent), and point `XDG_CONFIG_HOME`,
 `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME` inside the disposable
@@ -28,8 +30,8 @@ Test-pr installs refusing Codex stubs (shell, cmd, PowerShell) in its first
 PATH entry. `ALLOW_CLAUDE=1` omits only the Claude stub, keeping Codex refused
 and the temporary home isolation intact. E2E fixtures do not install stubs.
 Their drop rule matches the `CLAUDE` and `GIT_` prefixes and the exact names
-`CODEX_HOME`, `HISTFILE`, `ELECTRON_RUN_AS_NODE`, `ZDOTDIR`, `BASH_ENV`, `ENV`
-and the four `XDG_*_HOME` roots case-insensitively.
+`CODEX_HOME`, `HISTFILE`, `ELECTRON_RUN_AS_NODE`, `ZDOTDIR`, `BASH_ENV`, `ENV`,
+`PROMPT_COMMAND`, `INPUTRC` and the four `XDG_*_HOME` roots case-insensitively.
 
 `test/launcher-env.test.js` covers both builders, inherited/unset and mixed-case
 Codex homes, default-mode preservation, and stub lookup with both Claude modes.
