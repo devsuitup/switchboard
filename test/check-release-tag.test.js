@@ -218,3 +218,12 @@ test('end to end: a missing tag argument is a usage error', (t) => {
   const repo = makeRepo(t);
   assert.equal(run(repo, '').status, 2);
 });
+
+test('end to end: a final whose changelog exceeds one MiB is read whole', (t) => {
+  const repo = makeRepo(t);
+  const pad = 'x'.repeat(2 * 1024 * 1024);
+  repo.commit({ ...FINAL_FILES, 'CHANGELOG.md': FINAL_FILES['CHANGELOG.md'] + pad }, 'chore(release): v0.1.0');
+  repo.git('tag', 'v0.1.0');
+  const result = run(repo, 'v0.1.0');
+  assert.equal(result.status, 0, result.out.slice(0, 500));
+});
