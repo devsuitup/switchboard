@@ -1551,10 +1551,10 @@ async function getProjectsSnapshot(showArchived, retry = false, { logConflict = 
           await writer.pruneUndeclaredRepairFolders(repairFolders.filter(folder => !declared.includes(folder)));
           projectsRepairCleanupDeferred.clear();
         } catch (error) {
-          const code = error.code || error.message;
-          if (!projectsRepairCleanupDeferred.has(code)) {
-            projectsRepairCleanupDeferred.add(code);
-            log.warn(`[projects] repair cleanup for undeclared hosts deferred: ${code}`);
+          const key = error.code || 'UNCODED';
+          if (!projectsRepairCleanupDeferred.has(key)) {
+            projectsRepairCleanupDeferred.add(key);
+            log.warn(`[projects] repair cleanup for undeclared hosts deferred: ${error.code || error.message}`);
           }
         }
       }

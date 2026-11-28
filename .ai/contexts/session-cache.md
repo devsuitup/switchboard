@@ -1427,8 +1427,9 @@ removed. Main also wraps the call: a failure is logged at warn
 (`[projects] repair cleanup for undeclared hosts deferred`) and never fails the
 project listing. The keys stay in the setting, so the next snapshot retries.
 Each distinct failure code is logged once (`projectsRepairCleanupDeferred` in
-`main.js`); a successful cleanup clears that set, so a later failure is logged
-again (#1311).
+`main.js`); failures without a code count as one, because their messages embed
+request ids and would otherwise each look new. A successful cleanup clears that
+set, so a later failure is logged again (#1311).
 Before this change, origin/main awaited `completeRepairFolders` there, and a
 refusal failed the whole `get-projects` reply.
 

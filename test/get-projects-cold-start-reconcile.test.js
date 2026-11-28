@@ -284,5 +284,30 @@ test('a repair cleanup that keeps failing warns once per distinct code until a s
   await handler(null, false);
   await handler(null, false);
   assert.equal(deferred().length, 3, 'after a successful cleanup the same code is logged again');
-  assert.equal(outcomes.length, 0);
+  assert.equal(outcomes.length, 0);
+});
+
+test('code-less cleanup failures with varying messages share one warning (#1311)', async () => {
+  const settings = new Map([
+    ['global', { remoteHosts: [] }],
+    ['bridge_uuid_reindex_folders', ['gone::-srv-shared']],
+  ]);
+  let request = 0;
+  const warnings = [];
+  const handler = loadGetProjectsHandler({
+    annotateRemoteAttachable: projects => projects, mergePlaceholderSessions: projects => projects, normalizeHosts, parseFolderKey,
+    getSetting: key => settings.get(key), setSetting: (key, value) => settings.set(key, value),
+    backfillEntrypoints() {}, backfillCustomTitles() {}, TRACE: { on: false }, projectsReconciledAt: 0,
+    isCachePopulated: () => true, isSearchIndexPopulated: () => true, isInitialScanComplete: () => true,
+    populateCacheViaWorker() {}, log: { warn: message => warnings.push(message), info() {}, error() {} },
+    projectsClient: { request: () => Promise.resolve({ defaultProjects: [], allProjects: [], rows: 0 }) },
+    writer: { applyAndPersistArchived: projects => projects,
+      pruneUndeclaredRepairFolders: async () => { throw new Error(`writer exited during request ${++request}`); } },
+  });
+
+  for (let i = 0; i < 5; i++) await handler(null, false);
+  assert.deepEqual(warnings.filter(message => message.includes('repair cleanup for undeclared hosts deferred')),
+    ['[projects] repair cleanup for undeclared hosts deferred: writer exited during request 1'],
+    'failures without a code are one category, whatever their message says');
+  assert.equal(request, 5);
 });
