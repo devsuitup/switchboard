@@ -68,7 +68,7 @@ async function guardResume(session, { automatic = false, api, confirm, name, not
     if (typeof notify !== 'function') throw new TypeError('guardResume requires a notify adapter for a background refusal');
     notify({ id: `resume-background:${session.sessionId}`, kind: 'error', sessions: [{ ...session, name }],
       logText: `Cannot open "${session.sessionId?.slice(0, 8)}" here: it runs as a background session whose job Switchboard cannot identify, so it cannot be attached. Find it in the Agents view.`,
-      message: `Cannot open "${name || 'Untitled conversation'}" here: it runs as a background session whose job Switchboard cannot identify, so it cannot be attached. Find it in the Agents view.` });
+      message: `Cannot attach to this session; find it in the Agents view.\nCannot open "${name || 'Untitled conversation'}" here: it runs as a background session whose job Switchboard cannot identify, so it cannot be attached. Find it in the Agents view.` });
     return false;
   }
   return !!(await confirm({ ...liveElsewhereQuestion(live, name, undefined, session), sessions: [{ ...session, name }] }));

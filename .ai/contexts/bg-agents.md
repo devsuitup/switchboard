@@ -1904,8 +1904,10 @@ checks `bgAgentLiveJob(sessionId)` before calling
 A known-ended job shows an error without opening a tab; unknown liveness
 still allows attachment. A `not running` detach result skips the exit wait.
 Only a valid captured job id offers Undo; other detached tabs show an
-informational notice. After Undo, that tab's notice shows Reattaching while
-waiting and is replaced by the attachment result.
+informational notice. After Undo, that tab's notice starts "Reattaching to the
+session…" while waiting and becomes "Reattached to the session." on success.
+The session description follows the first newline; failures put the next step
+first and keep diagnostic text in the body or Details and in the notice log.
 Initial attach and background handoff both retain the actual attach cwd on
 the entry. Failed detaches keep their Retry notice and offer no Undo; a mixed
 Stop plan still confirms before ending its local or remote processes.

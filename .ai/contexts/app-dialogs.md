@@ -243,6 +243,28 @@ Tests: `test/dom-app-notices.test.js` (`1023 …`),
 `test/restore-live-elsewhere.test.js` (`1023 …`), `test/bg-agents-ipc.test.js`
 (`1023 …`).
 
+## Attach and resume wording (#1023, part 1)
+
+Attach failures in `attachBackgroundContinuation` and interactive
+`openSessionNow` use the existing `showSessionActionFailure` message/details
+options. The first line says "Could not attach; retry from the sidebar." or
+"Could not attach; check the session in the Agents view."; session identity,
+path and backend reason sit in collapsed Details. The original diagnostic
+arguments still build `logText`. Automatic restore keeps its existing wording.
+
+Detach Undo notices put progress, success or refusal first, with the session
+description after the first newline. Remote reattach refusal keeps its host
+in the body and supplies the original text explicitly as `logText`.
+
+The live-elsewhere question keeps its short "Session running elsewhere" title
+and its existing body, session markers, Resume anyway button, Cancel focus and
+danger flag. The automatic skip (#337) is unchanged. A background refusal
+without a job id starts "Cannot attach to this session; find it in the Agents
+view." and retains its explanation below and its original `logText`.
+
+Tests: `test/attach-resume-wording.test.js`, `test/detach-undo.test.js`,
+`test/resume-guard-live.test.js`, `test/resume-guard.test.js`.
+
 ## Failures say what to do (#709)
 
 A failure shown to the user says what failed, then what to do, in one short
