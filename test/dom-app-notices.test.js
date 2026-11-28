@@ -313,3 +313,20 @@ test('notices use a bottom-right flex stack and wrap long text within the viewpo
   assert.equal(message.whiteSpace, 'pre-wrap');
   assert.equal(message.overflowWrap, 'anywhere');
 });
+
+for (const rebuild of ['replacement', 'member removal']) {
+  test('rebuilding a multi-action notice preserves the second action focus on ' + rebuild, t => {
+    const { window, document } = setup(t);
+    const options = { id: 'ended', message: 'This job has ended.',
+      members: [{ id: 'first' }, { id: 'second' }],
+      actions: [{ label: 'Respawn', onAction() {} }, { label: 'Open transcript', onAction() {} }] };
+    window.showAppNotice(options);
+    document.querySelectorAll('.app-notice-action')[1].focus();
+    if (rebuild === 'replacement') window.showAppNotice(options);
+    else window.clearAppNotice('first');
+    assert.equal(document.activeElement.textContent, 'Open transcript', 'focus must stay on the second action');
+    assert.equal(document.querySelectorAll('.app-notice').length, 1);
+    t.mock.timers.tick(20_000);
+    assert.ok(document.querySelector('.app-notice'), 'restored focus must keep expiry paused');
+  });
+}

@@ -584,6 +584,26 @@ function attachBgAgent(entry) {
   openSession(session, { type: 'attach', jobId: entry.id, cwd: entry.cwd });
 }
 
+async function runEndedAgentVerb(verb, key) {
+  const entry = agentsRoster.find(candidate => agentsEntryKey(candidate) === key);
+  const availability = entry && agentVerbAvailability(entry, agentsDaemonReachable);
+  let reason;
+  if (!entry) reason = 'This job is no longer available.';
+  else if (agentsPendingVerbs.has(key) || agentsInFlightVerbs.has(key)) reason = 'An action is already in progress for this job.';
+  else if (!availability[verb]) {
+    if (verb === 'transcript') reason = 'Its transcript is not available yet.';
+    else if (!agentsDaemonReachable) reason = 'The daemon is not answering.';
+    else if (agentJobIsLive(entry)) reason = 'Its worker is running.';
+    else if (entry.conversationPid) reason = 'Its conversation is running in another process.';
+    else reason = 'This job can no longer be respawned.';
+  }
+  if (!reason) {
+    await runAgentVerb(verb, entry);
+    reason = agentsVerbErrors.get(key);
+  }
+  if (reason) showAppNotice({ id: 'agents-ended-job', message: reason });
+}
+
 async function runAgentVerb(verb, entry) {
   if (!entry) return;
   const key = agentsEntryKey(entry);
@@ -782,12 +802,16 @@ function initAgentsView() {
       const availability = agentVerbAvailability(entry, agentsDaemonReachable);
       if (availability.attach) attachBgAgent(entry);
       else if (entry.kind === 'background' && !agentJobIsLive(entry) && ['stopped', 'done', 'failed'].includes(entry.state)) {
+        const key = agentsEntryKey(entry);
         const actions = [];
-        if (availability.respawn && !agentsPendingVerbs.has(agentsEntryKey(entry))) {
-          actions.push({ label: 'Respawn', onAction: () => runAgentVerb('respawn', entry) });
+        if (availability.respawn && !agentsPendingVerbs.has(key) && !agentsInFlightVerbs.has(key)) {
+          actions.push({ label: 'Respawn', onAction: () => runEndedAgentVerb('respawn', key) });
         }
-        actions.push({ label: 'Open transcript', onAction: () => runAgentVerb('transcript', entry) });
-        showAppNotice({ id: 'agents-ended-job', message: 'This job has ended.', actions });
+        if (availability.transcript) {
+          actions.push({ label: 'Open transcript', onAction: () => runEndedAgentVerb('transcript', key) });
+        }
+        showAppNotice({ id: 'agents-ended-job', message: actions.length
+          ? 'This job has ended.' : 'This job has ended. Its transcript is not available yet.', actions });
       }
     });
     viewer.addEventListener('keydown', (e) => {

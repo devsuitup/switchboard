@@ -8,7 +8,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Moving a session to the background now asks whether to stop or keep an older job for the same conversation when Switchboard cannot tell if it is still running; Stop checks again before moving, and Cancel quietly keeps that session in the foreground while the rest of the batch continues. Cancellations from Claude and refusals after a choice still show their reason; Keep also checks for live jobs known only from the Agents list. Cancelled questions close, and waiting for a choice does not shorten the move’s confirmation time. (#1295)
 
 ### Fixed
-- Double-clicking an ended job in Agents now offers **Respawn** when available and **Open transcript**, instead of silently doing nothing. (#1023)
+- Double-clicking an ended job in Agents now offers **Respawn** when available and **Open transcript** when a transcript exists, instead of silently doing nothing. If an action becomes unavailable before you click, the notice explains why. (#1023)
 - On Windows, a project you deleted no longer reappears in the sidebar when its sessions recorded its folder under a short spelling such as `C:\Users\JEAN-B~1\...`, and adding it back with **Add project** under that spelling shows it again. (#1304)
 
 ## v0.1.0-beta.5 — 2026-11-28

@@ -1750,3 +1750,117 @@ for (const status of [null, 'busy']) {
     assert.equal(row.querySelectorAll('.session-icon--busy, .session-icon--response-ready, .session-icon--agents-busy, .session-icon--attention').length, 0);
   });
 }
+
+for (const [reason, overrides] of [
+  ['transcript unavailable', { transcriptAvailable: false }],
+  ['session missing', { sessionId: null }],
+]) {
+  for (const daemonReachable of [true, false]) {
+    test('ended notice omits transcript when ' + reason + ', daemon=' + daemonReachable, async t => {
+      const h = setup(); t.after(() => h.destroy());
+      h.setSnapshot({ roster: [{ ...ROSTER[1], ...overrides }], daemonReachable });
+      await h.window.showAgentsView();
+      dblclick(h, h.document.querySelector('.agents-row'));
+      assert.deepEqual([...h.document.querySelectorAll('.app-notice-action')].map(b => b.textContent),
+        daemonReachable ? ['Respawn'] : [], 'unavailable transcript must not be offered');
+      if (!daemonReachable) assert.equal(h.document.querySelector('.app-notice-message').textContent,
+        'This job has ended. Its transcript is not available yet.');
+    });
+  }
+}
+
+for (const [reason, overrides, daemonReachable, removed, expected] of [
+  ['worker returned', { hosted: true }, true, false, /worker is running/i],
+  ['conversation running', { conversationPid: 42 }, true, false, /conversation is running/i],
+  ['daemon unavailable', {}, false, false, /daemon is not answering/i],
+  ['job removed', {}, true, true, /no longer available/i],
+]) {
+  test('ended notice rechecks Respawn after ' + reason, async t => {
+    const h = setup(); t.after(() => h.destroy());
+    h.setSnapshot({ roster: [ROSTER[1]], daemonReachable: true });
+    await h.window.showAgentsView();
+    dblclick(h, h.document.querySelector('.agents-row'));
+    const action = h.document.querySelector('.app-notice-action');
+    h.emitChanged({ roster: removed ? [] : [{ ...ROSTER[1], ...overrides }], daemonReachable });
+    action.click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.calls.verbs, [], 'stale Respawn must not reach IPC');
+    assert.match(h.document.querySelector('.app-notice-message')?.textContent || '', expected,
+      'refusal must be visible in a notice');
+    assert.equal(h.document.querySelectorAll('.app-notice').length, 1);
+  });
+}
+
+for (const overrides of [{ transcriptAvailable: false }, { sessionId: null }]) {
+  test('ended notice rechecks transcript availability on click ' + JSON.stringify(overrides), async t => {
+    const h = setup(); t.after(() => h.destroy());
+    h.setSnapshot({ roster: [ROSTER[1]], daemonReachable: true });
+    await h.window.showAgentsView();
+    dblclick(h, h.document.querySelector('.agents-row'));
+    const action = [...h.document.querySelectorAll('.app-notice-action')][1];
+    h.emitChanged({ roster: [{ ...ROSTER[1], ...overrides }], daemonReachable: true });
+    action.click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.calls.verbs, [], 'stale transcript must not reach IPC');
+    assert.deepEqual(h.calls.jsonl, []);
+    assert.match(h.document.querySelector('.app-notice-message')?.textContent || '', /transcript is not available/i);
+  });
+}
+
+for (const openBeforePending of [false, true]) {
+  test('ended notice respects a pending verb, opened before pending=' + openBeforePending, async t => {
+    const h = setup(); t.after(() => h.destroy());
+    h.setSnapshot({ roster: [ROSTER[1]], daemonReachable: true });
+    await h.window.showAgentsView();
+    if (openBeforePending) dblclick(h, h.document.querySelector('.agents-row'));
+    let release;
+    h.window.api.bgAgentVerb = () => new Promise(resolve => { release = resolve; });
+    const pending = h.window.runAgentVerb('respawn', ROSTER[1]);
+    try {
+      if (openBeforePending) {
+        h.document.querySelector('.app-notice-action').click();
+        await new Promise(resolve => setImmediate(resolve));
+        assert.match(h.document.querySelector('.app-notice-message')?.textContent || '', /action is already in progress/i,
+          'pending refusal must stay visible');
+      } else {
+        dblclick(h, h.document.querySelector('.agents-row'));
+        assert.deepEqual([...h.document.querySelectorAll('.app-notice-action')].map(b => b.textContent), ['Open transcript']);
+      }
+    } finally {
+      release({ ok: true });
+      await pending;
+    }
+  });
+}
+
+for (const verb of ['respawn', 'transcript']) {
+  test('ended notice displays a backend ' + verb + ' refusal after selection changes', async t => {
+    const h = setup(); t.after(() => h.destroy());
+    h.setSnapshot({ roster: [ROSTER[1], ROSTER[0]], daemonReachable: true });
+    await h.window.showAgentsView();
+    dblclick(h, h.document.querySelector('[data-key="bg:bbbbbbbb"]'));
+    h.document.querySelector('[data-key="bg:aaaaaaaa"]').click();
+    h.window.api.bgAgentVerb = async () => ({ ok: false, error: 'Job changed; refresh and try again.' });
+    const label = verb === 'respawn' ? 'Respawn' : 'Open transcript';
+    [...h.document.querySelectorAll('.app-notice-action')].find(b => b.textContent === label).click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(h.document.querySelector('.app-notice-message')?.textContent || '', /Job changed; refresh and try again/,
+      'backend refusal must be visible outside the selected detail pane');
+  });
+}
+
+test('double clicking another ended job replaces the visible notice and its target', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  const other = { ...ROSTER[1], id: 'cccccccc', sessionId: 's-c' };
+  h.setSnapshot({ roster: [ROSTER[1], other], daemonReachable: true });
+  await h.window.showAgentsView();
+  dblclick(h, h.document.querySelector('[data-key="bg:bbbbbbbb"]'));
+  const oldAction = h.document.querySelector('.app-notice-action');
+  dblclick(h, h.document.querySelector('[data-key="bg:cccccccc"]'));
+  assert.equal(h.document.querySelectorAll('.app-notice').length, 1, 'ended notices replace, never stack');
+  oldAction.click();
+  assert.deepEqual(h.calls.verbs, [], 'detached notice cannot dispatch');
+  h.document.querySelector('.app-notice-action').click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(h.calls.verbs, [['respawn', other.id]]);
+});

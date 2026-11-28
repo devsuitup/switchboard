@@ -91,20 +91,26 @@ through this composition and detach the pinned attachment only after death.
 The Agents row double-click handler keeps the existing attach path for hosted
 jobs. An unhosted background job in stopped, done or failed state instead shows
 `This job has ended.` through `showAppNotice`, with Respawn and Open transcript
-actions. Respawn follows `agentVerbAvailability` and the detail control’s pending
-state; both actions call `runAgentVerb` for the clicked entry, even if selection
+actions only when available. Respawn follows `agentVerbAvailability` and excludes
+pending/in-flight verbs. Open transcript requires a sessionId and
+`transcriptAvailable !== false`, like the detail pane. With neither action,
+the notice says the job has ended and its transcript is not available yet.
+`runEndedAgentVerb` resolves the current roster entry by key on each action,
+rechecks availability and pending/in-flight state, then calls `runAgentVerb`.
+Local and backend refusals appear in the same notice, including after selection
 changes. Main-process respawn guards and transcript resolution stay authoritative.
-The existing availability predicate does not require a sessionId for Respawn;
-this notice preserves that rule. Open transcript retains the existing transcript
-availability guard. Unknown unhosted outcomes do not claim the job has ended.
-Single clicks still only select.
+Respawn still does not require a sessionId. Unknown unhosted working/blocked/running
+rows do nothing on double click. Single clicks still only select.
 
 `showAppNotice` accepts multiple action buttons; its legacy single-action API
 is unchanged. It fits this short actionable notice without the radio choices
 and extra confirmation step of `appChoose`. `test/dom-agents-view.test.js` loads
 the real notice helper and Agents source, stubbing IPC, terminal opening and the
 read-only viewer boundary. It covers stopped/done-dead/failed, both action routes,
-selection changes, unavailable Respawn and hosted done attaching normally.
+selection changes, unavailable actions, stale roster/pending state, backend refusals,
+notice replacement and hosted done attaching normally. Multi-action notice rebuilds
+restore focus by button class and label, keeping Open transcript focused instead
+of selecting the first action; its paused expiry is preserved.
 
 ## Key files
 
