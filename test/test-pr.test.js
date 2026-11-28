@@ -586,7 +586,7 @@ for (const value of ['0', '', undefined, '1']) {
         launchedHome = options.env.HOME;
         assert.notEqual(launchedHome, setup.home);
         assert.equal(options.env.USERPROFILE, launchedHome);
-        assert.equal(options.env.PATH, enabled ? originalPath : path.join(launchedHome, 'bin') + path.delimiter + originalPath);
+        assert.equal(options.env.PATH, path.join(launchedHome, 'bin') + path.delimiter + originalPath);
         for (const key of ['Path', 'ORIGINAL_PATH', 'original_path', 'CLAUDE_CONFIG_DIR', 'claudeOther', 'GIT_DIR', 'git_work_tree']) {
           assert.equal(options.env[key], undefined, key);
         }
@@ -855,7 +855,7 @@ for (const allowClaude of ['0', '1']) {
         for (const key of [...names, ...proxyKeys]) assert.equal(Object.hasOwn(launchEnv, key), false, key);
         for (const [key, value] of Object.entries(runtime)) assert.equal(launchEnv[key], value, key);
         for (const key of ['PR', 'ISOLATED', 'ALLOW_CLAUDE', 'DEBUG_PORT']) assert.equal(launchEnv[key], env[key], key);
-        assert.equal(launchEnv.PATH, allowClaude === '1' ? env.PATH : path.join(launchEnv.HOME, 'bin') + path.delimiter + env.PATH);
+        assert.equal(launchEnv.PATH, path.join(launchEnv.HOME, 'bin') + path.delimiter + env.PATH);
         for (const key of ['HOME', 'USERPROFILE']) assert.equal(launchEnv[key], launchEnv.HOME, key);
         for (const key of ['APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
           'SWITCHBOARD_DATA_DIR', 'SWITCHBOARD_TRIGGERS_DIR', 'GIT_CONFIG_GLOBAL']) {
@@ -896,7 +896,7 @@ for (const allowClaude of [false, true]) {
   });
 }
 
-test('enabled isolated mode resolves the original PATH command without a stub', (t) => {
+test('enabled isolated mode resolves the original PATH command without a Claude stub', (t) => {
   const root = temp(t);
   const fallback = path.join(root, 'original-tools');
   fs.mkdirSync(fallback);
@@ -906,7 +906,7 @@ test('enabled isolated mode resolves the original PATH command without a stub', 
   const originalPath = env.PATH;
   const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude: true, tempHome: root,
     env: { ...env, ORIGINAL_PATH: 'must-not-be-used' } });
-  assert.equal(launch.env.PATH, originalPath);
+  assert.equal(launch.env.PATH, path.join(root, 'bin') + path.delimiter + originalPath);
   const result = resolveFixtureCommand(root, launch.env);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), 'original command');
@@ -924,7 +924,7 @@ for (const platform of ['win32', 'linux', 'darwin']) {
         assert.deepEqual(Object.keys(launch.env).filter(key => key.toUpperCase() === 'PATH'),
           platform === 'win32' ? ['PATH'] : ['Path', 'path', 'PATH']);
         for (const key of ['Path', 'path']) assert.equal(launch.env[key], platform === 'win32' ? undefined : env[key], key);
-        assert.equal(launch.env.PATH, isolated && !allowClaude
+        assert.equal(launch.env.PATH, isolated
           ? path.join(root, 'bin') + path.delimiter + env.PATH : env.PATH);
         assert.equal(launch.env.KEEP_ME, 'ok');
         assert.deepEqual(env, { Path: 'inherited-tools', path: 'lowercase-tools', PATH: 'preferred-tools', KEEP_ME: 'ok' });
@@ -932,7 +932,7 @@ for (const platform of ['win32', 'linux', 'darwin']) {
         const aliases = { path: 'lowercase-tools', Path: 'inherited-tools' };
         const withoutExact = tooling().buildLaunch({ ...options, env: aliases });
         const originalPath = platform === 'win32' ? aliases.Path : isolated ? '' : undefined;
-        assert.equal(withoutExact.env.PATH, isolated && !allowClaude
+        assert.equal(withoutExact.env.PATH, isolated
           ? path.join(root, 'bin') + path.delimiter + originalPath : originalPath);
         for (const key of ['Path', 'path']) assert.equal(withoutExact.env[key], platform === 'win32' ? undefined : aliases[key], key);
       });
@@ -954,7 +954,7 @@ test('mixed-case inherited PATH resolves only the fake command from exact PATH',
   const launch = tooling().buildLaunch({ pr: '122', isolated: true, allowClaude: true, tempHome: root, platform: 'win32',
     env: { Path: shellEnv(decoy).PATH, ...safeEnv } });
   assert.deepEqual(Object.keys(launch.env).filter(key => key.toUpperCase() === 'PATH'), ['PATH']);
-  assert.equal(launch.env.PATH, safeEnv.PATH);
+  assert.equal(launch.env.PATH, path.join(root, 'bin') + path.delimiter + safeEnv.PATH);
   const result = resolveFixtureCommand(root, launch.env);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), 'fake command');

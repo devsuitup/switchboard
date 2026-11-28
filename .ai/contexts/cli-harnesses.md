@@ -1,5 +1,32 @@
 # CLI harness port
 
+## Isolated developer launchers (#1314)
+
+`scripts/launcher-env.js` owns `buildLaunch` for `scripts/test-pr.js`,
+`isolatedEnv` for `e2e/fixtures.js`, and test-pr's `writeRefusingStubs`.
+It has no Electron or Playwright dependency, so the environment boundary can
+be tested with plain `require` without executing either launcher.
+
+Both isolated modes set `CODEX_HOME` to `<temporary HOME>/.codex` and drop
+inherited spellings case-insensitively. The default test-pr mode keeps the
+user's Codex home. The audit of `harnesses/` and `src/` found no further
+harness-state override: `CODEX_HOME` also controls Codex usage credentials and
+full-read roots; `SWITCHBOARD_DATA_DIR` and `SWITCHBOARD_TRIGGERS_DIR` already
+point inside the disposable home. Claude paths derive from that home, and
+`CLAUDE*` overrides are dropped. `XDG_RUNTIME_DIR` selects a managed-browser
+socket location, not a harness history root, and stays available to desktop
+runtime services.
+
+Test-pr installs refusing Codex stubs (shell, cmd, PowerShell) in its first
+PATH entry. `ALLOW_CLAUDE=1` omits only the Claude stub, keeping Codex refused
+and the temporary home isolation intact. E2E fixtures do not install stubs.
+
+`test/launcher-env.test.js` covers both builders, inherited/unset and mixed-case
+Codex homes, default-mode preservation, and stub lookup with both Claude modes.
+This is a unit boundary: live launchers, Electron and Playwright remain CI
+validation, not part of this local proof. See `docs/testing-a-pr.md` and
+`docs/e2e.md`. Developer tooling only: no-changelog.
+
 ## Custom launch arguments (#1202)
 
 `SETTING_DEFAULTS` owns empty `customArgs` and `codexCustomArgs`, and exports
