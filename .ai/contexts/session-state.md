@@ -475,13 +475,22 @@ PTY is here, so it cannot answer this; unknown refuses). After the scan it
 checks the session object is still the same and runs every check again, then
 records the id in its `restarted` set and calls `stopLocalSession`, in the same
 tick (finding 2). Input invalidates the attempt even when the composer is
-empty again (PR #1319 review r2): `handleTerminalInput`
-(`src/main/terminals/terminal-input.js`) bumps `session.inputSeq` on every
-chunk written to the PTY, the attempt captures it before the scan and refuses
-`input-during-attempt` if it moved, since a typed and submitted prompt
-leaves `pending` at 0 and its `busy` may not have reached the descriptor cache
-yet. Before the scan, `NO_CLI_RESTART_QUIET_MS` (10 s) refuses `recent-input`
-when the composer's `lastInputAt` is that recent: a submitted prompt reaches
+empty again (PR #1319 reviews r2 and r3): `trackPtyWrites`
+(`src/main/terminals/pty-ops.js`), installed by `wireSessionPty` on every
+session PTY, local and remote attach, wraps the PTY object's own `write`, so
+every byte that reaches it bumps `session.inputSeq` and sets
+`session.lastPtyInputAt`: keystrokes, paste and drop (`terminal-input` →
+`handleTerminalInput` → `writePty`), the /bg handoff (`writePty`), trigger
+delivery (`createLocalSessionHandle(session.pty)` and `entry.handle`, which
+call the same object), detach's `\x1a` and a plain terminal's typed fallback.
+The attempt holds the tab input lock (`tryAcquireTabInput(session)`, the one
+trigger delivery and /bg take) from before the scan until after the stop, and
+refuses `input-locked` when someone else holds it; it captures `inputSeq`
+before the scan and refuses `input-during-attempt` if it moved, since a typed
+and submitted prompt leaves `pending` at 0 and its `busy` may not have reached
+the descriptor cache yet. Before and again after the scan,
+`NO_CLI_RESTART_QUIET_MS` (10 s) refuses `recent-input` when the newer of the
+composer's `lastInputAt` and `lastPtyInputAt` is that recent: a submitted prompt reaches
 the descriptor as `busy` and the transcript as an open turn within a few
 seconds, and 10 s covers that with margin while costing nothing to a CLI that
 never connected, whose user is not typing into it. A missing descriptor does not refuse: a CLI hung before its
