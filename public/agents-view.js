@@ -804,14 +804,16 @@ function initAgentsView() {
       else if (entry.kind === 'background' && !agentJobIsLive(entry) && ['stopped', 'done', 'failed'].includes(entry.state)) {
         const key = agentsEntryKey(entry);
         const actions = [];
-        if (availability.respawn && !agentsPendingVerbs.has(key) && !agentsInFlightVerbs.has(key)) {
+        const busy = agentsPendingVerbs.has(key) || agentsInFlightVerbs.has(key);
+        if (availability.respawn && !busy) {
           actions.push({ label: 'Respawn', onAction: () => runEndedAgentVerb('respawn', key) });
         }
-        if (availability.transcript) {
+        if (availability.transcript && !busy) {
           actions.push({ label: 'Open transcript', onAction: () => runEndedAgentVerb('transcript', key) });
         }
-        showAppNotice({ id: 'agents-ended-job', message: actions.length
-          ? 'This job has ended.' : 'This job has ended. Its transcript is not available yet.', actions });
+        showAppNotice({ id: 'agents-ended-job', message: actions.length ? 'This job has ended.'
+          : busy ? 'This job has ended. An action is already in progress for it.'
+            : 'This job has ended. Its transcript is not available yet.', actions });
       }
     });
     viewer.addEventListener('keydown', (e) => {

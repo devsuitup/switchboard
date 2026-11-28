@@ -1824,7 +1824,8 @@ for (const openBeforePending of [false, true]) {
           'pending refusal must stay visible');
       } else {
         dblclick(h, h.document.querySelector('.agents-row'));
-        assert.deepEqual([...h.document.querySelectorAll('.app-notice-action')].map(b => b.textContent), ['Open transcript']);
+        assert.deepEqual([...h.document.querySelectorAll('.app-notice-action')].map(b => b.textContent), []);
+        assert.match(h.document.querySelector('.app-notice-message')?.textContent || '', /action is already in progress/i);
       }
     } finally {
       release({ ok: true });

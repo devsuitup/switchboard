@@ -218,7 +218,9 @@ function showAppNotice(options) {
     notice.addEventListener('mouseleave', () => { hovered = false; resume(); });
     resume();
   }
-  if (focusedButton) [...notice.querySelectorAll('button')].find(button =>
-    button.className === focusedButton.className && button.textContent === focusedButton.label)?.focus();
+  if (focusedButton) {
+    const buttons = [...notice.querySelectorAll('button')].filter(button => button.className === focusedButton.className);
+    (buttons.find(button => button.textContent === focusedButton.label) || buttons[0])?.focus();
+  }
   return notice;
 }

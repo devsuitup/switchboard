@@ -314,6 +314,14 @@ test('notices use a bottom-right flex stack and wrap long text within the viewpo
   assert.equal(message.overflowWrap, 'anywhere');
 });
 
+test('re-showing a notice under a new action label keeps keyboard focus on its action', t => {
+  const { window, document } = setup(t);
+  window.showAppNotice({ id: 'restore', message: 'Could not reattach.', actionLabel: 'Respawn', onAction() {} });
+  document.querySelector('.app-notice-action').focus();
+  window.showAppNotice({ id: 'restore', message: 'Respawned, not attached.', actionLabel: 'Attach', onAction() {} });
+  assert.equal(document.activeElement.textContent, 'Attach');
+});
+
 for (const rebuild of ['replacement', 'member removal']) {
   test('rebuilding a multi-action notice preserves the second action focus on ' + rebuild, t => {
     const { window, document } = setup(t);
