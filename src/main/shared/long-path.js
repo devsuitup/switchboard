@@ -55,23 +55,40 @@ async function longPathForms(values, { platform = process.platform, realpath = f
   return forms;
 }
 
-async function settleLongPathForms(readValues, { platform = process.platform, realpath = fs.promises.realpath } = {}) {
+function pruneLongPathForms(forms, values) {
+  if (!forms) return forms;
+  const kept = {};
+  for (const value of values || []) {
+    if (!shortCandidate(value)) continue;
+    const key = formKey(value);
+    if (Object.hasOwn(forms, key)) kept[key] = forms[key];
+  }
+  return kept;
+}
+
+async function eachLimited(items, limit, run) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) await run(items[next++]);
+  }));
+}
+
+async function settleLongPathForms(readValues, { platform = process.platform, realpath = fs.promises.realpath, rounds = 3, concurrency = 4 } = {}) {
   if (platform !== 'win32') return null;
   const forms = {}, tries = new Map();
-  for (;;) {
-    const pending = new Map();
-    for (const value of readValues() || []) {
-      if (!shortCandidate(value)) continue;
-      const key = formKey(value);
-      if (!Object.hasOwn(forms, key) && !pending.has(key) && (tries.get(key) || 0) < 2) pending.set(key, value);
-    }
-    if (!pending.size) return forms;
-    await Promise.all([...pending].map(async ([key, value]) => {
+  for (let round = 0; round < rounds; round++) {
+    const values = readValues() || [];
+    const current = new Map();
+    for (const value of values) if (shortCandidate(value) && !current.has(formKey(value))) current.set(formKey(value), value);
+    const pending = [...current].filter(([key]) => !Object.hasOwn(forms, key) && (tries.get(key) || 0) < 2);
+    if (!pending.length) return pruneLongPathForms(forms, values);
+    await eachLimited(pending, concurrency, async ([key, value]) => {
       tries.set(key, (tries.get(key) || 0) + 1);
       const long = await longForm(value, realpath);
       if (long !== null) forms[key] = long;
-    }));
+    });
   }
+  return pruneLongPathForms(forms, readValues() || []);
 }
 
 function longPathLookup(forms, fallback = null) {
@@ -83,4 +100,4 @@ function longPathLookup(forms, fallback = null) {
   };
 }
 
-module.exports = { createLongPathResolver, longPathForms, settleLongPathForms, longPathLookup };
+module.exports = { createLongPathResolver, longPathForms, settleLongPathForms, pruneLongPathForms, longPathLookup };

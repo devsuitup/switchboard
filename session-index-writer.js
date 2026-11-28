@@ -13,7 +13,7 @@ const { createWriterWorkerClient } = require('./session-index-writer-client');
 const { createCacheEffects } = require('./cache-effects');
 const { projectArchiveWorkflows, archiveProjectIdentity } = require('./src/main/projects/project-archive-workflow');
 const { worktreeParentPath } = require('./public/worktree-nesting');
-const { settleLongPathForms, longPathLookup } = require('./src/main/shared/long-path');
+const { settleLongPathForms, pruneLongPathForms, longPathLookup } = require('./src/main/shared/long-path');
 const { stable } = require('./src/main/projects/project-delete-identity');
 const { SESSION_CONTENT_INDEX_VERSION, fullIndexConfig, rowWitness, folderReadWitness, observation, startupFolderPath, startupTouchedIds, startupInventoryMatches } = require('./src/main/session-index/full-read-state');
 const { randomUUID } = require('node:crypto');
@@ -410,7 +410,9 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       await ready;
       let kept;
       for (let attempt = 0; ; attempt++) {
-        const longPath = longPathLookup(await settleLongPathForms(() => archiveLongPathCandidates(projects, backend.getSetting('global') || {})));
+        const candidates = () => archiveLongPathCandidates(projects, backend.getSetting('global') || {});
+        const settled = await settleLongPathForms(candidates);
+        const longPath = longPathLookup(pruneLongPathForms(settled, candidates()));
         const archived = backend.getSetting('archivedProjects') || {};
         const snapshot = { archivedProjects: archived, hiddenProjects: (backend.getSetting('global') || {}).hiddenProjects || [],
           hiddenProjectScopes: (backend.getSetting('global') || {}).hiddenProjectScopes || {},

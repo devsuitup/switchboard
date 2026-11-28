@@ -98,3 +98,38 @@ test('GIVEN a non-Windows platform WHEN forms are settled THEN nothing is read o
   assert.equal(await settleLongPathForms(() => { reads++; return ['/x~1']; }, { platform: 'linux', realpath: async () => '/y' }), null);
   assert.equal(reads, 0);
 });
+
+test('GIVEN each resolution makes a new short path appear WHEN forms are settled THEN rounds and retained forms stay bounded', async () => {
+  let n = 0;
+  const calls = [];
+  const forms = await settleLongPathForms(() => [`C:/P${n}~1`], { platform: 'win32', realpath: async value => {
+    calls.push(value);
+    if (n < 256) n++;
+    return value.replace('~1', 'long');
+  } });
+  assert.ok(calls.length <= 3, `no pass bound: ${calls.length} resolutions`);
+  assert.ok(Object.keys(forms).length <= 1, `retained ${Object.keys(forms).length} forms for a single-element snapshot`);
+  assert.ok(Object.keys(forms).every(key => key === `c:/p${n}~1`), 'only paths of the last read may be retained');
+});
+
+test('GIVEN many short paths WHEN forms are settled THEN realpath concurrency is capped', async () => {
+  const values = Array.from({ length: 20 }, (_, i) => `C:/Q${i}~1`);
+  let inFlight = 0, peak = 0;
+  const forms = await settleLongPathForms(() => values, { platform: 'win32', realpath: async value => {
+    inFlight++; peak = Math.max(peak, inFlight);
+    await new Promise(resolve => setImmediate(resolve));
+    inFlight--;
+    return value.replace('~1', 'long');
+  } });
+  assert.equal(Object.keys(forms).length, 20);
+  assert.ok(peak <= 4, `peak realpath concurrency ${peak}`);
+});
+
+test('GIVEN a path that left the candidates during settling WHEN settling stops early THEN its form is not retained', async () => {
+  let values = ['C:/Gone~1'];
+  const forms = await settleLongPathForms(() => values, { platform: 'win32', realpath: async value => {
+    values = ['C:/Plain'];
+    return value.replace('~1', 'long');
+  } });
+  assert.deepEqual(forms, {}, 'a vanished path must not keep its form');
+});

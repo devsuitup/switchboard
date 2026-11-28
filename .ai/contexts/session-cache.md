@@ -3274,17 +3274,22 @@ Where realpath runs, and never on main's event loop:
   (`session-index-writer.js`), at the start of each of its retry attempts,
   awaits `settleLongPathForms` (`fs.promises.realpath`, libuv threadpool) over
   the local hide entries, each local project path, its worktree parent and its
-  sessions' `cwd`/`recordedCwd`. Settling works in rounds: each round rereads
-  the current settings, resolves every candidate not yet resolved, and retries
-  once, in the next round, a candidate whose resolution failed; it returns only
-  from a round with nothing left to resolve, which needs no await. The settings
-  snapshot that attempt filters is therefore read in the same synchronous span
-  as the last candidate list: a hide entry added during an await is resolved
-  before filtering, and an alias that appears while another resolution is
-  pending is caught by its retry. An alias that appears after its retry shows
-  until the next pass. The synchronous pass `archive.applyAndPersistArchived`
-  gets a lookup over that map (`longPathLookup`), which never touches the
-  filesystem; a path missing from the map keeps the plain comparison.
+  sessions' `cwd`/`recordedCwd`. Settling works in at most three rounds per
+  attempt: each round rereads the current settings and resolves every
+  candidate not yet resolved with at most four `realpath` calls in flight, and retries once,
+  in the next round, a candidate whose resolution failed. It stops early at a
+  round with nothing left to resolve, and returns only the forms of paths in
+  its last read. After the await, the writer reads the
+  candidates once more, keeps only the forms of paths in that read, and runs
+  the synchronous filter; there is no await between that final read and the
+  filter, which reads the settings itself in the same turn. So a hide entry
+  added while an earlier round was pending is resolved in a later round, and an
+  alias that appears while another resolution is pending is caught by its
+  retry, within the three rounds. A path still unresolved after the last round,
+  or first seen in the final read, compares as typed and shows until the next
+  pass. The synchronous pass `archive.applyAndPersistArchived` gets a lookup
+  over the kept forms (`longPathLookup`), which never touches the filesystem; a
+  path missing from them keeps the plain comparison.
   `delete-worktree` (`main.js`) awaits `longPathForms` before Git removes the
   directory, over the path being deleted and every local hide entry containing
   `~` (not only those under the deleted path's parent, whose spelling may
@@ -3298,11 +3303,13 @@ Where realpath runs, and never on main's event loop:
   there.
 
 Each resolver or precomputed map lives for one call (one projects request, one
-writer command, one assembly attempt, one deletion): it resolves each distinct
-path once, or twice for a failed resolution during an assembly attempt, needs
-no bound (its size is that call's distinct paths) and is never reused by a
+writer command, one assembly attempt, one deletion) and is never reused by a
 later call, so a folder created or removed between calls is seen by the next
-one. Keys are the spelling with
+one. Within a call it resolves each distinct path once, or twice for a failed
+resolution during an assembly attempt. Its size is bounded by the distinct
+paths of that call; an assembly attempt also caps its rounds at three and
+retains only forms of paths in its latest candidate read, so settings that keep
+gaining new short paths cannot extend it. Keys are the spelling with
 separators, trailing slash and case normalized. Only a path containing `~` is
 resolved. A missing path is resolved through its deepest existing ancestor
 that still contains `~`, keeping the missing tail as spelled, so a removed
