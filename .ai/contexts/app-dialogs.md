@@ -253,12 +253,12 @@ The visible body names the session with `sessionActionLabel` (name or 8-characte
 id), including when a handoff completion replaces the continuation notice.
 The full session description, path and backend reason remain in collapsed
 Details. Respawn failures instead start "Respawn failed." or "The respawned
-job did not appear.", followed by "Check it in the Agents view." and the
+job did not appear.", followed by "Check the job in the Agents view." and the
 session label. The original diagnostic arguments still build `logText`.
 Automatic restore keeps its existing wording.
 
 Detach Undo notices put progress, success or refusal alone on the first line.
-Failures put the next step on line 2, then the session description or remote
+Failures put the next step, or why there is none, on line 2, then the session description or remote
 host in the body. Progress and success keep the session description on line 2.
 Remote reattach refusal supplies the original text explicitly as `logText`.
 

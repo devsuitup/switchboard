@@ -1916,7 +1916,7 @@ async function detachSession(sessionOrId, btn, retryTargets) {
           }
           if (reattach.entry && openSessions.get(id) === reattach.entry && !reattach.entry.closed) {
             showAppNotice({ id: noticeId, kind: 'error', sessions: [reattach.session],
-              message: `Reattaching is still waiting for the detach to finish.\nOpen the session from the sidebar to retry.\n${sessionActionDescription(reattach.session)}`, logText: `The session is still detaching from ${sessionActionDescription(reattach.session, { log: true })}. Open it from the sidebar to retry.` });
+              message: `The session is still detaching.\nOpen it from the sidebar to retry.\n${sessionActionDescription(reattach.session)}`, logText: `The session is still detaching from ${sessionActionDescription(reattach.session, { log: true })}. Open it from the sidebar to retry.` });
             return;
           }
           let check;
@@ -3143,7 +3143,7 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
         }
         if (!current) {
           showSessionActionFailure('Attach background', session, error || `Job ${jobId} was respawned but has no live background descriptor`, 'Check the background session in the Agents view.', undefined,
-            { message: `${error ? 'Respawn failed.' : 'The respawned job did not appear.'}\nCheck it in the Agents view.\nSession: "${sessionActionLabel(session)}".`,
+            { message: `${error ? 'Respawn failed.' : 'The respawned job did not appear.'}\nCheck the job in the Agents view.\nSession: "${sessionActionLabel(session)}".`,
               details: `${sessionActionDescription(session)}\n${error || `Job ${jobId} was respawned but has no live background descriptor`}` });
           return false;
         }

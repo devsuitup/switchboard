@@ -174,10 +174,11 @@ test('Undo with not running reports still detaching when the old entry remains o
   assert.equal(notices[0].dataset.noticeId, noticeId);
   assert.equal(notices[0].getAttribute('role'), 'alert');
   assert.equal(notices[0].querySelector('.app-notice-message').textContent,
-    'Reattaching is still waiting for the detach to finish.\nOpen the session from the sidebar to retry.\n"Background work" (s1) at /project');
+    'The session is still detaching.\nOpen it from the sidebar to retry.\n"Background work" (s1) at /project');
   assert.match(notices[0].textContent, /open.*sidebar.*retry/i);
   assert.equal(notices[0].querySelector('.app-notice-title').textContent,
-    'Reattaching is still waiting for the detach to finish.');
+    'The session is still detaching.');
+  assert.doesNotMatch(notices[0].querySelector('.app-notice-title').textContent, /Reattaching|Reattached to/);
 });
 
 for (const jobId of [null, undefined, '', 'invalid', 1234]) {
@@ -255,10 +256,11 @@ test('Undo bounds an unresolved detach wait and reports still detaching without 
   assert.equal(notices[0].dataset.noticeId, noticeId);
   assert.equal(notices[0].getAttribute('role'), 'alert');
   assert.equal(notices[0].querySelector('.app-notice-message').textContent,
-    'Reattaching is still waiting for the detach to finish.\nOpen the session from the sidebar to retry.\n"Background work" (s1) at /project');
+    'The session is still detaching.\nOpen it from the sidebar to retry.\n"Background work" (s1) at /project');
   assert.match(notices[0].textContent, /open.*sidebar.*retry/i);
   assert.equal(notices[0].querySelector('.app-notice-title').textContent,
-    'Reattaching is still waiting for the detach to finish.');
+    'The session is still detaching.');
+  assert.doesNotMatch(notices[0].querySelector('.app-notice-title').textContent, /Reattaching|Reattached to/);
 });
 
 test('Undo replaces progress with its own error when reopening throws', async t => {

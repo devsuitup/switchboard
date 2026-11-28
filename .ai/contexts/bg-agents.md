@@ -1907,7 +1907,7 @@ Only a valid captured job id offers Undo; other detached tabs show an
 informational notice. After Undo, that tab's notice starts "Reattaching to the
 session…" while waiting and becomes "Reattached to the session." on success.
 Progress and success put the session description on line 2. Failures put the
-outcome alone on line 1 and the next step on line 2, with the session
+outcome alone on line 1 and the next step, or why there is none, on line 2, with the session
 description or host below. Diagnostic text stays in the body or Details and
 in the notice log.
 Initial attach and background handoff both retain the actual attach cwd on

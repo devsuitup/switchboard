@@ -66,7 +66,7 @@ test('1023 failed respawn does not claim that the job restarted', async t => {
   h.ctx.api.bgAgentVerb = async () => ({ ok: false, error: 'job 1234abcd refused' });
   assert.equal(await h.app.openSession(session), false);
   noticeText(h.dom.window.document,
-    'Respawn failed.\nCheck it in the Agents view.\nSession: "Work".',
+    'Respawn failed.\nCheck the job in the Agents view.\nSession: "Work".',
     '"Work" (old) at ' + h.root + '\njob 1234abcd refused');
   assert.deepEqual(h.spawned, []);
 });
@@ -85,7 +85,7 @@ for (const failure of ['missing job', 'throw']) {
     assert.equal(await h.app.openSession(session), false);
     noticeText(h.dom.window.document,
       (failure === 'throw' ? 'Respawn failed.' : 'The respawned job did not appear.')
-        + '\nCheck it in the Agents view.\nSession: "Work".',
+        + '\nCheck the job in the Agents view.\nSession: "Work".',
       '"Work" (old) at ' + h.root + '\n' + (failure === 'throw' ? 'respawn unavailable'
         : 'Job 1234abcd was respawned but has no live background descriptor'));
     assert.deepEqual(h.spawned, []);
