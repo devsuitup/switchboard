@@ -130,16 +130,30 @@ mode starts nothing by itself and the entry has no row to click.
 
 ## Closing the app
 
+The exit question names what will stop, such as **Stop 2 sessions and exit?**
+or **Stop 1 session and close Switchboard?**.
+Choose **Stop and exit** to end all listed local processes, whether idle or
+working, including commands running in them. Conversations are kept for resume.
+**Cancel** keeps Switchboard open. The labels follow the action you requested:
+exit, quit, close or update.
+
 Quit, Restart to update and window close can move eligible conversations to
-the background before stopping the remaining local work. Switchboard waits
+the background before stopping the remaining local work. The dialog lists
+eligible sessions under **Move to background** and the rest under **Stops after
+moving**, including plain terminals and panel shells. The button reads **Move
+to background and exit**, or **Move to background, stop the rest and exit**
+when other local work will stop.
+Switchboard waits
 up to ten minutes for a working conversation to finish its turn, with Cancel
-available throughout. Confirmed moves keep their tab positions and reopen as
-attach tabs at the next start; no attach starts during a successful exit.
+available throughout. Confirmed moves keep their tab positions and are saved
+for the next start, following the startup restore setting; no attach starts
+during a successful exit.
 
 This choice checks that the saved set was read and that the final write
 succeeded, with a two-second bound. A failed move or save keeps Switchboard
-open, stops nothing and reattaches the confirmed moves. A failed recovery
-attach remains saved for retry from the sidebar. A new process appearing
+open, stops nothing and reattaches the confirmed moves. **Switchboard stayed
+open.** gives the next step, keeps session names visible and puts failure
+reasons under **Details**. A failed recovery attach remains saved for retry from the sidebar. A new process appearing
 before commit renews consent without attaching the already moved sessions.
 External OS exits flush unchecked and do not recover tabs. Confirmed jobs are
 marked; an unresolved handoff is not saved as confirmed and is found through

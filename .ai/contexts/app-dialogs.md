@@ -236,8 +236,12 @@ preparation or in the Respawn that started it, passed as `afterRespawn`) is
 only while it holds an error; with no error, the sole member with an action
 keeps it. `Restore:ended` is one info line for jobs dropped from the working
 set at automatic restore ("N ended background jobs were removed from your
-open sessions."), with each job under Details. The exit-background failure
-names the count in its title and each session's reason under Details.
+open sessions."), with each job under Details. Exit progress starts with
+"Moving sessions to the background.", followed by the wait instruction and
+confirmed count. Exit recovery starts with "Switchboard stayed open.", then
+the next step and counts. Session names stay in the visible body; raw errors
+and per-session reasons remain under Details. Its `logText` uses short session
+IDs, including when a save error replaces the per-session details.
 
 Tests: `test/dom-app-notices.test.js` (`1023 …`),
 `test/restore-live-elsewhere.test.js` (`1023 …`), `test/bg-agents-ipc.test.js`

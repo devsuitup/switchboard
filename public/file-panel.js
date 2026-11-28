@@ -986,15 +986,16 @@ async function confirmSessionExit(detail, changed) {
     return line;
   };
   if (moving.length) {
-    message.push('Moves to the background:', ...moving.map(describe));
-    if (stopping.length) message.push('Stops:', ...stopping.map(describe));
+    message.push('Move to background: ' + words(moving), ...moving.map(describe));
+    if (stopping.length) message.push('Stops after moving: ' + words(stopping), ...stopping.map(describe));
   } else {
     message.push(...snapshot.rows.map(describe));
   }
-  message.push(sessions > 0 ? 'Their processes end, idle or working, with anything running in them. Each conversation is kept and can be resumed.' : 'Their shells end, with anything running in them.');
+  const pronoun = sessions + plain + panels > 1 ? 'them' : 'it';
+  message.push(sessions > 0 ? 'Stop and ' + label + ' ends ' + total + ', idle or working, and anything running in ' + pronoun + '. Conversations are kept and can be resumed.' : 'Stop and ' + label + ' ends ' + total + ' and anything running in ' + pronoun + '.');
   if (attached) message.push(count(attached, 'session') + ' attached here ' + (attached === 1 ? 'is' : 'are') + ' detached and ' + (attached === 1 ? 'keeps' : 'keep') + ' running in the background.');
   for (const [alias, n] of Object.entries(snapshot.remote)) if (n) message.push(count(n, 'session') + ' from ' + alias + (n === 1 ? ' keeps' : ' keep') + ' running on ' + alias + '.');
-  if (moving.length) message.push('Moved sessions keep running in the background; Switchboard reattaches them at the next start.');
+  if (moving.length) message.push("Moved sessions keep running in the background. They can reopen at the next start according to your startup restore setting, unless it is set to Don't restore.");
   if (mac && action === 'close') message.push('Switchboard stays in the Dock.');
   const listedRows = moving.length ? [...moving, ...stopping] : snapshot.rows;
   const firstRow = snapshot.unknown ? 1 : 0;
@@ -1008,7 +1009,7 @@ async function confirmSessionExit(detail, changed) {
   const result = await showChoiceDialog({ title: 'Stop ' + total + ' and ' + verb + '?', message, messageParts,
     sessions: [...rowParts.values()].flat(Infinity).filter(part => part?.session).map(part => part.session),
     confirmLabel: 'Stop and ' + label, initialFocus: 'cancel', danger: true,
-    secondaryAction: moving.length ? { id: 'background', label: 'Move ' + words(moving) + ' to background' + (stopping.length ? ', stop ' + words(stopping) + ', and ' : ' and ') + label, danger: stopping.length > 0 } : null,
+    secondaryAction: moving.length ? { id: 'background', label: 'Move to background' + (stopping.length ? ', stop the rest and ' : ' and ') + label, danger: stopping.length > 0 } : null,
     returnFocus: document.activeElement, replace: true, closeWith: changed && changed.then(() => null) });
   return result === null ? false : result.action === 'background' ? 'background' : 'stop';
 }

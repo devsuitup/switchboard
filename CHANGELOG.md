@@ -9,6 +9,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Changed
 
+- Exit dialogs name what stops or moves to the background, explain how startup restore applies, and put the next step before failure details. (#1023)
 - Attach and resume messages put the outcome and next step first, with session identifiers, paths and failure details below. (#1023)
 - Send to background uses shorter confirmations and refusals, with session details kept out of the first line. (#1023)
 - Notices are easier to read: each one shows its outcome on the first line, colors and an icon tell errors from information, technical details sit behind a collapsed **Details**, a line along the bottom shows when it will go away, and at most three show at once, with older ones behind **+N more**. (#1023)
