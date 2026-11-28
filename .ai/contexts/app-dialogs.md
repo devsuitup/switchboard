@@ -243,6 +243,37 @@ Tests: `test/dom-app-notices.test.js` (`1023 …`),
 `test/restore-live-elsewhere.test.js` (`1023 …`), `test/bg-agents-ipc.test.js`
 (`1023 …`).
 
+## Attach and resume wording (#1023, part 1)
+
+Attach failures in `attachBackgroundContinuation`, both completion paths of
+`sendSessionToBackground`, and interactive `openSessionNow` use the existing
+`showSessionActionFailure` message/details options. The first line says
+"Could not attach to the background session."; the next step is on line 2.
+The visible body names the session with `sessionActionLabel` (name or 8-character
+id), including when a handoff completion replaces the continuation notice.
+The full session description, path and backend reason remain in collapsed
+Details. Respawn failures instead start "Respawn failed." or "The respawned
+job did not appear.", followed by "Check the job in the Agents view." and the
+session label. The original diagnostic arguments still build `logText`.
+Automatic restore keeps its existing wording.
+
+Detach Undo notices put progress, success or refusal alone on the first line.
+Failures put the next step, or why there is none, on line 2, then the session description or remote
+host in the body. Progress and success keep the session description on line 2.
+Remote reattach refusal supplies the original text explicitly as `logText`.
+
+The live-elsewhere question keeps its short "Session running elsewhere" title
+and its existing body, session markers, Resume anyway button, Cancel focus and
+danger flag. The automatic skip (#337) is unchanged. A background refusal
+without a job id starts "Cannot attach to this session.", followed by "Find
+it in the Agents view." on line 2. Its body names the conversation and explains
+that Switchboard cannot identify its background job, without repeating the
+advice. Its original `logText` is retained.
+
+Tests: `test/attach-resume-wording.test.js`, `test/detach-undo.test.js`,
+`test/resume-guard-live.test.js`, `test/send-to-background-renderer.test.js`,
+`test/schedule-live-resume.test.js`.
+
 ## Failures say what to do (#709)
 
 A failure shown to the user says what failed, then what to do, in one short

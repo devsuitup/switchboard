@@ -9,6 +9,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Changed
 
+- Attach and resume messages put the outcome and next step first, with session identifiers, paths and failure details below. (#1023)
 - Send to background uses shorter confirmations and refusals, with session details kept out of the first line. (#1023)
 - Notices are easier to read: each one shows its outcome on the first line, colors and an icon tell errors from information, technical details sit behind a collapsed **Details**, a line along the bottom shows when it will go away, and at most three show at once, with older ones behind **+N more**. (#1023)
 - At startup, background jobs that had stopped are removed from your open sessions and counted in one notice that goes away by itself, instead of a lasting error. A job whose worker is gone gets a notice that goes away by itself and still offers **Respawn**. (#1023)

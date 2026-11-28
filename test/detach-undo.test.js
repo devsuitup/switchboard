@@ -40,7 +40,8 @@ test('P4 an attach tab detaches once without asking and offers Undo', async t =>
   assert.deepEqual(h.calls.stopped, ['s1']);
   assert.equal(h.window.activePtyIds.has('s1'), false);
   assert.ok(h.undo(), 'Detach offers Undo');
-  assert.match(h.undo().closest('.app-notice').textContent, /keeps running/);
+  assert.equal(h.undo().closest('.app-notice').querySelector('.app-notice-message').textContent,
+    'Detached from the session.\nThe background session keeps running.\n"Background work" (s1) at /project');
 });
 
 test('Undo reattaches with the job id and cwd captured before detach even after the entry disappears', async t => {
@@ -125,7 +126,8 @@ test('Undo refuses a background job that ended while the attach client was exiti
   await settle();
   assert.deepEqual(h.calls.opened, [], 'an ended job must not open a tab');
   assert.deepEqual(h.calls.liveChecks, ['s1']);
-  assert.match(h.document.querySelector('#app-notices [role="alert"]').textContent, /background job has ended.*nothing to reattach/i);
+  assert.equal(h.document.querySelector('#app-notices [role="alert"] .app-notice-message').textContent,
+    'The background job has ended.\nThere is nothing to reattach.\n"Background work" (s1) at /project');
   assert.equal(h.undo(), undefined);
 });
 
@@ -171,9 +173,12 @@ test('Undo with not running reports still detaching when the old entry remains o
   assert.equal(notices.length, 1);
   assert.equal(notices[0].dataset.noticeId, noticeId);
   assert.equal(notices[0].getAttribute('role'), 'alert');
-  assert.match(notices[0].textContent, /still detaching/i);
+  assert.equal(notices[0].querySelector('.app-notice-message').textContent,
+    'The session is still detaching.\nOpen it from the sidebar to retry.\n"Background work" (s1) at /project');
   assert.match(notices[0].textContent, /open.*sidebar.*retry/i);
-  assert.doesNotMatch(notices[0].textContent, /Reattaching|Reattached to/);
+  assert.equal(notices[0].querySelector('.app-notice-title').textContent,
+    'The session is still detaching.');
+  assert.doesNotMatch(notices[0].querySelector('.app-notice-title').textContent, /Reattaching|Reattached to/);
 });
 
 for (const jobId of [null, undefined, '', 'invalid', 1234]) {
@@ -198,7 +203,8 @@ test('Undo shows Reattaching while waiting and replaces it with the successful r
   await settle();
   assert.equal(h.undo(), undefined);
   assert.equal(h.document.querySelectorAll('#app-notices .app-notice').length, 1);
-  assert.match(h.document.querySelector('#app-notices [role="status"]').textContent, /Reattaching/);
+  assert.equal(h.document.querySelector('#app-notices [role="status"] .app-notice-message').textContent,
+    'Reattaching to the session…\n"Background work" (s1) at /project');
   assert.deepEqual(h.calls.opened, []);
   h.entry.closed = true;
   h.entry.completeDetach();
@@ -206,7 +212,8 @@ test('Undo shows Reattaching while waiting and replaces it with the successful r
   assert.equal(h.calls.opened.length, 1);
   assert.equal(h.document.querySelectorAll('#app-notices .app-notice').length, 1);
   const notice = h.document.querySelector('#app-notices [role="status"]');
-  assert.match(notice.textContent, /Reattached to/);
+  assert.equal(notice.querySelector('.app-notice-message').textContent,
+    'Reattached to the session.\n"Background work" (s1) at /project');
   assert.doesNotMatch(notice.textContent, /Reattaching/);
 });
 
@@ -234,7 +241,8 @@ test('Undo bounds an unresolved detach wait and reports still detaching without 
   const noticeId = h.undo().closest('.app-notice').dataset.noticeId;
   h.undo().click();
   await settle();
-  assert.match(h.document.querySelector('#app-notices [role="status"]').textContent, /Reattaching/);
+  assert.equal(h.document.querySelector('#app-notices [role="status"] .app-notice-message').textContent,
+    'Reattaching to the session…\n"Background work" (s1) at /project');
   t.mock.timers.tick(2999);
   await settle();
   assert.deepEqual(h.calls.opened, [], 'allow the two-second detach grace plus a margin');
@@ -247,9 +255,12 @@ test('Undo bounds an unresolved detach wait and reports still detaching without 
   assert.equal(notices.length, 1);
   assert.equal(notices[0].dataset.noticeId, noticeId);
   assert.equal(notices[0].getAttribute('role'), 'alert');
-  assert.match(notices[0].textContent, /still detaching/i);
+  assert.equal(notices[0].querySelector('.app-notice-message').textContent,
+    'The session is still detaching.\nOpen it from the sidebar to retry.\n"Background work" (s1) at /project');
   assert.match(notices[0].textContent, /open.*sidebar.*retry/i);
-  assert.doesNotMatch(notices[0].textContent, /Reattaching|Reattached to/);
+  assert.equal(notices[0].querySelector('.app-notice-title').textContent,
+    'The session is still detaching.');
+  assert.doesNotMatch(notices[0].querySelector('.app-notice-title').textContent, /Reattaching|Reattached to/);
 });
 
 test('Undo replaces progress with its own error when reopening throws', async t => {
@@ -262,7 +273,27 @@ test('Undo replaces progress with its own error when reopening throws', async t 
   h.undo().click();
   await settle();
   assert.equal(h.document.querySelectorAll('#app-notices .app-notice').length, 1);
-  assert.match(h.document.querySelector('#app-notices [role="alert"]').textContent, /reattach/i);
+  assert.equal(h.document.querySelector('#app-notices [role="alert"] .app-notice-message').textContent,
+    'Could not reattach to the session.\nOpen the session from the sidebar to retry.\n"Background work" (s1) at /project: attach unavailable.');
   assert.match(h.document.querySelector('#app-notices [role="alert"]').textContent, /attach unavailable/);
   assert.doesNotMatch(h.document.querySelector('#app-notices').textContent, /Reattaching/);
+});
+
+
+test('1023 remote reattach refusal keeps the host below the first line and in the log', async t => {
+  const h = setup(t);
+  const logs = [];
+  h.window.api.logUiNotice = event => logs.push(event);
+  Object.assign(h.session, { remoteAlias: 'vps', remoteAttachable: true });
+  h.window.remoteHostLabel = () => 'Build host';
+  h.window.planSessionDetach = () => ({ targets: [{ sessionId: 's1', remote: true, alias: 'vps' }] });
+  await h.app.detachSession('s1');
+  h.entry.closed = true;
+  h.window.sessionMap.set('s1', { ...h.session, remoteAttachable: false });
+  h.undo().click();
+  await settle();
+  assert.equal(h.document.querySelector('.app-notice-message').textContent,
+    'Cannot reattach to the session.\nOpen it from the sidebar to view its transcript.\nHost: Build host.');
+  assert.deepEqual(h.calls.opened, []);
+  assert.equal(logs.at(-1).text, 'The session is no longer attachable on Build host. Open it from the sidebar to view its transcript.');
 });

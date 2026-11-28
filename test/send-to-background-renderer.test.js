@@ -150,9 +150,14 @@ test('R5: an inactive tab handoff does not steal the active tab', async t => {
 
 test('R6: attach failure explains that the job runs and where to retry', async t => {
   const h = handoff(t);
+  h.ctx.openSessions.get('old').session.name = 'Work';
   h.dom.window.api.openTerminal = async () => ({ ok: false, error: 'attach failed' });
   await h.app.sendSessionToBackground('old');
-  assert.match(h.dom.window.document.querySelector('[role="alert"]').textContent, /Attach background.*attach failed.*sidebar/i);
+  const notice = h.dom.window.document.querySelector('[role="alert"]');
+  assert.equal(notice.querySelector('.app-notice-message').textContent,
+    'Could not attach to the background session.\nOpen it from the sidebar to retry attaching.\n"Work" now runs in the background.');
+  assert.equal(notice.querySelector('.app-notice-details-body').textContent,
+    '"Work" (new) at ' + h.root + '\nattach failed');
   await h.app.persistWorkingSet();
   assert.equal(h.settings().openWorkingSet.find(row => row.sessionId === 'new')?.bg, true);
 });
@@ -499,4 +504,28 @@ test('awaited-answer refusal reaches the notice body without identifiers in the 
   assert.equal(notice.querySelector('.app-notice-body').textContent, 'Answer Claude in the terminal, then try again.');
   assert.deepEqual(h.destroyed, []);
   assert.deepEqual(h.spawned, []);
+});
+
+test('R6 continuation handoff keeps the short failure after the IPC reply', async t => {
+  const h = handoff(t);
+  const entry = h.ctx.openSessions.get('old');
+  entry.session.name = 'Work';
+  const { attachBackgroundContinuation } = loadAppFunctions(h.ctx, { functions: ['attachBackgroundContinuation'] });
+  h.ctx.api.openTerminal = async () => ({ ok: false, error: 'attach failed' });
+  h.ctx.api.sendSessionToBackground = async () => {
+    h.ctx.openSessions.delete('old');
+    entry.session = { ...entry.session, sessionId: 'new' };
+    h.ctx.openSessions.set('new', entry);
+    entry.backgroundAttach = attachBackgroundContinuation(entry, { jobId: '1234abcd' });
+    await entry.backgroundAttach;
+    return { ok: true, sessionId: 'new', jobId: '1234abcd', cwd: '/bg' };
+  };
+  await h.app.sendSessionToBackground('old');
+  const notices = h.dom.window.document.querySelectorAll('[role="alert"]');
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].dataset.noticeId, 'Attach background:local:new');
+  assert.equal(notices[0].querySelector('.app-notice-message').textContent,
+    'Could not attach to the background session.\nOpen it from the sidebar to retry attaching.\n"Work" now runs in the background.');
+  assert.equal(notices[0].querySelector('.app-notice-details-body').textContent,
+    '"Work" (new) at ' + h.root + '\nattach failed');
 });
