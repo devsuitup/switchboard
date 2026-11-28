@@ -86,3 +86,71 @@ test('GIVEN a project archive stopping a session WHEN the session is re-keyed du
   assert.equal(document.querySelector('[data-session-id=old] .session-archive-btn').disabled, false);
   assert.equal(vm.runInContext("archivingSessionIds.has('old')", context), false);
 });
+
+test('GIVEN a project archive awaiting a second stop after the first was refused WHEN the first row is archived again THEN the project cleanup leaves the row archive lock in place', async t => {
+  const { w, document, sidebar, context } = fixture(t);
+  const rows = ['first', 'second'].map(sessionId => ({ sessionId, name: sessionId, summary: sessionId, projectPath: '/repo', modified: new Date().toISOString(), archived: 0 }));
+  const project = { projectPath: '/repo', sessions: rows };
+  const secondStarted = deferred(), secondStopped = deferred(), retryStarted = deferred(), retryStopped = deferred();
+  let firstStops = 0;
+  w.api = new Proxy({}, {
+    get: (_target, method) => method === 'stopSession'
+      ? id => {
+        if (id === 'second') { secondStarted.resolve(); return secondStopped.promise; }
+        if (++firstStops === 1) return Promise.resolve({ ok: false, error: 'Stop refused' });
+        retryStarted.resolve(); return retryStopped.promise;
+      }
+      : () => Promise.resolve(method === 'getProjectArchivePlan' ? { schedules: [] } : (method === 'bgAgentLiveJob' ? { known: true, job: null } : { ok: true })),
+  });
+  w.appConfirm = async () => true;
+  for (const s of rows) { w.sessionMap.set(s.sessionId, s); w.activePtyIds.add(s.sessionId); }
+  w.activeSessionId = 'elsewhere';
+  w.cachedAllProjects = [project];
+  sidebar.renderProjects([project], true);
+  const rowButton = id => document.querySelector(`[data-session-id="${id}"] .session-archive-btn`);
+  const busy = id => vm.runInContext(`archivingSessionIds.has(${JSON.stringify(id)})`, context);
+
+  const folder = document.getElementById('ph-' + sidebar.folderId('/repo')).querySelector('.project-archive-btn').onclick(new w.MouseEvent('click'));
+  assert.ok(await answerChoiceDialog({ document }, { confirm: true }));
+  await secondStarted.promise;
+  assert.equal(rowButton('first').disabled, false);
+  const retry = rowButton('first').onclick(new w.MouseEvent('click'));
+  await retryStarted.promise;
+  secondStopped.resolve({ ok: false, error: 'Stop refused' });
+  await folder;
+  const lockedDuringRetry = busy('first'), disabledDuringRetry = rowButton('first').disabled;
+  retryStopped.resolve({ ok: false, error: 'Stop refused' });
+  await retry;
+
+  assert.equal(lockedDuringRetry, true, 'project cleanup released the lock the row archive took after it');
+  assert.equal(disabledDuringRetry, true);
+  assert.equal(busy('first'), false);
+});
+
+test('GIVEN an older-rows archive awaiting confirmation WHEN a kept row is re-keyed and the archive is cancelled THEN the original transcript can be archived again', async t => {
+  const { w, context, document, sidebar, rekeySessionTab } = fixture(t);
+  const rows = [
+    { sessionId: 'recent', summary: 'recent', projectPath: '/repo', modified: new Date().toISOString(), archived: 0 },
+    { sessionId: 'old', summary: 'old', projectPath: '/repo', modified: '2026-01-01T00:00:00Z', archived: 0 },
+    { sessionId: 'idle', summary: 'idle', projectPath: '/repo', modified: '2026-01-01T00:00:00Z', archived: 0 },
+  ];
+  const project = { projectPath: '/repo', sessions: rows };
+  for (const s of rows) w.sessionMap.set(s.sessionId, s);
+  w.openSessions.set('old', { session: rows[1] });
+  w.activeSessionId = 'elsewhere';
+  w.visibleSessionCount = 1;
+  w.api.getSessionLiveElsewhere = async () => null;
+  const confirmation = deferred(), asked = deferred();
+  w.appConfirm = () => { asked.resolve(); return confirmation.promise; };
+  sidebar.renderProjects([project], true);
+
+  const archiving = document.querySelector('.sessions-older-archive-btn').onclick(new w.MouseEvent('click'));
+  assert.equal(vm.runInContext("archivingSessionIds.has('old')", context), true);
+  await asked.promise;
+  rekeySessionTab('old', 'new', 'fork', null, () => {});
+  confirmation.resolve(false);
+  await archiving;
+
+  assert.equal(vm.runInContext("archivingSessionIds.has('old')", context), false);
+  assert.equal(vm.runInContext("archivingSessionIds.has('new')", context), false);
+});

@@ -2242,13 +2242,22 @@ inside an object or a closure. The chain check is syntactic: it proves each
 function names the next one, not that the call runs, so a call made
 unreachable behind a condition still passes it.
 
-`archivingSessionIds` is an archive lock, not moved. The row, group and
-project archive actions capture the session ids they lock before awaiting
-and release those ids, never the `session.sessionId` read again afterwards:
-`rekeySessionTab` renames that object in place, so a re-key while a
-confirmation or a stop is pending would otherwise leave the original
+`archivingSessionIds` is an archive lock, not moved. The row, group, older
+rows and project archive actions capture the session ids they lock before
+awaiting and release those ids, never the `session.sessionId` read again
+afterwards: `rekeySessionTab` renames that object in place, so a re-key while
+a confirmation or a stop is pending would otherwise leave the original
 transcript's Archive button disabled until the renderer reloads.
-`test/dom-archive-busy-rekey.test.js` pins the row and project paths.
+
+The lock belongs to the action that took it last, and an action releases only
+the ids it still holds. Each action takes only ids nobody holds and releases
+each one once. The project archive releases a row as soon as that row's stop
+settles, so the row's own Archive button works again while the folder awaits
+the next stop; it then forgets that id, and its final cleanup releases only
+the rows it has not reached. Releasing every captured id again would free a
+lock that a retried row archive took in between, and that row archive would
+run with its button enabled. `test/dom-archive-busy-rekey.test.js` pins the
+row, project and older rows paths.
 
 Two source-keyed stores stay under the old id without a visible effect.
 `sessionExits` (`process-exit.js`) records the PTY that ended under an id:
